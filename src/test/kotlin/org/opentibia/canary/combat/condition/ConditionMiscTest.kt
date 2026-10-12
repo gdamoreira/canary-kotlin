@@ -107,9 +107,31 @@ class ConditionMiscTest {
     }
 
     @Test
-    fun `factory returns null for unported types like the C++ default`() {
-        assertThat(Condition.createCondition(ConditionId.CONDITIONID_COMBAT, ConditionType.CONDITION_SERENE, 1000)).isNull()
-        assertThat(Condition.createCondition(ConditionId.CONDITIONID_COMBAT, ConditionType.CONDITION_LIGHT, 1000)).isNull()
+    fun `factory mirrors createCondition for the visual and cooldown types`() {
+        val serene = Condition.createCondition(ConditionId.CONDITIONID_COMBAT, ConditionType.CONDITION_SERENE, 1000)
+        assertThat(serene).isInstanceOf(ConditionSerene::class.java)
+
+        val light = Condition.createCondition(
+            ConditionId.CONDITIONID_COMBAT,
+            ConditionType.CONDITION_LIGHT,
+            ticks = 1000,
+            param = 0x0205,
+        )
+        assertThat(light).isInstanceOf(ConditionLight::class.java)
+        // condition.cpp:360: level = param & 0xFF, color = (param & 0xFF00) >> 8.
+        assertThat((light as ConditionLight).lightInfo).isEqualTo(LightInfo(5, 2))
+
+        val invisible = Condition.createCondition(ConditionId.CONDITIONID_COMBAT, ConditionType.CONDITION_INVISIBLE, 1000)
+        assertThat(invisible).isInstanceOf(ConditionInvisible::class.java)
+
+        val outfit = Condition.createCondition(ConditionId.CONDITIONID_COMBAT, ConditionType.CONDITION_OUTFIT, 1000)
+        assertThat(outfit).isInstanceOf(ConditionOutfit::class.java)
+
+        val spell = Condition.createCondition(ConditionId.CONDITIONID_COMBAT, ConditionType.CONDITION_SPELLCOOLDOWN, 1000)
+        assertThat(spell).isInstanceOf(ConditionSpellCooldown::class.java)
+
+        val group = Condition.createCondition(ConditionId.CONDITIONID_COMBAT, ConditionType.CONDITION_SPELLGROUPCOOLDOWN, 1000)
+        assertThat(group).isInstanceOf(ConditionSpellGroupCooldown::class.java)
     }
 
     @Test

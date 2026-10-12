@@ -45,6 +45,16 @@ class FakeConditionTarget(
     var manaShieldValue: Int = 0
     var maxManaShieldValue: Int = 0
 
+    // Visual state (ConditionInvisible / ConditionOutfit / ConditionLight).
+    var visible: Boolean = true
+    var isInvisibleValue: Boolean = false
+    val visibilityChanges: MutableList<Boolean> = mutableListOf()
+    var outfitValue: Outfit = Outfit()
+    val outfitChanges: MutableList<Outfit> = mutableListOf()
+    var defaultOutfitValue: Outfit = Outfit(lookType = 136)
+    var creatureLightInfo: LightInfo = LightInfo(0, 0)
+    var lightChanges: Int = 0
+
     // ConditionPlayer observables.
     var baseMagicLevelValue: Int = 10
     var capacityValue: Double = 400.0
@@ -53,6 +63,9 @@ class FakeConditionTarget(
     val varStats: MutableMap<Stat, Int> = mutableMapOf()
     var statsSent: Int = 0
     var skillsSent: Int = 0
+    val monkData: MutableList<Pair<MonkData, Int>> = mutableListOf()
+    val spellCooldowns: MutableList<Pair<Int, Int>> = mutableListOf()
+    val spellGroupCooldowns: MutableList<Pair<SpellGroup, Int>> = mutableListOf()
 
     override val player: ConditionPlayer?
         get() = if (isPlayer) this else null
@@ -137,6 +150,46 @@ class FakeConditionTarget(
 
     override fun setMaxManaShield(value: Int) {
         maxManaShieldValue = value
+    }
+
+    override fun internalCreatureChangeVisible(visible: Boolean) {
+        this.visible = visible
+        visibilityChanges.add(visible)
+    }
+
+    override fun isInvisible(): Boolean = isInvisibleValue
+
+    override fun internalCreatureChangeOutfit(outfit: Outfit) {
+        outfitValue = outfit
+        outfitChanges.add(outfit)
+    }
+
+    override fun getDefaultOutfit(): Outfit = defaultOutfitValue
+
+    override fun getCreatureLight(): LightInfo = creatureLightInfo
+
+    override fun setCreatureLight(lightInfo: LightInfo) {
+        creatureLightInfo = lightInfo
+    }
+
+    override fun setNormalCreatureLight() {
+        creatureLightInfo = LightInfo(0, 0)
+    }
+
+    override fun changeLight() {
+        lightChanges++
+    }
+
+    override fun sendMonkData(type: MonkData, value: Int) {
+        monkData.add(type to value)
+    }
+
+    override fun sendSpellCooldown(spellId: Int, time: Int) {
+        spellCooldowns.add(spellId to time)
+    }
+
+    override fun sendSpellGroupCooldown(groupId: SpellGroup, time: Int) {
+        spellGroupCooldowns.add(groupId to time)
     }
 
     override fun getBaseMagicLevel(): Int = baseMagicLevelValue

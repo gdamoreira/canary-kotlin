@@ -103,6 +103,30 @@ interface ConditionTarget {
 
     /** `Creature::setMaxManaShield(value)` (`condition.cpp:1613`, `1624`, `1638`). */
     fun setMaxManaShield(value: Int)
+
+    /** `g_game().internalCreatureChangeVisible(creature, visible)` (`condition.cpp:2649`, `2655`). */
+    fun internalCreatureChangeVisible(visible: Boolean)
+
+    /** `Creature::isInvisible()` (`condition.cpp:2654`). */
+    fun isInvisible(): Boolean
+
+    /** `g_game().internalCreatureChangeOutfit(creature, outfit)` (`condition.cpp:2712`, `2721`, `2746`). */
+    fun internalCreatureChangeOutfit(outfit: Outfit)
+
+    /** `Creature::getDefaultOutfit()` (`condition.cpp:2721`). */
+    fun getDefaultOutfit(): Outfit
+
+    /** `Creature::getCreatureLight()` (`condition.cpp:2778`). */
+    fun getCreatureLight(): LightInfo
+
+    /** `Creature::setCreatureLight(lightInfo)` (`condition.cpp:2768`, `2782`, `2804`). */
+    fun setCreatureLight(lightInfo: LightInfo)
+
+    /** `Creature::setNormalCreatureLight()` (`condition.cpp:2791`). */
+    fun setNormalCreatureLight()
+
+    /** `g_game().changeLight(creature)` (`condition.cpp:2769`, `2783`, `2792`, `2805`). */
+    fun changeLight()
 }
 
 /**
@@ -142,4 +166,13 @@ interface ConditionPlayer {
 
     /** `Player::sendSkills()` (`condition.cpp:892`, `1019`, ...). */
     fun sendSkills()
+
+    /** `Player::sendMonkData(type, value)` (`condition.cpp:669`, `680`). */
+    fun sendMonkData(type: MonkData, value: Int)
+
+    /** `Player::sendSpellCooldown(spellId, time)` (`condition.cpp:2892`, `2913`). */
+    fun sendSpellCooldown(spellId: Int, time: Int)
+
+    /** `Player::sendSpellGroupCooldown(groupId, time)` (`condition.cpp:2930`, `2951`). */
+    fun sendSpellGroupCooldown(groupId: SpellGroup, time: Int)
 }
