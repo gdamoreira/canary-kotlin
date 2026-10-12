@@ -66,6 +66,8 @@ class Player(
     var inCombat: Boolean = false
 ) : Creature(id, name, maxHealth, health, maxMana, mana, speed, position) {
 
+    val features: PlayerFeatures = PlayerFeatures(playerId = id, levelProvider = { level })
+
     fun addExperience(exp: Long) {
         experience += exp
         updateLevel()
