@@ -80,7 +80,7 @@ class ConditionRegeneration(
         val player = target?.player
         var dailyStreak = 0
         if (player != null) {
-            val streak = target?.getStorageValue(STORAGE_STREAK)
+            val streak = target.getStorageValue(STORAGE_STREAK)
             if (streak != null) {
                 dailyStreak = streak.toInt()
             }
