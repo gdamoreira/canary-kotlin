@@ -130,7 +130,26 @@ class GameHandler(
     }
 
     private fun handleGamePacket(ctx: ChannelHandlerContext, msg: ByteBuf) {
-        // Future game packets (movement, use, say, etc.)
+        val activePlayer = player ?: return
+        val cipher = xteaCipher
+
+        // Verify and decrypt incoming game packet if encrypted
+        if (cipher != null && msg.readableBytes() >= 4) {
+            val checksum = msg.readUnsignedIntLE()
+            val payloadStart = msg.readerIndex()
+            val payloadLen = msg.readableBytes()
+            val calcChecksum = Adler32Checksum.compute(msg, payloadStart, payloadLen)
+
+            if (checksum == calcChecksum) {
+                cipher.decrypt(msg, payloadStart, payloadLen)
+            } else {
+                msg.readerIndex(payloadStart) // fallback if unchecksummed
+            }
+        }
+
+        dispatcher.dispatch {
+            GamePacketRouter.route(activePlayer, msg, GamePacketContext(map = gameMap))
+        }
     }
 
     private fun sendLoginSuccess(ctx: ChannelHandlerContext, player: Player) {
