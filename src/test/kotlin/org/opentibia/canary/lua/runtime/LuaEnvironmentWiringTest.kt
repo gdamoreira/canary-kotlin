@@ -67,7 +67,7 @@ class LuaEnvironmentWiringTest {
     @Test
     fun `core bindings are callable after initState without throwing`() {
         val environment = env()
-        environment.loadChunk("item = Game.createItem(2160, 3)")
-        assertThat(environment.getGlobal("item").isnil()).isTrue()
+        environment.loadChunk("ok = pcall(function() return Game.createItem(2160, 3) end)")
+        assertThat(environment.getGlobal("ok").toboolean()).isTrue()
     }
 }

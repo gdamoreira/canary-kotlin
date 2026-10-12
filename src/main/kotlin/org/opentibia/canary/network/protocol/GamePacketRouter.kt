@@ -8,7 +8,12 @@ import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.network.protocol.offline.StartOfflineTrainingPacketParser
 import org.opentibia.canary.network.protocol.rewardchest.RewardChestCollectPacketParser
+import org.opentibia.canary.network.protocol.wheel.OpenWheelCommand
+import org.opentibia.canary.network.protocol.wheel.SaveWheelCommand
+import org.opentibia.canary.network.protocol.wheel.WheelGemActionCommand
 import org.opentibia.canary.network.protocol.wheel.WheelPacketParser
+import org.opentibia.canary.systems.offlinetraining.OfflineTrainingApplication
+import org.opentibia.canary.systems.wheel.WheelApplication
 
 data class GamePacketContext(
     val map: GameMap,
@@ -19,6 +24,8 @@ data class GamePacketContext(
 )
 
 object GamePacketRouter {
+
+    private val wheelApplication = WheelApplication()
 
     fun route(player: Player, buffer: ByteBuf, context: GamePacketContext): Int {
         var packetsHandled = 0
@@ -72,10 +79,11 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // PlayerWheel/gem state is not yet attached to Player, so
-                            // this is the confinement boundary for the Canary mutations
-                            // (playerOpenWheel / playerSaveWheel / playerWheelGemAction).
-                            // Parsing alone is no-op-safe until that engine state is wired.
+                            when (command) {
+                                is SaveWheelCommand -> wheelApplication.applySave(player.features.wheel, command)
+                                is WheelGemActionCommand -> wheelApplication.applyGemAction(player.features.wheel, command)
+                                is OpenWheelCommand -> Unit // opening the window mutates no state
+                            }
                         }
                         true
                     }
@@ -88,9 +96,7 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // OfflineTraining engine is not yet attached to Player, so
-                            // this is the confinement boundary for parseStartOfflineTraining.
-                            // Parsing alone is no-op-safe until that engine state is wired.
+                            OfflineTrainingApplication.apply(player.features.offlineTraining, command)
                         }
                         true
                     }
