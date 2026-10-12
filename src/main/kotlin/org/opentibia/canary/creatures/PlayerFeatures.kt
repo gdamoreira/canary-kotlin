@@ -14,6 +14,7 @@ import org.opentibia.canary.systems.mount.PlayerMountState
 import org.opentibia.canary.systems.offlinetraining.OfflineTraining
 import org.opentibia.canary.systems.offlinetraining.Skill
 import org.opentibia.canary.systems.offlinetraining.VocationRequirements
+import org.opentibia.canary.systems.proficiency.WeaponProficiencyData
 import org.opentibia.canary.systems.rewardchest.RewardChest
 import org.opentibia.canary.systems.wheel.PlayerWheel
 
@@ -105,6 +106,15 @@ class PlayerFeatures(
     val rewardChest: RewardChest by lazy(LazyThreadSafetyMode.NONE) {
         RewardChest(RewardChest.ITEM_REWARD_CHEST)
     }
+
+    /**
+     * Per-weapon proficiency state (`WeaponProficiency proficiency`,
+     * weapon_proficiency.hpp:135; `Player::m_weaponProficiency`, player.hpp:1970),
+     * keyed by weapon id. Added as the persistence sink for the
+     * `weapon-proficiency` state; the combat-application engine is not yet wired
+     * into this holder (see PARITY GAPS).
+     */
+    val weaponProficiencies: MutableMap<Int, WeaponProficiencyData> = linkedMapOf()
 }
 
 /**
