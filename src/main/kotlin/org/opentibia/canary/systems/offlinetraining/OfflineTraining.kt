@@ -1,6 +1,7 @@
 package org.opentibia.canary.systems.offlinetraining
 
 import kotlin.math.round
+import org.opentibia.canary.config.FeatureFlags
 
 /**
  * Mirror of Canary's `skills_t` enum (src/creatures/creatures_definitions.hpp:466).
@@ -90,6 +91,16 @@ data class SkillState(
  */
 class OfflineTraining(
     private val vocation: VocationRequirements,
+    /**
+     * `RATE_OFFLINE_TRAINING_SPEED` (src/config/configmanager.cpp:204), default
+     * `1.0`. Canary applies this in
+     * data/scripts/creaturescripts/player/offline_training.lua as
+     * `tries * configManager.getFloat(configKeys.RATE_OFFLINE_TRAINING_SPEED)`
+     * before calling `Player::addOfflineTrainingTries`. Because the Kotlin port
+     * does not port that Lua conversion (AGENTS.md 1.4), the same scalar is
+     * injected here and applied at the conversion entry point.
+     */
+    private val rateOfflineTrainingSpeed: Float = FeatureFlags().rateOfflineTrainingSpeed,
 ) {
     /** `Player::offlineTrainingSkill`, default `SKILL_NONE` (player.hpp:1807). */
     private var offlineTrainingSkill: Skill = Skill.SKILL_NONE
@@ -141,11 +152,12 @@ class OfflineTraining(
      * Canary `sendUpdate` flag (a level or progress change occurred).
      */
     fun addOfflineTrainingTries(skill: Skill, tries: Long): Boolean {
-        if (tries == 0L || skill == Skill.SKILL_LEVEL) {
+        val scaledTries = scaleOfflineTrainingTries(tries)
+        if (scaledTries == 0L || skill == Skill.SKILL_LEVEL) {
             return false
         }
 
-        var remainingTries = tries
+        var remainingTries = scaledTries
         var sendUpdate = false
 
         if (skill == Skill.SKILL_MAGLEVEL) {
@@ -236,6 +248,15 @@ class OfflineTraining(
 
         return sendUpdate
     }
+
+    /**
+     * Applies `RATE_OFFLINE_TRAINING_SPEED` to an incoming try count, mirroring
+     * the Lua conversion's `tries * rate` before `Player::addOfflineTrainingTries`.
+     * Lua passed the floating-point product to the `uint64_t` parameter, so the
+     * product is truncated on entry here as well.
+     */
+    private fun scaleOfflineTrainingTries(tries: Long): Long =
+        (tries.toDouble() * rateOfflineTrainingSpeed).toLong()
 
     companion object {
         /**

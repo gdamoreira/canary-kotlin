@@ -5,6 +5,7 @@ import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 import org.opentibia.canary.combat.CombatDamage
+import org.opentibia.canary.config.FeatureFlags
 
 /**
  * Engine core of the Gnomprona Hazard difficulty system.
@@ -50,7 +51,31 @@ data class HazardConfig(
     val podsTimeToDamage: Int = 2000,
     val podsTimeToSpawn: Int = 4000,
     val spawnPlunderMultiplier: Int = 25,
-)
+) {
+    companion object {
+        /**
+         * Builds the hazard configuration from the Canary `HAZARD_*` /
+         * `TOGGLE_HAZARDSYSTEM` feature flags (configmanager.cpp:153,180,277-288).
+         * The `FeatureFlags` defaults match this type's defaults exactly.
+         */
+        fun fromFeatureFlags(flags: FeatureFlags): HazardConfig = HazardConfig(
+            toggleHazardSystem = flags.toggleHazardSystem,
+            criticalChance = flags.hazardCriticalChance,
+            criticalInterval = flags.hazardCriticalInterval,
+            criticalMultiplier = flags.hazardCriticalMultiplier,
+            damageMultiplier = flags.hazardDamageMultiplier,
+            defenseMultiplier = flags.hazardDefenseMultiplier,
+            dodgeMultiplier = flags.hazardDodgeMultiplier,
+            expBonusMultiplier = flags.hazardExpBonusMultiplier.toDouble(),
+            lootBonusMultiplier = flags.hazardLootBonusMultiplier,
+            podsDamage = flags.hazardPodsDamage,
+            podsDropMultiplier = flags.hazardPodsDropMultiplier,
+            podsTimeToDamage = flags.hazardPodsTimeToDamage,
+            podsTimeToSpawn = flags.hazardPodsTimeToSpawn,
+            spawnPlunderMultiplier = flags.hazardSpawnPlunderMultiplier,
+        )
+    }
+}
 
 /**
  * The subset of Canary `CombatDamage` (src/creatures/creatures_definitions.hpp:1720-1760)

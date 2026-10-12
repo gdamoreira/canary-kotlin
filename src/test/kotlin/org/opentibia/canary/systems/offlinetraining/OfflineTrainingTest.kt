@@ -90,6 +90,18 @@ class OfflineTrainingTest {
     }
 
     @Test
+    fun `offline training rate scales the converted tries`() {
+        val scaled = OfflineTraining(TestVocation(), rateOfflineTrainingSpeed = 0.5f)
+        scaled.skills[Skill.SKILL_SWORD] = SkillState(level = 10, tries = 0, percent = 0)
+
+        val updated = scaled.addOfflineTrainingTries(Skill.SKILL_SWORD, 240)
+
+        assertThat(updated).isTrue()
+        assertThat(scaled.skills[Skill.SKILL_SWORD]!!.level).isEqualTo(12)
+        assertThat(scaled.skills[Skill.SKILL_SWORD]!!.tries).isEqualTo(15)
+    }
+
+    @Test
     fun `get percent level mirrors canary truncation and overflow guard`() {
         assertThat(OfflineTraining.getPercentLevel(0, 0)).isEqualTo(0.0)
         assertThat(OfflineTraining.getPercentLevel(200, 14_400)).isEqualTo(1.39)

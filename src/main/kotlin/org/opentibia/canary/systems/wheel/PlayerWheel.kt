@@ -1,5 +1,7 @@
 package org.opentibia.canary.systems.wheel
 
+import org.opentibia.canary.config.FeatureFlags
+
 /**
  * Mirror of the deterministic point-budget surface of Canary's `PlayerWheel`
  * (src/creatures/players/components/wheel/player_wheel.cpp), plus the minimal
@@ -12,6 +14,12 @@ class PlayerWheel(
     val vocationCipId: Int,
     val level: Int,
     private val extraPoints: Int = 0,
+    /**
+     * `PlayerWheel::m_pointsPerLevel`, set from `WHEEL_POINTS_PER_LEVEL`
+     * (src/creatures/players/components/wheel/player_wheel.cpp:378,
+     * configmanager.cpp:385), default `1`.
+     */
+    private val pointsPerLevel: Int = FeatureFlags().wheelPointsPerLevel,
     private var modsMaxGrade: Int = 0,
     val pointsBySlot: MutableMap<WheelSlots, Int> = mutableMapOf(),
     val gems: WheelGemState = WheelGemState(),
@@ -139,7 +147,7 @@ class PlayerWheel(
     }
 
     fun getWheelPoints(includeExtraPoints: Boolean = true): Int {
-        var totalPoints = maxOf(0, level - MIN_LEVEL_TO_START_COUNT_POINTS) * POINTS_PER_LEVEL
+        var totalPoints = maxOf(0, level - MIN_LEVEL_TO_START_COUNT_POINTS) * pointsPerLevel
         if (includeExtraPoints) {
             totalPoints += extraPoints
         }

@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test
 import org.opentibia.canary.combat.CombatDamage
 import org.opentibia.canary.combat.CombatOrigin
 import org.opentibia.canary.combat.CombatType
+import org.opentibia.canary.config.FeatureFlags
 
 /**
  * Integration tests connecting `handleHazardSystemAttack`
@@ -78,6 +79,33 @@ class HazardCombatDamageTest {
         assertThat(damage.extension).isTrue()
         assertThat(damage.exString).isEqualTo("(Hazard)")
         assertThat(player.getLastHazardSystemCriticalHit()).isEqualTo(10000L)
+    }
+
+    @Test
+    fun `feature flags configure the hazard damage multiplier`() {
+        val config = HazardConfig.fromFeatureFlags(FeatureFlags(hazardDamageMultiplier = 1000))
+        val monster = MonsterHazard().apply { setHazard(true); setHazardSystemDamageBoost(true) }
+        val player = PlayerHazard(config = config, normalRandom = { _, _ -> 1 })
+        player.setHazardSystemPoints(5)
+
+        val damage = CombatDamage(primaryType = CombatType.PHYSICALDAMAGE, primaryValue = 100)
+        HazardSystem.handleHazardSystemAttack(damage, player, monster, isPlayerAttacker = false)
+
+        assertThat(damage.primaryValue).isEqualTo(150)
+    }
+
+    @Test
+    fun `toggle hazard system feature flag disables the hazard math`() {
+        val config = HazardConfig.fromFeatureFlags(FeatureFlags(toggleHazardSystem = false))
+        val monster = MonsterHazard().apply { setHazard(true); setHazardSystemDamageBoost(true) }
+        val player = PlayerHazard(config = config, normalRandom = { _, _ -> 1 })
+        player.setHazardSystemPoints(5)
+
+        val damage = CombatDamage(primaryType = CombatType.PHYSICALDAMAGE, primaryValue = 100)
+        HazardSystem.handleHazardSystemAttack(damage, player, monster, isPlayerAttacker = false)
+
+        assertThat(damage.primaryValue).isEqualTo(100)
+        assertThat(damage.extension).isFalse()
     }
 
     @Test

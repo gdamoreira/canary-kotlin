@@ -2,6 +2,7 @@ package org.opentibia.canary.systems.proficiency
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.config.FeatureFlags
 import java.io.File
 
 /**
@@ -110,6 +111,18 @@ class WeaponProficiencyLoaderTest {
             realJson,
             maxLevels = 3,
             maxPerksPerLevel = 1,
+        ).getValue(6)
+
+        assertThat(limited.maxLevel).isEqualTo(3)
+        assertThat(limited.level).hasSize(3)
+        assertThat(limited.level[1].perks).hasSize(1)
+    }
+
+    @Test
+    fun `feature flags cap proficiency levels and perks`() {
+        val limited = WeaponProficiencyLoader.loadFromJson(
+            realJson,
+            FeatureFlags(weaponProficiencyMaxLevels = 3, weaponProficiencyMaxPerksPerLevel = 1),
         ).getValue(6)
 
         assertThat(limited.maxLevel).isEqualTo(3)

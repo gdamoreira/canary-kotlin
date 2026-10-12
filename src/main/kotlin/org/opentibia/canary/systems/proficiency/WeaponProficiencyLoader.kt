@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.nio.file.Files
 import java.nio.file.Path
+import org.opentibia.canary.config.FeatureFlags
 
 private val logger = KotlinLogging.logger {}
 
@@ -75,11 +76,24 @@ object WeaponProficiencyLoader {
         maxPerksPerLevel: Int = DEFAULT_MAX_PERKS_PER_LEVEL,
     ): Map<Int, Proficiency> = loadFromJson(Files.readString(path), maxLevels, maxPerksPerLevel)
 
+    /**
+     * `loadFromJson` driven by `WEAPON_PROFICIENCY_MAX_LEVELS` /
+     * `WEAPON_PROFICIENCY_MAX_PERKS_PER_LEVEL` (configmanager.cpp:391-392).
+     */
+    fun loadFromJson(json: String, flags: FeatureFlags): Map<Int, Proficiency> =
+        loadFromJson(json, flags.weaponProficiencyMaxLevels, flags.weaponProficiencyMaxPerksPerLevel)
+
+    fun loadFromFile(path: Path = DEFAULT_PATH, flags: FeatureFlags): Map<Int, Proficiency> =
+        loadFromFile(path, flags.weaponProficiencyMaxLevels, flags.weaponProficiencyMaxPerksPerLevel)
+
     fun reload(
         path: Path = DEFAULT_PATH,
         maxLevels: Int = DEFAULT_MAX_LEVELS,
         maxPerksPerLevel: Int = DEFAULT_MAX_PERKS_PER_LEVEL,
     ): Map<Int, Proficiency> = loadFromFile(path, maxLevels, maxPerksPerLevel)
+
+    fun reload(path: Path = DEFAULT_PATH, flags: FeatureFlags): Map<Int, Proficiency> =
+        reload(path, flags.weaponProficiencyMaxLevels, flags.weaponProficiencyMaxPerksPerLevel)
 
     private fun registerLevels(
         levelsJson: JsonNode,
