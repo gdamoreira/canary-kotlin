@@ -175,10 +175,15 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Wiring**: combat consumers (bestiary charm procs, weapon-proficiency combat application, hazard bridge); `GamePacketRouter` dispatch for `0x61`/`0x62`/`0xE7`/`0x74`/`0xFF`.
 - All delivered via isolated git worktrees dispatched in parallel and merged to `main`.
 
+### Phase 9: Runtime State Wiring Foundations (01:30 – 02:00)
+- **Player feature state** — `creatures/PlayerFeatures.kt` composes the per-player engine cores (wheel, offline training, concoctions, daily reward, mounts, familiars, bestiary, forge, hazard) and is exposed as `Player.features`.
+- **Config gates** — `config/FeatureFlags.kt` mirrors Canary's advanced-feature config keys and exact defaults with `CANARY_*` env overrides.
+- **Persistence** — Flyway `V3__advanced_feature_state.sql` (wheel slots, bestiary kills, mounts, familiars, weapon proficiency, offline/daily/forge scalars) + `database/JdbcFeatureStateRepository.kt`.
+
 ---
 
 ### Current Status
-- **Automated Tests**: **115 test suites / 580 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **118 test suites / 600 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Advanced Features**: all 15 (`docs/Plan/050–064`) have faithful **C++ engine cores** ported with TDD; Lua-authored portions remain Lua.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer, and protocol parsers/serializers in place.
 - **Remaining**: runtime state wiring (Player enrichment, persistence), config gates, and Lua seam implementations — tracked in `docs/game-play-features.md`.
