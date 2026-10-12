@@ -52,27 +52,29 @@ This document establishes the master inventory of all gameplay features from Can
 
 ---
 
-## ⏳ 2. Remaining Canary Gameplay Features (Pending Implementation)
+## ⏳ 2. Remaining Canary Gameplay Features — Engine Cores Ported
 
 > **Rule (AGENTS.md §1.4):** Lua stays Lua. For each feature, only the **C++ engine surface** is ported to Kotlin; player-facing logic authored in `data/**/*.lua` is executed as Lua through the scripting engine. Corrected plan docs are in `docs/Plan/050–064`.
+>
+> **Status:** all 15 features now have a **faithful C++ engine core** ported with TDD (each `systems/<feature>/` package, own test class). The remaining work per feature is its **protocol/persistence wiring** and, for Lua-dominant features, the **Lua binding layer** (the `org.opentibia.canary.lua` engine). Gaps are recorded in each plan doc.
 
-| # | Feature Name | Nature | Kotlin scope (C++ engine only) | Stays Lua | Plan |
-|---|---|---|---|:---:|---|
-| **42** | Wheel of Destiny | **C++-only** | `IOWheel`, `PlayerWheel`, `wheel_gems`, `wheel_spells`, enums, protocol `0x61`/`0x62`/`0xE7` | — | `050` |
-| **43** | Exaltation Forge | Mixed | `PlayerForgeHistory`, `Player` forge API, item tier attrs, forge protocol | `exaltation_forge.lua`, `item_tiers.lua` | `051` |
-| **44** | Bestiary & Charms | Mixed | `IOBestiary`, `Charm`, Player charm state, bestiary protocol | `bestiary_charms.lua` | `052` |
-| **45** | In-Game Store | Lua-dominant | `Account` coin primitives, coin columns, balance packet | whole `gamestore/*` module | `053` |
-| **46** | Hazard System | Mixed | Monster hazard flags, Player hazard points/hooks, `handleHazardSystemAttack` | `hazard.lua`, `ondroploot_hazard.lua` | `054` |
-| **47** | Daily Reward Shrine | Mixed | `Player::setDailyReward`, KV persistence, regen, packet | `daily_reward.lua`, shrine scripts | `055` |
-| **48** | Boss Reward Chest | Mixed | `Reward`/`RewardChest`, `collectRewardChestItems`, protocol `0xFF` | `reward_chest.lua`, `reward_boss.lua` | `056` |
-| **49** | Familiars | Mixed | `Familiars` XML loader, Player familiar state | `familiar.lua`, summon spells | `057` |
-| **50** | Hirelings | Mixed | Game hireling maps, `canSpeakWithHireling`, protocol `0xEC` | `hireling.lua` | `058` |
-| **51** | Mounts & Speed | Mixed | `Mount`/`Mounts` loader, Player mount methods | taming scripts, mount catalog | `059` |
-| **52** | Weapon Proficiencies | **C++-dominant** | `WeaponProficiency` + JSON loader + enums + payload | 2 small scripts | `060` |
-| **53** | Soul War / Taint | Mixed | Taint/Fear/Agony conditions, `ConditionFeared`, Zone primitives | `encounters.lua`, quest scripts | `061` |
-| **54** | Scheduled World Raids | Mixed | legacy `Raids`/`Raid`/`RaidEvent` (or Encounter primitives) | `raids.lua`, `raids.xml` | `062` |
-| **55** | Offline Training | Mixed | `Player` offline-training state, protocol `0x74`, persistence | `offline_training.lua` | `063` |
-| **56** | Concoctions | Mixed | `Concoction_t`, `updateConcoction`, active state, packet | `concoctions.lua` | `064` |
+| # | Feature Name | Nature | Engine core ported (Kotlin) | Remaining gaps | Plan |
+|---|---|---|---|---|:---:|
+| **42** | Wheel of Destiny | **C++-only** | `systems/wheel/`: enums, `IOWheel` (36 slot bonuses), `PlayerWheel` budget | `wheel_gems`, spell tables, protocol `0x61`/`0x62`/`0xE7` | `050` |
+| **43** | Exaltation Forge | Mixed | `systems/forge/`: `ForgeAction`, `PlayerForgeHistory`, dust/fusion math | item/gold mutation, forge protocol | `051` |
+| **44** | Bestiary & Charms | Mixed | `systems/bestiary/`: `IOBestiary`, `Charm`, player state | charm combat procs, buy flow, protocol | `052` |
+| **45** | In-Game Store | Lua-dominant | `systems/gamestore/`: `CoinType`, account coin ledger | protocol balance packet; store module stays Lua | `053` |
+| **46** | Hazard System | Mixed | `systems/hazard/`: monster/player hazard + `handleHazardSystemAttack` | protocol/UI icons | `054` |
+| **47** | Daily Reward | Mixed | `systems/dailyreward/`: enums, `setDailyReward`, streak KV | persistence, regen application, packet | `055` |
+| **48** | Boss Reward Chest | Mixed | `systems/rewardchest/`: `Reward`, `RewardChest`, collect logic | container inheritance, protocol `0xFF` | `056` |
+| **49** | Familiars | Mixed | `systems/familiar/`: XML loader, player familiar state | combat flags, storage persistence | `057` |
+| **50** | Hirelings | Mixed | `systems/hireling/`: skill/outfit maps, `canSpeakWithHireling`, 0xEC parse | cyclopedia summary, DB/KV | `058` |
+| **51** | Mounts & Speed | Mixed | `systems/mount/`: XML loader (236 mounts), player mount state | outfit protocol, persistence | `059` |
+| **52** | Weapon Proficiencies | **C++-dominant** | `systems/proficiency/`: enums, experience tables + level math | JSON loader, combat application | `060` |
+| **53** | Soul War / Taint | Mixed | `systems/soulwar/`: taint/fear/agony conditions, fear check | walk/pathing, Zone primitives | `061` |
+| **54** | Scheduled World Raids | Mixed | `systems/raid/`: legacy `Raids`/`Raid`/`RaidEvent` XML engine | Game wiring, Lua script runner | `062` |
+| **55** | Offline Training | Mixed | `systems/offlinetraining/`: state, accrual, try conversion | protocol `0x74`, persistence | `063` |
+| **56** | Concoctions | Mixed | `systems/concoction/`: `ConcoctionType`, active state | packet, Lua effect configs | `064` |
 
 **Scope note:** none of these is "Lua misread as a feature" — each has a real missing C++ engine surface. The prior assumption that they could be delivered as standalone Kotlin `*Engine` classes was wrong for the Lua-authored portions; those now stay Lua.
 
@@ -81,5 +83,5 @@ This document establishes the master inventory of all gameplay features from Can
 ## 📈 Summary Metrics
 
 - **Implemented & Verified Gameplay Systems**: **41 / 56** ($73\%$)
-- **Planned Advanced Gameplay Systems**: **15 / 56** ($27\%$)
-- **Automated Test Coverage**: 57 test suites passing cleanly on **Java 25 LTS** via `./gradlew test`.
+- **Advanced Gameplay Systems — engine cores ported**: **15 / 15** (protocol/Lua wiring remains)
+- **Automated Test Coverage**: 83 test suites / 337 tests passing cleanly on **Java 25 LTS** via `./gradlew test`.
