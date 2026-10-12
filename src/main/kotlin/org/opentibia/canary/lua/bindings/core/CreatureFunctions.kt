@@ -16,6 +16,8 @@ interface CreatureOperations {
     fun setHealth(creature: Any, health: Int): Boolean
     fun addHealth(creature: Any, healthChange: Int, combatType: Int): Boolean
     fun getPosition(creature: Any): Position
+    fun getDirection(creature: Any): Int
+    fun setDirection(creature: Any, direction: Int): Boolean
 }
 
 /**
@@ -28,6 +30,8 @@ interface CreatureOperations {
  *   creature:setHealth(health)
  *   creature:addHealth(healthChange, combatType)
  *   creature:getPosition()
+ *   creature:getDirection()
+ *   creature:setDirection(direction)
  *
  * Canary shares the `Creature` class with `Player`, `Monster` and `Npc` through
  * `Lua::registerSharedClass`. The Kotlin [org.opentibia.canary.lua.userdata.UserdataRegistry]
@@ -77,6 +81,17 @@ object CreatureFunctions {
                 val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
                 env.userdata.wrap("Position", operations.getPosition(creature))
             })
+
+            registry.registerMethod(type, "getDirection", luaFunction { args ->
+                val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+                LuaValue.valueOf(operations.getDirection(creature))
+            })
+
+            registry.registerMethod(type, "setDirection", luaFunction { args ->
+                val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+                val direction = args.arg(2).toint()
+                LuaValue.valueOf(operations.setDirection(creature, direction))
+            })
         }
     }
 }
@@ -102,4 +117,10 @@ internal object UnwiredCreatureOperations : CreatureOperations {
 
     override fun getPosition(creature: Any): Position =
         throw NotImplementedError("CreatureFunctions.getPosition seam is not wired")
+
+    override fun getDirection(creature: Any): Int =
+        throw NotImplementedError("CreatureFunctions.getDirection seam is not wired")
+
+    override fun setDirection(creature: Any, direction: Int): Boolean =
+        throw NotImplementedError("CreatureFunctions.setDirection seam is not wired")
 }
