@@ -1,6 +1,9 @@
 package org.opentibia.canary.creatures
 
+import org.opentibia.canary.items.Container
+import org.opentibia.canary.items.Item
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.systems.rewardchest.ReturnValue
 import kotlin.math.max
 
 abstract class Creature(
@@ -84,6 +87,132 @@ class Player(
 
     /** `Player::isPremium()` (player.cpp:7532). */
     fun isPremium(): Boolean = premium
+
+    /** `Player::inventory[CONST_SLOT_LAST + 1]` (player.hpp:1763). */
+    private val inventory = arrayOfNulls<Item>(Slots_t.LAST + 1)
+
+    /** `Player::skills[SKILL_LAST + 1]` (player.hpp:1711). */
+    private val skills = Array(skills_t.LAST + 1) { SkillState() }
+
+    /** `Player::getInventoryItem` (player.cpp:337). */
+    fun getInventoryItem(slot: Slots_t): Item? {
+        if (slot.value < Slots_t.FIRST || slot.value > Slots_t.LAST) {
+            return null
+        }
+        return inventory[slot.value]
+    }
+
+    /**
+     * Inventory insertion, mirroring `Game::internalPlayerAddItem` / `Game::internalAddItem`
+     * (game.cpp:2693-3003) for the carried-in-inventory case.
+     */
+    fun addItem(item: Item, slot: Slots_t = Slots_t.CONST_SLOT_WHEREEVER): ReturnValue {
+        val target = when {
+            slot == Slots_t.CONST_SLOT_WHEREEVER -> firstFreeSlot() ?: return ReturnValue.NOTENOUGHROOM
+            slot.value < Slots_t.FIRST || slot.value > Slots_t.LAST -> return ReturnValue.NOTPOSSIBLE
+            else -> slot
+        }
+        if (inventory[target.value] != null) {
+            return ReturnValue.NOTENOUGHROOM
+        }
+        if (itemWeight(item) > getFreeCapacity()) {
+            return ReturnValue.NOTENOUGHCAPACITY
+        }
+        inventory[target.value] = item
+        return ReturnValue.NOERROR
+    }
+
+    /** `Player::removeItem` (player.cpp:10251-10281). */
+    fun removeItem(item: Item, count: Int = 0): ReturnValue {
+        val slot = inventory.indexOfFirst { it === item }
+        if (slot < 0) {
+            return ReturnValue.NOTPOSSIBLE
+        }
+        val toRemove = if (count == 0 || count > item.count) item.count else count
+        item.count -= toRemove
+        if (item.count <= 0) {
+            inventory[slot] = null
+        }
+        return ReturnValue.NOERROR
+    }
+
+    /** `Player::getItemTypeCount` (player.cpp:5151-5179); Lua `player:getItemCount`. */
+    fun getItemCount(
+        itemId: Int,
+        subType: Int = -1,
+        ignoreEquipped: Boolean = false,
+        ignoreStoreInbox: Boolean = false,
+    ): Long {
+        var count = 0L
+        for (slot in Slots_t.FIRST..Slots_t.LAST) {
+            if (ignoreStoreInbox && slot == Slots_t.CONST_SLOT_STORE_INBOX.value) {
+                continue
+            }
+            val item = inventory[slot] ?: continue
+            if (!ignoreEquipped && item.id == itemId) {
+                count += countByType(item, subType)
+            }
+            if (item is Container) {
+                count += countContainer(item, itemId, subType)
+            }
+        }
+        return count
+    }
+
+    /** `Player::getFreeCapacity` (player.cpp:5468-5476). */
+    fun getFreeCapacity(): Double = max(0.0, capacity - inventoryWeight())
+
+    /** `Player::getSkillLevel` (player.cpp:7468). */
+    fun getSkillLevel(skill: skills_t): Int {
+        if (skill.value < skills_t.FIRST || skill.value > skills_t.LAST) {
+            return 0
+        }
+        return skills[skill.value].level
+    }
+
+    /** Lua `player:addSkillTries` -> `Player::addSkillAdvance` (player.cpp:1190-1249). */
+    fun addSkillTries(skill: skills_t, tries: Long) {
+        if (skill.value < skills_t.FIRST || skill.value > skills_t.LAST) {
+            return
+        }
+        skills[skill.value].tries += tries
+    }
+
+    /** Lua `player:getSkillTries` (player_functions.cpp:1662-1672). */
+    fun getSkillTries(skill: skills_t): Long {
+        if (skill.value < skills_t.FIRST || skill.value > skills_t.LAST) {
+            return 0L
+        }
+        return skills[skill.value].tries
+    }
+
+    private fun firstFreeSlot(): Slots_t? =
+        Slots_t.entries.firstOrNull { it.value in Slots_t.FIRST..Slots_t.LAST && inventory[it.value] == null }
+
+    private fun inventoryWeight(): Double =
+        (Slots_t.FIRST..Slots_t.LAST).sumOf { slot -> inventory[slot]?.let { itemWeight(it) } ?: 0.0 }
+
+    private fun itemWeight(item: Item): Double = if (item is Container) item.totalWeight else item.weight
+
+    private fun countByType(item: Item, subType: Int): Long {
+        if (subType >= 0 && item.count != subType) {
+            return 0L
+        }
+        return item.count.toLong()
+    }
+
+    private fun countContainer(container: Container, itemId: Int, subType: Int): Long {
+        var count = 0L
+        for (item in container.items) {
+            if (item.id == itemId) {
+                count += countByType(item, subType)
+            }
+            if (item is Container) {
+                count += countContainer(item, itemId, subType)
+            }
+        }
+        return count
+    }
 
     fun addExperience(exp: Long) {
         experience += exp
