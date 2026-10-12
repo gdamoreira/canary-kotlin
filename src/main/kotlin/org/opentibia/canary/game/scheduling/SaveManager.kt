@@ -2,12 +2,16 @@ package org.opentibia.canary.game.scheduling
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.persistence.PlayerPersistenceService
 import org.opentibia.canary.persistence.PlayerStorage
 import java.util.concurrent.ConcurrentHashMap
 
 private val logger = KotlinLogging.logger {}
 
-class SaveManager(private val playerStorage: PlayerStorage) {
+class SaveManager(
+    private val playerStorage: PlayerStorage,
+    private val featurePersistence: PlayerPersistenceService? = null,
+) {
 
     private val onlinePlayers = ConcurrentHashMap<Long, Player>()
 
@@ -26,6 +30,7 @@ class SaveManager(private val playerStorage: PlayerStorage) {
         for (player in onlinePlayers.values) {
             try {
                 playerStorage.save(player)
+                featurePersistence?.save(player)
                 count++
             } catch (e: Exception) {
                 logger.error(e) { "Failed to save player ${player.name} during server save" }

@@ -30,8 +30,13 @@ class PlayerFeatureStateLoader(private val repository: FeatureStateRepository) {
         return true
     }
 
-    /** Persists the current state of [features]. */
+    /** Persists the current state of [features] under [features.playerId]. */
     fun save(features: PlayerFeatures) {
-        repository.save(PlayerFeatureStateMapper.toFeatureState(features.playerId, features))
+        save(features.playerId, features)
+    }
+
+    /** Persists the current state of [features] under an explicit [playerId]. */
+    fun save(playerId: Long, features: PlayerFeatures) {
+        repository.save(PlayerFeatureStateMapper.toFeatureState(playerId, features))
     }
 }
