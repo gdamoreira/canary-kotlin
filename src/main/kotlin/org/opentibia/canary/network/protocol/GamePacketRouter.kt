@@ -2,9 +2,13 @@ package org.opentibia.canary.network.protocol
 
 import io.netty.buffer.ByteBuf
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
+import org.opentibia.canary.network.protocol.offline.StartOfflineTrainingPacketParser
+import org.opentibia.canary.network.protocol.rewardchest.RewardChestCollectPacketParser
+import org.opentibia.canary.network.protocol.wheel.WheelPacketParser
 
 data class GamePacketContext(
     val map: GameMap,
@@ -56,6 +60,55 @@ object GamePacketRouter {
                 }
                 0xA1 -> {
                     CombatPacketHandler.handleAttack(player, buffer, emptyList())
+                }
+
+                // Wheel of Destiny
+                // 0x61 parseOpenWheel / 0x62 parseSaveWheel / 0xE7 parseWheelGemAction
+                WheelPacketParser.OPCODE_OPEN_WHEEL,
+                WheelPacketParser.OPCODE_SAVE_WHEEL,
+                WheelPacketParser.OPCODE_WHEEL_GEM_ACTION -> {
+                    val command = WheelPacketParser.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // PlayerWheel/gem state is not yet attached to Player, so
+                            // this is the confinement boundary for the Canary mutations
+                            // (playerOpenWheel / playerSaveWheel / playerWheelGemAction).
+                            // Parsing alone is no-op-safe until that engine state is wired.
+                        }
+                        true
+                    }
+                }
+
+                // Offline training: 0x74 parseStartOfflineTraining
+                0x74 -> {
+                    val command = StartOfflineTrainingPacketParser.parse(buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // OfflineTraining engine is not yet attached to Player, so
+                            // this is the confinement boundary for parseStartOfflineTraining.
+                            // Parsing alone is no-op-safe until that engine state is wired.
+                        }
+                        true
+                    }
+                }
+
+                // Reward chest: 0xFF parseRewardChestCollect
+                0xFF -> {
+                    val command = RewardChestCollectPacketParser.parse(buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerRewardChestCollect needs the player's reward
+                            // container, which is not yet wired; this is the confinement
+                            // boundary. Parsing alone is no-op-safe until then.
+                        }
+                        true
+                    }
                 }
 
                 else -> false
