@@ -84,4 +84,6 @@ This document establishes the master inventory of all gameplay features from Can
 
 - **Implemented & Verified Gameplay Systems**: **41 / 56** ($73\%$)
 - **Advanced Gameplay Systems — engine cores ported**: **15 / 15** (protocol/Lua wiring remains)
-- **Automated Test Coverage**: 94 test suites / 407 tests passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered).
+- **Automated Test Coverage**: 105 test suites / 491 tests passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered).
+- **Combat stack**: `combat/CombatDamage` + `Combat` (damage/armor/mitigation/crit) and `combat/condition/*` (Condition engine core).
+- **Lua engine**: `lua/bindings/core/*` (Game/Player/Creature/Item/Position primitives) and `lua/registry/*` + `lua/bindings/*` (Spell/CreatureEvent/GlobalEvent/MoveEvent constructors).
