@@ -57,3 +57,40 @@ This document records the binding architectural policies, lifetime safety rules,
   - Test suites must use real domain code and Netty's `EmbeddedChannel` without requiring live external sockets or network Daemons.
 - **Verification Before Completion**:
   - Running `./gradlew test` must pass with zero failures and zero compile warnings before any commit or release claim.
+
+---
+
+## 5. Feature Documentation & Canary Code Reference Mandate
+
+Whenever creating or proposing any new feature document in `docs/Plan/`, `docs/Implementing/`, or `docs/Done/`, the document **MUST** adhere to the standard template and **MUST include exact Canary C++ source file references**:
+
+### 5.1 Mandatory Document Structure
+Each document must follow this layout:
+```markdown
+# Feature: <Feature Name>
+
+## 1. Explanation
+[What the feature is, high-level summary of the domain logic]
+
+## 2. Impact
+[Why it matters, gameplay/system consequence]
+
+## 3. Functionality Affected
+[Specific opcodes, state machines, or mechanics modified]
+
+## 4. Agent Implementation Details
+[Kotlin components, architectural patterns, concurrency considerations]
+
+## 5. Test Reference
+[Automated unit and integration test class references]
+
+## 6. Canary Original Code Reference
+- **Source Files**: `<path/to/canary/file.cpp>, <path/to/header.hpp>`
+- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Key Methods / Opcodes**: `<e.g. ProtocolGame::parseAttack, Combat::doCombat>`
+```
+
+### 5.2 Rule of File Verification
+- Before writing a feature document, locate the corresponding files in the Canary repository using `glob` or `grep`.
+- Never invent or assume file paths. Record the exact relative path from the Canary root.
+- If the feature has C++ tests in Canary (`tests/unit/` or `tests/integration/`), record them in the document and create the corresponding Kotlin transcript test.
