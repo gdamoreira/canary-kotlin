@@ -252,6 +252,9 @@ abstract class Condition(
             now: () -> Long = { System.currentTimeMillis() },
             random: kotlin.random.Random = kotlin.random.Random.Default,
             rateSpellCooldown: Double = 1.0,
+            warnUnsafeScripts: Boolean = false,
+            isLookTypeRegistered: (Int) -> Boolean = { false },
+            monsterOutfit: (String) -> Outfit? = { null },
         ): Condition? {
             createDamageCondition(id, type, buff, subId)?.let { return it }
 
@@ -259,6 +262,34 @@ abstract class Condition(
                 ConditionType.CONDITION_HASTE,
                 ConditionType.CONDITION_PARALYZE,
                 -> ConditionSpeed(id, type, ticks, buff, subId, param, now, random)
+
+                ConditionType.CONDITION_INVISIBLE ->
+                    ConditionInvisible(id, type, ticks, buff, subId, now)
+
+                ConditionType.CONDITION_OUTFIT ->
+                    ConditionOutfit(
+                        id,
+                        type,
+                        ticks,
+                        buff,
+                        subId,
+                        now,
+                        warnUnsafeScripts,
+                        isLookTypeRegistered,
+                        monsterOutfit,
+                    )
+
+                ConditionType.CONDITION_LIGHT ->
+                    ConditionLight(
+                        id,
+                        type,
+                        ticks,
+                        buff,
+                        subId,
+                        param and 0xFF,
+                        (param and 0xFF00) shr 8,
+                        now,
+                    )
 
                 ConditionType.CONDITION_REGENERATION ->
                     ConditionRegeneration(id, type, ticks, buff, subId, now, rateSpellCooldown)
@@ -275,6 +306,20 @@ abstract class Condition(
 
                 ConditionType.CONDITION_MANASHIELD ->
                     ConditionManaShield(id, type, ticks, buff, subId, now)
+
+                ConditionType.CONDITION_SPELLCOOLDOWN ->
+                    ConditionSpellCooldown(id, type, ticks, buff, subId, now)
+
+                ConditionType.CONDITION_SPELLGROUPCOOLDOWN ->
+                    ConditionSpellGroupCooldown(id, type, ticks, buff, subId, now)
+
+                ConditionType.CONDITION_SERENE ->
+                    ConditionSerene(id, type, ticks, buff, subId, now)
+
+                // `CONDITION_FEARED` is ported in `org.opentibia.canary.systems.soulwar`
+                // (different engine hierarchy), so it is not returned here.
+                // `CONDITION_AGONY` has no Canary condition class either; both keep
+                // the C++ `default: return nullptr` behaviour (PARITY GAP).
 
                 ConditionType.CONDITION_ROOTED,
                 ConditionType.CONDITION_INFIGHT,
