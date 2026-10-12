@@ -1,5 +1,7 @@
 package org.opentibia.canary.systems.bestiary
 
+import org.opentibia.canary.combat.CombatType
+
 /**
  * Charm runes: definitions and per-player state.
  *
@@ -8,8 +10,8 @@ package org.opentibia.canary.systems.bestiary
  *  - `src/creatures/creatures_definitions.hpp:391-431` (charmCategory_t, charm_t, charmRune_t)
  *  - `src/creatures/players/player.hpp:113-116` (struct CharmInfo)
  *
- * Combat handlers (Charm::damageType/effect/sound and IOBestiary::parseCharmCombat)
- * are intentionally out of scope for this engine-core port.
+ * The combat handlers live in [CharmCombat]; this file only owns the charm
+ * definition and per-player state.
  */
 
 /** `charmCategory_t` (creatures_definitions.hpp:391-395). */
@@ -78,6 +80,10 @@ data class Charm(
     val binary: Int = 0,
     val cancelMessage: String = "",
     val logMessage: Boolean = false,
+    val damageType: CombatType = CombatType.NONE,
+    val effect: Int = 0,
+    val soundImpactEffect: Int = 0,
+    val soundCastEffect: Int = 0,
     val percent: Double = 0.0,
     val chance: List<Double> = emptyList(),
 ) {

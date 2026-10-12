@@ -4,6 +4,7 @@ import java.util.Random
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
+import org.opentibia.canary.combat.CombatDamage
 
 /**
  * Engine core of the Gnomprona Hazard difficulty system.
@@ -306,5 +307,51 @@ object HazardSystem {
                 player.parseAttackRecvHazardSystem(damage, monster)
             }
         }
+    }
+
+    /**
+     * `Game::handleHazardSystemAttack` (src/game/game.cpp:8193-8201), connected
+     * to the combat core's [CombatDamage].
+     *
+     * The hazard parsers operate on the plain-integer [HazardDamage] mirror, so
+     * this overload crosses the seam in both directions: it snapshots the
+     * relevant [CombatDamage] fields, runs the parser, then writes the mutated
+     * values back. Damage types keep their numeric value, which is why
+     * [CombatDamage.primaryType] can be compared with the hazard `COMBAT_*`
+     * constants.
+     */
+    fun handleHazardSystemAttack(
+        damage: CombatDamage,
+        player: PlayerHazard,
+        monster: MonsterHazard,
+        isPlayerAttacker: Boolean,
+    ) {
+        if (damage.primaryValue == 0 || !monster.getHazard()) {
+            return
+        }
+
+        val view = HazardDamage(
+            primaryType = damage.primaryType.value,
+            primaryValue = damage.primaryValue,
+            secondaryType = damage.secondaryType.value,
+            secondaryValue = damage.secondaryValue,
+            critical = damage.critical,
+            extension = damage.extension,
+            exString = damage.exString,
+            hazardDodge = damage.hazardDodge,
+        )
+
+        if (isPlayerAttacker) {
+            player.parseAttackDealtHazardSystem(view, monster)
+        } else {
+            player.parseAttackRecvHazardSystem(view, monster)
+        }
+
+        damage.primaryValue = view.primaryValue
+        damage.secondaryValue = view.secondaryValue
+        damage.critical = view.critical
+        damage.extension = view.extension
+        damage.exString = view.exString
+        damage.hazardDodge = view.hazardDodge
     }
 }
