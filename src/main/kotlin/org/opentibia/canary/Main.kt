@@ -7,6 +7,8 @@ import org.opentibia.canary.config.ConfigManager
 import org.opentibia.canary.database.DatabaseConfig
 import org.opentibia.canary.database.DatabaseConnectionFactory
 import org.opentibia.canary.database.JdbcAccountRepository
+import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.network.CanaryServer
 
 private val logger = KotlinLogging.logger {}
@@ -35,15 +37,22 @@ fun main() {
     DatabaseConnectionFactory.migrate(dataSource)
     val accountRepo: AccountRepository = JdbcAccountRepository(dataSource)
 
+    val gameMap = GameMap()
+    val dispatcher = GameDispatcher().apply { start() }
+
     val server = CanaryServer(
-        port = serverConfig.loginPort,
-        accountRepository = accountRepo
+        loginPort = serverConfig.loginPort,
+        gamePort = serverConfig.gamePort,
+        accountRepository = accountRepo,
+        gameMap = gameMap,
+        dispatcher = dispatcher
     )
     server.start()
 
     Runtime.getRuntime().addShutdownHook(Thread {
         logger.info { "Shutting down..." }
         server.stop()
+        dispatcher.shutdown()
         dataSource.close()
     })
 }
