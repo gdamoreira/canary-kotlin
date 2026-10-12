@@ -16,11 +16,19 @@ import org.opentibia.canary.lua.runtime.LuaEnvironment
  *   rune:name("explosion rune")
  *   rune:id(18)
  *   rune:runeId(3200)
+ *   rune:level(20)
+ *   rune:mana(80)
+ *   rune:cooldown(2000)
+ *   rune:group(1)
+ *   rune:vocation("sorcerer")
+ *   rune:range(3)
  *   function rune.onCastSpell(creature, var, isHotkey) ... end
  *   rune:register()
  *
  * `Spell("instant")` / `Spell("rune")` (or the `SPELL_INSTANT` / `SPELL_RUNE` enum
- * values) create a new spell, mirroring SpellFunctions::luaSpellCreate.
+ * values) create a new spell, mirroring SpellFunctions::luaSpellCreate. Each
+ * constructor setter also supports the zero-argument getter form of its C++ counterpart
+ * (e.g. `spell:level()` returns the stored level).
  */
 object SpellBindings {
     private const val SPELL_INSTANT = 1
@@ -40,32 +48,66 @@ object SpellBindings {
                 var spellId = 0
                 var words = ""
                 var runeId = 0
+                var level = 0
+                var magicLevel = 0
+                var mana = 0
+                var cooldown = 0
+                var group = 0
+                var secondaryGroup = 0
+                var groupCooldown = 0
+                var secondaryGroupCooldown = 0
+                var range = 0
+                val vocations = mutableListOf<String>()
 
-                self.set("name", object : VarArgFunction() {
+                self.set("name", stringField({ name }, { name = it }))
+                self.set("id", intField({ spellId }, { spellId = it }))
+                self.set("words", stringField({ words }, { words = it }))
+                self.set("runeId", intField({ runeId }, { runeId = it }))
+                self.set("level", intField({ level }, { level = it }))
+                self.set("magicLevel", intField({ magicLevel }, { magicLevel = it }))
+                self.set("mana", intField({ mana }, { mana = it }))
+                self.set("cooldown", intField({ cooldown }, { cooldown = it }))
+                self.set("range", intField({ range }, { range = it }))
+                self.set("group", object : VarArgFunction() {
                     override fun invoke(a: Varargs): Varargs {
-                        name = a.arg(2).tojstring()
-                        return LuaValue.NONE
+                        if (a.narg() <= 1) {
+                            return LuaValue.varargsOf(LuaValue.valueOf(group), LuaValue.valueOf(secondaryGroup))
+                        }
+                        group = a.arg(2).toint()
+                        if (a.narg() > 2) {
+                            secondaryGroup = a.arg(3).toint()
+                        }
+                        return LuaValue.TRUE
                     }
                 })
-
-                self.set("id", object : VarArgFunction() {
+                self.set("groupCooldown", object : VarArgFunction() {
                     override fun invoke(a: Varargs): Varargs {
-                        spellId = a.arg(2).checkint()
-                        return LuaValue.NONE
+                        if (a.narg() <= 1) {
+                            return LuaValue.varargsOf(
+                                LuaValue.valueOf(groupCooldown),
+                                LuaValue.valueOf(secondaryGroupCooldown),
+                            )
+                        }
+                        groupCooldown = a.arg(2).toint()
+                        if (a.narg() > 2) {
+                            secondaryGroupCooldown = a.arg(3).toint()
+                        }
+                        return LuaValue.TRUE
                     }
                 })
-
-                self.set("words", object : VarArgFunction() {
+                self.set("vocation", object : VarArgFunction() {
                     override fun invoke(a: Varargs): Varargs {
-                        words = a.arg(2).checkjstring()
-                        return LuaValue.NONE
-                    }
-                })
-
-                self.set("runeId", object : VarArgFunction() {
-                    override fun invoke(a: Varargs): Varargs {
-                        runeId = a.arg(2).checkint()
-                        return LuaValue.NONE
+                        if (a.narg() <= 1) {
+                            val table = LuaTable()
+                            vocations.forEachIndexed { index, vocation ->
+                                table.set(index + 1, LuaValue.valueOf(vocation))
+                            }
+                            return table
+                        }
+                        for (i in 2..a.narg()) {
+                            vocations.add(a.arg(i).tojstring())
+                        }
+                        return LuaValue.TRUE
                     }
                 })
 
@@ -75,7 +117,24 @@ object SpellBindings {
                         if (!onCastSpell.isfunction()) {
                             return LuaValue.FALSE
                         }
-                        val spell = LuaSpell(name, spellType, spellId, words, runeId, onCastSpell)
+                        val spell = LuaSpell(
+                            name = name,
+                            spellType = spellType,
+                            spellId = spellId,
+                            words = words,
+                            runeId = runeId,
+                            onCastSpell = onCastSpell,
+                            level = level,
+                            magicLevel = magicLevel,
+                            mana = mana,
+                            cooldown = cooldown,
+                            group = group,
+                            secondaryGroup = secondaryGroup,
+                            groupCooldown = groupCooldown,
+                            secondaryGroupCooldown = secondaryGroupCooldown,
+                            range = range,
+                            vocations = vocations.toList(),
+                        )
                         val registered = when (spellType) {
                             SpellType.INSTANT -> spells.registerInstant(spell)
                             SpellType.RUNE -> spells.registerRune(spell)
@@ -89,6 +148,26 @@ object SpellBindings {
         })
 
         return spells
+    }
+
+    private fun intField(get: () -> Int, set: (Int) -> Unit): LuaValue = object : VarArgFunction() {
+        override fun invoke(a: Varargs): Varargs {
+            if (a.narg() <= 1) {
+                return LuaValue.valueOf(get())
+            }
+            set(a.arg(2).toint())
+            return LuaValue.TRUE
+        }
+    }
+
+    private fun stringField(get: () -> String, set: (String) -> Unit): LuaValue = object : VarArgFunction() {
+        override fun invoke(a: Varargs): Varargs {
+            if (a.narg() <= 1) {
+                return LuaValue.valueOf(get())
+            }
+            set(a.arg(2).tojstring())
+            return LuaValue.TRUE
+        }
     }
 
     private fun resolveType(value: LuaValue): SpellType? {

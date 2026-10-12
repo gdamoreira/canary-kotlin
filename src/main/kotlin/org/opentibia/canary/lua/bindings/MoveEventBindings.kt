@@ -8,6 +8,7 @@ import org.luaj.vm2.lib.ZeroArgFunction
 import org.opentibia.canary.lua.registry.LuaMoveEvent
 import org.opentibia.canary.lua.registry.MoveEvents
 import org.opentibia.canary.lua.runtime.LuaEnvironment
+import org.opentibia.canary.map.Position
 
 /**
  * Registers the global `MoveEvent()` constructor used by revscriptsys.lua scripts:
@@ -16,9 +17,15 @@ import org.opentibia.canary.lua.runtime.LuaEnvironment
  *   function trap.onStepIn(creature, item, position, fromPosition) ... end
  *   trap:type("stepin")
  *   trap:id(2145, 2148)
+ *   trap:level(10)
+ *   trap:magicLevel(3)
+ *   trap:slot("head")
+ *   trap:vocation("knight")
+ *   trap:position(Position(10, 20, 7))
  *   trap:register()
  *
- * Mirrors MoveEventFunctions::luaCreateMoveEvent, `id`/`aid`/`uid`, and the
+ * Mirrors MoveEventFunctions::luaCreateMoveEvent, `id`/`aid`/`uid`, the
+ * `level`/`magicLevel`/`slot`/`vocation`/`position` setters, and the
  * revscriptsys `on<Callback>` -> `type` mapping.
  */
 object MoveEventBindings {
@@ -31,6 +38,26 @@ object MoveEventBindings {
         "onStepOut" to "stepout"
     )
 
+    /**
+     * Mirrors the slot-name mapping in MoveEventFunctions::luaMoveEventSlot, using the
+     * `SlotPositionBits` values from src/items/items_definitions.hpp.
+     */
+    private val SLOT_BITS = mapOf(
+        "head" to (1 shl 0),
+        "necklace" to (1 shl 1),
+        "backpack" to (1 shl 2),
+        "armor" to (1 shl 3),
+        "body" to (1 shl 3),
+        "right-hand" to (1 shl 4),
+        "left-hand" to (1 shl 5),
+        "hand" to ((1 shl 4) or (1 shl 5)),
+        "shield" to ((1 shl 4) or (1 shl 5)),
+        "legs" to (1 shl 6),
+        "feet" to (1 shl 7),
+        "ring" to (1 shl 8),
+        "ammo" to (1 shl 9),
+    )
+
     fun install(env: LuaEnvironment): MoveEvents {
         val events = MoveEvents()
 
@@ -38,9 +65,14 @@ object MoveEventBindings {
             override fun call(): LuaValue {
                 val self = LuaTable()
                 var explicitType = ""
+                var requiredLevel = 0
+                var requiredMagicLevel = 0
+                var slot = 0
                 val itemIds = mutableListOf<Int>()
                 val actionIds = mutableListOf<Int>()
                 val uniqueIds = mutableListOf<Int>()
+                val positions = mutableListOf<Position>()
+                val vocations = mutableListOf<String>()
 
                 self.set("type", object : VarArgFunction() {
                     override fun invoke(a: Varargs): Varargs {
@@ -52,6 +84,47 @@ object MoveEventBindings {
                 self.set("id", idCollector(itemIds))
                 self.set("aid", idCollector(actionIds))
                 self.set("uid", idCollector(uniqueIds))
+
+                self.set("level", object : VarArgFunction() {
+                    override fun invoke(a: Varargs): Varargs {
+                        requiredLevel = a.arg(2).toint()
+                        return LuaValue.TRUE
+                    }
+                })
+
+                self.set("magicLevel", object : VarArgFunction() {
+                    override fun invoke(a: Varargs): Varargs {
+                        requiredMagicLevel = a.arg(2).toint()
+                        return LuaValue.TRUE
+                    }
+                })
+
+                self.set("slot", object : VarArgFunction() {
+                    override fun invoke(a: Varargs): Varargs {
+                        val bits = SLOT_BITS[a.arg(2).tojstring().lowercase()] ?: return LuaValue.FALSE
+                        slot = bits
+                        return LuaValue.TRUE
+                    }
+                })
+
+                self.set("position", object : VarArgFunction() {
+                    override fun invoke(a: Varargs): Varargs {
+                        for (i in 2..a.narg()) {
+                            val position = a.arg(i).touserdata() as? Position ?: return LuaValue.FALSE
+                            positions.add(position)
+                        }
+                        return LuaValue.TRUE
+                    }
+                })
+
+                self.set("vocation", object : VarArgFunction() {
+                    override fun invoke(a: Varargs): Varargs {
+                        for (i in 2..a.narg()) {
+                            vocations.add(a.arg(i).tojstring())
+                        }
+                        return LuaValue.TRUE
+                    }
+                })
 
                 self.set("register", object : VarArgFunction() {
                     override fun invoke(a: Varargs): Varargs {
@@ -76,7 +149,12 @@ object MoveEventBindings {
                             itemIds.toList(),
                             actionIds.toList(),
                             uniqueIds.toList(),
-                            callback
+                            callback,
+                            requiredLevel,
+                            requiredMagicLevel,
+                            slot,
+                            positions.toList(),
+                            vocations.toList()
                         )
                         return LuaValue.valueOf(events.register(event))
                     }

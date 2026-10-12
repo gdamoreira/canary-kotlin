@@ -17,6 +17,34 @@ internal fun luaFunction(fn: (Varargs) -> Varargs): VarArgFunction = object : Va
 internal fun retrieveUserdata(args: Varargs, index: Int): Any? = args.arg(index).touserdata()
 
 /**
+ * Reads a Lua argument into a raw attribute value, mirroring Canary's
+ * `ItemFunctions::luaItemSetAttribute` value handling (boolean, integer, float, string).
+ */
+internal fun luaToAttributeValue(value: LuaValue): Any? = when {
+    value.isnil() -> null
+    value.isboolean() -> value.toboolean()
+    value.isnumber() -> if (value.isint()) value.toint() else value.todouble()
+    value.isstring() -> value.tojstring()
+    else -> null
+}
+
+/**
+ * Converts a seam attribute result back to Lua, mirroring Canary's
+ * `ItemFunctions::luaItemGetAttribute` (integer attributes as numbers, string attributes
+ * as strings, absent attributes as nil).
+ */
+internal fun attributeValueToLua(value: Any?): LuaValue = when (value) {
+    null -> LuaValue.NIL
+    is Int -> LuaValue.valueOf(value)
+    is Long -> LuaValue.valueOf(value.toDouble())
+    is Double -> LuaValue.valueOf(value)
+    is Float -> LuaValue.valueOf(value.toDouble())
+    is Boolean -> LuaValue.valueOf(value)
+    is String -> LuaValue.valueOf(value)
+    else -> LuaValue.valueOf(value.toString())
+}
+
+/**
  * Mirrors Canary's item-return convention: a single item is returned as its userdata,
  * multiple items as a 1-indexed table, and none as nil.
  */

@@ -58,6 +58,22 @@ interface PlayerOperations {
     fun addSkillTries(player: Any, skillType: Int, tries: Long): Boolean
 
     fun sendTextMessage(player: Any, message: LuaTextMessage): Boolean
+
+    fun getStorageValue(player: Any, key: Int): Int
+
+    fun setStorageValue(player: Any, key: Int, value: Int): Boolean
+
+    fun getLevel(player: Any): Int
+
+    fun getExperience(player: Any): Long
+
+    fun addExperience(player: Any, experience: Long, sendText: Boolean): Boolean
+
+    fun getMana(player: Any): Int
+
+    fun addMana(player: Any, manaChange: Int, animationOnLoss: Boolean): Boolean
+
+    fun getVocation(player: Any): Any
 }
 
 /**
@@ -69,6 +85,14 @@ interface PlayerOperations {
  *   player:addSkillTries(skillType, tries)
  *   player:sendTextMessage(type, text[, position, primaryValue, primaryColor[, secondaryValue, secondaryColor]])
  *   player:sendTextMessage(type, text, channelId)
+ *   player:getStorageValue(key)
+ *   player:setStorageValue(key, value)
+ *   player:getLevel()
+ *   player:getExperience()
+ *   player:addExperience(experience[, sendText = false])
+ *   player:getMana()
+ *   player:addMana(manaChange[, animationOnLoss = false])
+ *   player:getVocation()
  */
 object PlayerFunctions {
     const val PLAYER_TYPE = "Player"
@@ -134,6 +158,52 @@ object PlayerFunctions {
             }
             LuaValue.valueOf(operations.sendTextMessage(player, message))
         })
+
+        registry.registerMethod(PLAYER_TYPE, "getStorageValue", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.getStorageValue(player, args.arg(2).toint()))
+        })
+
+        registry.registerMethod(PLAYER_TYPE, "setStorageValue", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val key = args.arg(2).toint()
+            val value = args.arg(3).toint()
+            LuaValue.valueOf(operations.setStorageValue(player, key, value))
+        })
+
+        registry.registerMethod(PLAYER_TYPE, "getLevel", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.getLevel(player))
+        })
+
+        registry.registerMethod(PLAYER_TYPE, "getExperience", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.getExperience(player).toDouble())
+        })
+
+        registry.registerMethod(PLAYER_TYPE, "addExperience", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val experience = args.arg(2).optlong(0)
+            val sendText = args.arg(3).optboolean(false)
+            LuaValue.valueOf(operations.addExperience(player, experience, sendText))
+        })
+
+        registry.registerMethod(PLAYER_TYPE, "getMana", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.getMana(player))
+        })
+
+        registry.registerMethod(PLAYER_TYPE, "addMana", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val manaChange = args.arg(2).toint()
+            val animationOnLoss = args.arg(3).optboolean(false)
+            LuaValue.valueOf(operations.addMana(player, manaChange, animationOnLoss))
+        })
+
+        registry.registerMethod(PLAYER_TYPE, "getVocation", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            env.userdata.wrap("Vocation", operations.getVocation(player))
+        })
     }
 }
 
@@ -181,4 +251,28 @@ internal object UnwiredPlayerOperations : PlayerOperations {
 
     override fun sendTextMessage(player: Any, message: LuaTextMessage): Boolean =
         throw NotImplementedError("PlayerFunctions.sendTextMessage seam is not wired")
+
+    override fun getStorageValue(player: Any, key: Int): Int =
+        throw NotImplementedError("PlayerFunctions.getStorageValue seam is not wired")
+
+    override fun setStorageValue(player: Any, key: Int, value: Int): Boolean =
+        throw NotImplementedError("PlayerFunctions.setStorageValue seam is not wired")
+
+    override fun getLevel(player: Any): Int =
+        throw NotImplementedError("PlayerFunctions.getLevel seam is not wired")
+
+    override fun getExperience(player: Any): Long =
+        throw NotImplementedError("PlayerFunctions.getExperience seam is not wired")
+
+    override fun addExperience(player: Any, experience: Long, sendText: Boolean): Boolean =
+        throw NotImplementedError("PlayerFunctions.addExperience seam is not wired")
+
+    override fun getMana(player: Any): Int =
+        throw NotImplementedError("PlayerFunctions.getMana seam is not wired")
+
+    override fun addMana(player: Any, manaChange: Int, animationOnLoss: Boolean): Boolean =
+        throw NotImplementedError("PlayerFunctions.addMana seam is not wired")
+
+    override fun getVocation(player: Any): Any =
+        throw NotImplementedError("PlayerFunctions.getVocation seam is not wired")
 }

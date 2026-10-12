@@ -21,12 +21,39 @@ interface PositionOperations {
  *   position:sendMagicEffect(magicEffect[, player])
  *   position:removeMagicEffect(magicEffect[, player])
  *   position:toString()
+ *
+ * It also registers the `__add`, `__sub` and `__eq` metamethods mirroring
+ * PositionFunctions::luaPositionAdd/luaPositionSub/luaPositionCompare.
  */
 object PositionFunctions {
     const val POSITION_TYPE = "Position"
 
     fun install(env: LuaEnvironment, operations: PositionOperations = UnwiredPositionOperations) {
         val registry = env.userdata
+
+        registry.registerMethod(POSITION_TYPE, "__add", luaFunction { args ->
+            val position = retrieveUserdata(args, 1) as? Position ?: return@luaFunction LuaValue.NIL
+            val other = retrieveUserdata(args, 2) as? Position ?: return@luaFunction LuaValue.NIL
+            env.userdata.wrap(
+                POSITION_TYPE,
+                Position(position.x + other.x, position.y + other.y, position.z + other.z),
+            )
+        })
+
+        registry.registerMethod(POSITION_TYPE, "__sub", luaFunction { args ->
+            val position = retrieveUserdata(args, 1) as? Position ?: return@luaFunction LuaValue.NIL
+            val other = retrieveUserdata(args, 2) as? Position ?: return@luaFunction LuaValue.NIL
+            env.userdata.wrap(
+                POSITION_TYPE,
+                Position(position.x - other.x, position.y - other.y, position.z - other.z),
+            )
+        })
+
+        registry.registerMethod(POSITION_TYPE, "__eq", luaFunction { args ->
+            val position = retrieveUserdata(args, 1) as? Position ?: return@luaFunction LuaValue.NIL
+            val other = retrieveUserdata(args, 2) as? Position ?: return@luaFunction LuaValue.FALSE
+            LuaValue.valueOf(position == other)
+        })
 
         registry.registerMethod(POSITION_TYPE, "getDistance", luaFunction { args ->
             val position = retrieveUserdata(args, 1) as? Position ?: return@luaFunction LuaValue.NIL

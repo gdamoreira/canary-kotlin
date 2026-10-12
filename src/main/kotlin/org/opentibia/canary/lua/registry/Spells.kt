@@ -13,7 +13,17 @@ data class LuaSpell(
     val spellId: Int,
     val words: String,
     val runeId: Int,
-    val onCastSpell: LuaValue
+    val onCastSpell: LuaValue,
+    val level: Int = 0,
+    val magicLevel: Int = 0,
+    val mana: Int = 0,
+    val cooldown: Int = 0,
+    val group: Int = 0,
+    val secondaryGroup: Int = 0,
+    val groupCooldown: Int = 0,
+    val secondaryGroupCooldown: Int = 0,
+    val range: Int = 0,
+    val vocations: List<String> = emptyList(),
 )
 
 /**

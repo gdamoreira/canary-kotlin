@@ -1,13 +1,19 @@
 package org.opentibia.canary.lua.registry
 
 import org.luaj.vm2.LuaValue
+import org.opentibia.canary.map.Position
 
 data class LuaMoveEvent(
     val eventType: String,
     val itemIds: List<Int>,
     val actionIds: List<Int>,
     val uniqueIds: List<Int>,
-    val callback: LuaValue
+    val callback: LuaValue,
+    val requiredLevel: Int = 0,
+    val requiredMagicLevel: Int = 0,
+    val slot: Int = 0,
+    val positions: List<Position> = emptyList(),
+    val vocations: List<String> = emptyList(),
 )
 
 /**

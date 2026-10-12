@@ -28,9 +28,12 @@ class CoreBindingsTest {
         var health: Int,
         val maxHealth: Int,
         val position: Position,
+        var direction: Int = 0,
     )
 
     private class FakePlayer
+
+    private class FakeVocation(val id: Int, val name: String)
 
     private data class AddItemCall(
         val itemId: Int,
@@ -53,6 +56,12 @@ class CoreBindingsTest {
     private class FakePlayerOps : PlayerOperations {
         val addItemCalls = mutableListOf<AddItemCall>()
         var lastMessage: LuaTextMessage? = null
+        val storage = mutableMapOf<Int, Int>()
+        val vocation = FakeVocation(4, "Elite Knight")
+        var level = 33
+        var experience = 12_345L
+        var mana = 70
+        var lastAddExperience: Pair<Long, Boolean>? = null
         override fun itemIdByName(name: String): Int = if (name == "gold coin") 2148 else 0
         override fun addItem(
             player: Any,
@@ -90,6 +99,32 @@ class CoreBindingsTest {
             lastMessage = message
             return true
         }
+
+        override fun getStorageValue(player: Any, key: Int): Int = storage[key] ?: -1
+
+        override fun setStorageValue(player: Any, key: Int, value: Int): Boolean {
+            storage[key] = value
+            return true
+        }
+
+        override fun getLevel(player: Any): Int = level
+
+        override fun getExperience(player: Any): Long = experience
+
+        override fun addExperience(player: Any, experience: Long, sendText: Boolean): Boolean {
+            this.experience += experience
+            lastAddExperience = experience to sendText
+            return true
+        }
+
+        override fun getMana(player: Any): Int = mana
+
+        override fun addMana(player: Any, manaChange: Int, animationOnLoss: Boolean): Boolean {
+            mana += manaChange
+            return true
+        }
+
+        override fun getVocation(player: Any): Any = vocation
     }
 
     private class FakeCreatureOps : CreatureOperations {
@@ -110,11 +145,22 @@ class CoreBindingsTest {
         }
 
         override fun getPosition(creature: Any): Position = (creature as FakeCreature).position
+
+        override fun getDirection(creature: Any): Int = (creature as FakeCreature).direction
+
+        override fun setDirection(creature: Any, direction: Int): Boolean {
+            (creature as FakeCreature).direction = direction
+            return true
+        }
     }
 
     private class FakeItemOps : ItemOperations {
         val transforms = mutableListOf<Triple<Any, Int, Int>>()
+        val attributes = mutableMapOf<Int, Any>()
+        var actionId = 0
+        var uniqueId = 0L
         override fun itemIdByName(name: String): Int = 0
+        override fun itemAttributeByName(name: String): Int = if (name == "duration") 5 else 0
         override fun getId(item: Any): Int = (item as FakeItem).id
         override fun getCount(item: Any): Int = (item as FakeItem).count
         override fun getName(item: Any): String = (item as FakeItem).name
@@ -129,6 +175,29 @@ class CoreBindingsTest {
         }
 
         override fun decay(item: Any, decayId: Int): Boolean = true
+
+        override fun getActionId(item: Any): Int = actionId
+
+        override fun setActionId(item: Any, actionId: Int): Boolean {
+            this.actionId = actionId
+            return true
+        }
+
+        override fun getUniqueId(item: Any): Long = uniqueId
+
+        override fun getAttribute(item: Any, attribute: Int): Any? = attributes[attribute]
+
+        override fun setAttribute(item: Any, attribute: Int, value: Any?): Boolean {
+            if (attribute == 0) {
+                return false
+            }
+            if (value == null) {
+                attributes.remove(attribute)
+            } else {
+                attributes[attribute] = value
+            }
+            return true
+        }
     }
 
     private class FakePositionOps : PositionOperations {
@@ -300,6 +369,100 @@ class CoreBindingsTest {
         assertThat(environment.getGlobal("text").tojstring()).isEqualTo("( 1, 2, 3 )")
         assertThat(environment.getGlobal("ok").toboolean()).isTrue()
         assertThat(positionOps.effects).containsExactly(Triple(Position(1, 2, 3), 12, null))
+    }
+
+    @Test
+    fun `Player storage level experience mana and vocation use the Canary names`() {
+        val environment = env()
+        val playerOps = FakePlayerOps()
+        PlayerFunctions.install(environment, playerOps)
+        environment.globals.set("p", environment.userdata.wrap("Player", FakePlayer()))
+
+        environment.loadChunk("storage = p:getStorageValue(1000)")
+        environment.loadChunk("stored = p:setStorageValue(1000, 42)")
+        environment.loadChunk("again = p:getStorageValue(1000)")
+        environment.loadChunk("level = p:getLevel()")
+        environment.loadChunk("experience = p:getExperience()")
+        environment.loadChunk("added = p:addExperience(500, true)")
+        environment.loadChunk("addedMana = p:addMana(30)")
+        environment.loadChunk("mana = p:getMana()")
+        environment.loadChunk("vocation = p:getVocation()")
+
+        assertThat(environment.getGlobal("storage").toint()).isEqualTo(-1)
+        assertThat(environment.getGlobal("again").toint()).isEqualTo(42)
+        assertThat(playerOps.storage).containsEntry(1000, 42)
+        assertThat(environment.getGlobal("level").toint()).isEqualTo(33)
+        assertThat(environment.getGlobal("experience").toint()).isEqualTo(12_345)
+        assertThat(environment.getGlobal("added").toboolean()).isTrue()
+        assertThat(playerOps.lastAddExperience).isEqualTo(500L to true)
+        assertThat(environment.getGlobal("mana").toint()).isEqualTo(100)
+        assertThat(environment.getGlobal("addedMana").toboolean()).isTrue()
+        assertThat(environment.getGlobal("vocation").isuserdata()).isTrue()
+    }
+
+    @Test
+    fun `Creature direction uses the Canary names`() {
+        val environment = env()
+        CreatureFunctions.install(environment, FakeCreatureOps())
+        val creature = FakeCreature(9L, "Rat", 30, 100, Position(10, 20, 7), direction = 2)
+        environment.globals.set("c", environment.userdata.wrap("Monster", creature))
+
+        environment.loadChunk("dir = c:getDirection()")
+        environment.loadChunk("turned = c:setDirection(3)")
+        environment.loadChunk("after = c:getDirection()")
+
+        assertThat(environment.getGlobal("dir").toint()).isEqualTo(2)
+        assertThat(environment.getGlobal("turned").toboolean()).isTrue()
+        assertThat(environment.getGlobal("after").toint()).isEqualTo(3)
+        assertThat(creature.direction).isEqualTo(3)
+    }
+
+    @Test
+    fun `Item action id unique id and attributes use the Canary names`() {
+        val environment = env()
+        val itemOps = FakeItemOps()
+        ItemFunctions.install(environment, itemOps)
+        itemOps.uniqueId = 6543L
+        itemOps.attributes[5] = 180
+        environment.globals.set("item", environment.userdata.wrap("Item", FakeItem(2160)))
+
+        environment.loadChunk("aid = item:getActionId()")
+        environment.loadChunk("setAid = item:setActionId(100)")
+        environment.loadChunk("uid = item:getUniqueId()")
+        environment.loadChunk("attr = item:getAttribute(5)")
+        environment.loadChunk("named = item:getAttribute('duration')")
+        environment.loadChunk("setAttr = item:setAttribute(5, 7)")
+
+        assertThat(environment.getGlobal("aid").toint()).isEqualTo(0)
+        assertThat(environment.getGlobal("setAid").toboolean()).isTrue()
+        assertThat(itemOps.actionId).isEqualTo(100)
+        assertThat(environment.getGlobal("uid").toint()).isEqualTo(6543)
+        assertThat(environment.getGlobal("attr").toint()).isEqualTo(180)
+        assertThat(environment.getGlobal("named").toint()).isEqualTo(180)
+        assertThat(environment.getGlobal("setAttr").toboolean()).isTrue()
+        assertThat(itemOps.attributes[5]).isEqualTo(7)
+    }
+
+    @Test
+    fun `Position arithmetic and equality metamethods follow Canary`() {
+        val environment = env()
+        PositionFunctions.install(environment, FakePositionOps())
+        environment.globals.set("a", environment.userdata.wrap("Position", Position(1, 2, 3)))
+        environment.globals.set("b", environment.userdata.wrap("Position", Position(4, 5, 6)))
+        environment.globals.set("same", environment.userdata.wrap("Position", Position(1, 2, 3)))
+
+        environment.loadChunk("sum = a + b")
+        environment.loadChunk("diff = a - b")
+        environment.loadChunk("equal = (a == same)")
+        environment.loadChunk("different = (a == b)")
+
+        assertThat(environment.getGlobal("sum").isuserdata()).isTrue()
+        environment.loadChunk("sumText = sum:toString()")
+        assertThat(environment.getGlobal("sumText").tojstring()).isEqualTo("( 5, 7, 9 )")
+        environment.loadChunk("diffText = diff:toString()")
+        assertThat(environment.getGlobal("diffText").tojstring()).isEqualTo("( -3, -3, -3 )")
+        assertThat(environment.getGlobal("equal").toboolean()).isTrue()
+        assertThat(environment.getGlobal("different").toboolean()).isFalse()
     }
 
     @Test
