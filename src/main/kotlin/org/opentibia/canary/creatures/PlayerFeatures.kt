@@ -17,6 +17,8 @@ import org.opentibia.canary.systems.offlinetraining.VocationRequirements
 import org.opentibia.canary.systems.proficiency.WeaponProficiencyData
 import org.opentibia.canary.systems.rewardchest.RewardChest
 import org.opentibia.canary.systems.wheel.PlayerWheel
+import org.opentibia.canary.creatures.vocations.VocationRequirementsAdapter
+import org.opentibia.canary.creatures.vocations.Vocations
 
 /**
  * Composition holder for the per-player advanced-feature engine cores.
@@ -49,8 +51,14 @@ class PlayerFeatures(
     private val isPremiumProvider: () -> Boolean = { false },
     /** `Player::isAccessPlayer()` (`group->access`). */
     private val hasAccessProvider: () -> Boolean = { false },
+    /** `Vocations::getInstance()` registry; when present it satisfies the offline-training requirement seam. */
+    private val vocations: Vocations? = null,
     /** `Vocation::getReqSkillTries` / `Vocation::getReqMana` seam. */
-    private val vocationRequirementsProvider: () -> VocationRequirements = { UnwiredVocationRequirements },
+    private val vocationRequirementsProvider: () -> VocationRequirements = {
+        vocations?.getVocation(vocationIdProvider())
+            ?.let { VocationRequirementsAdapter(it) }
+            ?: UnwiredVocationRequirements
+    },
     /** `Mounts::getInstance()` definition registry. */
     private val mountDefinitions: Mounts = Mounts(),
     /** `Familiars::getInstance()` definition registry. */
@@ -123,7 +131,7 @@ class PlayerFeatures(
  * constructible and inert; the real `Vocation::getReqSkillTries` /
  * `Vocation::getReqMana` formulas are still an unported parity gap.
  */
-private object UnwiredVocationRequirements : VocationRequirements {
+internal object UnwiredVocationRequirements : VocationRequirements {
     override fun getReqSkillTries(skill: Skill, level: Int): Long = 0L
     override fun getReqMana(magLevel: Int): Long = 0L
 }

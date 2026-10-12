@@ -3,6 +3,7 @@ package org.opentibia.canary.creatures
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.creatures.vocations.Vocation
+import org.opentibia.canary.creatures.vocations.VocationRequirementsAdapter
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.systems.rewardchest.ReturnValue
@@ -94,6 +95,11 @@ class Player(
         levelProvider = { level },
         vocationIdProvider = { vocationId },
         isPremiumProvider = { premium },
+        vocationRequirementsProvider = {
+            vocations?.getVocation(vocationId)
+                ?.let { VocationRequirementsAdapter(it) }
+                ?: UnwiredVocationRequirements
+        },
     )
 
     /**
