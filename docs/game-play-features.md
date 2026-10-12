@@ -4,7 +4,7 @@ This document establishes the master inventory of all gameplay features from Can
 
 ---
 
-## 📊 Gameplay Feature Matrix
+## 📊 1. Implemented & Verified Gameplay Features
 
 | # | Gameplay System / Feature | Domain & Protocol Logic | Status | Automated Test Reference |
 |---|---|---|:---:|---|
@@ -52,9 +52,32 @@ This document establishes the master inventory of all gameplay features from Can
 
 ---
 
-## 📈 Roadmap & Completion Progress
+## ⏳ 2. Remaining Canary Gameplay Features (Pending Implementation)
 
-- **Total Mapped Gameplay Features**: 41
-- **Implemented & Verified in Kotlin**: 41 (**100%**)
-- **Unit & Integration Tests**: 53 automated test suites passing on **Java 25 LTS** via `./gradlew test`.
-- **Database Backend**: PostgreSQL 16+ production support + H2 In-Memory zero-configuration local testing mode with Flyway migrations.
+The following advanced and secondary gameplay systems from Canary are identified and categorized for implementation:
+
+| # | Feature Name | Description & Canary Source Reference | Target Component |
+|---|---|---|---|
+| **42** | **Wheel of Destiny (Skill Wheel)** | `src/io/io_wheel.cpp`, `src/enums/player_wheel.hpp`. Vocation perk trees, points distribution per level $>50$, dedication perks, gem sockets, and active spell bonuses (`0x61` Open, `0x62` Save). | `WheelOfDestinyEngine.kt` |
+| **43** | **Exaltation Forge (Item Tiers & Fusion)** | `data/libs/systems/exaltation_forge.lua`, `src/enums/forge_conversion.hpp`. Dust, sliver, and core currency. Equipment fusion (Tier 0 to Tier 10), Onslaught (bonus damage), Ruse (dodge), and Momentum (cooldown reduction). | `ExaltationForgeEngine.kt` |
+| **44** | **Bestiary & Charm Runes** | `src/io/iobestiary.cpp`, `data/scripts/systems/bestiary_charms.lua`. Monster kill counter stages, unlocking charm points, assigning active charms (Zap, Freeze, Wound, Dodge, Parry, Low Blow). | `BestiaryCharmEngine.kt` |
+| **45** | **In-Game Store (GameStore)** | `data/modules/scripts/gamestore/gamestore.lua`, `src/enums/account_coins.hpp`. Tibia coins / transferable coins balance, category browsing, instant delivery of outfits, mounts, XP boosts, and blessings. | `GameStoreService.kt` |
+| **46** | **Hazard System (Gnomprona Primal Dungeons)** | `data/libs/systems/hazard.lua`. Hazard level scales ($1..12+$, Primal Pods, Plunder Patriarch). Increases monster damage, defense, and boosted loot drop rates. | `HazardSystemEngine.kt` |
+| **47** | **Daily Reward Shrine** | `data/libs/systems/daily_reward.lua`. Consecutive daily streak tracking (1..7 days), rest area bonuses, granting daily potions, prey cards, and XP boosts. | `DailyRewardEngine.kt` |
+| **48** | **Boss Reward Chest (Damage Participation Loot)**| `src/items/containers/rewards/`, `data/scripts/systems/reward_chest.lua`. Tracks damage dealt, damage taken, and healing contributions per player during boss fights; deposits individualized reward containers into player reward chests. | `RewardChestEngine.kt` |
+| **49** | **Familiars (Summoned Vocation Companions)** | `data/libs/systems/familiar.lua`, `data/XML/familiars.xml`. 30-minute cooldown summons for level 200+ characters (Sorcerer: *Sorcerer Familiar*, Druid: *Druid Familiar*, Knight: *Knight Familiar*, Paladin: *Paladin Familiar*). | `FamiliarSystem.kt` |
+| **50** | **Hirelings System** | `data/libs/systems/hireling.lua`. House hireling NPCs serving as bankers, traders, cooks, and potion sellers with customized dresses and dialogues. | `HirelingSystem.kt` |
+| **51** | **Mounts & Speed Bonuses** | `data/XML/mounts.xml`. Equipping mounts via hotkey, applying fixed speed bonuses ($+10..+15$ speed), and taming item chances. | `MountSystem.kt` |
+| **52** | **Weapon Proficiencies (Tibia 13.30+)** | `src/enums/weapon_proficiency.hpp`, `data/items/proficiencies.json`. Leveling weapon weapon families (Swords, Axes, Clubs, Bows, Crossbows, Rods, Wands) granting passive damage and critical chances. | `WeaponProficiencyEngine.kt` |
+| **53** | **Soul War / Taint Encounters** | `data/libs/systems/encounters.lua`. Goshnar taint multipliers, fear/agony gauges, and mechanical environmental arena traps. | `EncounterEngine.kt` |
+| **54** | **Scheduled World Raids** | `data-canary/raids/raids.xml`. Automated global raid announcements (e.g. *"The ancient dragon Ghazbaran has risen!"*) spawning boss encounters and minions. | `RaidScheduler.kt` |
+| **55** | **Offline Training Shrines** | `src/server/network/protocol/protocolgame.cpp` opcode `0x74`. Clicking training statues in temples/houses to log out and accumulate skill/magic level progress over offline hours. | `OfflineTrainingEngine.kt` |
+| **56** | **Concoctions (Alchemy Potions)** | `data/libs/systems/concoctions.lua`. Temporary 1-hour alchemical stat flasks granting elemental protections, skill buffs, and mana leech bonuses. | `ConcoctionEngine.kt` |
+
+---
+
+## 📈 Summary Metrics
+
+- **Implemented & Verified Gameplay Systems**: **41 / 56** ($73\%$)
+- **Planned Advanced Gameplay Systems**: **15 / 56** ($27\%$)
+- **Automated Test Coverage**: 53 test suites passing cleanly on **Java 25 LTS** via `./gradlew test`.
