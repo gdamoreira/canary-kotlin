@@ -24,6 +24,9 @@ dependencies {
     // SQLite JDBC
     implementation("org.xerial:sqlite-jdbc:3.48.0.0")
 
+    // LuaJ scripting engine
+    implementation("org.luaj:luaj-jse:3.0.1")
+
     // Testing (JUnit 5 + Mockk + AssertJ)
     testImplementation(kotlin("test"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
