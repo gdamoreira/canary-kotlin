@@ -4,6 +4,8 @@ import org.luaj.vm2.Globals
 import org.luaj.vm2.LuaError
 import org.luaj.vm2.LuaValue
 import org.luaj.vm2.lib.jse.JsePlatform
+import org.opentibia.canary.lua.bindings.ActionBindings
+import org.opentibia.canary.lua.registry.Actions
 import org.opentibia.canary.lua.userdata.UserdataRegistry
 
 /**
@@ -16,6 +18,8 @@ class LuaEnvironment {
     lateinit var userdata: UserdataRegistry
         private set
 
+    val actions = Actions()
+
     private val libraries = mutableListOf<() -> LuaValue>()
 
     fun registerLib(name: String, fetch: () -> LuaValue) {
@@ -25,6 +29,7 @@ class LuaEnvironment {
     fun initState() {
         loadCompatShim()
         userdata = UserdataRegistry(globals)
+        ActionBindings.install(this)
         libraries.forEach { it() }
     }
 
