@@ -36,6 +36,17 @@ class Monster(
     position: Position
 ) : Creature(id, name, maxHealth, health, maxMana, mana, speed, position)
 
+enum class FightMode {
+    Attack,
+    Balanced,
+    Defense
+}
+
+enum class ChaseMode {
+    StandStill,
+    Follow
+}
+
 class Player(
     id: Long,
     name: String,
@@ -47,7 +58,11 @@ class Player(
     speed: Int = 220,
     position: Position,
     var experience: Long = 0,
-    var level: Int = 1
+    var level: Int = 1,
+    var fightMode: FightMode = FightMode.Attack,
+    var chaseMode: ChaseMode = ChaseMode.StandStill,
+    var secureMode: Boolean = true,
+    var targetCreatureId: Long? = null
 ) : Creature(id, name, maxHealth, health, maxMana, mana, speed, position) {
 
     fun addExperience(exp: Long) {
