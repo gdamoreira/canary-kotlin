@@ -8,8 +8,11 @@ import org.opentibia.canary.database.DatabaseConfig
 import org.opentibia.canary.database.DatabaseConnectionFactory
 import org.opentibia.canary.database.JdbcAccountRepository
 import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.lua.loader.Scripts
+import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.network.CanaryServer
+import java.nio.file.Path
 
 private val logger = KotlinLogging.logger {}
 
@@ -40,12 +43,19 @@ fun main() {
     val gameMap = GameMap()
     val dispatcher = GameDispatcher().apply { start() }
 
+    val luaEnvironment = LuaEnvironment().apply { initState() }
+    val scripts = Scripts(luaEnvironment).apply {
+        setDirectories(Path.of("data"), Path.of("data-canary"))
+        loadScripts(Path.of("data-canary/scripts"))
+    }
+
     val server = CanaryServer(
         loginPort = serverConfig.loginPort,
         gamePort = serverConfig.gamePort,
         accountRepository = accountRepo,
         gameMap = gameMap,
-        dispatcher = dispatcher
+        dispatcher = dispatcher,
+        luaEnvironment = luaEnvironment
     )
     server.start()
 

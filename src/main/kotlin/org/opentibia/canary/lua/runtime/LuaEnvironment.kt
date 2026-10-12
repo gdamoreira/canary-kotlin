@@ -9,6 +9,8 @@ import org.opentibia.canary.lua.bindings.TalkActionBindings
 import org.opentibia.canary.lua.registry.Actions
 import org.opentibia.canary.lua.registry.TalkActions
 import org.opentibia.canary.lua.userdata.UserdataRegistry
+import java.nio.file.Files
+import java.nio.file.Path
 
 /**
  * Mirrors Canary's LuaScriptInterface: owns a single LuaJ [Globals], preloads the
@@ -51,6 +53,11 @@ class LuaEnvironment {
     }
 
     fun getGlobal(name: String): LuaValue = globals.get(name)
+
+    fun loadFile(path: Path) {
+        val source = Files.readString(path)
+        loadChunk(source, "@${path.toAbsolutePath()}")
+    }
 
     private fun loadCompatShim() {
         val stream = javaClass.classLoader.getResourceAsStream(COMPAT_RESOURCE)

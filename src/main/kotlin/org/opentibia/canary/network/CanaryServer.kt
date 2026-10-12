@@ -12,6 +12,7 @@ import io.netty.channel.socket.nio.NioServerSocketChannel
 import org.opentibia.canary.account.AccountRepository
 import org.opentibia.canary.account.InMemoryAccountRepository
 import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.network.codec.RateLimiterHandler
 import org.opentibia.canary.network.codec.TibiaFrameDecoder
@@ -32,8 +33,11 @@ class CanaryServer(
     private val accountRepository: AccountRepository = InMemoryAccountRepository(),
     private val gameMap: GameMap = GameMap(),
     private val dispatcher: GameDispatcher = GameDispatcher(),
-    private val rsaCipher: RsaCipher = RsaCipher()
+    private val rsaCipher: RsaCipher = RsaCipher(),
+    private val luaEnvironment: LuaEnvironment = LuaEnvironment().apply { initState() }
 ) {
+    val scriptingEnvironment: LuaEnvironment get() = luaEnvironment
+
     private var bossGroup: EventLoopGroup? = null
     private var workerGroup: EventLoopGroup? = null
     private var loginChannelFuture: ChannelFuture? = null
