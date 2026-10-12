@@ -10,6 +10,8 @@ import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.network.protocol.ItemPacketHandler
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class LuaActionDispatchTest {
     @Test
@@ -46,10 +48,10 @@ class LuaActionDispatchTest {
             val handled = ItemPacketHandler.handleUse(player, payload, map, dispatcher, env)
             assertThat(handled).isTrue()
 
-            val deadline = System.currentTimeMillis() + 2_000
-            while (!env.getGlobal("lever_used").toboolean() && System.currentTimeMillis() < deadline) {
-                Thread.sleep(10)
-            }
+            val ran = CountDownLatch(1)
+            dispatcher.dispatch { ran.countDown() }
+            assertThat(ran.await(2, TimeUnit.SECONDS)).isTrue()
+
             assertThat(env.getGlobal("lever_used").toboolean()).isTrue()
         } finally {
             dispatcher.shutdown()

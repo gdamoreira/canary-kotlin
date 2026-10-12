@@ -5,6 +5,8 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.game.movement.Direction
+import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 
@@ -29,7 +31,11 @@ class GamePacketRouterTest {
         frame.writeByte(0x65) // Move North
         frame.writeByte(0x66) // Move East
 
-        val context = GamePacketContext(map = map)
+        val context = GamePacketContext(
+            map = map,
+            dispatcher = GameDispatcher(),
+            luaEnvironment = LuaEnvironment().apply { initState() }
+        )
         val handledCount = GamePacketRouter.route(player, frame, context)
 
         assertThat(handledCount).isEqualTo(3)

@@ -38,7 +38,7 @@ object TalkActionBindings {
 
                 self.set("separator", object : VarArgFunction() {
                     override fun invoke(a: Varargs): Varargs {
-                        separator = a.arg(2).tojstring()
+                        separator = a.arg(2).checkjstring()
                         return LuaValue.NONE
                     }
                 })

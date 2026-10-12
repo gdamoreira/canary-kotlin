@@ -29,4 +29,15 @@ class UserdataRegistryTest {
 
         assertThat(env.getGlobal("same").toboolean()).isTrue()
     }
+
+    @Test
+    fun `rawgetmetatable auto-vivifies an unknown type and shares mutations`() {
+        val env = LuaEnvironment().apply { initState() }
+        env.loadChunk("mt = rawgetmetatable('Action')")
+        assertThat(env.getGlobal("mt").isnil()).isFalse()
+
+        env.loadChunk("rawgetmetatable('Action').marker = 5")
+        env.loadChunk("shared = rawgetmetatable('Action').marker")
+        assertThat(env.getGlobal("shared").toint()).isEqualTo(5)
+    }
 }

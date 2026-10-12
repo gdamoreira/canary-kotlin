@@ -8,8 +8,8 @@ import org.opentibia.canary.map.GameMap
 
 data class GamePacketContext(
     val map: GameMap,
-    val dispatcher: GameDispatcher = GameDispatcher(),
-    val luaEnvironment: LuaEnvironment = LuaEnvironment().apply { initState() },
+    val dispatcher: GameDispatcher,
+    val luaEnvironment: LuaEnvironment,
     val tradeManager: TradeManager = TradeManager(),
     val modalManager: ModalWindowManager = ModalWindowManager()
 )

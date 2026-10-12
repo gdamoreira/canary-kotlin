@@ -48,6 +48,20 @@ class ActionsTest {
     }
 
     @Test
+    fun `id with a non-number argument fails loudly`() {
+        val env = LuaEnvironment().apply { initState() }
+        assertThatThrownBy { env.loadChunk("local a = Action() a:id('x')") }
+            .isInstanceOf(ScriptError::class.java)
+    }
+
+    @Test
+    fun `id with no argument fails loudly`() {
+        val env = LuaEnvironment().apply { initState() }
+        assertThatThrownBy { env.loadChunk("local a = Action() a:id()") }
+            .isInstanceOf(ScriptError::class.java)
+    }
+
+    @Test
     fun `duplicate id re-registration replaces the previous action`() {
         val env = LuaEnvironment().apply { initState() }
         env.loadChunk("local a = Action() a:id(100) function a.onUse(p) return true end a:register()")

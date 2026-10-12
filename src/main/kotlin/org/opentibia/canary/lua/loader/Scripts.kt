@@ -2,7 +2,6 @@ package org.opentibia.canary.lua.loader
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import org.opentibia.canary.lua.runtime.LuaEnvironment
-import org.opentibia.canary.lua.runtime.ScriptError
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.streams.asSequence
@@ -36,7 +35,7 @@ class Scripts(private val environment: LuaEnvironment) {
                 .forEach { file ->
                     try {
                         loadFile(file)
-                    } catch (e: ScriptError) {
+                    } catch (e: Exception) {
                         logger.error { "Failed to load script $file: ${e.message}" }
                     }
                 }

@@ -30,4 +30,18 @@ class ScriptsTest {
 
         assertThat(env.getGlobal("loaded_ok").toboolean()).isTrue()
     }
+
+    @Test
+    fun `a non-Lua binding failure does not stop loading siblings`(@TempDir dir: Path) {
+        val env = LuaEnvironment().apply { initState() }
+        env.globals.set("boom", object : org.luaj.vm2.lib.ZeroArgFunction() {
+            override fun call(): org.luaj.vm2.LuaValue = throw IllegalStateException("boom")
+        })
+        Files.writeString(dir.resolve("a_throws.lua"), "boom()")
+        Files.writeString(dir.resolve("b_sibling.lua"), "loaded_sibling = true")
+
+        Scripts(env).loadScripts(dir)
+
+        assertThat(env.getGlobal("loaded_sibling").toboolean()).isTrue()
+    }
 }

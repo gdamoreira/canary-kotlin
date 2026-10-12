@@ -11,7 +11,8 @@ import org.luaj.vm2.LuaValue
  * `getmetatable(self)` returns the method table used by revscriptsys.lua.
  */
 class UserdataRegistry(private val globals: Globals) {
-    private val metatables: LuaTable = LuaTable().also { globals.set("__metatables__", it) }
+    private val metatables: LuaTable = (globals.get("__metatables__") as? LuaTable)
+        ?: LuaTable().also { globals.set("__metatables__", it) }
 
     fun metatable(typeName: String): LuaTable {
         val existing = metatables.get(typeName)

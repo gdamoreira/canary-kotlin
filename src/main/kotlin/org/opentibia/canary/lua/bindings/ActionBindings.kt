@@ -29,14 +29,14 @@ object ActionBindings {
 
                 self.set("id", object : VarArgFunction() {
                     override fun invoke(args: Varargs): Varargs {
-                        actionId = args.arg(2).toint()
+                        actionId = args.arg(2).checkint()
                         return LuaValue.NONE
                     }
                 })
 
                 self.set("allowFarUse", object : VarArgFunction() {
                     override fun invoke(args: Varargs): Varargs {
-                        allowFarUse = args.arg(2).toboolean()
+                        allowFarUse = args.arg(2).checkboolean()
                         return LuaValue.NONE
                     }
                 })

@@ -9,6 +9,8 @@ import org.opentibia.canary.items.Item
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class ItemPacketHandlerTest {
 
@@ -48,10 +50,10 @@ class ItemPacketHandlerTest {
             val handled = ItemPacketHandler.handleUse(player, payload, map, dispatcher, env)
             assertThat(handled).isTrue()
 
-            val deadline = System.currentTimeMillis() + 2_000
-            while (!env.getGlobal("lever_pulled").toboolean() && System.currentTimeMillis() < deadline) {
-                Thread.sleep(10)
-            }
+            val ran = CountDownLatch(1)
+            dispatcher.dispatch { ran.countDown() }
+            assertThat(ran.await(2, TimeUnit.SECONDS)).isTrue()
+
             assertThat(env.getGlobal("lever_pulled").toboolean()).isTrue()
         } finally {
             dispatcher.shutdown()

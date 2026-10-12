@@ -34,6 +34,9 @@ object ItemPacketHandler {
 
         val action = luaEnvironment.actions.get(item.id) ?: return false
 
+        // Always post to WorldCommit so the Lua handler is confined even if this is
+        // ever invoked off the game lane; the world mutation contract (AGENTS.md 1.2)
+        // must not depend on the caller's thread.
         dispatcher.dispatch(DispatcherLane.WorldCommit) {
             action.onUse.invoke(
                 LuaValue.varargsOf(
