@@ -1,12 +1,12 @@
 package org.opentibia.canary.network.protocol
 
 import io.netty.buffer.ByteBuf
-import org.luaj.vm2.LuaValue
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.lua.runtime.LuaEnvironment
+import org.opentibia.canary.lua.runtime.LuaEventDispatcher
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 
@@ -32,23 +32,22 @@ object ItemPacketHandler {
         val tile = map.getTile(itemPos) ?: return false
         val item = tile.items.find { it.id == itemId } ?: (if (tile.ground?.id == itemId) tile.ground else null) ?: Item(itemId)
 
-        val action = luaEnvironment.actions.get(item.id) ?: return false
+        luaEnvironment.actions.get(item.id) ?: return false
 
         // Always post to WorldCommit so the Lua handler is confined even if this is
         // ever invoked off the game lane; the world mutation contract (AGENTS.md 1.2)
-        // must not depend on the caller's thread.
+        // must not depend on the caller's thread. Argument order and userdata wrapping
+        // live in LuaEventDispatcher so they match Canary's Action::executeUse exactly.
         dispatcher.dispatch(DispatcherLane.WorldCommit) {
-            action.onUse.invoke(
-                LuaValue.varargsOf(
-                    arrayOf(
-                        luaEnvironment.userdata.wrap("Player", player),
-                        luaEnvironment.userdata.wrap("Item", item),
-                        luaEnvironment.userdata.wrap("Position", itemPos),
-                        LuaValue.NIL,
-                        LuaValue.NIL,
-                        LuaValue.FALSE
-                    )
-                )
+            LuaEventDispatcher.actionOnUse(
+                luaEnvironment,
+                item.id,
+                player,
+                item,
+                itemPos,
+                null,
+                itemPos,
+                false
             )
         }
         return true

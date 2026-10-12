@@ -61,6 +61,54 @@ class ItemPacketHandlerTest {
     }
 
     @Test
+    fun `use item routes onUse through LuaEventDispatcher with wrapped target and toPosition`() {
+        val env = LuaEnvironment().apply { initState() }
+        env.loadChunk(
+            """
+            local a = Action()
+            a:id(1945)
+            function a.onUse(player, item, fromPosition, target, toPosition, isHotkey)
+                seen_target_uid = target.uid
+                seen_to = toPosition:toString()
+                seen_hotkey = isHotkey
+            end
+            a:register()
+            """.trimIndent()
+        )
+
+        val map = GameMap()
+        val pos = Position(100, 100, 7)
+        val tile = map.getOrCreateTile(pos)
+        tile.addItem(Item(id = 1945))
+
+        val player = Player(1, "Hero", 100, 100, position = pos)
+
+        val payload = Unpooled.buffer()
+        payload.writeShortLE(pos.x)
+        payload.writeShortLE(pos.y)
+        payload.writeByte(pos.z)
+        payload.writeShortLE(1945)
+        payload.writeByte(0)
+        payload.writeByte(0)
+
+        val dispatcher = GameDispatcher().apply { start() }
+        try {
+            val handled = ItemPacketHandler.handleUse(player, payload, map, dispatcher, env)
+            assertThat(handled).isTrue()
+
+            val ran = CountDownLatch(1)
+            dispatcher.dispatch { ran.countDown() }
+            assertThat(ran.await(2, TimeUnit.SECONDS)).isTrue()
+
+            assertThat(env.getGlobal("seen_target_uid").toint()).isEqualTo(0)
+            assertThat(env.getGlobal("seen_to").tojstring()).isEqualTo("( 100, 100, 7 )")
+            assertThat(env.getGlobal("seen_hotkey").toboolean()).isFalse()
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    @Test
     fun `parses throw item packet 0x78 and moves ground item to destination tile`() {
         val map = GameMap()
         val fromPos = Position(100, 100, 7)
