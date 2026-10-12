@@ -180,10 +180,16 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Config gates** — `config/FeatureFlags.kt` mirrors Canary's advanced-feature config keys and exact defaults with `CANARY_*` env overrides.
 - **Persistence** — Flyway `V3__advanced_feature_state.sql` (wheel slots, bestiary kills, mounts, familiars, weapon proficiency, offline/daily/forge scalars) + `database/JdbcFeatureStateRepository.kt`.
 
+### Phase 10: Runtime Wiring (02:00 – 02:30)
+- **Player vocation/premium** — `Player.vocationId`/`getPlayerVocationEnum`/`premium`/`isPremium`, flowing into `PlayerFeatures` (so `features.wheel` uses the real vocation).
+- **Command application** — `WheelApplication` (save validation + gem actions), `OfflineTrainingApplication`, `RewardChestApplication`.
+- **Lua world seams** — `WorldLuaOperations` real domain-backed `GameOperations`/`PlayerOperations`/`CreatureOperations`/`ItemOperations`/`ContainerOperations`/`PositionOperations`.
+- **Integration** — `GamePacketRouter` applies wheel/offline commands to `player.features` on the WorldCommit lane; `LuaEnvironment.initState()` installs the real world seams.
+
 ---
 
 ### Current Status
-- **Automated Tests**: **118 test suites / 600 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **123 test suites / 645 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Advanced Features**: all 15 (`docs/Plan/050–064`) have faithful **C++ engine cores** ported with TDD; Lua-authored portions remain Lua.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer, and protocol parsers/serializers in place.
 - **Remaining**: runtime state wiring (Player enrichment, persistence), config gates, and Lua seam implementations — tracked in `docs/game-play-features.md`.
