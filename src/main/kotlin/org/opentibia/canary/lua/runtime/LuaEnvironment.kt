@@ -4,6 +4,7 @@ import org.luaj.vm2.Globals
 import org.luaj.vm2.LuaError
 import org.luaj.vm2.LuaValue
 import org.luaj.vm2.lib.jse.JsePlatform
+import org.opentibia.canary.lua.userdata.UserdataRegistry
 
 /**
  * Mirrors Canary's LuaScriptInterface: owns a single LuaJ [Globals], preloads the
@@ -11,6 +12,9 @@ import org.luaj.vm2.lib.jse.JsePlatform
  */
 class LuaEnvironment {
     val globals: Globals = JsePlatform.standardGlobals()
+
+    lateinit var userdata: UserdataRegistry
+        private set
 
     private val libraries = mutableListOf<() -> LuaValue>()
 
@@ -20,6 +24,7 @@ class LuaEnvironment {
 
     fun initState() {
         loadCompatShim()
+        userdata = UserdataRegistry(globals)
         libraries.forEach { it() }
     }
 
