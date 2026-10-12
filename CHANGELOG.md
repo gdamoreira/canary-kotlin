@@ -186,10 +186,18 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Lua world seams** — `WorldLuaOperations` real domain-backed `GameOperations`/`PlayerOperations`/`CreatureOperations`/`ItemOperations`/`ContainerOperations`/`PositionOperations`.
 - **Integration** — `GamePacketRouter` applies wheel/offline commands to `player.features` on the WorldCommit lane; `LuaEnvironment.initState()` installs the real world seams.
 
+### Phase 11: Deeper Runtime Wiring (02:30 – 03:15)
+- **Reward chest + config gates** — `player.features.rewardChest` wired into opcode `0xFF` via a Player-backed `RewardChestOwner`; `GamePacketContext` carries `FeatureFlags` and gates the wheel system.
+- **Player domain** — inventory (`Slots_t`, add/remove/count items, capacity), skills (`skills_t`, tries), and Item attribute bag (`ItemAttribute`, action/unique id, duration); Lua world seams now delegate to them.
+- **Feature persistence flow** — `PlayerPersistenceService` + `SaveManager` save-all flush feature state; load seam for the login path.
+- **Vocations** — `Vocations`/`Vocation` XML registry; `Player.getPlayerVocationEnum()` normalizes internal→CIP ids; offline-training requirements sourced from the registry.
+- **Config consumption** — offline rate, proficiency multiplier/limits, hazard multipliers, forge costs, and wheel points-per-level consume `FeatureFlags`.
+- **Lua event dispatch** — `LuaEventDispatcher`/`ScriptingDispatch`; `ItemPacketHandler` routes `onUse` through the dispatcher.
+
 ---
 
 ### Current Status
-- **Automated Tests**: **123 test suites / 645 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **132 test suites / 731 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Advanced Features**: all 15 (`docs/Plan/050–064`) have faithful **C++ engine cores** ported with TDD; Lua-authored portions remain Lua.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer, and protocol parsers/serializers in place.
 - **Remaining**: runtime state wiring (Player enrichment, persistence), config gates, and Lua seam implementations — tracked in `docs/game-play-features.md`.
