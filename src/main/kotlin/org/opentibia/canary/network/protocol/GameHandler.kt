@@ -126,19 +126,24 @@ class GameHandler(
         this.player = activePlayer
 
         logger.info { "Player '${activePlayer.name}' logged into game world" }
-        sendSelfAppear(ctx, activePlayer)
+        sendLoginSuccess(ctx, activePlayer)
     }
 
     private fun handleGamePacket(ctx: ChannelHandlerContext, msg: ByteBuf) {
         // Future game packets (movement, use, say, etc.)
     }
 
-    private fun sendSelfAppear(ctx: ChannelHandlerContext, player: Player) {
+    private fun sendLoginSuccess(ctx: ChannelHandlerContext, player: Player) {
         val out = ctx.alloc().buffer()
+        // 1. Self Appear (0x0A)
         out.writeByte(PACKET_SELF_APPEAR)
         out.writeIntLE(player.id.toInt())
         out.writeShortLE(50) // Graphics speed
         out.writeByte(0) // Can report bugs
+
+        // 2. Map Description (0x64)
+        MapPacketWriter.writeMapDescription(out, gameMap, player.position)
+
         ctx.writeAndFlush(out)
     }
 
