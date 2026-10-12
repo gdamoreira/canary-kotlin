@@ -5,7 +5,9 @@ import org.luaj.vm2.LuaError
 import org.luaj.vm2.LuaValue
 import org.luaj.vm2.lib.jse.JsePlatform
 import org.opentibia.canary.lua.bindings.ActionBindings
+import org.opentibia.canary.lua.bindings.TalkActionBindings
 import org.opentibia.canary.lua.registry.Actions
+import org.opentibia.canary.lua.registry.TalkActions
 import org.opentibia.canary.lua.userdata.UserdataRegistry
 
 /**
@@ -19,6 +21,7 @@ class LuaEnvironment {
         private set
 
     val actions = Actions()
+    val talkActions = TalkActions()
 
     private val libraries = mutableListOf<() -> LuaValue>()
 
@@ -30,6 +33,7 @@ class LuaEnvironment {
         loadCompatShim()
         userdata = UserdataRegistry(globals)
         ActionBindings.install(this)
+        TalkActionBindings.install(this)
         libraries.forEach { it() }
     }
 
