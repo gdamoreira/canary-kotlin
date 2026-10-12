@@ -110,4 +110,12 @@ class FamiliarsTest {
         assertThat(familiars.getFamiliars(4)).hasSize(2)
         assertThat(familiars.getFamiliarByLookType(4, 992)!!.name).isEqualTo("Disabled")
     }
+
+    @Test
+    fun `returns false when the XML cannot be parsed or the root is missing`() {
+        val familiars = Familiars()
+
+        assertThat(familiars.loadFromXml("<familiars><familiar")).isFalse()
+        assertThat(familiars.loadFromXml("<?xml version=\"1.0\"?><other/>")).isFalse()
+    }
 }

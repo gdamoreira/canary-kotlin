@@ -22,9 +22,13 @@ class Familiars {
     private val familiars: Array<MutableList<Familiar>> = Array(VOCATION_LAST + 1) { mutableListOf() }
 
     fun loadFromXml(xmlContent: String): Boolean {
-        val factory = DocumentBuilderFactory.newInstance()
-        val builder = factory.newDocumentBuilder()
-        val doc = builder.parse(ByteArrayInputStream(xmlContent.toByteArray()))
+        val doc = try {
+            val factory = DocumentBuilderFactory.newInstance()
+            val builder = factory.newDocumentBuilder()
+            builder.parse(ByteArrayInputStream(xmlContent.toByteArray()))
+        } catch (exception: Exception) {
+            return false
+        }
 
         val root = doc.getElementsByTagName("familiars").item(0) as? Element ?: return false
 
