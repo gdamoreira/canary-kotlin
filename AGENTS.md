@@ -8,6 +8,7 @@ This document records the binding architectural policies, lifetime safety rules,
 
 ### 1.1 Idiomatic Kotlin over Direct C++ Translation
 - **Never translate raw C++ pointers, singletons, or manual mutexes 1:1.**
+- Target **Java 25 LTS** runtime with **Kotlin 2.4+** and **Gradle 9+**.
 - Eliminate global singletons (`g_game()`, `g_dispatcher()`, `g_configManager()`) in favor of clean **Dependency Injection** (constructor injection) and interface contracts (`AccountRepository`, `PlayerStorage`, `GameMap`).
 - Use Kotlin **value classes** (`@JvmInline value class Direction`) and sealed interfaces for domain modeling instead of raw integer bitmasks.
 

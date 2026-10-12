@@ -1,13 +1,13 @@
 # Canary Kotlin Edition
 
-[![Kotlin](https://img.shields.io/badge/kotlin-2.1.10-blue.svg?logo=kotlin)](https://kotlinlang.org)
-[![JVM](https://img.shields.io/badge/JVM-21%20LTS-orange.svg?logo=openjdk)](https://adoptium.net)
-[![Gradle](https://img.shields.io/badge/gradle-8.12-green.svg?logo=gradle)](https://gradle.org)
+[![Kotlin](https://img.shields.io/badge/kotlin-2.4.21-blue.svg?logo=kotlin)](https://kotlinlang.org)
+[![JVM](https://img.shields.io/badge/JVM-25%20LTS-orange.svg?logo=openjdk)](https://adoptium.net)
+[![Gradle](https://img.shields.io/badge/gradle-9.8.1-green.svg?logo=gradle)](https://gradle.org)
 [![Netty](https://img.shields.io/badge/netty-4.1.118-blueviolet.svg)](https://netty.io)
 [![PostgreSQL](https://img.shields.io/badge/postgresql-16-blue.svg?logo=postgresql)](https://www.postgresql.org/)
 [![License](https://img.shields.io/github/license/opentibiabr/canary.svg)](https://github.com/opentibiabr/canary/blob/main/LICENSE)
 
-**Canary Kotlin Edition** is a modern, high-performance rewrite of the [Canary OpenTibia MMORPG Server](https://github.com/opentibiabr/canary) designed specifically for the **JVM stack** (Kotlin 2.1, Java 21 LTS, Netty 4.2, and Kotlin Coroutines).
+**Canary Kotlin Edition** is a modern, high-performance rewrite of the [Canary OpenTibia MMORPG Server](https://github.com/opentibiabr/canary) designed specifically for the **JVM stack** (Kotlin 2.4, Java 25 LTS, Gradle 9.8, Netty, and Kotlin Coroutines).
 
 It translates 15+ years of C++20 engine evolution into idiomatic, testable, and memory-safe Kotlin architectures without sacrificing wire-level binary and mathematical parity.
 
@@ -29,7 +29,7 @@ It translates 15+ years of C++20 engine evolution into idiomatic, testable, and 
 ## 🛠️ Getting Started
 
 ### Prerequisites
-- **JDK 21 LTS** installed and configured (`JAVA_HOME` pointing to Java 21).
+- **JDK 25 LTS** installed and configured (`JAVA_HOME` pointing to Java 25).
 - No external database required for local testing! The server automatically initializes an in-memory database with test accounts.
 
 ### Building & Running Tests

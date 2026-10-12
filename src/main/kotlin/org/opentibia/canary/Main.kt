@@ -44,6 +44,6 @@ fun main() {
     Runtime.getRuntime().addShutdownHook(Thread {
         logger.info { "Shutting down..." }
         server.stop()
-        (dataSource as? com.zaxxer.hikari.HikariDataSource)?.close()
+        dataSource.close()
     })
 }
