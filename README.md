@@ -22,7 +22,7 @@ It translates 15+ years of C++20 engine evolution into idiomatic, testable, and 
 | Raw memory pointers & circular `std::shared_ptr` references | **Thread-confined Domain Entities** & Value Classes (`@JvmInline value class Direction`) | Memory safety, zero memory leaks, idiomatic GC lifecycle management. |
 | Hardcoded MySQL raw string queries | **Flyway Database Migrations + HikariCP Connection Pool** | Automated database migrations, SQL injection prevention, zero-downtime schemas. |
 | Mandatory external database daemons for tests | **H2 In-Memory (PostgreSQL mode)** | Instant out-of-the-box local testing without running external Docker/MariaDB containers. |
-| C-API Lua userdata bindings | **Embedded LuaJ Engine & Functional Script Registries** | Safe reflection without JNI crashes or memory corruptions. |
+| C-API Lua userdata bindings | **Embedded LuaJ engine + Canary-named binding libraries** | Lua gameplay scripts run *as Lua* through `LuaEnvironment`/`UserdataRegistry`; no JNI, no memory corruption, and no Lua logic re-authored in Kotlin. |
 
 ---
 
@@ -76,15 +76,17 @@ Default container ports:
 ```
 canary-kotlin/
 ├── docs/
-│   ├── Done/              # 40 completed specifications (reverse engineering, packets, parsers, DB)
+│   ├── Done/              # Completed specifications (networking, parsers, DB, systems)
 │   ├── Implementing/      # Features actively in progress
-│   └── Plan/              # Architectural guidelines & execution roadmaps
+│   ├── Plan/              # Feature specs 050–064 + architectural guidelines & roadmap
+│   ├── game-play-features.md   # Master 56-feature matrix & engine-core port status
+│   └── superpowers/       # Design specs & implementation plans
 ├── src/
 │   ├── main/
 │   │   ├── kotlin/org/opentibia/canary/
 │   │   │   ├── account/       # Account domain model & repository interfaces
 │   │   │   ├── chat/          # Chat channels, speech scopes (Whisper, Say, Yell)
-│   │   │   ├── combat/        # Damage formulas, armor mitigation, combat loops
+│   │   │   ├── combat/        # CombatDamage + Combat (damage/armor/mitigation/crit) & condition/*
 │   │   │   ├── config/        # ServerConfig & environment variable loaders
 │   │   │   ├── creatures/     # Creature, Player, Monster, NPC models & AI
 │   │   │   ├── database/      # DatabaseConnectionFactory, HikariCP, JDBC Repositories
@@ -92,18 +94,20 @@ canary-kotlin/
 │   │   │   ├── game/          # GameDispatcher coroutine actor, MovementEngine
 │   │   │   ├── io/            # OTBM binary parser, OTB items, XML loaders, AssetManager
 │   │   │   ├── items/         # Item, Container, WorldObjects (MagicField, Teleport, Door)
-│   │   │   ├── lua/           # LuaScriptBridge (LuaJ embedding)
+│   │   │   ├── lua/           # LuaJ engine: runtime/, userdata/, registry/, bindings/, loader/
 │   │   │   ├── map/           # Position, Tile, GameMap, House & HouseTile
-│   │   │   ├── network/       # Netty TCP pipeline, TibiaFrameDecoder, MessageEncoder
+│   │   │   ├── network/       # Netty pipeline + protocol/ handlers, parsers & serializers
 │   │   │   ├── persistence/   # Persistent PlayerStorage & PlayerData
-│   │   │   ├── scripting/     # Action & TalkAction functional script registries
-│   │   │   └── systems/       # Modern systems (Imbuements, Prey, Bosstiary)
+│   │   │   └── systems/       # Advanced features: wheel, forge, bestiary, hazard, mounts,
+│   │   │                      #   familiars, proficiency, gamestore, hireling, soulwar, raid,
+│   │   │                      #   offlinetraining, dailyreward, rewardchest, concoction
 │   │   └── resources/
-│   │       └── db/migration/  # Flyway schema migrations (V1, V2)
-│   └── test/                  # 100% green JUnit 5 + AssertJ + Mockk test suite
+│   │       ├── db/migration/  # Flyway schema migrations (V1, V2)
+│   │       └── lua/           # LuaJ compatibility shim
+│   └── test/                  # JUnit 5 + AssertJ test suite (115 suites / 580 tests, all green)
 ├── docker-compose.yml         # Containerized PostgreSQL 16 + Server stack
 ├── Dockerfile                 # Multi-stage alpine build
-└── build.gradle.kts           # Kotlin 2.1 Gradle build file
+└── build.gradle.kts           # Kotlin 2.4 / Java 25 Gradle build file
 ```
 
 ---
@@ -117,3 +121,27 @@ Every subsystem is validated against Canary's exact formulas and byte specificat
 - **Physical Damage**: Attack formula $2 \times \frac{\text{attack} \times (\text{skill} + 5.8)}{25} + \frac{\text{level}}{5}$.
 - **Armor Reduction**: Randomized interval $P(\text{reduction}) \in \left[\frac{\text{armor}}{2}, \text{armor} - 1\right]$.
 - **Viewport Streaming**: $18 \times 14$ tile canvas encoding with empty run compression skip bytes.
+- **Wheel of Destiny**: 36-slot per-vocation tree, point budget $\max(0, \text{level} - 50)$, revelation stats and the exact per-slot bonus tables.
+- **Weapon Proficiencies**: the three Canary experience tables (crossbow/knight/standard) and mastery offsets.
+- **Conditions**: `Condition` lifecycle (ticks/stacking) and damage/regeneration/attributes/speed math.
+
+---
+
+## 🧭 Lua Scripting & Parity Policy
+
+The port follows two binding rules (see `AGENTS.md` §1.1 and §1.4):
+
+1. **Strict Canary parity** — no invented methods, classes, or values. Every Kotlin name mirrors its Canary C++ or Lua counterpart.
+2. **Lua stays Lua** — gameplay authored in `data/**/*.lua` (NPC dialogue, quests, spells, actions, systems) is executed *as Lua* through `LuaEnvironment` (LuaJ) and the Canary-named binding libraries; it is never re-implemented as Kotlin. Kotlin provides only the C++ engine primitives and the bindings those scripts call.
+
+Consequently, each of the 15 advanced features (`docs/Plan/050–064`) is delivered as its **C++ engine core** in `systems/<feature>/`, with the Lua-authored portions left as Lua.
+
+---
+
+## 🧩 Advanced Feature Coverage (Engine Cores)
+
+All 15 advanced gameplay systems now have faithful C++ engine cores with tests, plus a combat stack and a Lua binding layer:
+
+`wheel` · `forge` · `bestiary` · `gamestore` · `hazard` · `dailyreward` · `rewardchest` · `familiar` · `hireling` · `mount` · `proficiency` · `soulwar` · `raid` · `offlinetraining` · `concoction`
+
+Protocol parsers/serializers for wheel (`0x61`/`0x62`/`0xE7`), offline training (`0x74`), reward chest (`0xFF`) and weapon proficiencies are routed through `GamePacketRouter`. Remaining work per feature is its runtime state wiring (Player enrichment, persistence) — tracked in `docs/game-play-features.md`.

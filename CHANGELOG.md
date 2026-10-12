@@ -148,7 +148,37 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 6: Canary Parity Mandate & Lua Remediation (23:00 – 23:50)
+- **`6ee94f8` - Parity + Lua Boundary Policies**:
+  - Added `AGENTS.md` §1.1 (strict Canary parity — no invented methods/APIs) and §1.4 (Lua stays Lua — never port Lua logic to Kotlin).
+  - Enforced immediately: renamed fabricated `Npc.onHear` → Canary `Npc::onCreatureSay`, `MagicField.onStepIn` → `onStepInField`.
+- **`87a83ad` / `d6f79d3` - Lua Parity Remediation Spec & Plan**:
+  - Approved design superseding `Done/012` and `Done/028`; foundation implementation plan created.
+- **`24e04fb`…`92aed2d` - Lua Scripting Engine Foundation**:
+  - Implemented `org.opentibia.canary.lua`: `LuaEnvironment` + `ScriptError` + LuaJ compat shim, `UserdataRegistry` (Canary-named metatables), `Actions`/`TalkActions` registries with `Action()`/`TalkAction()` constructors, and a boot-time `Scripts` loader.
+  - Removed the Kotlin `ScriptRegistry`; item-use now dispatches Lua actions on the `GameDispatcher` WorldCommit lane.
+- **`bade5ed` - Corrected Feature Plans 050–064**:
+  - Rewrote every advanced-feature plan to separate the C++ engine scope from Lua, filling the previously empty Canary source references (C++ vs Lua).
+
+### Phase 7: Advanced Feature Engine Cores — Parallel Agent Waves (23:50 – 00:40)
+- **`c3aca76` - Wheel of Destiny (parity)** — replaced the non-parity stub with `systems/wheel/`: all enums, `IOWheel` (36 slot bonus functions), `PlayerWheel` budget; later `WheelSpellTables`/`WheelGems`.
+- **`e806b3d` - Weapon Proficiencies** — `systems/proficiency/` enums, experience tables + level math; later the JSON loader.
+- **`a3dfeaa` - Concoctions** — `systems/concoction/` `ConcoctionType` + active state.
+- **Wave 1 (C++-centric, 7 parallel worktrees)**: Offline Training, Reward Chest, Bestiary/Charms, Exaltation Forge, Mounts, Familiars, Daily Reward.
+- **Wave 2 (Lua-dominant, 5 parallel worktrees)**: GameStore coins, Hazard, Hirelings, Soul War conditions, Raids.
+- **Wave 3–4**: Wheel spell tables + gems; Weapon-Proficiency JSON loader; Bestiary registry/economy/elements; Wheel/offline/reward protocol parsers; Weapon-Proficiency payload serializer.
+- **`55a4cc8` - Test Discovery Fix**: `GameDispatcherTest`'s `= runBlocking { }` expression bodies silently skipped by JUnit; fixed to `runBlocking<Unit>` (discovered == `@Test` count).
+
+### Phase 8: Combat Stack, Lua Bindings & Wiring (00:40 – 01:30)
+- **Combat stack**: `combat/CombatDamage` + `Combat` (replacing the invented `CombatEngine`), `combat/condition/*` (Condition engine core + outfit/light/invisible/cooldown/serene).
+- **Lua bindings**: core primitives (Game/Player/Creature/Item/Container/Position) and `Spell`/`CreatureEvent`/`GlobalEvent`/`MoveEvent` registries; installed from `LuaEnvironment.initState()`; best-effort `data/libs` load.
+- **Wiring**: combat consumers (bestiary charm procs, weapon-proficiency combat application, hazard bridge); `GamePacketRouter` dispatch for `0x61`/`0x62`/`0xE7`/`0x74`/`0xFF`.
+- All delivered via isolated git worktrees dispatched in parallel and merged to `main`.
+
+---
+
 ### Current Status
-- **Automated Tests**: 58 test suites passing cleanly on **Java 25 LTS** via `./gradlew test`.
-- **Features Implemented & Verified**: 42 completed gameplay & infrastructure features.
-- **Features Planned with Full Specs**: 14 advanced features documented in `docs/Plan/`.
+- **Automated Tests**: **115 test suites / 580 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Advanced Features**: all 15 (`docs/Plan/050–064`) have faithful **C++ engine cores** ported with TDD; Lua-authored portions remain Lua.
+- **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer, and protocol parsers/serializers in place.
+- **Remaining**: runtime state wiring (Player enrichment, persistence), config gates, and Lua seam implementations — tracked in `docs/game-play-features.md`.
