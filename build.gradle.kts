@@ -21,6 +21,9 @@ dependencies {
     implementation("ch.qos.logback:logback-classic:1.5.16")
     implementation("io.github.oshai:kotlin-logging-jvm:7.0.3")
 
+    // SQLite JDBC
+    implementation("org.xerial:sqlite-jdbc:3.48.0.0")
+
     // Testing (JUnit 5 + Mockk + AssertJ)
     testImplementation(kotlin("test"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
