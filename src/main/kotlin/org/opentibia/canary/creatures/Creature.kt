@@ -11,7 +11,8 @@ abstract class Creature(
     var maxMana: Int = 0,
     var mana: Int = 0,
     var speed: Int = 200,
-    var position: Position
+    var position: Position,
+    var direction: org.opentibia.canary.game.movement.Direction = org.opentibia.canary.game.movement.Direction.South
 ) {
     val isDead: Boolean get() = health <= 0
 
