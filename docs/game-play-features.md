@@ -84,4 +84,4 @@ This document establishes the master inventory of all gameplay features from Can
 
 - **Implemented & Verified Gameplay Systems**: **41 / 56** ($73\%$)
 - **Advanced Gameplay Systems — engine cores ported**: **15 / 15** (protocol/Lua wiring remains)
-- **Automated Test Coverage**: 83 test suites / 337 tests passing cleanly on **Java 25 LTS** via `./gradlew test`.
+- **Automated Test Coverage**: 94 test suites / 407 tests passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered).

@@ -24,7 +24,7 @@ class GameDispatcherTest {
     }
 
     @Test
-    fun `executes dispatched events sequentially`() = runBlocking {
+    fun `executes dispatched events sequentially`() = runBlocking<Unit> {
         val counter = AtomicInteger(0)
         val doneSignal = CompletableDeferred<Unit>()
 
@@ -44,7 +44,7 @@ class GameDispatcherTest {
     }
 
     @Test
-    fun `schedules delayed event execution`() = runBlocking {
+    fun `schedules delayed event execution`() = runBlocking<Unit> {
         val signal = CompletableDeferred<Long>()
         val start = System.currentTimeMillis()
 
@@ -58,7 +58,7 @@ class GameDispatcherTest {
     }
 
     @Test
-    fun `cancels scheduled task before trigger`() = runBlocking {
+    fun `cancels scheduled task before trigger`() = runBlocking<Unit> {
         val executed = AtomicInteger(0)
 
         val task = dispatcher.schedule(delayMs = 200) {
