@@ -238,6 +238,67 @@ class IOBestiary(
             else -> 0
         }
     }
+
+    /**
+     * `IOBestiary::getMonsterElements` (iobestiary.cpp:576-612).
+     *
+     * Starts every one of the eight protocol slots (0..7) at 100 and subtracts
+     * the matching `MonsterType::info.elementMap` percentage. Only the locatable
+     * combat types are applied; `COMBAT_LIFEDRAIN`, `COMBAT_MANADRAIN` and
+     * `COMBAT_DROWNDAMAGE` fall through Canary's `default` branch (iobestiary.cpp:607-608).
+     *
+     * `elementMap` keys are `CombatType_t` values (creatures_definitions.hpp:833-853).
+     */
+    fun getMonsterElements(mtype: MonsterBestiaryInfo): Map<Int, Int> {
+        val defaultMap = linkedMapOf<Int, Int>()
+        for (i in 0..7) {
+            defaultMap[i] = 100
+        }
+
+        for ((combatType, value) in mtype.elementMap) {
+            val slot = COMBAT_TYPE_TO_ELEMENT_SLOT[combatType] ?: continue
+            defaultMap[slot] = (defaultMap.getValue(slot)) - value
+        }
+        return defaultMap
+    }
+
+    /**
+     * Deterministic extraction of the minor-charm-echo reward granted when a
+     * major charm rune is upgraded: `25 * tier^2 + 25 * tier + 50`
+     * (iobestiary.cpp:479). Canary inlines this in `sendBuyCharmRune`.
+     */
+    fun getMinorCharmEchoesReward(charmTier: Int): Int =
+        25 * charmTier * charmTier + 25 * charmTier + 50
+
+    /**
+     * Deterministic extraction of the per-tier charm-point buy cost
+     * `charm->points[charmTier]` (iobestiary.cpp:473 for major, :488 for minor).
+     * The point tables themselves come from the Lua charm registrations.
+     */
+    fun getCharmBuyCost(charm: Charm, charmTier: Int): Int = charm.points[charmTier]
+
+    /**
+     * Deterministic extraction of the `charmTier > 2` cap checked by
+     * `sendBuyCharmRune` before any upgrade (iobestiary.cpp:468,483).
+     */
+    fun isCharmTierMax(charmTier: Int): Boolean = charmTier > 2
+
+    private companion object {
+        /**
+         * `getMonsterElements` slot assignment (iobestiary.cpp:583-606):
+         * the switch maps the damage combat type onto its protocol element slot.
+         */
+        val COMBAT_TYPE_TO_ELEMENT_SLOT: Map<Int, Int> = mapOf(
+            0 to 0, // COMBAT_PHYSICALDAMAGE
+            1 to 1, // COMBAT_FIREDAMAGE
+            2 to 2, // COMBAT_EARTHDAMAGE
+            3 to 3, // COMBAT_ENERGYDAMAGE
+            9 to 4, // COMBAT_ICEDAMAGE
+            10 to 5, // COMBAT_HOLYDAMAGE
+            11 to 6, // COMBAT_DEATHDAMAGE
+            7 to 7, // COMBAT_HEALING
+        )
+    }
 }
 
 /** `BestiaryType_t` (creatures_definitions.hpp:524-551). */
@@ -268,7 +329,10 @@ enum class BestiaryRace(val value: Int) {
 
 /**
  * Carrier for the bestiary subset of Canary `MonsterType::info`
- * (monsters.hpp:89-99): raceid, unlock thresholds, charm points and star rating.
+ * (monsters.hpp:89-99): raceid, unlock thresholds, charm points, star rating,
+ * race/class metadata and the damage `elementMap` (monsters.hpp:53).
+ *
+ * `elementMap` keys are `CombatType_t` values (creatures_definitions.hpp:833-853).
  */
 data class MonsterBestiaryInfo(
     val raceid: Int = 0,
@@ -280,4 +344,5 @@ data class MonsterBestiaryInfo(
     val bestiaryStars: Int = 0,
     val bestiaryClass: String = "",
     val bestiaryRace: BestiaryRace = BestiaryRace.BESTY_RACE_NONE,
+    val elementMap: Map<Int, Int> = emptyMap(),
 )
