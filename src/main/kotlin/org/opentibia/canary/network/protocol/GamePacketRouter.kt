@@ -2,6 +2,7 @@ package org.opentibia.canary.network.protocol
 
 import io.netty.buffer.ByteBuf
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.config.FeatureFlags
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.lua.runtime.LuaEnvironment
@@ -13,12 +14,15 @@ import org.opentibia.canary.network.protocol.wheel.SaveWheelCommand
 import org.opentibia.canary.network.protocol.wheel.WheelGemActionCommand
 import org.opentibia.canary.network.protocol.wheel.WheelPacketParser
 import org.opentibia.canary.systems.offlinetraining.OfflineTrainingApplication
+import org.opentibia.canary.systems.rewardchest.PlayerRewardChestOwner
+import org.opentibia.canary.systems.rewardchest.RewardChestApplication
 import org.opentibia.canary.systems.wheel.WheelApplication
 
 data class GamePacketContext(
     val map: GameMap,
     val dispatcher: GameDispatcher,
     val luaEnvironment: LuaEnvironment,
+    val featureFlags: FeatureFlags = FeatureFlags(),
     val tradeManager: TradeManager = TradeManager(),
     val modalManager: ModalWindowManager = ModalWindowManager()
 )
@@ -75,7 +79,7 @@ object GamePacketRouter {
                 WheelPacketParser.OPCODE_SAVE_WHEEL,
                 WheelPacketParser.OPCODE_WHEEL_GEM_ACTION -> {
                     val command = WheelPacketParser.parse(opcode, buffer)
-                    if (command == null) {
+                    if (command == null || !context.featureFlags.toggleWheelSystem) {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
@@ -109,9 +113,19 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // Game::playerRewardChestCollect needs the player's reward
-                            // container, which is not yet wired; this is the confinement
-                            // boundary. Parsing alone is no-op-safe until then.
+                            val owner = PlayerRewardChestOwner(
+                                capacityProvider = { player.capacity },
+                                cancelMessageSink = { },
+                                textMessageSink = { },
+                                collectManagedItem = { item -> player.addItem(item) },
+                            )
+                            RewardChestApplication.apply(
+                                chest = player.features.rewardChest,
+                                owner = owner,
+                                command = command,
+                                collectEnabled = context.featureFlags.rewardChestCollectEnabled,
+                                maxCollectItems = context.featureFlags.rewardChestMaxCollectItems,
+                            )
                         }
                         true
                     }

@@ -136,7 +136,12 @@ class WorldPlayerOperations(
         subType: Int,
         slot: Int,
         tier: Int,
-    ): List<Any> = emptyList()
+    ): List<Any> {
+        val target = player as? Player ?: return emptyList()
+        val item = org.opentibia.canary.items.Item(itemId, count.coerceAtLeast(1))
+        val result = target.addItem(item)
+        return if (result == org.opentibia.canary.systems.rewardchest.ReturnValue.NOERROR) listOf(item) else emptyList()
+    }
 
     override fun removeItem(
         player: Any,
@@ -145,7 +150,14 @@ class WorldPlayerOperations(
         subType: Int,
         ignoreEquipped: Boolean,
         ignoreStoreInbox: Boolean,
-    ): Boolean = false
+    ): Boolean {
+        val target = player as? Player ?: return false
+        val item = org.opentibia.canary.creatures.Slots_t.entries
+            .firstNotNullOfOrNull { target.getInventoryItem(it) }
+            ?.takeIf { it.id == itemId }
+            ?: return false
+        return target.removeItem(item, count) == org.opentibia.canary.systems.rewardchest.ReturnValue.NOERROR
+    }
 
     override fun getItemCount(
         player: Any,
@@ -153,9 +165,14 @@ class WorldPlayerOperations(
         subType: Int,
         ignoreEquipped: Boolean,
         ignoreStoreInbox: Boolean,
-    ): Long = 0L
+    ): Long = (player as? Player)?.getItemCount(itemId, subType, ignoreEquipped, ignoreStoreInbox) ?: 0L
 
-    override fun addSkillTries(player: Any, skillType: Int, tries: Long): Boolean = false
+    override fun addSkillTries(player: Any, skillType: Int, tries: Long): Boolean {
+        val target = player as? Player ?: return false
+        val skill = org.opentibia.canary.creatures.skills_t.entries.firstOrNull { it.value == skillType } ?: return false
+        target.addSkillTries(skill, tries)
+        return true
+    }
 
     override fun sendTextMessage(player: Any, message: LuaTextMessage): Boolean = false
 
