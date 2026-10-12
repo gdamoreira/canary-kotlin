@@ -62,7 +62,8 @@ class Player(
     var fightMode: FightMode = FightMode.Attack,
     var chaseMode: ChaseMode = ChaseMode.StandStill,
     var secureMode: Boolean = true,
-    var targetCreatureId: Long? = null
+    var targetCreatureId: Long? = null,
+    var inCombat: Boolean = false
 ) : Creature(id, name, maxHealth, health, maxMana, mana, speed, position) {
 
     fun addExperience(exp: Long) {
