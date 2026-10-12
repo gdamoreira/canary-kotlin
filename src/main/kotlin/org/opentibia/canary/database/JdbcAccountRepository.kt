@@ -36,7 +36,8 @@ class JdbcAccountRepository(private val dataSource: DataSource) : AccountReposit
 
     override fun authenticate(name: String, password: String): Account? {
         val account = findByAccountName(name) ?: return null
-        return if (account.passwordHash == password) account else null
+        val matches = org.opentibia.canary.network.crypto.Argon2Security.verifyPassword(password, account.passwordHash)
+        return if (matches) account else null
     }
 
     private fun loadCharactersForAccount(conn: java.sql.Connection, accountId: Long): List<CharacterEntry> {
