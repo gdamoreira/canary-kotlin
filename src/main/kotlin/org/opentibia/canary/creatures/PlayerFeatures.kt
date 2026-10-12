@@ -14,6 +14,7 @@ import org.opentibia.canary.systems.mount.PlayerMountState
 import org.opentibia.canary.systems.offlinetraining.OfflineTraining
 import org.opentibia.canary.systems.offlinetraining.Skill
 import org.opentibia.canary.systems.offlinetraining.VocationRequirements
+import org.opentibia.canary.systems.rewardchest.RewardChest
 import org.opentibia.canary.systems.wheel.PlayerWheel
 
 /**
@@ -95,6 +96,15 @@ class PlayerFeatures(
 
     /** `Player` Gnomprona Hazard state (player.cpp:5513-5647). */
     val hazard: PlayerHazard = PlayerHazard()
+
+    /**
+     * `Player::getRewardChest()` (player.cpp:2058) over the `rewardChest` member
+     * (player.hpp:1773). Created lazily as `RewardChest(ITEM_REWARD_CHEST)` the
+     * first time it is accessed, exactly like Canary's `std::make_shared`.
+     */
+    val rewardChest: RewardChest by lazy(LazyThreadSafetyMode.NONE) {
+        RewardChest(RewardChest.ITEM_REWARD_CHEST)
+    }
 }
 
 /**
