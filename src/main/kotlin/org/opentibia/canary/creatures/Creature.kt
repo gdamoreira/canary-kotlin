@@ -66,7 +66,24 @@ class Player(
     var inCombat: Boolean = false
 ) : Creature(id, name, maxHealth, health, maxMana, mana, speed, position) {
 
-    val features: PlayerFeatures = PlayerFeatures(playerId = id, levelProvider = { level })
+    /** `Player::vocation` CIP id (`Vocation_t`): 0 none, 1..5 knight..monk. */
+    var vocationId: Int = 0
+
+    /** `Player::account->getPremiumRemainingDays() > 0` (player.cpp:7532). */
+    var premium: Boolean = false
+
+    val features: PlayerFeatures = PlayerFeatures(
+        playerId = id,
+        levelProvider = { level },
+        vocationIdProvider = { vocationId },
+        isPremiumProvider = { premium },
+    )
+
+    /** `Player::getPlayerVocationEnum()` (player.cpp:13030). */
+    fun getPlayerVocationEnum(): Int = vocationId
+
+    /** `Player::isPremium()` (player.cpp:7532). */
+    fun isPremium(): Boolean = premium
 
     fun addExperience(exp: Long) {
         experience += exp
