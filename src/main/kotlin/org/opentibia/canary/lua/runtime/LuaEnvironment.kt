@@ -10,6 +10,8 @@ import org.opentibia.canary.lua.bindings.GlobalEventBindings
 import org.opentibia.canary.lua.bindings.MoveEventBindings
 import org.opentibia.canary.lua.bindings.SpellBindings
 import org.opentibia.canary.lua.bindings.TalkActionBindings
+import org.opentibia.canary.lua.bindings.core.ContainerFunctions
+import org.opentibia.canary.lua.bindings.core.ContainerOperations
 import org.opentibia.canary.lua.bindings.core.CreatureFunctions
 import org.opentibia.canary.lua.bindings.core.CreatureOperations
 import org.opentibia.canary.lua.bindings.core.GameFunctions
@@ -71,6 +73,7 @@ class LuaEnvironment {
         PlayerFunctions.install(this, NO_OP_PLAYER)
         CreatureFunctions.install(this, NO_OP_CREATURE)
         ItemFunctions.install(this, NO_OP_ITEM)
+        ContainerFunctions.install(this, NO_OP_CONTAINER)
         PositionFunctions.install(this, NO_OP_POSITION)
 
         ActionBindings.install(this)
@@ -167,6 +170,14 @@ private object NO_OP_PLAYER : PlayerOperations {
 
     override fun addSkillTries(player: Any, skillType: Int, tries: Long): Boolean = false
     override fun sendTextMessage(player: Any, message: LuaTextMessage): Boolean = false
+    override fun getStorageValue(player: Any, key: Int): Int = 0
+    override fun setStorageValue(player: Any, key: Int, value: Int): Boolean = false
+    override fun getLevel(player: Any): Int = 0
+    override fun getExperience(player: Any): Long = 0L
+    override fun addExperience(player: Any, experience: Long, sendText: Boolean): Boolean = false
+    override fun getMana(player: Any): Int = 0
+    override fun addMana(player: Any, manaChange: Int, animationOnLoss: Boolean): Boolean = false
+    override fun getVocation(player: Any): Any = Unit
 }
 
 private object NO_OP_CREATURE : CreatureOperations {
@@ -177,16 +188,37 @@ private object NO_OP_CREATURE : CreatureOperations {
     override fun setHealth(creature: Any, health: Int): Boolean = false
     override fun addHealth(creature: Any, healthChange: Int, combatType: Int): Boolean = false
     override fun getPosition(creature: Any): Position = Position(0, 0, 0)
+    override fun getDirection(creature: Any): Int = 0
+    override fun setDirection(creature: Any, direction: Int): Boolean = false
 }
 
 private object NO_OP_ITEM : ItemOperations {
     override fun itemIdByName(name: String): Int = 0
+    override fun itemAttributeByName(name: String): Int = 0
     override fun getId(item: Any): Int = 0
     override fun getCount(item: Any): Int = 0
     override fun getName(item: Any): String = ""
     override fun getSubType(item: Any): Int = 0
     override fun transform(item: Any, itemId: Int, subType: Int): Boolean = false
     override fun decay(item: Any, decayId: Int): Boolean = false
+    override fun getActionId(item: Any): Int = 0
+    override fun setActionId(item: Any, actionId: Int): Boolean = false
+    override fun getUniqueId(item: Any): Long = 0L
+    override fun getAttribute(item: Any, attribute: Int): Any? = null
+    override fun setAttribute(item: Any, attribute: Int, value: Any?): Boolean = false
+}
+
+private object NO_OP_CONTAINER : ContainerOperations {
+    override fun itemIdByName(name: String): Int = 0
+    override fun getSize(container: Any): Int = 0
+    override fun getMaxCapacity(container: Any): Int = 0
+    override fun getCapacity(container: Any): Int = 0
+    override fun getEmptySlots(container: Any, recursive: Boolean): Int = 0
+    override fun getItemHoldingCount(container: Any): Int = 0
+    override fun getItemCountById(container: Any, itemId: Int, subType: Int): Int = 0
+    override fun getItem(container: Any, index: Int): Any? = null
+    override fun hasItem(container: Any, item: Any?): Boolean = false
+    override fun getItems(container: Any, recursive: Boolean): List<Any> = emptyList()
 }
 
 private object NO_OP_POSITION : PositionOperations {
