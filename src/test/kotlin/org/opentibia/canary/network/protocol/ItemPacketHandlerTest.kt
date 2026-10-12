@@ -4,15 +4,29 @@ import io.netty.buffer.Unpooled
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.items.Item
+import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
-import org.opentibia.canary.scripting.ScriptRegistry
 
 class ItemPacketHandlerTest {
 
     @Test
     fun `parses use item packet 0x82 and invokes registered action`() {
+        val env = LuaEnvironment().apply { initState() }
+        env.loadChunk(
+            """
+            local a = Action()
+            a:id(1945)
+            function a.onUse(player, item, fromPosition, target, toPosition, isHotkey)
+                lever_pulled = true
+                return true
+            end
+            a:register()
+            """.trimIndent()
+        )
+
         val map = GameMap()
         val pos = Position(100, 100, 7)
         val tile = map.getOrCreateTile(pos)
@@ -20,13 +34,6 @@ class ItemPacketHandlerTest {
         tile.addItem(lever)
 
         val player = Player(1, "Hero", 100, 100, position = pos)
-        val scripts = ScriptRegistry()
-
-        var leverPulled = false
-        scripts.registerAction(itemId = 1945) { _, item, _ ->
-            leverPulled = true
-            true
-        }
 
         val payload = Unpooled.buffer()
         payload.writeShortLE(pos.x)
@@ -36,9 +43,19 @@ class ItemPacketHandlerTest {
         payload.writeByte(0) // Stackpos
         payload.writeByte(0) // Index
 
-        val handled = ItemPacketHandler.handleUse(player, payload, map, scripts)
-        assertThat(handled).isTrue()
-        assertThat(leverPulled).isTrue()
+        val dispatcher = GameDispatcher().apply { start() }
+        try {
+            val handled = ItemPacketHandler.handleUse(player, payload, map, dispatcher, env)
+            assertThat(handled).isTrue()
+
+            val deadline = System.currentTimeMillis() + 2_000
+            while (!env.getGlobal("lever_pulled").toboolean() && System.currentTimeMillis() < deadline) {
+                Thread.sleep(10)
+            }
+            assertThat(env.getGlobal("lever_pulled").toboolean()).isTrue()
+        } finally {
+            dispatcher.shutdown()
+        }
     }
 
     @Test

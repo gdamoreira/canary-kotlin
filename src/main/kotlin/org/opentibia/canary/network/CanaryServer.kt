@@ -79,7 +79,7 @@ class CanaryServer(
                     pipeline.addLast("rateLimiter", RateLimiterHandler(maxPacketsPerSecond = 100))
                     pipeline.addLast("frameDecoder", TibiaFrameDecoder())
                     pipeline.addLast("messageEncoder", TibiaMessageEncoder())
-                    pipeline.addLast("gameHandler", GameHandler(rsaCipher, accountRepository, gameMap, dispatcher))
+                    pipeline.addLast("gameHandler", GameHandler(rsaCipher, accountRepository, gameMap, dispatcher, luaEnvironment))
                 }
             })
 

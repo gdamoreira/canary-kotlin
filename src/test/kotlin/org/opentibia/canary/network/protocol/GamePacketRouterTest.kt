@@ -7,7 +7,6 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
-import org.opentibia.canary.scripting.ScriptRegistry
 
 class GamePacketRouterTest {
 
@@ -20,7 +19,6 @@ class GamePacketRouterTest {
         map.getOrCreateTile(Position(101, 99, 7)) // East
 
         val player = Player(1, "Hero", 100, 100, position = startPos)
-        val scripts = ScriptRegistry()
 
         // Create buffer with 3 bundled packets:
         // 1. Turn North (0x6F)
@@ -31,7 +29,7 @@ class GamePacketRouterTest {
         frame.writeByte(0x65) // Move North
         frame.writeByte(0x66) // Move East
 
-        val context = GamePacketContext(map = map, scripts = scripts)
+        val context = GamePacketContext(map = map)
         val handledCount = GamePacketRouter.route(player, frame, context)
 
         assertThat(handledCount).isEqualTo(3)

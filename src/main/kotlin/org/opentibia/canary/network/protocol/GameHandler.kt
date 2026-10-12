@@ -8,6 +8,7 @@ import io.netty.channel.SimpleChannelInboundHandler
 import org.opentibia.canary.account.AccountRepository
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.network.codec.TibiaMessageEncoder
@@ -26,7 +27,8 @@ class GameHandler(
     private val rsaCipher: RsaCipher = RsaCipher(),
     private val accountRepository: AccountRepository,
     private val gameMap: GameMap,
-    private val dispatcher: GameDispatcher
+    private val dispatcher: GameDispatcher,
+    private val luaEnvironment: LuaEnvironment = LuaEnvironment().apply { initState() }
 ) : SimpleChannelInboundHandler<ByteBuf>() {
 
     private var player: Player? = null
@@ -148,7 +150,11 @@ class GameHandler(
         }
 
         dispatcher.dispatch {
-            GamePacketRouter.route(activePlayer, msg, GamePacketContext(map = gameMap))
+            GamePacketRouter.route(
+                activePlayer,
+                msg,
+                GamePacketContext(map = gameMap, dispatcher = dispatcher, luaEnvironment = luaEnvironment)
+            )
         }
     }
 

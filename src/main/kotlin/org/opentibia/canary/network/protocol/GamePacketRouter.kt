@@ -2,12 +2,14 @@ package org.opentibia.canary.network.protocol
 
 import io.netty.buffer.ByteBuf
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
-import org.opentibia.canary.scripting.ScriptRegistry
 
 data class GamePacketContext(
     val map: GameMap,
-    val scripts: ScriptRegistry = ScriptRegistry(),
+    val dispatcher: GameDispatcher = GameDispatcher(),
+    val luaEnvironment: LuaEnvironment = LuaEnvironment().apply { initState() },
     val tradeManager: TradeManager = TradeManager(),
     val modalManager: ModalWindowManager = ModalWindowManager()
 )
@@ -40,7 +42,7 @@ object GamePacketRouter {
                     ItemPacketHandler.handleThrow(player, buffer, context.map)
                 }
                 0x82 -> {
-                    ItemPacketHandler.handleUse(player, buffer, context.map, context.scripts)
+                    ItemPacketHandler.handleUse(player, buffer, context.map, context.dispatcher, context.luaEnvironment)
                 }
 
                 // Look At
