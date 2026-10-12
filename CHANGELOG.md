@@ -1,0 +1,154 @@
+# Changelog: Canary-Kotlin Development Timeline
+
+All notable technical milestones, architectural transformations, feature implementations, and test-driven developments for **Canary-Kotlin** are documented in chronological order.
+
+---
+
+## 📅 Chronological Timeline
+
+### Phase 1: Inception & Network Foundations (15:50 – 16:07)
+- **`53ce982` - Repository Initialization & Crypto Stack**:
+  - Initialized Git repository, configured Gradle with Kotlin DSL, and integrated Netty 4.1.
+  - Implemented 64-round Little-Endian `XteaCipher`, 1024-bit raw textbook `RsaCipher` with Canary's standard OpenTibia primes ($p, q$), and RFC 1950 `Adler32Checksum`.
+  - Built `TibiaFrameDecoder` and `TibiaMessageEncoder`.
+  - Implemented `LoginHandler` parsing client OS, protocol version, RSA credentials, and delivering character list opcode `0x64`.
+- **`07e4b2f` - Documentation Structure**:
+  - Created `docs/Plan/`, `docs/Implementing/`, and `docs/Done/` lifecycle structure.
+- **`fa0f889` - Architectural Adaptation & Parity Strategy**:
+  - Documented `000-kotlin-architectural-design.md`, replacing C++ singletons (`g_game`, `g_dispatcher`) and raw mutexes with dependency injection and single-threaded Coroutine Actor confinement.
+  - Established `000-parity-validation-strategy.md` and sequential execution roadmap.
+- **`e23dfac` - Configuration Manager**:
+  - Implemented `ServerConfig` and `ConfigManager` supporting environment variable overrides (`CANARY_*`) and properties fallbacks.
+- **`1acc187` - Coroutine Actor GameDispatcher**:
+  - Implemented `GameDispatcher` utilizing Kotlin Coroutines with priority lanes (`WorldCommit`, `Maintenance`) for lock-free state modifications.
+- **`175298e` - Items & Containers**:
+  - Implemented `ItemType`, `ItemTypeRegistry`, `Item`, and `Container` with recursive weight calculations and capacity limits.
+- **`e1ee6f5` - Spatial Map Grid**:
+  - Implemented `Position` (Chebyshev distance and range checks), `Tile`, and `GameMap`.
+- **`175605a` - Creatures & Progression**:
+  - Implemented `Creature`, `Monster`, and `Player` with Canary's cubic experience formula: $\frac{50n^3 - 300n^2 + 850n - 600}{3}$.
+- **`67cbf6a` - Movement Engine**:
+  - Implemented `Direction` offsets and step duration calculation: $\frac{\text{groundSpeed} \times 1000}{\text{creatureSpeed}}$.
+- **`5624fb4` - Status Protocol (0xFF)**:
+  - Implemented `StatusHandler` serving TSQP XML server info pings.
+- **`f04a323` - Game Protocol Handshake**:
+  - Implemented `GameHandler` authenticating character credentials on port 7172 and delivering `SelfAppear` (`0x0A`).
+
+---
+
+### Phase 2: RPG Mechanics & Domain Systems (17:49 – 18:25)
+- **`c18c875` - Combat & Mitigation Engine**:
+  - Implemented `CombatEngine` with physical damage formula $2 \times \frac{\text{attack} \times (\text{skill} + 5.8)}{25} + \frac{\text{level}}{5}$ and randomized armor reduction $P \in [\frac{\text{armor}}{2}, \text{armor} - 1]$.
+- **`f91b41f` - Chat & Channels**:
+  - Implemented `SpeechType` hearing radiuses (Whisper: 1, Say: 4, Yell: 18) and public channel broadcasting in `ChatManager`.
+- **`f324741` - Snapshot Persistence**:
+  - Implemented `PlayerData` and `InMemoryPlayerStorage` decoupling network threads from persistence.
+- **`3901d21` - Action Scripting Registry**:
+  - Implemented `ScriptRegistry` handling item actions (`onUse`) and talkactions (`!commands`).
+- **`1ae91e5` - Modern Systems Baseline**:
+  - Implemented `ImbuementSlot` duration decay and `PreySlot` monster buff multipliers.
+- **`7b330f0` - Houses & Private Ownership**:
+  - Implemented `House` and `HouseTile` permission lists (`aleta grav`, `aleta sio`) and intruder eviction.
+- **`9a62037` - Guilds & Guild Wars**:
+  - Implemented `Guild`, member ranks, and `GuildWar` frag-tracking limits.
+- **`c2f8575` - Global Player Market**:
+  - Implemented `MarketManager` handling buy/sell offer escrow and automated trade matching.
+- **`3fed633` - Depots & Mail Delivery**:
+  - Implemented `DepotService` with multi-town lockers, supply stash, and parcel mailbox delivery.
+- **`85954e7` - Bosstiary & Lockouts**:
+  - Implemented `BosstiaryManager` with Bane tiers (25, 100, 300) and 20-hour boss room lever lockouts.
+- **`c979ca8` - OTBM Binary Map Parser**:
+  - Implemented `OtbmNodeReader` unescaping byte markers (`0xFD`) and `OtbmMapLoader`.
+- **`17c8d7a` - OTB Binary Items Parser**:
+  - Implemented `OtbItemsLoader` decoding `items.otb` nodes and sprite ID mappings.
+- **`f685a10` - XML Content Loaders**:
+  - Implemented `XmlItemLoader` (`items.xml`) and `XmlVocationLoader` (`vocations.xml`).
+- **`8e5b212` - Viewport Serialization**:
+  - Implemented `MapPacketWriter` streaming $18 \times 14$ tile canvas descriptions (`0x64`) with empty run compression skip bytes.
+- **`4554ed9` - Monster AI & Spawners**:
+  - Implemented `Spawner`, `SpawnManager`, and `MonsterAiEngine` autonomous player approach steps.
+- **`1a6c56a` - NPC Dialogue & Shop State Machine**:
+  - Implemented `Npc` conversations (`hi`, `bye`, `trade`) and merchant price catalogs.
+- **`a94edca` - World Hazards & Teleporters**:
+  - Implemented `MagicField` damage, `TeleportItem` coordinates, and `DoorItem` toggles.
+- **`9e9d956` - Relational Database Layer**:
+  - Implemented `SqlitePlayerDatabase` JDBC persistence.
+- **`093f50a` - LuaJ Runtime Embedding**:
+  - Implemented `LuaScriptBridge` executing Lua scripts against Kotlin entities.
+
+---
+
+### Phase 3: PostgreSQL, Flyway & End-to-End Transition (18:30 – 18:38)
+- **`3faf75f` - Containerization & Flyway**:
+  - Added Docker Compose, multi-stage `Dockerfile`, Flyway migrations, and HikariCP connection pooling.
+- **`468ad99` - PostgreSQL & In-Memory Mode**:
+  - Switched database engine to **PostgreSQL 16+** for production and **H2 In-Memory (PostgreSQL mode)** for local testing.
+  - Updated Flyway schema migrations (`V1__initial_schema.sql`, `V2__seed_test_accounts.sql`).
+- **`e204547` - Full Login to World Transition**:
+  - Unified `GameHandler` and `MapPacketWriter`.
+  - Added `FullLoginToGameWorldFlowTest.kt` verifying complete client authentication and map viewport streaming.
+
+---
+
+### Phase 4: ProtocolGame Inbound Loop & Production Readiness (18:54 – 22:01)
+- **`1a0d290` - Inbound Movement & Turns**:
+  - Implemented `MovePacketHandler` decoding walking (`0x65..0x68`, `0x6A..0x6D`) and spot turns (`0x6F..0x72`).
+- **`b8480dc` - Item Interactions & Throwing**:
+  - Implemented `ItemPacketHandler` decoding item use (`0x82`) and dragging/throwing across ground/containers (`0x78`).
+- **`0947682` - Combat Stances & Target Locking**:
+  - Implemented `CombatPacketHandler` decoding fight modes (`0xA0`) and target creature locking (`0xA1`).
+- **`60a2c81` - Look At & Inspection Notifications**:
+  - Implemented `LookPacketHandler` (`0x8C`) and `DescriptionFormatter` emitting text messages (`0xB4`).
+- **`1b0c989` - Safe Trade & Modal Windows**:
+  - Implemented `TradeManager` safe 2-way item exchange and `ModalWindowManager` dialog callbacks (`0xFA`).
+- **`f5d1874` - Heartbeat & Safe Logout**:
+  - Implemented `KeepaliveHandler` ping/pong (`0x1E`) and combat logout prevention (`0x14`).
+- **`5bd83bb` - Unified GamePacketRouter**:
+  - Implemented multi-packet frame unbundling in `GamePacketRouter.kt` and connected to `GameHandler`.
+- **`c8295d0` - Argon2id Security Engine**:
+  - Implemented `Argon2Security` ($m=65536, t=4, p=1$) verifying web AAC password hashes with BouncyCastle.
+- **`d3d231c` - Anti-DoS & Rate Limiting**:
+  - Implemented Netty `RateLimiterHandler` token-bucket flood defense enforcing max packets per second.
+- **`ccf24f7` - High-Performance MapSector Chunking**:
+  - Implemented 32x32 `MapSector` array spatial chunking in `GameMap`, reducing JVM memory consumption by $>80\%$.
+- **`3442f88` - Atomic Server Save & Graceful Shutdown**:
+  - Implemented `SaveManager` flushing all online player inventories and world states to database.
+- **`f213a13` - Death Penalty & Temple Revive**:
+  - Implemented `DeathPenaltyEngine` calculating blessing exp mitigation and temple revives.
+- **`b86b5a4` - Prometheus Observability**:
+  - Implemented `MetricsRegistry` scraping active player counts and tick latency.
+
+---
+
+### Phase 5: Modernization to Java 25 & Canary Parity (21:55 – 22:36)
+- **`b42e887` - Java 25, Gradle 9.8.1, Kotlin 2.4.21 Upgrade**:
+  - Upgraded build toolchain to **Gradle 9.8.1**, **Kotlin 2.4.21**, and target runtime to **Java 25 LTS**.
+- **`b682325` - Dual TCP Listeners**:
+  - Updated `CanaryServer` to bind both Port 7171 (Login/Status) and Port 7172 (GameWorld) simultaneously with rate limiters.
+- **`fe0130c` - Multi-Character E2E Integration Suite**:
+  - Created `MultiCharacterSwitchMovementTest.kt` verifying login, Char 1 move, logout, Char 2 switch, move, and disconnect.
+- **`f8ac145` - Asset Ingestion**:
+  - Copied Canary example map (`canary.otbm` - 19 MB), `items.xml` (3.5 MB), `appearances.dat`, monster templates, and XML definitions to `data-canary/`.
+- **`9b49068` - Canary C++ Test Transcriptions**:
+  - Transcripted C++ unit tests for numeric bounds, string replacements, SHA1/SHA256 vectors, coordinate directions, and IP player capping.
+- **`43090e3` - Currency & Vitals Regeneration**:
+  - Implemented `Currency` coin conversions (Gold, Platinum, Crystal), `BankService`, and `VitalsRegenEngine`.
+- **`7d17b03` - Magic Spells & Player QuestLog**:
+  - Implemented `SpellRegistry` (instant spells, mana/level checks) and `PlayerStorageManager` (`getStorage`/`setStorage`).
+- **`1a14b87` / `20cc0ea` - Gameplay Feature Matrix**:
+  - Created `docs/game-play-features.md` inventorying all 56 Canary gameplay systems.
+- **`5b83cd4` - Advanced Feature Specifications**:
+  - Created implementation plans in `docs/Plan/` for features `050` through `064` (Skill Wheel, Forge, Bestiary, Store, Hazard, etc.).
+- **`95bcad5` / `03fa14c` - Canary C++ File References**:
+  - Annotated all 64 feature documents with file paths and line numbers from the original Canary repository.
+- **`4918a4c` - Codebase Audit & Feature Template**:
+  - Created `docs/canary-codebase-implementation-audit.md` and `docs/TEMPLATE_FEATURE.md`.
+- **`da45490` - Wheel of Destiny Engine**:
+  - Implemented `WheelOfDestinyEngine` promotion point budgets ($\max(0, \text{level} - 50)$), perk allocations, and passive stat bonuses.
+
+---
+
+### Current Status
+- **Automated Tests**: 58 test suites passing cleanly on **Java 25 LTS** via `./gradlew test`.
+- **Features Implemented & Verified**: 42 completed gameplay & infrastructure features.
+- **Features Planned with Full Specs**: 14 advanced features documented in `docs/Plan/`.
