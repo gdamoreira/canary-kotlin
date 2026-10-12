@@ -84,6 +84,8 @@ This document establishes the master inventory of all gameplay features from Can
 
 - **Implemented & Verified Gameplay Systems**: **41 / 56** ($73\%$)
 - **Advanced Gameplay Systems — engine cores ported**: **15 / 15** (protocol/Lua wiring remains)
-- **Automated Test Coverage**: 105 test suites / 491 tests passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered).
-- **Combat stack**: `combat/CombatDamage` + `Combat` (damage/armor/mitigation/crit) and `combat/condition/*` (Condition engine core).
-- **Lua engine**: `lua/bindings/core/*` (Game/Player/Creature/Item/Position primitives) and `lua/registry/*` + `lua/bindings/*` (Spell/CreatureEvent/GlobalEvent/MoveEvent constructors).
+- **Automated Test Coverage**: 115 test suites / 580 tests passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered).
+- **Combat stack**: `combat/CombatDamage` + `Combat` (damage/armor/mitigation/crit), `combat/condition/*` (Condition engine core + remaining subclasses: outfit/light/invisible/cooldown/serene).
+- **Combat consumers**: bestiary charm procs, weapon-proficiency combat application, and hazard `CombatDamage` bridge.
+- **Lua engine**: bindings installed at `LuaEnvironment.initState()`; core primitive bindings (Game/Player/Creature/Item/Container/Position) + Spell/CreatureEvent/GlobalEvent/MoveEvent registries; best-effort `data/libs` load.
+- **Router**: opcodes `0x61`/`0x62`/`0xE7` (wheel), `0x74` (offline training), `0xFF` (reward chest) dispatched via `GamePacketRouter` on the WorldCommit lane.
