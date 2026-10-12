@@ -21,8 +21,14 @@ dependencies {
     implementation("ch.qos.logback:logback-classic:1.5.16")
     implementation("io.github.oshai:kotlin-logging-jvm:7.0.3")
 
-    // SQLite JDBC
+    // SQLite & MariaDB/MySQL JDBC
     implementation("org.xerial:sqlite-jdbc:3.48.0.0")
+    implementation("org.mariadb.jdbc:mariadb-java-client:3.5.1")
+    implementation("com.zaxxer:HikariCP:6.2.1")
+
+    // Database Migrations (Flyway)
+    implementation("org.flywaydb:flyway-core:11.2.0")
+    implementation("org.flywaydb:flyway-mysql:11.2.0")
 
     // LuaJ scripting engine
     implementation("org.luaj:luaj-jse:3.0.1")
