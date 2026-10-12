@@ -1,5 +1,7 @@
 package org.opentibia.canary.systems.forge
 
+import org.opentibia.canary.config.FeatureFlags
+
 /**
  * Mirror of Canary's forge enums, item constants, and configuration defaults.
  *
@@ -50,4 +52,29 @@ data class ForgeConfig(
     val sliverAmount: Int = 3,
     val tierLossReduction: Int = 50,
     val transferDustCost: Int = 100,
-)
+) {
+    companion object {
+        /**
+         * Builds the forge configuration from the Canary `FORGE_*` feature flags
+         * (src/config/configmanager.cpp:179,258-273). The `FeatureFlags` defaults
+         * match this type's defaults exactly.
+         */
+        fun fromFeatureFlags(flags: FeatureFlags): ForgeConfig = ForgeConfig(
+            amountMultiplier = flags.forgeAmountMultiplier.toDouble(),
+            baseSuccessRate = flags.forgeBaseSuccessRate,
+            bonusSuccessRate = flags.forgeBonusSuccessRate,
+            convergenceFusionDustCost = flags.forgeConvergenceFusionDustCost,
+            convergenceTransferDustCost = flags.forgeConvergenceTransferDustCost,
+            coreCost = flags.forgeCoreCost,
+            costOneSliver = flags.forgeCostOneSliver,
+            fusionDustCost = flags.forgeFusionDustCost,
+            maxDust = flags.forgeMaxDust,
+            maxItemTier = flags.forgeMaxItemTier,
+            maxSlivers = flags.forgeMaxSlivers,
+            minSlivers = flags.forgeMinSlivers,
+            sliverAmount = flags.forgeSliverAmount,
+            tierLossReduction = flags.forgeTierLossReduction,
+            transferDustCost = flags.forgeTransferDustCost,
+        )
+    }
+}

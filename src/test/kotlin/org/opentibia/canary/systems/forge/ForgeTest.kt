@@ -2,6 +2,7 @@ package org.opentibia.canary.systems.forge
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.config.FeatureFlags
 
 /**
  * Transcript tests for the Exaltation Forge engine core. Expected values are
@@ -49,6 +50,26 @@ class ForgeTest {
         assertThat(config.sliverAmount).isEqualTo(3)
         assertThat(config.tierLossReduction).isEqualTo(50)
         assertThat(config.transferDustCost).isEqualTo(100)
+    }
+
+    @Test
+    fun `forge config from feature flags drives success costs and cap`() {
+        val config = ForgeConfig.fromFeatureFlags(
+            FeatureFlags(
+                forgeBaseSuccessRate = 40,
+                forgeBonusSuccessRate = 10,
+                forgeFusionDustCost = 77,
+                forgeMaxDust = 100,
+            )
+        )
+        val forge = Forge(config)
+
+        assertThat(forge.finalSuccessRate(usedCore = false)).isEqualTo(40)
+        assertThat(forge.finalSuccessRate(usedCore = true)).isEqualTo(50)
+        assertThat(forge.fusionDustCost(convergence = false)).isEqualTo(77)
+
+        forge.addForgeDustLevel(100)
+        assertThat(forge.increaseLimit()).isNull()
     }
 
     @Test

@@ -2,6 +2,7 @@ package org.opentibia.canary.systems.proficiency
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.config.FeatureFlags
 
 class WeaponProficiencyTest {
 
@@ -61,6 +62,13 @@ class WeaponProficiencyTest {
         assertThat(WeaponProficiencyExperience.scaleGain(100, 1.0)).isEqualTo(100)
         assertThat(WeaponProficiencyExperience.scaleGain(101, 0.5)).isEqualTo(51)
         assertThat(WeaponProficiencyExperience.scaleGain(100, -2.0)).isEqualTo(0)
+    }
+
+    @Test
+    fun `gain scaling uses the feature flag multiplier by default`() {
+        assertThat(WeaponProficiencyExperience.scaleGain(100, FeatureFlags())).isEqualTo(33)
+        assertThat(WeaponProficiencyExperience.scaleGain(100, FeatureFlags(weaponProficiencyGainMultiplier = 2.0f)))
+            .isEqualTo(200)
     }
 
     @Test

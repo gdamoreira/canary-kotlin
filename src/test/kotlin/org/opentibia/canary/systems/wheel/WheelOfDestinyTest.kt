@@ -16,6 +16,14 @@ class WheelOfDestinyTest {
     }
 
     @Test
+    fun `points per level feature flag scales the point budget`() {
+        assertThat(PlayerWheel(IOWheel.VOCATION_KNIGHT_CIP, level = 100, pointsPerLevel = 1).getWheelPoints())
+            .isEqualTo(50)
+        assertThat(PlayerWheel(IOWheel.VOCATION_KNIGHT_CIP, level = 100, pointsPerLevel = 2).getWheelPoints())
+            .isEqualTo(100)
+    }
+
+    @Test
     fun `extra points are included by default and excluded on request`() {
         val wheel = PlayerWheel(IOWheel.VOCATION_KNIGHT_CIP, level = 100, extraPoints = 7)
         assertThat(wheel.getWheelPoints()).isEqualTo(57)

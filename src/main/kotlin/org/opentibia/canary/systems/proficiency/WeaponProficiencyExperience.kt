@@ -1,6 +1,7 @@
 package org.opentibia.canary.systems.proficiency
 
 import kotlin.math.pow
+import org.opentibia.canary.config.FeatureFlags
 
 /**
  * Weapon Proficiencies experience tables and level math, ported verbatim from
@@ -62,6 +63,14 @@ object WeaponProficiencyExperience {
         val scaled = Math.round(experience * safeMultiplier)
         return minOf(scaled, Int.MAX_VALUE.toLong()).toInt()
     }
+
+    /**
+     * `WeaponProficiency::scaleWeaponProficiencyExperienceGain`
+     * (src/creatures/players/components/weapon_proficiency.cpp:50-58), driven by
+     * `WEAPON_PROFICIENCY_GAIN_MULTIPLIER` (configmanager.cpp:220).
+     */
+    fun scaleGain(experience: Int, flags: FeatureFlags): Int =
+        scaleGain(experience, flags.weaponProficiencyGainMultiplier.toDouble())
 
     fun bosstiaryExperience(rarity: BosstiaryRarity): Int = when (rarity) {
         BosstiaryRarity.RARITY_BANE -> 500
