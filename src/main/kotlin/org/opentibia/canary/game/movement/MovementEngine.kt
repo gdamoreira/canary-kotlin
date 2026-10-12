@@ -21,6 +21,33 @@ enum class Direction(val byteValue: Byte, val dx: Int, val dy: Int) {
 
 object MovementEngine {
 
+    fun getDirectionTo(from: Position, to: Position, exactDiagonal: Boolean = true): Direction? {
+        val dx = to.x - from.x
+        val dy = to.y - from.y
+
+        if (dx == 0 && dy == 0) return null
+
+        return if (exactDiagonal) {
+            when {
+                dx < 0 && dy < 0 -> Direction.NorthWest
+                dx > 0 && dy < 0 -> Direction.NorthEast
+                dx < 0 && dy > 0 -> Direction.SouthWest
+                dx > 0 && dy > 0 -> Direction.SouthEast
+                dx < 0 -> Direction.West
+                dx > 0 -> Direction.East
+                dy < 0 -> Direction.North
+                dy > 0 -> Direction.South
+                else -> null
+            }
+        } else {
+            if (kotlin.math.abs(dx) > kotlin.math.abs(dy)) {
+                if (dx > 0) Direction.East else Direction.West
+            } else {
+                if (dy > 0) Direction.South else Direction.North
+            }
+        }
+    }
+
     fun calculateStepDuration(creatureSpeed: Int, groundSpeed: Int = 100): Long {
         if (creatureSpeed <= 0) return Long.MAX_VALUE
         return (groundSpeed.toLong() * 1000L) / creatureSpeed.toLong()
