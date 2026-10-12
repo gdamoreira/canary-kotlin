@@ -1,0 +1,330 @@
+package org.opentibia.canary.lua.bindings.core
+
+import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.Test
+import org.opentibia.canary.lua.runtime.LuaEnvironment
+import org.opentibia.canary.map.Position
+import kotlin.math.abs
+import kotlin.math.max
+
+/**
+ * Transcript-style tests for the core Lua binding libraries. Each group is installed
+ * with a fake engine seam, then exercised through real Lua chunks using the exact
+ * Canary method names (player:addItem, creature:getHealth, item:transform,
+ * position:sendMagicEffect, Game.createItem).
+ */
+class CoreBindingsTest {
+
+    private class FakeItem(
+        var id: Int,
+        var count: Int = 1,
+        var subType: Int = 0,
+        var name: String = "item",
+    )
+
+    private class FakeCreature(
+        val id: Long,
+        val name: String,
+        var health: Int,
+        val maxHealth: Int,
+        val position: Position,
+    )
+
+    private class FakePlayer
+
+    private data class AddItemCall(
+        val itemId: Int,
+        val count: Int,
+        val canDropOnMap: Boolean,
+        val subType: Int,
+        val slot: Int,
+        val tier: Int,
+    )
+
+    private class FakeGame(private val names: Map<String, Int> = emptyMap()) : GameOperations {
+        val createItemCalls = mutableListOf<Pair<Int, Int>>()
+        override fun itemIdByName(name: String): Int = names[name] ?: 0
+        override fun createItem(itemId: Int, count: Int): List<Any> {
+            createItemCalls += itemId to count
+            return listOf(FakeItem(itemId, count))
+        }
+    }
+
+    private class FakePlayerOps : PlayerOperations {
+        val addItemCalls = mutableListOf<AddItemCall>()
+        var lastMessage: LuaTextMessage? = null
+        override fun itemIdByName(name: String): Int = if (name == "gold coin") 2148 else 0
+        override fun addItem(
+            player: Any,
+            itemId: Int,
+            count: Int,
+            canDropOnMap: Boolean,
+            subType: Int,
+            slot: Int,
+            tier: Int,
+        ): List<Any> {
+            addItemCalls += AddItemCall(itemId, count, canDropOnMap, subType, slot, tier)
+            return listOf(FakeItem(itemId, count))
+        }
+
+        override fun removeItem(
+            player: Any,
+            itemId: Int,
+            count: Int,
+            subType: Int,
+            ignoreEquipped: Boolean,
+            ignoreStoreInbox: Boolean,
+        ): Boolean = itemId == 2148 && count == 2
+
+        override fun getItemCount(
+            player: Any,
+            itemId: Int,
+            subType: Int,
+            ignoreEquipped: Boolean,
+            ignoreStoreInbox: Boolean,
+        ): Long = 7L
+
+        override fun addSkillTries(player: Any, skillType: Int, tries: Long): Boolean = skillType == 0 && tries == 100L
+
+        override fun sendTextMessage(player: Any, message: LuaTextMessage): Boolean {
+            lastMessage = message
+            return true
+        }
+    }
+
+    private class FakeCreatureOps : CreatureOperations {
+        val setHealthCalls = mutableListOf<Pair<Any, Int>>()
+        override fun getId(creature: Any): Long = (creature as FakeCreature).id
+        override fun getName(creature: Any): String = (creature as FakeCreature).name
+        override fun getHealth(creature: Any): Int = (creature as FakeCreature).health
+        override fun getMaxHealth(creature: Any): Int = (creature as FakeCreature).maxHealth
+        override fun setHealth(creature: Any, health: Int): Boolean {
+            setHealthCalls += creature to health
+            (creature as FakeCreature).health = health
+            return true
+        }
+
+        override fun addHealth(creature: Any, healthChange: Int, combatType: Int): Boolean {
+            (creature as FakeCreature).health += healthChange
+            return true
+        }
+
+        override fun getPosition(creature: Any): Position = (creature as FakeCreature).position
+    }
+
+    private class FakeItemOps : ItemOperations {
+        val transforms = mutableListOf<Triple<Any, Int, Int>>()
+        override fun itemIdByName(name: String): Int = 0
+        override fun getId(item: Any): Int = (item as FakeItem).id
+        override fun getCount(item: Any): Int = (item as FakeItem).count
+        override fun getName(item: Any): String = (item as FakeItem).name
+        override fun getSubType(item: Any): Int = (item as FakeItem).subType
+        override fun transform(item: Any, itemId: Int, subType: Int): Boolean {
+            transforms += Triple(item, itemId, subType)
+            (item as FakeItem).id = itemId
+            if (subType >= 0) {
+                item.subType = subType
+            }
+            return true
+        }
+
+        override fun decay(item: Any, decayId: Int): Boolean = true
+    }
+
+    private class FakePositionOps : PositionOperations {
+        val effects = mutableListOf<Triple<Position, Int, Any?>>()
+        override fun getDistance(position: Position, target: Position): Int =
+            max(max(abs(position.x - target.x), abs(position.y - target.y)), abs(position.z - target.z))
+
+        override fun sendMagicEffect(position: Position, magicEffect: Int, spectator: Any?): Boolean {
+            effects += Triple(position, magicEffect, spectator)
+            return true
+        }
+
+        override fun removeMagicEffect(position: Position, magicEffect: Int, spectator: Any?): Boolean = true
+    }
+
+    private fun env(): LuaEnvironment = LuaEnvironment().apply { initState() }
+
+    @Test
+    fun `Game createItem uses the Canary name and wraps the seam item`() {
+        val environment = env()
+        val game = FakeGame(mapOf("gold coin" to 2148))
+        GameFunctions.install(environment, game)
+        ItemFunctions.install(environment, FakeItemOps())
+        environment.loadChunk("item = Game.createItem(2160, 3)")
+
+        val item = environment.getGlobal("item")
+        assertThat(item.isuserdata()).isTrue()
+
+        environment.loadChunk("id = item:getId()")
+        assertThat(environment.getGlobal("id").toint()).isEqualTo(2160)
+        assertThat(game.createItemCalls).containsExactly(2160 to 3)
+    }
+
+    @Test
+    fun `Game createItem resolves an item name to an id`() {
+        val environment = env()
+        val game = FakeGame(mapOf("gold coin" to 2148))
+        GameFunctions.install(environment, game)
+        environment.loadChunk("item = Game.createItem('gold coin', 5)")
+        assertThat(environment.getGlobal("item").isuserdata()).isTrue()
+        assertThat(game.createItemCalls).containsExactly(2148 to 5)
+    }
+
+    @Test
+    fun `Game createItem returns nil for an unknown name`() {
+        val environment = env()
+        GameFunctions.install(environment, FakeGame())
+        environment.loadChunk("item = Game.createItem('does not exist')")
+        assertThat(environment.getGlobal("item").isnil()).isTrue()
+    }
+
+    @Test
+    fun `Player addItem exposes the Canary signature and returns the item`() {
+        val environment = env()
+        val playerOps = FakePlayerOps()
+        PlayerFunctions.install(environment, playerOps)
+        ItemFunctions.install(environment, FakeItemOps())
+        environment.globals.set("p", environment.userdata.wrap("Player", FakePlayer()))
+
+        environment.loadChunk("item = p:addItem(2160, 2, true, 1, 6, 0)")
+        environment.loadChunk("id = item:getId()")
+
+        assertThat(environment.getGlobal("id").toint()).isEqualTo(2160)
+        assertThat(playerOps.addItemCalls).containsExactly(AddItemCall(2160, 2, true, 1, 6, 0))
+    }
+
+    @Test
+    fun `Player removeItem getItemCount and addSkillTries use Canary names`() {
+        val environment = env()
+        PlayerFunctions.install(environment, FakePlayerOps())
+        environment.globals.set("p", environment.userdata.wrap("Player", FakePlayer()))
+
+        environment.loadChunk("removed = p:removeItem(2148, 2)")
+        environment.loadChunk("count = p:getItemCount('gold coin')")
+        environment.loadChunk("trained = p:addSkillTries(0, 100)")
+
+        assertThat(environment.getGlobal("removed").toboolean()).isTrue()
+        assertThat(environment.getGlobal("count").toint()).isEqualTo(7)
+        assertThat(environment.getGlobal("trained").toboolean()).isTrue()
+    }
+
+    @Test
+    fun `Player sendTextMessage forwards type and text`() {
+        val environment = env()
+        val playerOps = FakePlayerOps()
+        PlayerFunctions.install(environment, playerOps)
+        environment.globals.set("p", environment.userdata.wrap("Player", FakePlayer()))
+
+        environment.loadChunk("ok = p:sendTextMessage(18, 'hello world')")
+
+        assertThat(environment.getGlobal("ok").toboolean()).isTrue()
+        assertThat(playerOps.lastMessage).isNotNull()
+        assertThat(playerOps.lastMessage!!.type).isEqualTo(18)
+        assertThat(playerOps.lastMessage!!.text).isEqualTo("hello world")
+    }
+
+    @Test
+    fun `Creature methods are available on the creature metatables`() {
+        val environment = env()
+        val creatureOps = FakeCreatureOps()
+        CreatureFunctions.install(environment, creatureOps)
+        PositionFunctions.install(environment, FakePositionOps())
+
+        val creature = FakeCreature(7L, "Rat", 30, 100, Position(10, 20, 7))
+        environment.globals.set("c", environment.userdata.wrap("Monster", creature))
+
+        environment.loadChunk("id = c:getId()")
+        environment.loadChunk("name = c:getName()")
+        environment.loadChunk("hp = c:getHealth()")
+        environment.loadChunk("maxHp = c:getMaxHealth()")
+        environment.loadChunk("c:setHealth(55)")
+        environment.loadChunk("after = c:getHealth()")
+        environment.loadChunk("pos = c:getPosition()")
+        environment.globals.set("target", environment.userdata.wrap("Position", Position(13, 24, 7)))
+        environment.loadChunk("dist = pos:getDistance(target)")
+
+        assertThat(environment.getGlobal("id").toint()).isEqualTo(7)
+        assertThat(environment.getGlobal("name").tojstring()).isEqualTo("Rat")
+        assertThat(environment.getGlobal("hp").toint()).isEqualTo(30)
+        assertThat(environment.getGlobal("maxHp").toint()).isEqualTo(100)
+        assertThat(environment.getGlobal("after").toint()).isEqualTo(55)
+        assertThat(environment.getGlobal("dist").toint()).isEqualTo(4)
+        assertThat(creatureOps.setHealthCalls).containsExactly(creature to 55)
+    }
+
+    @Test
+    fun `Player userdata also exposes inherited Creature methods`() {
+        val environment = env()
+        CreatureFunctions.install(environment, FakeCreatureOps())
+        val creature = FakeCreature(42L, "Hero", 200, 200, Position(1, 1, 7))
+        environment.globals.set("p", environment.userdata.wrap("Player", creature))
+
+        environment.loadChunk("id = p:getId()")
+        assertThat(environment.getGlobal("id").toint()).isEqualTo(42)
+    }
+
+    @Test
+    fun `Item methods use the Canary names`() {
+        val environment = env()
+        ItemFunctions.install(environment, FakeItemOps())
+        val item = FakeItem(2160, 5, 0, "crystal coin")
+        environment.globals.set("item", environment.userdata.wrap("Item", item))
+
+        environment.loadChunk("id = item:getId()")
+        environment.loadChunk("count = item:getCount()")
+        environment.loadChunk("name = item:getName()")
+        environment.loadChunk("subType = item:getSubType()")
+        environment.loadChunk("transformed = item:transform(2160, 3)")
+        environment.loadChunk("decayed = item:decay(0)")
+
+        assertThat(environment.getGlobal("id").toint()).isEqualTo(2160)
+        assertThat(environment.getGlobal("count").toint()).isEqualTo(5)
+        assertThat(environment.getGlobal("name").tojstring()).isEqualTo("crystal coin")
+        assertThat(environment.getGlobal("subType").toint()).isEqualTo(0)
+        assertThat(environment.getGlobal("transformed").toboolean()).isTrue()
+        assertThat(environment.getGlobal("decayed").toboolean()).isTrue()
+    }
+
+    @Test
+    fun `Position toString and sendMagicEffect use the Canary names`() {
+        val environment = env()
+        val positionOps = FakePositionOps()
+        PositionFunctions.install(environment, positionOps)
+        environment.globals.set("pos", environment.userdata.wrap("Position", Position(1, 2, 3)))
+
+        environment.loadChunk("text = pos:toString()")
+        environment.loadChunk("ok = pos:sendMagicEffect(12)")
+
+        assertThat(environment.getGlobal("text").tojstring()).isEqualTo("( 1, 2, 3 )")
+        assertThat(environment.getGlobal("ok").toboolean()).isTrue()
+        assertThat(positionOps.effects).containsExactly(Triple(Position(1, 2, 3), 12, null))
+    }
+
+    @Test
+    fun `installed metatables expose the exact Canary method names`() {
+        val environment = env()
+        GameFunctions.install(environment, FakeGame())
+        PlayerFunctions.install(environment, FakePlayerOps())
+        CreatureFunctions.install(environment, FakeCreatureOps())
+        ItemFunctions.install(environment, FakeItemOps())
+        PositionFunctions.install(environment, FakePositionOps())
+
+        environment.loadChunk(
+            "checks = (rawgetmetatable('Player').addItem ~= nil) and " +
+                "(rawgetmetatable('Player').removeItem ~= nil) and " +
+                "(rawgetmetatable('Player').getItemCount ~= nil) and " +
+                "(rawgetmetatable('Player').addSkillTries ~= nil) and " +
+                "(rawgetmetatable('Player').sendTextMessage ~= nil) and " +
+                "(rawgetmetatable('Player').getHealth ~= nil) and " +
+                "(rawgetmetatable('Monster').getHealth ~= nil) and " +
+                "(rawgetmetatable('Item').transform ~= nil) and " +
+                "(rawgetmetatable('Item').decay ~= nil) and " +
+                "(rawgetmetatable('Position').sendMagicEffect ~= nil) and " +
+                "(Game.createItem ~= nil)",
+        )
+
+        assertThat(environment.getGlobal("checks").toboolean()).isTrue()
+    }
+}
