@@ -18,3 +18,8 @@ Production data persistence. Allows external account managers (MyAAC, Znote AAC)
 
 ## 5. Test Reference
 - `org.opentibia.canary.database.ExposedDatabaseTest`: Tests running against an in-memory H2 database, persisting an account with multiple characters and reloading.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

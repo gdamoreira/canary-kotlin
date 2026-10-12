@@ -18,3 +18,8 @@ Core engine architecture. In Kotlin/JVM, replacing C++ mutexes and Asio event lo
 
 ## 5. Test Reference
 - `org.opentibia.canary.game.scheduling.GameDispatcherTest`: Test event ordering, priority execution, exception isolation, and graceful shutdown.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

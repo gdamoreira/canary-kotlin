@@ -28,3 +28,8 @@ Drives all PvE encounters, hunting economics, experience gain, and equipment dro
 
 ## 5. Test Reference
 - `org.opentibia.canary.creatures.MonsterPipelineServiceTest`: Loads a sample monster definition (e.g. Dragon), kills monster, and verifies corpse generation with rolled loot items.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

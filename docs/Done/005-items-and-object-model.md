@@ -19,3 +19,8 @@ Critical dependency for the map loader, creature inventory, container handling, 
 
 ## 5. Test Reference
 - `org.opentibia.canary.items.ItemLoaderTest`: Parse test `items.otb` snippet and verify attribute assignment (stackable, containers, weapon types).
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

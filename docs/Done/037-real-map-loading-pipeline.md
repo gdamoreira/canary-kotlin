@@ -29,3 +29,8 @@ Constructs the actual spatial reality of the game world. Maps can exceed 100,000
 
 ## 5. Test Reference
 - `org.opentibia.canary.map.MapPipelineServiceTest`: Loads an integration test suite comprising an OTBM file, a matching `house.xml`, and a `spawn.xml`, verifying towns, houses, tiles, and monster spawn points are loaded and linked.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

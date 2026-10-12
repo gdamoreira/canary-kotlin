@@ -21,3 +21,8 @@ Directly governs core gameplay balance, PvP, and PvE loops. High complexity due 
 ## 5. Test Reference
 - `org.opentibia.canary.combat.DamageCalculationTest`: Verify damage bounds for test weapon/skill values.
 - `org.opentibia.canary.combat.ConditionTest`: Verify DOT damage ticks and expiration.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

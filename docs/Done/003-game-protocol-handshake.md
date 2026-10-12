@@ -20,3 +20,8 @@ Foundational system for gameplay. Bridges player network sessions with the inter
 
 ## 5. Test Reference
 - `org.opentibia.canary.network.protocol.GameHandshakeTest`: Tests game world login with valid character, invalid credentials, and duplicate logins.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

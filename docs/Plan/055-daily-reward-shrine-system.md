@@ -19,3 +19,8 @@ Daily player retention driver and resting zone passive regeneration.
 
 ## 5. Test Reference
 - `org.opentibia.canary.systems.DailyRewardTest`: Tests claiming reward on Day 1 advancing streak, attempting second claim same day being rejected, and claiming next day advancing to Day 2 with bonus wildcard.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

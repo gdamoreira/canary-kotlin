@@ -22,3 +22,8 @@ Production monitoring. Operators can integrate Prometheus & Grafana dashboards t
 
 ## 5. Test Reference
 - `org.opentibia.canary.monitoring.MetricsServerTest`: Queries the `/metrics` endpoint and verifies presence of `canary_players_online_total` and tick metrics.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

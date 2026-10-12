@@ -18,3 +18,8 @@ This delivers the complete player entry loop. Real OpenTibia clients can now aut
 
 ## 5. Test Reference
 - `org.opentibia.canary.network.protocol.FullLoginToGameWorldFlowTest`: Full end-to-end integration test verifying both TCP connections (Port 7171 and 7172), RSA decryption, XTEA encryption, and map stream decoding.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

@@ -18,3 +18,8 @@ Production stability. Without rate limiting, a single bot client can send 10,000
 
 ## 5. Test Reference
 - `org.opentibia.canary.network.codec.RateLimiterHandlerTest`: Floods a channel with 200 packets in 100ms and verifies the handler closes the connection and rejects further packets.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

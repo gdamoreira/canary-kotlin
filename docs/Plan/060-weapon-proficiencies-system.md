@@ -21,3 +21,8 @@ Long-term character weapon mastery progression in modern protocol versions ($\ge
 
 ## 5. Test Reference
 - `org.opentibia.canary.systems.WeaponProficiencyTest`: Tests dealing damage with a sword accumulating sword proficiency XP, advancing level, and verifying damage bonus is applied to subsequent attacks.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

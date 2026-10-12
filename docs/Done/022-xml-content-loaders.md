@@ -22,3 +22,8 @@ Provides actual RPG stats, balance, and creature behavior templates. Without thi
 
 ## 5. Test Reference
 - `org.opentibia.canary.io.XmlContentLoaderTest`: Parses a sample XML snippet for items and vocations, asserting attack/defense and vocation stat gains per level.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

@@ -18,3 +18,8 @@ Endgame character customization and power progression for level 50..1000+ charac
 
 ## 5. Test Reference
 - `org.opentibia.canary.systems.WheelOfDestinyTest`: Tests allocating points according to level budget, prerequisite gating, and applying perk stat modifiers to `Player`.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

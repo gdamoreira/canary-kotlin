@@ -22,3 +22,8 @@ Consumable gold sink and tactical preparation for high-difficulty bossing and hu
 
 ## 5. Test Reference
 - `org.opentibia.canary.systems.ConcoctionEngineTest`: Tests consuming a fire resistance concoction reducing fire damage taken by 8%, and verifying second concoction consumption replaces the active buff.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

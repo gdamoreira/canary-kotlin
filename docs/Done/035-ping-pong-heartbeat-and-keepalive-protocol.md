@@ -24,3 +24,8 @@ Prevents dead TCP socket accumulation, tracks player ping/latency, and ensures c
 
 ## 5. Test Reference
 - `org.opentibia.canary.network.protocol.KeepaliveProtocolTest`: Tests receiving `0x1E` ping and asserting immediate `0x1E` pong response. Tests `0x14` logout saving player state and closing channel.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

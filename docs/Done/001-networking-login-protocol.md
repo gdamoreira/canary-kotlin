@@ -26,3 +26,8 @@ Critical entry point for players connecting to the server. Without this feature,
 - `org.opentibia.canary.network.crypto.CryptoTest`: Tests XTEA encrypt/decrypt and RSA encrypt/decrypt round-trips.
 - `org.opentibia.canary.network.message.TibiaByteBufExtTest`: Tests Tibia string and variable count serialization.
 - `org.opentibia.canary.network.protocol.LoginProtocolTest`: Full end-to-end integration test with `EmbeddedChannel` simulating a real client packet, checking authentication, XTEA responses, and disconnects.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

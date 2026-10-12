@@ -19,3 +19,8 @@ Core RPG high-stakes death loop. Governs blessing economics (Twist of Fate, 5 st
 
 ## 5. Test Reference
 - `org.opentibia.canary.game.DeathPenaltyTest`: Tests unblessed player dying drops backpack and loses 10% exp, and full-blessed player loses reduced exp and keeps all items.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

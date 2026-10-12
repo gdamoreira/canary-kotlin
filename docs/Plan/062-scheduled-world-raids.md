@@ -21,3 +21,8 @@ Server-wide community events, rare loot opportunities, and server activity surge
 
 ## 5. Test Reference
 - `org.opentibia.canary.systems.RaidSchedulerTest`: Triggers a test raid, verifies broadcast delivery to online players, and verifies monster spawning on target map coordinates.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

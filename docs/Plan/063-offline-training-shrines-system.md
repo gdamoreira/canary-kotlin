@@ -21,3 +21,8 @@ Core daily progression for offline players, preventing the need for AFK training
 
 ## 5. Test Reference
 - `org.opentibia.canary.systems.OfflineTrainingTest`: Simulates player training sword skill offline for 10 hours and verifies sword skill points increase by exact calculated tries upon login.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

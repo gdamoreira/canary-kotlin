@@ -21,3 +21,8 @@ Pinnacle endgame team-hunting difficulty modifier for level 800..2000+ parties.
 
 ## 5. Test Reference
 - `org.opentibia.canary.systems.HazardSystemTest`: Tests hazard level 5 applying $+10\%$ monster damage scaling and adding bonus loot rolls on death.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

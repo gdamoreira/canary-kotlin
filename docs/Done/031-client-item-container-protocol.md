@@ -30,3 +30,8 @@ Essential for player inventory management, using equipment, looting monsters, or
 
 ## 5. Test Reference
 - `org.opentibia.canary.network.protocol.ItemInteractionPacketHandlerTest`: Tests dragging item from ground to backpack, moving item between containers, and using a closed backpack emitting container open packets (`0x7D`).
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

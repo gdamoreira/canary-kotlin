@@ -21,3 +21,8 @@ Necessary for 100% parity with modern Canary protocol versions ($\ge 12.00$).
 ## 5. Test Reference
 - `org.opentibia.canary.systems.ImbuementTest`: Test slotting items, applying stat bonuses, and decay tracking.
 - `org.opentibia.canary.systems.PreyTest`: Test roll logic and active buff multipliers.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

@@ -20,3 +20,8 @@ Premier endgame questline mechanics and high-risk boss strategy.
 
 ## 5. Test Reference
 - `org.opentibia.canary.systems.SoulWarEncounterTest`: Tests having 3 taints applying $+45\%$ damage taken from Goshnar boss attacks and purging taints upon boss victory.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

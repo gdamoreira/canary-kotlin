@@ -21,3 +21,8 @@ Server monetization, premium item delivery, and automated service transactions w
 
 ## 5. Test Reference
 - `org.opentibia.canary.economy.GameStoreTest`: Tests browsing offers, purchasing an outfit with Tibia Coins, verifying coin deduction, and confirming delivery to player inbox.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

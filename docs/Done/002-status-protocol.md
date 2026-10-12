@@ -18,3 +18,8 @@ Low risk, vital for community discovery and external monitoring tools. Keeps ser
 
 ## 5. Test Reference
 - `org.opentibia.canary.network.protocol.StatusProtocolTest`: Unit/integration tests simulating client ping with opcode `0xFF` (with and without Adler32) and validating the XML/JSON response body.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

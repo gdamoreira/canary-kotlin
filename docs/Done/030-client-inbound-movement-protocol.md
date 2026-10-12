@@ -35,3 +35,8 @@ Foundational gameplay operation. Governs all locomotion, position changes, and o
 
 ## 5. Test Reference
 - `org.opentibia.canary.network.protocol.MovePacketHandlerTest`: Simulates walking in all 8 directions, verifies position updates and spectator broadcast packets, and tests blocked movement generating `0xB5`.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

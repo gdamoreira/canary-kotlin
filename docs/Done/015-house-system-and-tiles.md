@@ -19,3 +19,8 @@ Critical for player persistence, player economy, and map tile security. House ti
 
 ## 5. Test Reference
 - `org.opentibia.canary.map.house.HouseTest`: Tests permission check for owner, guest, and unauthorized intruder. Tests rent deduction and eviction.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

@@ -27,3 +27,8 @@ Essential for safe player trading, in-game NPC confirmation prompts, quest dialo
 
 ## 5. Test Reference
 - `org.opentibia.canary.network.protocol.TradeProtocolTest`: Tests trade proposal between two players, both accepting, and verifying item swap. Tests walking away cancelling trade.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

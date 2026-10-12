@@ -22,3 +22,8 @@ Endgame item sink, economy driver, and equipment progression.
 
 ## 5. Test Reference
 - `org.opentibia.canary.systems.ExaltationForgeTest`: Tests fusion success advancing tier, failure consuming dust, and combat engine triggering Onslaught critical procs.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

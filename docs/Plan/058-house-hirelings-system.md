@@ -22,3 +22,8 @@ Private house utility, convenience for players, and gold sink.
 
 ## 5. Test Reference
 - `org.opentibia.canary.systems.HirelingSystemTest`: Tests summoning hireling inside owned house tile, interacting as banker to deposit gold, and verifying non-house owners cannot interact.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

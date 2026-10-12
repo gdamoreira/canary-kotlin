@@ -18,3 +18,8 @@ Core endgame community and PvP system. Directly impacts player organization, PvP
 
 ## 5. Test Reference
 - `org.opentibia.canary.social.guild.GuildWarTest`: Tests war declaration, kill score accumulation, frag limit victory, and emblem resolutions.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

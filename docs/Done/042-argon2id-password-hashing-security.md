@@ -18,3 +18,8 @@ Security compliance and real web AAC compatibility. Prevents plaintext password 
 
 ## 5. Test Reference
 - `org.opentibia.canary.security.Argon2SecurityTest`: Generates an Argon2id hash for a test password, verifies matching password succeeds, and verifies mismatching password fails.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

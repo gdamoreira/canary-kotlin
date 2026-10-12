@@ -29,3 +29,8 @@ Powers all towns, merchant economies, travel networks (ships, carpets), banking 
 
 ## 5. Test Reference
 - `org.opentibia.canary.creatures.NpcPipelineServiceTest`: Loads a sample merchant NPC definition, asserts buy/sell items are available in the shop catalogue, and verifies bank deposit keyword responses.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

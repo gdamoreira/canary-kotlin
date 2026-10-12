@@ -21,3 +21,8 @@ Powers character magic development, rune casting, healing loops, and questlines 
 ## 4. Test Reference
 - `org.opentibia.canary.spells.SpellSystemTest`: Tests instant spell mana consumption, level gating, and health addition.
 - `org.opentibia.canary.quest.QuestStorageTest`: Tests storage key-value transitions and multi-mission quest log evaluation.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

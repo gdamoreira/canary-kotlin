@@ -20,3 +20,8 @@ Core mid-to-endgame hunting incentive. Affects combat DPS by up to 20-30% on hig
 
 ## 5. Test Reference
 - `org.opentibia.canary.systems.BestiaryTest`: Tests kill thresholds awarding charm points, socketing a charm rune to a completed creature, and verifying the 10% proc rate deals elemental damage.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

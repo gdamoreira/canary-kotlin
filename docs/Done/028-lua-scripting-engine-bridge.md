@@ -18,3 +18,8 @@ Massive ecosystem compatibility. Allows drop-in usage of the existing `data/scri
 
 ## 5. Test Reference
 - `org.opentibia.canary.lua.LuaScriptBridgeTest`: Executes a real Lua snippet from Canary (`Player:getHealth()`, `player:addHealth(50)`) and asserts modification of the Kotlin `Player` instance.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

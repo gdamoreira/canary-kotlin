@@ -18,3 +18,8 @@ Controls startup parameters, operational toggles, and server tuning without requ
 
 ## 5. Test Reference
 - `org.opentibia.canary.config.ConfigManagerTest`: Tests configuration loading with fallbacks and environment variable overrides.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

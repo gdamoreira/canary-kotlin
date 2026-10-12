@@ -20,3 +20,8 @@ Powers NPC banking dialogues (`deposit`, `withdraw`, `transfer`), merchant trans
 ## 4. Test Reference
 - `org.opentibia.canary.game.bank.BankSystemTest`: Tests currency conversions, deposits, withdrawals, and inter-player transfers.
 - `org.opentibia.canary.game.VitalsRegenerationTest`: Tests periodic health/mana regeneration up to maximum caps.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

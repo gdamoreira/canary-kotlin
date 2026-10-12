@@ -20,3 +20,8 @@ Central domain entities. Drives player interaction, monster behavior, AI, dialog
 ## 5. Test Reference
 - `org.opentibia.canary.creatures.CreatureTest`: Test health modifications, death triggers, inventory equipping, capacity checks.
 - `org.opentibia.canary.creatures.PlayerStatsTest`: Test experience/level progression and skill formula computations.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

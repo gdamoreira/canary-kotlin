@@ -18,3 +18,8 @@ Populates the game world with living PvE encounters. Governs hunting grounds, du
 
 ## 5. Test Reference
 - `org.opentibia.canary.creatures.MonsterAiTest`: Tests monster target acquisition, movement towards player, and spell casting trigger.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

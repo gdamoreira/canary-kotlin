@@ -18,3 +18,8 @@ Solves the primary memory bottleneck on the JVM. In a flat `Map<Position, Tile>`
 
 ## 5. Test Reference
 - `org.opentibia.canary.map.MapSectorTest`: Populates 1,000 tiles across 4 adjacent sectors, asserts correct tile recovery, and verifies unallocated sectors consume zero allocations.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

@@ -21,3 +21,8 @@ Essential for multiplayer communication, moderation, party hunting, and server m
 ## 5. Test Reference
 - `org.opentibia.canary.chat.ChatChannelTest`: Join, leave, send message, mute permissions.
 - `org.opentibia.canary.social.PartyTest`: Shared exp distribution tests based on member levels and proximity.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

@@ -22,3 +22,8 @@ Eliminates loot theft, bot clicking, and griefing in massive multiplayer boss en
 
 ## 5. Test Reference
 - `org.opentibia.canary.systems.RewardChestTest`: Simulates 3 players fighting a boss (DPS, Tank, Healer), calculates participation points, and verifies each player receives their own personal reward container in their reward chest.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

@@ -21,3 +21,8 @@ Data loss prevention. Hard-killing a server process during a reboot rolls back p
 
 ## 5. Test Reference
 - `org.opentibia.canary.game.scheduling.ShutdownHandlerTest`: Simulates shutdown trigger, verifies all active in-memory players are flushed to database, and verifies connection closure.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

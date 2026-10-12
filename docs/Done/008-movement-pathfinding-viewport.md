@@ -20,3 +20,8 @@ Most frequent network operation in the MMORPG. Imperfect synchronization results
 ## 5. Test Reference
 - `org.opentibia.canary.game.movement.MovementTest`: Verify step delay calculation, tile collision rejection, and floor change transitions.
 - `org.opentibia.canary.game.movement.PathfinderTest`: Test A* around obstacles and closed doors.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

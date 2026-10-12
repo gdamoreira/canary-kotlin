@@ -29,3 +29,8 @@ Directly governs PvE and PvP combat rounds. Without these opcodes, players canno
 
 ## 5. Test Reference
 - `org.opentibia.canary.network.protocol.CombatPacketHandlerTest`: Tests sending `0xA0` (setting Full Attack & Chase), sending `0xA1` (targeting monster), and asserting attack loop execution.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

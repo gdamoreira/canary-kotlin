@@ -20,3 +20,8 @@ Data integrity, server crash resilience, character save/load operations, and web
 
 ## 5. Test Reference
 - `org.opentibia.canary.database.PlayerPersistenceTest`: Save player with nested backpack items, reload into new instance, assert identity and properties.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

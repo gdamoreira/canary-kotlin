@@ -23,3 +23,8 @@ The most visible and critical client-rendering component. Without this, real Tib
 
 ## 5. Test Reference
 - `org.opentibia.canary.network.protocol.MapPacketWriterTest`: Tests serializing a test $18 \times 14$ tile grid and verifies empty tile run compression and ground item IDs.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

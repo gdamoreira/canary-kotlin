@@ -20,3 +20,8 @@ Critical foundational loader. Without this, the server cannot load real Tibia wo
 
 ## 5. Test Reference
 - `org.opentibia.canary.io.OtbmLoaderTest`: Tests parsing a synthetic binary OTBM buffer with header, town list, and 3x3 tile area with ground and house tiles.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

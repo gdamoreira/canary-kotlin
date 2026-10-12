@@ -28,3 +28,8 @@ Critical for player information feedback. Informs players of equipment stats (at
 
 ## 5. Test Reference
 - `org.opentibia.canary.network.protocol.LookPacketHandlerTest`: Tests sending `0x8C` on an item and asserts that response contains opcode `0xB4` and the correct attribute string.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

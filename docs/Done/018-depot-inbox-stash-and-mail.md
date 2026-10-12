@@ -18,3 +18,8 @@ Critical inventory and logistical subsystem. Prevents item duplication and loss 
 
 ## 5. Test Reference
 - `org.opentibia.canary.items.containers.depot.DepotMailTest`: Tests sending a parcel through a mailbox and receiving it in the recipient's town depot inbox.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

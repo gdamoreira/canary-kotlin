@@ -22,3 +22,8 @@ Mid-to-endgame solo hunting combat amplifier and boss burst DPS support.
 
 ## 5. Test Reference
 - `org.opentibia.canary.systems.FamiliarSystemTest`: Tests level 200 player summoning familiar, familiar attacking master's target, cooldown timer preventing immediate recast, and automatic 15-minute expiration.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

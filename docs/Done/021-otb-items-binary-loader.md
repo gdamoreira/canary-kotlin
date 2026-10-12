@@ -18,3 +18,8 @@ Essential for game assets. Without OTB loading, the server cannot know which ser
 
 ## 5. Test Reference
 - `org.opentibia.canary.items.OtbLoaderTest`: Tests parsing sample binary OTB item nodes and asserts client sprite ID translation and flag bitmasks.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

@@ -27,3 +27,8 @@ Without this pipeline, equipment offers no stats, weapons do zero damage, contai
 
 ## 5. Test Reference
 - `org.opentibia.canary.items.ItemPipelineServiceTest`: Loads real test snippets of `items.otb` and `items.xml`, asserting that a sword has attack, defense, weapon type, and correct sprite mapping.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

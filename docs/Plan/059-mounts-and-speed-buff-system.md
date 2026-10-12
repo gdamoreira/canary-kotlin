@@ -21,3 +21,8 @@ Movement speed progression, map exploration pacing, and collection mechanics.
 
 ## 5. Test Reference
 - `org.opentibia.canary.systems.MountSystemTest`: Tests toggling mount applying $+10$ speed, step duration decreasing accordingly, and dismounting restoring base speed.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

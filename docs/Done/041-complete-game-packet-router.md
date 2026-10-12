@@ -44,3 +44,8 @@ Critical core bridge. Without this implementation, incoming packets sent after l
 
 ## 5. Test Reference
 - `org.opentibia.canary.network.protocol.GamePacketRouterTest`: Feeds a ByteBuf containing chained packets (Turn North + Move East + Say "Hello") and asserts all handlers execute in correct order.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

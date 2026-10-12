@@ -31,3 +31,8 @@ Critical bridge between engine code and game content. Without a unified asset pi
 
 ## 5. Test Reference
 - `org.opentibia.canary.io.AssetPipelineTest`: Boots a synthetic data directory containing sample OTB, XML, and OTBM files, asserting complete registration across all registries without exceptions.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

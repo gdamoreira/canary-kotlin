@@ -19,3 +19,8 @@ Extremely high. Over 80% of specific content, quests, events, boss mechanics, an
 
 ## 5. Test Reference
 - `org.opentibia.canary.scripting.ScriptEngineTest`: Execute test script registering an item action, simulate trigger, assert state change.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

@@ -18,3 +18,8 @@ High economic impact. Replaces trade chat spam with an asynchronous in-game econ
 
 ## 5. Test Reference
 - `org.opentibia.canary.economy.market.MarketTest`: Tests offer creation, escrow deduction, matching, and fund distribution.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

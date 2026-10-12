@@ -22,3 +22,8 @@ Pervasive world mechanics. Governs dungeon puzzles, map exploration, safe zones,
 
 ## 5. Test Reference
 - `org.opentibia.canary.items.WorldObjectsTest`: Tests stepping into a fire field applies burning damage, stepping onto teleporter changes coordinates, and using a closed door toggles state.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

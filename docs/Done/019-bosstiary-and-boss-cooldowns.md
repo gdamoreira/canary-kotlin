@@ -18,3 +18,8 @@ Endgame bossing progression and reward mechanics. Affects boss room levers, inst
 
 ## 5. Test Reference
 - `org.opentibia.canary.systems.bosstiary.BosstiaryTest`: Tests boss kill accumulation, tier unlock, and bonus multiplier calculation.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

@@ -20,3 +20,8 @@ Foundational for all gameplay and spatial awareness. The map structure dictates 
 ## 5. Test Reference
 - `org.opentibia.canary.map.OtbmLoaderTest`: Parse a small synthetic OTBM test map and assert tile coordinates, ground item IDs, and towns.
 - `org.opentibia.canary.map.SpectatorTest`: Test viewport queries around boundary positions $(x, y, z)$.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 

@@ -18,3 +18,8 @@ Key to character progression, buying basic equipment, potions, runes, traveling 
 
 ## 5. Test Reference
 - `org.opentibia.canary.creatures.NpcDialogueTest`: Tests player greeting NPC, initiating trade, and buying a potion.
+
+
+## Canary Original Code Reference
+- **Source Files**: 
+- **Canary Repository Root**: 
