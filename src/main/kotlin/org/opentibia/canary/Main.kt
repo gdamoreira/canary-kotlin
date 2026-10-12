@@ -16,22 +16,24 @@ fun main() {
     val serverConfig = ConfigManager.load()
 
     val dbHost = System.getenv("CANARY_DB_HOST")
-    val accountRepo: AccountRepository = if (!dbHost.isNullOrEmpty()) {
-        logger.info { "Configuring external database connection to $dbHost..." }
+    val dataSource = if (!dbHost.isNullOrEmpty()) {
+        logger.info { "Connecting to external PostgreSQL at $dbHost..." }
         val dbConfig = DatabaseConfig(
             host = dbHost,
-            port = System.getenv("CANARY_DB_PORT")?.toIntOrNull() ?: 3306,
+            port = System.getenv("CANARY_DB_PORT")?.toIntOrNull() ?: 5432,
             database = System.getenv("CANARY_DB_NAME") ?: "canary",
             user = System.getenv("CANARY_DB_USER") ?: "canary",
             password = System.getenv("CANARY_DB_PASSWORD") ?: "canary"
         )
-        val dataSource = DatabaseConnectionFactory.createDataSource(dbConfig)
-        DatabaseConnectionFactory.migrate(dataSource)
-        JdbcAccountRepository(dataSource)
+        DatabaseConnectionFactory.createDataSource(dbConfig)
     } else {
-        logger.info { "No external database configured; running with default repository." }
-        InMemoryAccountRepository()
+        logger.info { "No external database configured; initializing In-Memory Database (PostgreSQL mode)..." }
+        DatabaseConnectionFactory.createInMemoryDataSource("canary_local")
     }
+
+    // Automatically apply Flyway schema and seed migrations
+    DatabaseConnectionFactory.migrate(dataSource)
+    val accountRepo: AccountRepository = JdbcAccountRepository(dataSource)
 
     val server = CanaryServer(
         port = serverConfig.loginPort,
@@ -42,5 +44,6 @@ fun main() {
     Runtime.getRuntime().addShutdownHook(Thread {
         logger.info { "Shutting down..." }
         server.stop()
+        (dataSource as? com.zaxxer.hikari.HikariDataSource)?.close()
     })
 }

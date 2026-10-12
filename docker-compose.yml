@@ -2,23 +2,22 @@ version: '3.8'
 
 services:
   db:
-    image: mariadb:11.4
-    container_name: canary-kotlin-db
+    image: postgres:16-alpine
+    container_name: canary-kotlin-postgres
     restart: unless-stopped
     environment:
-      MARIADB_DATABASE: "${CANARY_DB_NAME:-canary}"
-      MARIADB_USER: "${CANARY_DB_USER:-canary}"
-      MARIADB_PASSWORD: "${CANARY_DB_PASSWORD:-canary}"
-      MARIADB_ROOT_PASSWORD: "${CANARY_DB_ROOT_PASSWORD:-root}"
+      POSTGRES_DB: "${CANARY_DB_NAME:-canary}"
+      POSTGRES_USER: "${CANARY_DB_USER:-canary}"
+      POSTGRES_PASSWORD: "${CANARY_DB_PASSWORD:-canary}"
     networks:
       - canary-net
     ports:
-      - "${CANARY_DB_PORT:-3306}:3306"
+      - "${CANARY_DB_PORT:-5432}:5432"
     volumes:
-      - canary-db-data:/var/lib/mysql
+      - canary-pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U ${CANARY_DB_USER:-canary} -d ${CANARY_DB_NAME:-canary}"]
+      interval: 5s
       timeout: 5s
       retries: 10
 
@@ -30,7 +29,7 @@ services:
     restart: unless-stopped
     environment:
       CANARY_DB_HOST: "db"
-      CANARY_DB_PORT: "3306"
+      CANARY_DB_PORT: "5432"
       CANARY_DB_NAME: "${CANARY_DB_NAME:-canary}"
       CANARY_DB_USER: "${CANARY_DB_USER:-canary}"
       CANARY_DB_PASSWORD: "${CANARY_DB_PASSWORD:-canary}"
@@ -49,7 +48,7 @@ services:
         condition: service_healthy
 
 volumes:
-  canary-db-data:
+  canary-pgdata:
 
 networks:
   canary-net:

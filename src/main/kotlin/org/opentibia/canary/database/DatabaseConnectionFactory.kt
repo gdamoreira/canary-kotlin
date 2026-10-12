@@ -10,7 +10,7 @@ private val logger = KotlinLogging.logger {}
 
 data class DatabaseConfig(
     val host: String = "127.0.0.1",
-    val port: Int = 3306,
+    val port: Int = 5432,
     val database: String = "canary",
     val user: String = "canary",
     val password: String = "canary",
@@ -18,10 +18,22 @@ data class DatabaseConfig(
     val jdbcUrlOverride: String? = null
 ) {
     val jdbcUrl: String
-        get() = jdbcUrlOverride ?: "jdbc:mariadb://$host:$port/$database?autoReconnect=true&useUnicode=true&characterEncoding=UTF-8"
+        get() = jdbcUrlOverride ?: "jdbc:postgresql://$host:$port/$database"
 }
 
 object DatabaseConnectionFactory {
+
+    /**
+     * Creates an in-memory H2 DataSource in PostgreSQL compatibility mode for fast, isolated local testing.
+     */
+    fun createInMemoryDataSource(dbName: String = "canary_test"): HikariDataSource {
+        val config = DatabaseConfig(
+            user = "sa",
+            password = "",
+            jdbcUrlOverride = "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
+        )
+        return createDataSource(config)
+    }
 
     fun createDataSource(config: DatabaseConfig): HikariDataSource {
         val hikariConfig = HikariConfig().apply {
