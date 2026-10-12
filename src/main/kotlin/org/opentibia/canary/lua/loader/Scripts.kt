@@ -14,16 +14,40 @@ private val logger = KotlinLogging.logger {}
  * script never prevents the server from booting.
  */
 class Scripts(private val environment: LuaEnvironment) {
+    private var coreDirectory: Path? = null
+
     fun setDirectories(dataDir: Path, coreDir: Path) {
         environment.globals.set("DATA_DIRECTORY", dataDir.toAbsolutePath().toString())
         environment.globals.set("CORE_DIRECTORY", coreDir.toAbsolutePath().toString())
+        coreDirectory = coreDir
     }
 
     fun loadFile(path: Path) {
         environment.loadFile(path)
     }
 
+    /**
+     * Optionally loads Canary's core Lua libraries (`<coreDir>/libs/libs.lua`), which
+     * define helpers such as `table.contains` used by the game scripts. The step is
+     * best-effort: a missing file is logged and boot continues, mirroring Canary's
+     * tolerance for an absent/partial data pack.
+     */
+    fun loadLibs(coreDir: Path? = coreDirectory) {
+        val dir = coreDir ?: return
+        val libs = dir.resolve("libs").resolve("libs.lua")
+        if (!Files.isRegularFile(libs)) {
+            logger.warn { "Canary libs not found, skipping: $libs" }
+            return
+        }
+        try {
+            loadFile(libs)
+        } catch (e: Exception) {
+            logger.error { "Failed to load Canary libs $libs: ${e.message}" }
+        }
+    }
+
     fun loadScripts(dir: Path) {
+        loadLibs()
         if (!Files.isDirectory(dir)) {
             logger.warn { "Scripts directory does not exist: $dir" }
             return
