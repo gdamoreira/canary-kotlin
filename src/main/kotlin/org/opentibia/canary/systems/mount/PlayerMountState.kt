@@ -236,6 +236,48 @@ class PlayerMountState(
         defaultOutfitLookMount = 0
     }
 
+    /**
+     * Persistence seam: every owned mount id, decoded from the reserved mount
+     * storage range exactly as [tameMount]/[hasMount] address it. Canary keeps
+     * this state in `PlayerStorage`'s mount range and enumerates it there; this
+     * accessor makes the same state readable without the definition registry.
+     */
+    fun getOwnedMounts(): Set<Int> {
+        val result = linkedSetOf<Int>()
+        for (storageIndex in 0 until PSTRG_MOUNTS_RANGE_SIZE) {
+            val value = storage[PSTRG_MOUNTS_RANGE_START + storageIndex] ?: continue
+            if (value == -1) {
+                continue
+            }
+            for (bit in 0 until MOUNT_BITS_PER_STORAGE) {
+                if ((value and (1 shl bit)) == 0) {
+                    continue
+                }
+                val tmpMountId = storageIndex * MOUNT_BITS_PER_STORAGE + bit
+                if (tmpMountId <= MAX_TMP_MOUNT_ID) {
+                    result.add(tmpMountId + 1)
+                }
+            }
+        }
+        return result
+    }
+
+    /**
+     * Persistence seam: replace the owned mount set in the reserved storage
+     * range, packing bits the same way [tameMount]/[untameMount] do.
+     */
+    fun setOwnedMounts(mountIds: Set<Int>) {
+        for (storageIndex in 0 until PSTRG_MOUNTS_RANGE_SIZE) {
+            storage.remove(PSTRG_MOUNTS_RANGE_START + storageIndex)
+        }
+        for (mountId in mountIds) {
+            val tmpMountId = (mountId - 1) and MAX_TMP_MOUNT_ID
+            val key = PSTRG_MOUNTS_RANGE_START + (tmpMountId / MOUNT_BITS_PER_STORAGE)
+            val value = storage[key] ?: 0
+            storage[key] = value or (1 shl (tmpMountId % MOUNT_BITS_PER_STORAGE))
+        }
+    }
+
     private fun getStorageValue(key: Int): Int = storage[key] ?: -1
 
     private fun addStorageValue(key: Int, value: Int) {
@@ -248,6 +290,10 @@ class PlayerMountState(
         const val PSTRG_MOUNTS_RANGE_START = PSTRG_RESERVED_RANGE_START + 2001 // 10002001
         const val PSTRG_MOUNTS_RANGE_SIZE = 10
         const val PSTRG_MOUNTS_CURRENTMOUNT = PSTRG_MOUNTS_RANGE_START + 10 // 10002011
+
+        /** `Player::tameMount` packs 31 mount ids per reserved storage key. */
+        private const val MOUNT_BITS_PER_STORAGE = 31
+        private const val MAX_TMP_MOUNT_ID = 0xFF
 
         private const val TOGGLE_MOUNT_COOLDOWN_MS = 3000L
     }

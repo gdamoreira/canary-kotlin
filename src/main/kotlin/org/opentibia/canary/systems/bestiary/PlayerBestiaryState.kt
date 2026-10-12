@@ -53,6 +53,20 @@ class PlayerBestiaryState {
         return if (value > 0) value else 0
     }
 
+    /**
+     * Persistence seam for [org.opentibia.canary.database.FeatureStateRepository]:
+     * every stored kill count, `raceid -> count`. Canary serializes these through
+     * `STORAGEVALUE_BESTIARYKILLCOUNT`; the direct map is its behavioural
+     * equivalent for a single player.
+     */
+    fun getBestiaryKillCounts(): Map<Int, Int> = bestiaryKillCount.toMap()
+
+    /** Persistence seam: replace the stored kill counts with [counts]. */
+    fun setBestiaryKillCounts(counts: Map<Int, Int>) {
+        bestiaryKillCount.clear()
+        bestiaryKillCount.putAll(counts)
+    }
+
     /** `Player::getCharmPoints` (player.cpp:1830-1832). */
     fun getCharmPoints(): Int = charmPoints
 
