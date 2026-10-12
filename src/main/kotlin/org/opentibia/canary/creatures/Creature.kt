@@ -2,6 +2,8 @@ package org.opentibia.canary.creatures
 
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
+import org.opentibia.canary.creatures.vocations.Vocation
+import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import kotlin.math.max
@@ -69,8 +71,20 @@ class Player(
     var inCombat: Boolean = false
 ) : Creature(id, name, maxHealth, health, maxMana, mana, speed, position) {
 
-    /** `Player::vocation` CIP id (`Vocation_t`): 0 none, 1..5 knight..monk. */
+    /**
+     * `Player::vocation` (player.hpp). Canary stores the internal [Vocations] id
+     * (0..10); without a wired registry this Kotlin port historically held a CIP
+     * id directly, so [getPlayerVocationEnum] passes it through unchanged.
+     */
     var vocationId: Int = 0
+
+    /**
+     * `Vocations` registry used by [getPlayerVocationEnum] to normalize the
+     * internal vocation id to the CIP client id. Canary resolves this through the
+     * global `g_vocations()`; per AGENTS.md 1.1 it is injected here and defaults to
+     * absent, which keeps [getPlayerVocationEnum] a pass-through.
+     */
+    var vocations: Vocations? = null
 
     /** `Player::account->getPremiumRemainingDays() > 0` (player.cpp:7532). */
     var premium: Boolean = false
@@ -82,8 +96,24 @@ class Player(
         isPremiumProvider = { premium },
     )
 
-    /** `Player::getPlayerVocationEnum()` (player.cpp:13030). */
-    fun getPlayerVocationEnum(): Int = vocationId
+    /**
+     * `Player::getPlayerVocationEnum()` (player.cpp:13030): maps the internal
+     * vocation id through the [Vocations] registry's `clientid` to the CIP
+     * `Vocation_t` id (1..5). Without a wired registry the raw [vocationId] is
+     * returned unchanged, preserving the previous behavior.
+     */
+    fun getPlayerVocationEnum(): Int {
+        val registry = vocations ?: return vocationId
+        val vocation = registry.getVocation(vocationId) ?: return Vocation.VOCATION_NONE
+        return when (vocation.getClientId()) {
+            1, 11 -> Vocation.VOCATION_KNIGHT_CIP
+            2, 12 -> Vocation.VOCATION_PALADIN_CIP
+            3, 13 -> Vocation.VOCATION_SORCERER_CIP
+            4, 14 -> Vocation.VOCATION_DRUID_CIP
+            5, 15 -> Vocation.VOCATION_MONK_CIP
+            else -> Vocation.VOCATION_NONE
+        }
+    }
 
     /** `Player::isPremium()` (player.cpp:7532). */
     fun isPremium(): Boolean = premium
