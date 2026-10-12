@@ -54,23 +54,27 @@ This document establishes the master inventory of all gameplay features from Can
 
 ## ⏳ 2. Remaining Canary Gameplay Features (Pending Implementation)
 
-| # | Feature Name | Description & Canary Source Reference | Canary Original Code Source | Target Component |
-|---|---|---|---|---|
-| **42** | **Wheel of Destiny (Skill Wheel)** | Vocation perk trees, points distribution per level $>50$, dedication perks, gem sockets, and active spell bonuses (`0x61` Open, `0x62` Save). | `src/io/io_wheel.cpp`, `src/io/io_wheel.hpp`, `src/enums/player_wheel.hpp` | `WheelOfDestinyEngine.kt` |
-| **43** | **Exaltation Forge (Item Tiers & Fusion)** | Dust, sliver, and core currency. Equipment fusion (Tier 0 to Tier 10), Onslaught (bonus damage), Ruse (dodge), and Momentum (cooldown reduction). | `data/libs/systems/exaltation_forge.lua`, `src/enums/forge_conversion.hpp`, `data/scripts/systems/item_tiers.lua` | `ExaltationForgeEngine.kt` |
-| **44** | **Bestiary & Charm Runes** | Monster kill counter stages, unlocking charm points, assigning active charms (Zap, Freeze, Wound, Dodge, Parry, Low Blow). | `src/io/iobestiary.cpp`, `src/io/iobestiary.hpp`, `data/scripts/systems/bestiary_charms.lua` | `BestiaryCharmEngine.kt` |
-| **45** | **In-Game Store (GameStore)** | Tibia coins / transferable coins balance, category browsing, instant delivery of outfits, mounts, XP boosts, and blessings. | `data/modules/scripts/gamestore/gamestore.lua`, `src/enums/account_coins.hpp`, `src/enums/account_type.hpp` | `GameStoreService.kt` |
-| **46** | **Hazard System (Gnomprona Primal Dungeons)** | Hazard level scales ($1..12+$, Primal Pods, Plunder Patriarch). Increases monster damage, defense, and boosted loot drop rates. | `data/libs/systems/hazard.lua`, `data/scripts/eventcallbacks/monster/ondroploot_hazard.lua` | `HazardSystemEngine.kt` |
-| **47** | **Daily Reward Shrine** | Consecutive daily streak tracking (1..7 days), rest area bonuses, granting daily potions, prey cards, and XP boosts. | `data/libs/systems/daily_reward.lua` | `DailyRewardEngine.kt` |
-| **48** | **Boss Reward Chest (Damage Participation Loot)**| Tracks damage dealt, damage taken, and healing contributions per player during boss fights; deposits individualized reward containers into player reward chests. | `src/items/containers/rewards/reward.cpp`, `data/scripts/systems/reward_chest.lua`, `data/libs/systems/reward_boss.lua` | `RewardChestEngine.kt` |
-| **49** | **Familiars (Summoned Vocation Companions)** | 30-minute cooldown summons for level 200+ characters (Sorcerer: *Sorcerer Familiar*, Druid: *Druid Familiar*, Knight: *Knight Familiar*, Paladin: *Paladin Familiar*). | `data/libs/systems/familiar.lua`, `data/XML/familiars.xml` | `FamiliarSystem.kt` |
-| **50** | **Hirelings System** | House hireling NPCs serving as bankers, traders, cooks, and potion sellers with customized dresses and dialogues. | `data/libs/systems/hireling.lua` | `HirelingSystem.kt` |
-| **51** | **Mounts & Speed Bonuses** | Equipping mounts via hotkey, applying fixed speed bonuses ($+10..+15$ speed), and taming item chances. | `data/XML/mounts.xml` | `MountSystem.kt` |
-| **52** | **Weapon Proficiencies (Tibia 13.30+)** | Leveling weapon families (Swords, Axes, Clubs, Bows, Crossbows, Rods, Wands) granting passive damage and critical chances. | `src/enums/weapon_proficiency.hpp`, `data/items/proficiencies.json` | `WeaponProficiencyEngine.kt` |
-| **53** | **Soul War / Taint Encounters** | Goshnar taint multipliers, fear/agony gauges, and mechanical environmental arena traps. | `data/libs/systems/encounters.lua`, `data-otservbr-global/world/quest/soul_war/` | `EncounterEngine.kt` |
-| **54** | **Scheduled World Raids** | Automated global raid announcements (e.g. *"The ancient dragon Ghazbaran has risen!"*) spawning boss encounters and minions. | `data/libs/systems/raids.lua`, `data-canary/raids/raids.xml` | `RaidScheduler.kt` |
-| **55** | **Offline Training Shrines** | Clicking training statues in temples/houses to log out and accumulate skill/magic level progress over offline hours (`0x74`). | `src/server/network/protocol/protocolgame.cpp:1783` | `OfflineTrainingEngine.kt` |
-| **56** | **Concoctions (Alchemy Potions)** | Temporary 1-hour alchemical stat flasks granting elemental protections, skill buffs, and mana leech bonuses. | `data/libs/systems/concoctions.lua`, `data/scripts/systems/concoctions.lua` | `ConcoctionEngine.kt` |
+> **Rule (AGENTS.md §1.4):** Lua stays Lua. For each feature, only the **C++ engine surface** is ported to Kotlin; player-facing logic authored in `data/**/*.lua` is executed as Lua through the scripting engine. Corrected plan docs are in `docs/Plan/050–064`.
+
+| # | Feature Name | Nature | Kotlin scope (C++ engine only) | Stays Lua | Plan |
+|---|---|---|---|:---:|---|
+| **42** | Wheel of Destiny | **C++-only** | `IOWheel`, `PlayerWheel`, `wheel_gems`, `wheel_spells`, enums, protocol `0x61`/`0x62`/`0xE7` | — | `050` |
+| **43** | Exaltation Forge | Mixed | `PlayerForgeHistory`, `Player` forge API, item tier attrs, forge protocol | `exaltation_forge.lua`, `item_tiers.lua` | `051` |
+| **44** | Bestiary & Charms | Mixed | `IOBestiary`, `Charm`, Player charm state, bestiary protocol | `bestiary_charms.lua` | `052` |
+| **45** | In-Game Store | Lua-dominant | `Account` coin primitives, coin columns, balance packet | whole `gamestore/*` module | `053` |
+| **46** | Hazard System | Mixed | Monster hazard flags, Player hazard points/hooks, `handleHazardSystemAttack` | `hazard.lua`, `ondroploot_hazard.lua` | `054` |
+| **47** | Daily Reward Shrine | Mixed | `Player::setDailyReward`, KV persistence, regen, packet | `daily_reward.lua`, shrine scripts | `055` |
+| **48** | Boss Reward Chest | Mixed | `Reward`/`RewardChest`, `collectRewardChestItems`, protocol `0xFF` | `reward_chest.lua`, `reward_boss.lua` | `056` |
+| **49** | Familiars | Mixed | `Familiars` XML loader, Player familiar state | `familiar.lua`, summon spells | `057` |
+| **50** | Hirelings | Mixed | Game hireling maps, `canSpeakWithHireling`, protocol `0xEC` | `hireling.lua` | `058` |
+| **51** | Mounts & Speed | Mixed | `Mount`/`Mounts` loader, Player mount methods | taming scripts, mount catalog | `059` |
+| **52** | Weapon Proficiencies | **C++-dominant** | `WeaponProficiency` + JSON loader + enums + payload | 2 small scripts | `060` |
+| **53** | Soul War / Taint | Mixed | Taint/Fear/Agony conditions, `ConditionFeared`, Zone primitives | `encounters.lua`, quest scripts | `061` |
+| **54** | Scheduled World Raids | Mixed | legacy `Raids`/`Raid`/`RaidEvent` (or Encounter primitives) | `raids.lua`, `raids.xml` | `062` |
+| **55** | Offline Training | Mixed | `Player` offline-training state, protocol `0x74`, persistence | `offline_training.lua` | `063` |
+| **56** | Concoctions | Mixed | `Concoction_t`, `updateConcoction`, active state, packet | `concoctions.lua` | `064` |
+
+**Scope note:** none of these is "Lua misread as a feature" — each has a real missing C++ engine surface. The prior assumption that they could be delivered as standalone Kotlin `*Engine` classes was wrong for the Lua-authored portions; those now stay Lua.
 
 ---
 

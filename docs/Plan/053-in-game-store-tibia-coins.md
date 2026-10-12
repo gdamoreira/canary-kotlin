@@ -1,28 +1,26 @@
 # Feature: In-Game Store (GameStore) & Tibia Coins System
 
 ## 1. Explanation
-Implements the in-game premium shop (`data/modules/scripts/gamestore/gamestore.lua`, `src/enums/account_coins.hpp`). Players spend Tibia Coins / Transferable Coins to purchase service products:
-- **Character Services**: Name changes, sex changes, main vocation blessings, instant XP boosts.
-- **Cosmetics**: Premium store outfits, addons, and mounts.
-- **Supplies**: Kegs, potions, exercise weapons, and house furniture.
-- **Opcodes**: Open Store (`0xFA`), Browse Category (`0xFB`), Purchase Offer (`0xFC`).
+Implements the in-game premium shop (`data/modules/scripts/gamestore/*`, `data/libs/gamestore/*`). Players spend Tibia Coins / Transferable Coins on character services, cosmetics, and supplies. Applies to account coin balances (`src/enums/account_coins.hpp`, `src/account/account.*`).
 
 ## 2. Impact
-Server monetization, premium item delivery, and automated service transactions without GM intervention.
+Server monetization, premium item delivery, and automated service transactions.
 
 ## 3. Functionality Affected
-- **Coin Ledger**: Manages `coins` and `coins_transferable` in `accounts` table.
-- **Transactional Deduction**: Checks sufficient balance, deducts coins, logs to `coins_transactions` table, and delivers product directly into player inventory or inbox.
+- **Coin ledger**: `coins`, `coins_tournament`, `coins_transferable` account columns (`Account::getCoins/addCoins/removeCoins/registerCoinTransaction`).
+- **Transferable balance**: `Player::coinTransferableBalance`.
+- **Balance packet**: `Game::sendResourcesBalance` / resources packet.
+- **Opcode layer**: store opcodes (`0xEF`, `0xFA`..`0xFE`) are **commented out / WIP** in Canary — no C++ store engine file exists.
 
 ## 4. Agent Implementation Details
-- Implement `GameStoreService.kt` managing store categories and product offers.
-- Implement purchase processor validating coin balance and delivering item/service.
-- Connect to database `coins_transactions` table.
+- **Kotlin scope (C++ engine only):** port the account coin primitives (`Account::getCoins/addCoins/removeCoins/registerCoinTransaction`), `CoinType`/`CoinTransactionType` enums, the three account coin DB columns, `Player::coinTransferableBalance`, and the resource-balance packet. The store opcode handlers stay unimplemented until Canary enables them.
+- **Stays Lua (do not port):** the entire store catalog/purchase/delivery logic — `data/libs/gamestore/{store,parsers,purchases,senders,helpers,player,taskboard,constants}.lua` and `data/modules/scripts/gamestore/*` + `catalog/*`.
 
 ## 5. Test Reference
-- `org.opentibia.canary.economy.GameStoreTest`: Tests browsing offers, purchasing an outfit with Tibia Coins, verifying coin deduction, and confirming delivery to player inbox.
+- `org.opentibia.canary.account.CoinLedgerTest`: adding/removing coins of each `CoinType`, transferable balance tracking, and resource-balance packet serialization.
 
-
-## Canary Original Code Reference
-- **Source Files**: 
-- **Canary Repository Root**: 
+## 6. Canary Original Code Reference
+- **C++ Engine Source Files**: `src/enums/account_coins.hpp`, `src/enums/account_type.hpp`, `src/account/account.hpp`, `src/account/account.cpp`, `src/database/account_repository_db.cpp`, `src/creatures/players/player.hpp`, `src/server/network/protocol/protocolgame.cpp`
+- **Lua Source Files (stay Lua)**: `data/libs/gamestore/*`, `data/modules/scripts/gamestore/*`
+- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Key Methods / Opcodes**: `Account::getCoins/addCoins/removeCoins/registerCoinTransaction`, `Game::sendResourcesBalance`, `CoinType`, `CoinTransactionType`

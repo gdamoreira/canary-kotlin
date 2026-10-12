@@ -1,27 +1,26 @@
 # Feature: Bestiary & Charm Runes System
 
 ## 1. Explanation
-Implements CipSoft's Cyclopedia Bestiary and Charm Runes system (`src/io/iobestiary.cpp`, `data/scripts/systems/bestiary_charms.lua`). Tracks monster kills across 3 unlock stages (e.g. 25, 250, 1000 kills), reveals monster details (HP, loot chances, elemental weaknesses), awards Charm Points, and unlocks socketable Charm Runes:
-- **Offensive Charms**: Zap (Energy), Freeze (Ice), Wound (Physical), Enflame (Fire), Poison (Earth), Curse (Death), Divine Wrath (Holy) dealing $5\%$ of monster's max HP.
-- **Defensive & Utility Charms**: Dodge (10% evade), Parry (reflects full damage), Low Blow (+9% critical chance).
+Implements CipSoft's Cyclopedia Bestiary and Charm Runes (`src/io/iobestiary.cpp`, `src/io/iobestiary.hpp`). Tracks monster kills across 3 unlock stages (e.g. 25/250/1000), reveals monster details (HP, loot, weaknesses), awards Charm Points, and unlocks socketable Charm Runes — offensive (Zap, Freeze, Wound, Enflame, Poison, Curse, Divine Wrath) and defensive/utility (Dodge, Parry, Low Blow).
 
 ## 2. Impact
-Core mid-to-endgame hunting incentive. Affects combat DPS by up to 20-30% on high-health creatures.
+Core mid-to-endgame hunting incentive; affects combat DPS on high-health creatures.
 
 ## 3. Functionality Affected
-- **Kill Progress Tracker**: Increments count upon monster death, triggering level completions and charm points awards.
-- **Charm Assignment**: Assigns an unlocked charm rune to a fully completed monster entry.
-- **Proc Chance Engine**: $10\%$ trigger chance per offensive/defensive attack in `CombatEngine`.
+- **Kill progress**: `Player::addBestiaryKillCount` / `getBestiaryKillCount`, stage completion.
+- **Charm state**: `charmsArray`, `charmPoints`, `setCharmTier`, `parseRacebyCharm`.
+- **Monster metadata**: `MonsterType.info.bestiaryRace/Class/Stars`.
+- **Protocol**: `parseBestiarySendRaces`, `parseBestiarysendMonsterData`, `parseBestiarySendCreatures`, `parseSendBuyCharmRune`, `sendBestiaryCharms`.
 
 ## 4. Agent Implementation Details
-- Implement `BestiaryManager.kt` storing kill counts and charm allocations per player.
-- Implement `CharmRune` definitions with proc callbacks.
-- Hook into monster death events and attack calculation pipelines.
+- **Kotlin scope (C++ engine only):** port `IOBestiary`, `Charm`, the `Player` bestiary/charm state, the bestiary protocol handlers, and `Game().getBestiaryList()`. Bind `Game.createBestiaryCharm`, `player:addBestiaryKillCount/getBestiaryKillCount/charmPoints`.
+- **Stays Lua (do not port):** `data/scripts/systems/bestiary_charms.lua` (the 25 charm configs registered via `Game.createBestiaryCharm(id):register(config)`), `data/scripts/lib/register_monster_type.lua` (bestiary mask).
 
 ## 5. Test Reference
-- `org.opentibia.canary.systems.BestiaryTest`: Tests kill thresholds awarding charm points, socketing a charm rune to a completed creature, and verifying the 10% proc rate deals elemental damage.
+- `org.opentibia.canary.systems.BestiaryTest`: kill thresholds awarding charm points, socketing a charm to a completed creature, charm combat proc, and bestiary protocol serialization.
 
-
-## Canary Original Code Reference
-- **Source Files**: 
-- **Canary Repository Root**: 
+## 6. Canary Original Code Reference
+- **C++ Engine Source Files**: `src/io/iobestiary.cpp`, `src/io/iobestiary.hpp`, `src/creatures/players/player.hpp` (bestiary/charm state), `src/server/network/protocol/protocolgame.cpp`
+- **Lua Source Files (stay Lua)**: `data/scripts/systems/bestiary_charms.lua`, `data/scripts/lib/register_monster_type.lua`
+- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Key Methods / Opcodes**: `IOBestiary::parseCharm`, `Player::addBestiaryKillCount`, `Game::createBestiaryCharm`, `parseBestiarySendRaces`, `parseSendBuyCharmRune`

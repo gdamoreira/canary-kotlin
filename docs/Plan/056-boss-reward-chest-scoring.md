@@ -1,29 +1,27 @@
 # Feature: Boss Reward Chest & Damage Participation Scoring
 
 ## 1. Explanation
-Implements CipSoft's Boss Reward Container & participation loot scoring (`src/items/containers/rewards/`, `data/scripts/systems/reward_chest.lua`, `src/io/`). When world bosses or nemesis encounters die (e.g. Ferumbras, Morgaroth, Soul War bosses), loot is not dropped on the floor to be stolen. Instead, the engine computes a contribution score per player based on:
-- Damage dealt to the boss.
-- Damage taken from the boss (tanking score).
-- Healing dealt to participants.
-Each eligible player receives an individualized Reward Container directly inside the adventurer's guild **Reward Chest**.
+Implements CipSoft's Boss Reward Container & participation loot scoring (`src/items/containers/rewards/`). On boss/nemesis death, loot is delivered per-participant into each adventurer's guild Reward Chest instead of dropping on the floor, scored by damage dealt/taken and healing.
 
 ## 2. Impact
-Eliminates loot theft, bot clicking, and griefing in massive multiplayer boss encounters.
+Eliminates loot theft and griefing in large boss encounters.
 
 ## 3. Functionality Affected
-- **Boss Combat Tracker**: Tracks damage dealt, damage mitigated, and healing per player GUID throughout the boss life cycle.
-- **Participation Score Formula**: Assigns loot tiers (Tier 1..5) based on normalized contribution percent.
-- **Reward Container Dispatcher**: Generates personal loot and deposits into the player's persistent Reward Chest inventory.
+- **Reward containers**: `class RewardChest`, `class Reward` (`rewardchest.hpp/.cpp`, `reward.hpp/.cpp`).
+- **Player chest API**: `Player::getRewardChest/getReward/addReward`.
+- **Collection**: `Game::collectRewardChestItems`, `Game::playerRewardChestCollect`; `actions.cpp` opening a reward container.
+- **Protocol**: opcode `0xFF`, `parseRewardChestCollect`.
+- **Config**: `REWARD_CHEST_COLLECT_ENABLED`, `_MAX_COLLECT_ITEMS`.
 
 ## 4. Agent Implementation Details
-- Implement `RewardChestEngine.kt` maintaining active boss encounter score sheets.
-- Hook into `CombatEngine` to record damage and healing events.
-- On boss death, compute scores and spawn private `RewardContainer` instances into database storage.
+- **Kotlin scope (C++ engine only):** port `Reward`/`RewardChest`, `Player::getReward/getRewardChest/addReward`, `Game::collectRewardChestItems/playerRewardChestCollect`, the `0xFF` protocol handler, and config. Bind `container:registerReward/addRewardBossItems`, `creature:getDamageMap/getTargetList`, `monsterType:getBossReward/generateLootRoll`.
+- **Stays Lua (do not port):** `data/scripts/systems/reward_chest.lua` (BossDeath score/participation, `BossParticipation.onHealthChange`), `data/libs/systems/reward_boss.lua` (`InsertRewardItems` DB insert, `GetPlayerStats`, `ResetAndSetTargetList`).
 
 ## 5. Test Reference
-- `org.opentibia.canary.systems.RewardChestTest`: Simulates 3 players fighting a boss (DPS, Tank, Healer), calculates participation points, and verifies each player receives their own personal reward container in their reward chest.
+- `org.opentibia.canary.systems.RewardChestTest`: adding a reward to a player's chest, collecting items through `collectRewardChestItems`, collect-limit config, and `0xFF` serialization.
 
-
-## Canary Original Code Reference
-- **Source Files**: 
-- **Canary Repository Root**: 
+## 6. Canary Original Code Reference
+- **C++ Engine Source Files**: `src/items/containers/rewards/reward.hpp`, `src/items/containers/rewards/reward.cpp`, `src/items/containers/rewards/rewardchest.hpp`, `src/items/containers/rewards/rewardchest.cpp`, `src/creatures/players/player.hpp`, `src/creatures/players/player.cpp`, `src/game/game.cpp`, `src/server/network/protocol/protocolgame.cpp`
+- **Lua Source Files (stay Lua)**: `data/scripts/systems/reward_chest.lua`, `data/libs/systems/reward_boss.lua`
+- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Key Methods / Opcodes**: `Game::collectRewardChestItems`, `Player::addReward`, `parseRewardChestCollect` (0xFF)

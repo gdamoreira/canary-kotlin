@@ -1,28 +1,26 @@
 # Feature: Weapon Proficiencies System (Tibia 13.30+)
 
 ## 1. Explanation
-Implements CipSoft's Weapon Proficiencies system (`src/enums/weapon_proficiency.hpp`, `data/items/proficiencies.json`). Characters level up their mastery of weapon families:
-- Swords, Axes, Clubs, Bows, Crossbows, Rods, Wands.
-- As players deal damage with a weapon family, they accumulate proficiency experience points.
-- Gaining proficiency levels unlocks permanent passive modifiers: $+1..+5\%$ physical/elemental base damage and $+1..+3\%$ critical strike chance.
+Implements CipSoft's Weapon Proficiencies (`src/creatures/players/components/weapon_proficiency.*`, `src/enums/weapon_proficiency.hpp`, `data/items/proficiencies.json`). Characters accumulate proficiency experience per weapon family (Swords, Axes, Clubs, Bows, Crossbows, Rods, Wands), unlocking permanent perks (damage, critical, spell bonuses). This is a C++-dominant feature; the Lua surface is minimal.
 
 ## 2. Impact
-Long-term character weapon mastery progression in modern protocol versions ($\ge 13.30$).
+Long-term weapon mastery progression in protocol versions >= 13.30.
 
 ## 3. Functionality Affected
-- **Weapon Hit Listener**: Increments proficiency XP on each damaging combat round.
-- **Proficiency Level Thresholds**: Evaluates level milestones ($1..10$).
-- **Combat Modifier Injection**: Injects passive proficiency bonuses into `CombatEngine` calculations.
+- **Enums/structs**: `WeaponProficiencyBonus_t`, `ProficiencyPerk/Level/Proficiency`, `WeaponProficiencyData`, spell-bonus structs.
+- **Component**: `class WeaponProficiency` (JSON load, perks, combat application, kill tracking).
+- **Protocol**: `OfficialWeaponProficiencyPayload` (`protocol_profile.hpp`).
+- **Binding**: `player:addWeaponExperience`.
 
 ## 4. Agent Implementation Details
-- Implement `WeaponProficiencyEngine.kt` tracking weapon XP and levels per player.
-- Serialize proficiency levels into database storage tables.
-- Apply proficiency damage bonuses in `CombatEngine`.
+- **Kotlin scope (C++ engine only):** port the `WeaponProficiency` component + JSON loader + enums + protocol payload, and bind `player:addWeaponExperience`.
+- **Stays Lua (do not port):** `data/scripts/lib/proficiency_helper.lua` (catalyst item), `data/scripts/talkactions/god/weapon_proficiency.lua`.
 
 ## 5. Test Reference
-- `org.opentibia.canary.systems.WeaponProficiencyTest`: Tests dealing damage with a sword accumulating sword proficiency XP, advancing level, and verifying damage bonus is applied to subsequent attacks.
+- `org.opentibia.canary.systems.WeaponProficiencyTest`: JSON load, adding weapon experience per family, perk level thresholds, and applying the damage bonus to combat.
 
-
-## Canary Original Code Reference
-- **Source Files**: 
-- **Canary Repository Root**: 
+## 6. Canary Original Code Reference
+- **C++ Engine Source Files**: `src/enums/weapon_proficiency.hpp`, `src/creatures/players/components/weapon_proficiency.hpp`, `src/creatures/players/components/weapon_proficiency.cpp`, `src/server/network/protocol/protocol_profile.hpp`, `src/lua/functions/creatures/player/player_functions.cpp`
+- **Lua Source Files (stay Lua)**: `data/scripts/lib/proficiency_helper.lua`, `data/scripts/talkactions/god/weapon_proficiency.lua`, `data/items/proficiencies.json`
+- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Key Methods / Opcodes**: `WeaponProficiency::loadFromJson`, `addWeaponExperience`/`addWeaponProficiencyExperience`, `OfficialWeaponProficiencyPayload`

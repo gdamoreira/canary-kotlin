@@ -1,28 +1,26 @@
 # Feature: Gnomprona Hazard System & Primal Dungeons
 
 ## 1. Explanation
-Implements CipSoft's Hazard difficulty scaling system (`data/libs/systems/hazard.lua`, `data/scripts/eventcallbacks/monster/ondroploot_hazard.lua`). Used in Gnomprona primal hunting zones. Hazard level scales from $1$ to $12+$:
-- Increases monster damage dealt ($+2\%$ per hazard level) and defense mitigation.
-- Increases hazard environmental events (Primal Pod explosions, spawn traps).
-- Multiplies loot bonus chances and rolls for rare drops (Primal Bag, Plunder Patriarch encounter).
+Implements CipSoft's Hazard difficulty scaling (`src/game/game.cpp` `handleHazardSystemAttack`, monster/player hazard state). Used in Gnomprona primal hunting zones. Hazard level (1..12+) increases monster damage/defense and loot bonuses.
 
 ## 2. Impact
-Pinnacle endgame team-hunting difficulty modifier for level 800..2000+ parties.
+Pinnacle endgame team-hunting difficulty modifier.
 
 ## 3. Functionality Affected
-- **Hazard Zone Tracker**: Evaluates player hazard level when inside configured zone bounding boxes.
-- **Combat Multipliers**: Injects damage/defense multipliers into `CombatEngine` calculations.
-- **Loot Injection**: Adds hazard bonus drop rolls upon monster death.
+- **Monster hazard flags**: `Monster::getHazard/setHazard/hazardCrit/hazardDodge/hazardDamageBoost/hazardDefenseBoost`.
+- **Player hazard points**: `Player::set/getHazardSystemPoints`, `parseAttackRecvHazardSystem`, `parseAttackDealtHazardSystem`, exp bonus.
+- **Combat hooks**: `Game::handleHazardSystemAttack`, dodge roll.
+- **Config**: `HAZARD_*` / `TOGGLE_HAZARDSYSTEM`.
 
 ## 4. Agent Implementation Details
-- Implement `HazardSystemEngine.kt` evaluating player zone levels.
-- Apply hazard damage scaling to creature attacks in the combat round loop.
-- Hook into `LootEngine` to roll additional hazard loot tiers.
+- **Kotlin scope (C++ engine only):** port the Monster hazard flags, Player hazard points + attack hooks, `Game::handleHazardSystemAttack`, and hazard config. Bind `monster:hazard()/hazardCrit()/hazardDodge()/hazardDamageBoost()/hazardDefenseBoost()` and `player:setHazardSystemPoints/updateHazard`.
+- **Stays Lua (do not port):** `data/libs/systems/hazard.lua` (`Hazard` class, KV levels, `ZoneEvent` enter/leave, `HazardMonster.onSpawn`), `data/scripts/eventcallbacks/monster/ondroploot_hazard.lua` (extra loot rolls).
 
 ## 5. Test Reference
-- `org.opentibia.canary.systems.HazardSystemTest`: Tests hazard level 5 applying $+10\%$ monster damage scaling and adding bonus loot rolls on death.
+- `org.opentibia.canary.systems.HazardSystemTest`: monster hazard flags scaling damage, player hazard points accumulating, and the `handleHazardSystemAttack` dodge/crit rolls.
 
-
-## Canary Original Code Reference
-- **Source Files**: 
-- **Canary Repository Root**: 
+## 6. Canary Original Code Reference
+- **C++ Engine Source Files**: `src/creatures/monsters/monster.hpp`, `src/creatures/monsters/monster.cpp`, `src/creatures/players/player.hpp`, `src/creatures/players/player.cpp`, `src/game/game.cpp`, `src/config/config_enums.hpp`
+- **Lua Source Files (stay Lua)**: `data/libs/systems/hazard.lua`, `data/scripts/eventcallbacks/monster/ondroploot_hazard.lua`, `data/scripts/lib/register_monster_type.lua`
+- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Key Methods / Opcodes**: `Game::handleHazardSystemAttack`, `Monster::getHazard/setHazard`, `Player::parseAttackDealtHazardSystem`

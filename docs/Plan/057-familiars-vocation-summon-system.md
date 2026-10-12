@@ -1,29 +1,25 @@
 # Feature: Familiars Vocation Summon System
 
 ## 1. Explanation
-Implements CipSoft's Level 200+ Vocation Familiars (`data/libs/systems/familiar.lua`, `data/XML/familiars.xml`). Characters level $\ge 200$ can summon an invincible 15-minute combat companion on a 30-minute cooldown timer:
-- **Knight**: *Skullfrost* (Knight Familiar - Tank / Melee physical + Ice wave)
-- **Paladin**: *Snowbash* (Paladin Familiar - Distance holy bolts + area divine aura)
-- **Sorcerer**: *Sorcerer Familiar* (Death strike + Great fire wave)
-- **Druid**: *Druid Familiar* (Area healing + Ice wave)
+Implements CipSoft's level 200+ Vocation Familiars (`src/creatures/players/grouping/familiars.*`, `data/libs/systems/familiar.lua`, `data/XML/familiars.xml`). Each vocation summons a timed companion (Knight/Paladin/Sorcerer/Druid/Monk familiar). The C++ engine stores familiar definitions (XML) and player familiar state; the summon spells and timers are Lua.
 
 ## 2. Impact
-Mid-to-endgame solo hunting combat amplifier and boss burst DPS support.
+Mid-to-endgame solo hunting combat amplifier and boss support.
 
 ## 3. Functionality Affected
-- **Summon Cooldown Engine**: Enforces 30-minute cooldown tracking per player.
-- **Companion AI**: Follows master, attacks master's locked target, matches master movement speed.
-- **Despawn Timer**: Companion automatically despawns after 15 minutes or when master logs out.
+- **Definitions**: `class Familiars`/`Familiar`/`FamiliarEntry` (XML load).
+- **Player state**: `canFamiliar/addFamiliar/removeFamiliar/getFamiliar/setFamiliarLooktype`; storage range.
+- **Combat**: `Monster::isFamiliar`, `Player::isFamiliar`.
 
 ## 4. Agent Implementation Details
-- Implement `FamiliarSystem.kt` managing familiar summon spells and timers.
-- Extend `Monster` / `Creature` with `master` reference and companion behavior.
-- Hook familiar despawn timer onto `GameDispatcher.schedule(...)`.
+- **Kotlin scope (C++ engine only):** port the `Familiars` XML loader, the `Player` familiar collections + storage range, and the combat familiar flags.
+- **Stays Lua (do not port):** `data/libs/systems/familiar.lua` (FAMILIAR_ID map, timers, `RemoveFamiliar`), `data/scripts/spells/familiar/*` (summon spells), `data/scripts/creaturescripts/familiar/*`, `data/XML/familiars.xml` (data).
 
 ## 5. Test Reference
-- `org.opentibia.canary.systems.FamiliarSystemTest`: Tests level 200 player summoning familiar, familiar attacking master's target, cooldown timer preventing immediate recast, and automatic 15-minute expiration.
+- `org.opentibia.canary.systems.FamiliarSystemTest`: loading familiar definitions from XML, add/remove/has familiar on `Player`, and storage-range assignment.
 
-
-## Canary Original Code Reference
-- **Source Files**: 
-- **Canary Repository Root**: 
+## 6. Canary Original Code Reference
+- **C++ Engine Source Files**: `src/creatures/players/grouping/familiars.hpp`, `src/creatures/players/grouping/familiars.cpp`, `src/creatures/players/player.hpp`, `src/creatures/players/player.cpp`, `src/creatures/players/components/player_storage.cpp`
+- **Lua Source Files (stay Lua)**: `data/libs/systems/familiar.lua`, `data/scripts/spells/familiar/*`, `data/scripts/creaturescripts/familiar/*`, `data/XML/familiars.xml`
+- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Key Methods / Opcodes**: `Familiars::loadFromXml`, `Player::addFamiliar/removeFamiliar/canFamiliar`

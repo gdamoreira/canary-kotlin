@@ -1,28 +1,26 @@
 # Feature: Mounts & Speed Buff System
 
 ## 1. Explanation
-Implements creature mounts, taming items, and movement speed bonuses (`data/XML/mounts.xml`, `src/game/`). Players can tame wild creatures using specific items (e.g. Slingshot on Panda, Carrot on a Stick on Dromedary). Toggled via client hotkey (Ctrl+G / Mount button):
-- Changes player visual sprite to mounted outfit.
-- Grants a permanent $+10$ or $+15$ movement speed modifier while mounted.
-- Decreases step duration in `MovementEngine`.
+Implements creature mounts (`src/creatures/appearance/mounts/mounts.*`, `data/XML/mounts.xml`). Players tame creatures and toggle mounts, gaining a fixed movement-speed bonus while mounted. Mount definitions load from XML; the taming items and store catalog are Lua.
 
 ## 2. Impact
-Movement speed progression, map exploration pacing, and collection mechanics.
+Movement speed progression, exploration pacing, and collection mechanics.
 
 ## 3. Functionality Affected
-- **Taming Action Engine**: Evaluates item use on monster: probability of success (unlocks mount), escape, or item break.
-- **Speed Modifier Pipeline**: Dynamically recalculates creature speed: $\text{effectiveSpeed} = \text{baseSpeed} + \text{equipmentSpeed} + \text{mountSpeed}$.
-- **Network Outfit Framing**: Includes mount sprite ID in `sendCreatureOutfit` / `sendMapDescription`.
+- **Definitions**: `struct Mount` / `class Mounts` (XML load, speed value).
+- **Player state**: `setCurrentMount/toggleMount/tameMount/untameMount/hasMount/hasAnyMount/getRandomMountId/dismount`; storage range.
+- **Speed**: mounted speed added to effective creature speed.
+- **Protocol**: mount sprite in `sendCreatureOutfit` / map description.
 
 ## 4. Agent Implementation Details
-- Implement `MountSystem.kt` parsing `data/XML/mounts.xml`.
-- Add `mounted: Boolean` and `currentMountId: Int` to `Player`.
-- Update `MovementEngine.calculateStepDuration` to include active mount speed bonuses.
+- **Kotlin scope (C++ engine only):** port `Mount`/`Mounts` XML loader, the `Player` mount methods + storage range, the mount speed contribution, and the outfit/mount protocol framing. Bind `player:addMount/hasMount/toggleMount`.
+- **Stays Lua (do not port):** `data/scripts/actions/items/usable_mount_items.lua` (taming items → `player:addMount`), `data/scripts/talkactions/god/add_mount.lua`, `data/modules/scripts/gamestore/catalog/cosmetics_mounts.lua`, `data/XML/mounts.xml` (data).
 
 ## 5. Test Reference
-- `org.opentibia.canary.systems.MountSystemTest`: Tests toggling mount applying $+10$ speed, step duration decreasing accordingly, and dismounting restoring base speed.
+- `org.opentibia.canary.systems.MountSystemTest`: XML load, `toggleMount` applying the mount speed bonus, step-duration decrease, and dismount restoring base speed.
 
-
-## Canary Original Code Reference
-- **Source Files**: 
-- **Canary Repository Root**: 
+## 6. Canary Original Code Reference
+- **C++ Engine Source Files**: `src/creatures/appearance/mounts/mounts.hpp`, `src/creatures/appearance/mounts/mounts.cpp`, `src/creatures/players/player.hpp`, `src/creatures/players/player.cpp`, `src/creatures/players/components/player_storage.cpp`, `src/lua/functions/creatures/player/mount_functions.cpp`, `src/server/network/protocol/protocolgame.cpp`
+- **Lua Source Files (stay Lua)**: `data/scripts/actions/items/usable_mount_items.lua`, `data/scripts/talkactions/god/add_mount.lua`, `data/modules/scripts/gamestore/catalog/cosmetics_mounts.lua`, `data/XML/mounts.xml`
+- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Key Methods / Opcodes**: `Mounts::loadFromXml`, `Player::toggleMount/hasMount/addMount`

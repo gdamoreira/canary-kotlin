@@ -1,29 +1,26 @@
 # Feature: House Hirelings System
 
 ## 1. Explanation
-Implements House Hirelings (`data/libs/systems/hireling.lua`). House owners can purchase and place customizable Hireling NPCs inside their owned houses. Hirelings can be trained in skills:
-- **Banker**: Accesses personal bank account, deposits, and withdrawals directly inside the house.
-- **Trader / Merchant**: Sells standard potions, runes, and supplies; buys creature products.
-- **Cook**: Crafts special stat foods providing regeneration and temporary combat buffs.
-- **Steward**: Customizes outfit, dress, and greeting dialogues.
+Implements House Hirelings (`data/libs/systems/hireling.lua`, `data/modules/scripts/hirelings/*`). House owners purchase/place customizable Hireling NPCs (Banker, Trader, Cook, Steward). The C++ engine provides the hireling skill/outfit maps, house-owner speech checks, and the naming protocol; the role logic and dialogues are Lua.
 
 ## 2. Impact
 Private house utility, convenience for players, and gold sink.
 
 ## 3. Functionality Affected
-- **Hireling Placement Engine**: Ensures hirelings can only be summoned on tiles belonging to the player's house (`HouseTile`).
-- **Hireling Skill Unlock**: Tracks purchased job roles (Banker, Trader, Cook) per hireling instance.
-- **Dialogue & Shop Hook**: Connects to `BankService` and `NpcShopHandler`.
+- **Game maps**: `Game::m_hirelingSkills` / `m_hirelingOutfits` (+ accessors).
+- **Interaction**: `Player::canSpeakWithHireling`.
+- **Protocol**: `parseSetHirelingName` (0xEC); cyclopedia hireling summary (`Summary_t::HIRELINGS`).
+- **Item**: `ItemID_t::HIRELING_LAMP` + custom attribute.
 
 ## 4. Agent Implementation Details
-- Implement `HirelingSystem.kt` extending `Npc` with house ownership binding.
-- Implement hireling placement, dismissal, and job interaction state machines.
-- Persist active hireling instances in database house tables.
+- **Kotlin scope (C++ engine only):** port the `Game` hireling skill/outfit maps, `Player::canSpeakWithHireling`, the `0xEC` protocol handler, and the cyclopedia hireling summary.
+- **Stays Lua (do not port):** `data/libs/systems/hireling.lua` (752 lines: skills/outfits/sex/foods, house access, save/load), `data/modules/scripts/hirelings/hireling_module.lua`, `data/scripts/actions/items/hireling_lamp.lua`, `hireling_foods.lua`, `globalevents/hireling_save.lua`.
 
 ## 5. Test Reference
-- `org.opentibia.canary.systems.HirelingSystemTest`: Tests summoning hireling inside owned house tile, interacting as banker to deposit gold, and verifying non-house owners cannot interact.
+- `org.opentibia.canary.systems.HirelingSystemTest`: hireling skill/outfit maps, `canSpeakWithHireling` ownership check, and `0xEC` name serialization.
 
-
-## Canary Original Code Reference
-- **Source Files**: 
-- **Canary Repository Root**: 
+## 6. Canary Original Code Reference
+- **C++ Engine Source Files**: `src/game/game.hpp`, `src/game/game.cpp`, `src/creatures/players/player.hpp`, `src/creatures/players/player.cpp`, `src/server/network/protocol/protocolgame.cpp`, `src/creatures/players/components/player_cyclopedia.cpp`
+- **Lua Source Files (stay Lua)**: `data/libs/systems/hireling.lua`, `data/modules/scripts/hirelings/hireling_module.lua`, `data/scripts/actions/items/hireling_lamp.lua`, `data/scripts/actions/items/hireling_foods.lua`, `data/scripts/globalevents/hireling_save.lua`
+- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Key Methods / Opcodes**: `Player::canSpeakWithHireling`, `parseSetHirelingName` (0xEC)

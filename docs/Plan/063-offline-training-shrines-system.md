@@ -1,28 +1,27 @@
 # Feature: Offline Training Shrines System (0x74)
 
 ## 1. Explanation
-Implements CipSoft's Offline Training system (`src/server/network/protocol/protocolgame.cpp` opcode `0x74`). Players interact with training statues in temples and houses (Sword, Axe, Club, Distance, Magic Level):
-- Disconnects the player cleanly and records the logout timestamp and target training skill.
-- Each hour offline accumulates skill/magic level tries at $50\%$ of normal online training efficiency (up to a 12-hour training stamina cap).
-- When the player logs in next, computes elapsed offline time, awards skill advances, and displays a summary dialog.
+Implements CipSoft's Offline Training (`src/server/network/protocol/protocolgame.cpp` opcode `0x74`). Players interact with training statues (Sword, Axe, Club, Distance, Magic Level); the client disconnects the player, records the logout time and target skill, and awards skill/magic tries on next login based on elapsed offline time.
 
 ## 2. Impact
-Core daily progression for offline players, preventing the need for AFK training bots.
+Core daily progression for offline players.
 
 ## 3. Functionality Affected
-- **Offline Training Opcode (`0x74`)**: Dispatches chosen skill target and initiates graceful logout.
-- **Offline Math Engine**: Evaluates elapsed seconds since last logout up to $43,200$ seconds (12 hours).
-- **Skill Advancement Injection**: Advances player skill tries on login before delivering initial map stream.
+- **Player state**: `addOfflineTrainingTries`, `add/remove/getOfflineTrainingTime`, `get/setOfflineTrainingSkill`; `onThink` accrual.
+- **Dialog**: `Game::sendOfflineTrainingDialog`.
+- **Protocol**: opcode `0x74` `parseStartOfflineTraining`; client send; `MESSAGE_OFFLINE_TRAINING`.
+- **Persistence**: `iologindata_save_player.cpp` / `iologindata_load_player.cpp`.
+- **Config**: `RATE_OFFLINE_TRAINING_SPEED`.
 
 ## 4. Agent Implementation Details
-- Implement `OfflineTrainingEngine.kt` calculating skill tries per elapsed offline hour.
-- Add `offlineTrainingSkill` and `offlineTrainingTime` fields to `players` table.
-- Hook into player login sequence to apply earned skill points.
+- **Kotlin scope (C++ engine only):** port the `Player` offline-training state/methods, the `onThink` accrual, `Game::sendOfflineTrainingDialog`, the `0x74` protocol handler + client send, persistence, and config. Bind `player:addOfflineTrainingTries/getOfflineTrainingTime`.
+- **Stays Lua (do not port):** `data/scripts/creaturescripts/player/offline_training.lua` (onLogin computes tries from offline time/vocation).
 
 ## 5. Test Reference
-- `org.opentibia.canary.systems.OfflineTrainingTest`: Simulates player training sword skill offline for 10 hours and verifies sword skill points increase by exact calculated tries upon login.
+- `org.opentibia.canary.systems.OfflineTrainingTest`: `0x74` parsing sets the target skill and requests logout, offline-time accrual capped at the training cap, and try conversion on login.
 
-
-## Canary Original Code Reference
-- **Source Files**: 
-- **Canary Repository Root**: 
+## 6. Canary Original Code Reference
+- **C++ Engine Source Files**: `src/creatures/players/player.hpp`, `src/creatures/players/player.cpp`, `src/game/game.hpp`, `src/game/game.cpp`, `src/server/network/protocol/protocolgame.cpp`, `src/io/iologindata_save_player.cpp`, `src/io/iologindata_load_player.cpp`, `src/config/config_enums.hpp`
+- **Lua Source Files (stay Lua)**: `data/scripts/creaturescripts/player/offline_training.lua`
+- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Key Methods / Opcodes**: `parseStartOfflineTraining` (0x74), `Game::sendOfflineTrainingDialog`, `Player::addOfflineTrainingTries`
