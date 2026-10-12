@@ -18,10 +18,10 @@ class NpcDialogueTest {
 
         val player = Player(1, "Adventurer", 100, 100, position = Position(100, 101, 7))
 
-        // Greeting
-        val greetingResponse = npc.onHear(player, "hi")
+        // Greeting (Canary Npc::onCreatureSay)
+        val greetingResponse = npc.onCreatureSay(player, type = 1, text = "hi")
         assertThat(greetingResponse).contains("Hello, Adventurer!")
-        assertThat(npc.isInteractingWith(player)).isTrue()
+        assertThat(npc.isInteractingWithPlayer(player.id)).isTrue()
 
         // Shop query
         val shopItems = npc.getShopItems()
@@ -29,8 +29,8 @@ class NpcDialogueTest {
         assertThat(shopItems.first().name).isEqualTo("Mana Potion")
 
         // Farewell
-        val farewellResponse = npc.onHear(player, "bye")
+        val farewellResponse = npc.onCreatureSay(player, type = 1, text = "bye")
         assertThat(farewellResponse).contains("Good bye")
-        assertThat(npc.isInteractingWith(player)).isFalse()
+        assertThat(npc.isInteractingWithPlayer(player.id)).isFalse()
     }
 }

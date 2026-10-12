@@ -6,8 +6,10 @@ This document records the binding architectural policies, lifetime safety rules,
 
 ## 1. Core Architectural Mandates
 
-### 1.1 Idiomatic Kotlin over Direct C++ Translation
-- **Never translate raw C++ pointers, singletons, or manual mutexes 1:1.**
+### 1.1 Strict Canary Parity Mandate (No Invented Methods or APIs)
+- **NEVER implement classes, methods, signatures, or logic that do not exist in the Canary project.**
+- Every function, method name, signature, and state behavior in Kotlin must directly correspond to its C++ or Lua counterpart in Canary (e.g. `onCreatureSay`, `onCreatureAppear`, `setPlayerInteraction` instead of fabricated helper methods like `onHear`).
+- If a method or helper does not exist in Canary's codebase (`src/` or `data/`), **DO NOT INVENT IT**. Verify the exact C++ method definition before writing code.
 - Target **Java 25 LTS** runtime with **Kotlin 2.4+** and **Gradle 9+**.
 - Eliminate global singletons (`g_game()`, `g_dispatcher()`, `g_configManager()`) in favor of clean **Dependency Injection** (constructor injection) and interface contracts (`AccountRepository`, `PlayerStorage`, `GameMap`).
 - Use Kotlin **value classes** (`@JvmInline value class Direction`) and sealed interfaces for domain modeling instead of raw integer bitmasks.
@@ -22,6 +24,12 @@ This document records the binding architectural policies, lifetime safety rules,
 - **Zero-Copy & Direct Buffer Management**:
   - Netty `ByteBuf` instances allocated in inbound pipelines must be properly released across handler boundaries (`ReferenceCountUtil.release(msg)`).
   - Outbound frames must use Little-Endian byte order (`writeShortLE`, `writeIntLE`) to conform to OpenTibia wire contracts.
+
+### 1.4 Lua Scripting Boundary (Do Not Port Lua Into Kotlin)
+- **Lua stays Lua**: **NEVER re-implement Lua game logic (data files, `data/scripts`, `data-global`, NPC/quest/spell/action scripts, talkactions, movements, etc.) as Kotlin classes, methods, or hardcoded logic.**
+- Lua behavior must remain authored and executed as Lua: keep the Lua files as Lua (`data/` trees) and run them through the Lua bridge (`LuaScriptBridge`/LuaJ) so the original scripts are the source of truth.
+- Kotlin code may only provide the **C++-parity engine primitives and bindings** that Lua scripts call (e.g. `Creature:getHealth()`, `Game.createItem()`, event registration). Kotlin must not encode the script's decision logic itself.
+- If a gameplay behavior in Canary lives in a `.lua` file, the Kotlin port must load that same `.lua` file, not a Kotlin translation of it. If it lives in C++ (`src/`), port it to Kotlin. Never move logic across that boundary.
 
 ---
 

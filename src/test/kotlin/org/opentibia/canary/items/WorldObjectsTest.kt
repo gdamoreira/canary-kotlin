@@ -12,7 +12,7 @@ class WorldObjectsTest {
         val fireField = MagicField(id = 1487, damage = 20)
         val player = Player(1, "Adventurer", 100, 100, position = Position(100, 100, 7))
 
-        fireField.onStepIn(player)
+        fireField.onStepInField(player)
         assertThat(player.health).isEqualTo(80)
     }
 

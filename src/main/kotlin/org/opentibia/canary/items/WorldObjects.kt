@@ -7,7 +7,11 @@ class MagicField(
     id: Int,
     val damage: Int
 ) : Item(id) {
-    fun onStepIn(player: Player) {
+    /**
+     * Mirrors Canary MagicField::onStepInField(creature)
+     * src/creatures/combat/combat.hpp:369
+     */
+    fun onStepInField(player: Player) {
         player.drainHealth(damage)
     }
 }

@@ -24,27 +24,39 @@ class Npc(
 
     fun getShopItems(): List<ShopItem> = shopItems
 
-    fun isInteractingWith(player: Player): Boolean = interactingPlayers.contains(player.id)
+    fun setPlayerInteraction(playerId: Long) {
+        interactingPlayers.add(playerId)
+    }
 
-    fun onHear(player: Player, message: String): String {
-        return when (message.lowercase().trim()) {
+    fun removePlayerInteraction(playerId: Long) {
+        interactingPlayers.remove(playerId)
+    }
+
+    fun isInteractingWithPlayer(playerId: Long): Boolean = interactingPlayers.contains(playerId)
+
+    /**
+     * Mirrors Canary C++ Npc::onCreatureSay(creature, type, text)
+     * src/creatures/npcs/npc.cpp:670
+     */
+    fun onCreatureSay(player: Player, type: Int, text: String): String {
+        return when (text.lowercase().trim()) {
             "hi", "hello" -> {
-                interactingPlayers.add(player.id)
+                setPlayerInteraction(player.id)
                 "Hello, ${player.name}!"
             }
             "bye", "farewell" -> {
-                interactingPlayers.remove(player.id)
+                removePlayerInteraction(player.id)
                 "Good bye, ${player.name}."
             }
             "trade" -> {
-                if (isInteractingWith(player)) {
+                if (isInteractingWithPlayer(player.id)) {
                     "Take a look at my wares."
                 } else {
                     ""
                 }
             }
             else -> {
-                if (isInteractingWith(player)) "I don't understand." else ""
+                if (isInteractingWithPlayer(player.id)) "I don't understand." else ""
             }
         }
     }
