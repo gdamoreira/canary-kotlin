@@ -203,10 +203,16 @@ All notable technical milestones, architectural transformations, feature impleme
 - Moved feature specs `050–064` from `docs/Plan/` to `docs/Done/` (engine scope implemented + tested); `docs/Plan/` now holds only the architectural `000-*` docs.
 - Updated `docs/game-play-features.md` to **56 / 56 implemented** with per-feature residual gaps; refreshed README/CHANGELOG metrics.
 
+### Phase 14: Protocol Sends & Item Classification (04:00 – 04:30)
+- **Bestiary outbound** — `BestiaryWindowSerializer` for `0xD5`–`0xD9` (races/creatures/monster-data/charms/entry-changed), byte-exact.
+- **Wheel & Forge sends** — `WheelWindowSerializer` (open-wheel window: slots/points/gems/scrolls) and `ForgeHistorySerializer` (history paging + skill stats).
+- **Item classification** — `ItemType.upgradeClassification` loaded from `items.xml`, wired into `PlayerForgeAdapter` so forge costs resolve from real item classifications.
+- **Process gate** — `AGENTS.md` §6 added: every wave MUST update docs, commit them separately, and push.
+
 ---
 
 ### Current Status
-- **Automated Tests**: **156 test suites / 1005 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **159 test suites / 1048 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.

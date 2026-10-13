@@ -60,9 +60,9 @@ This document establishes the master inventory of all gameplay features from Can
 
 | # | Feature Name | Nature | Implemented (Kotlin) | Residual gaps | Spec |
 |---|---|---|---|:---:|:---:|
-| **42** | Wheel of Destiny | **C++-only** | `systems/wheel/`: enums, `IOWheel` (36 slot bonuses), `PlayerWheel` budget, spell tables, gems, `WheelApplication` (save + prerequisites + gem actions), protocol `0x61`/`0x62`/`0xE7` routed | gem-economy costs, spell-table registration into the spell registry, client wheel-window send | `050` |
+| **42** | Wheel of Destiny | **C++-only** | `systems/wheel/`: enums, `IOWheel` (36 slot bonuses), `PlayerWheel` budget, spell tables, gems, `WheelApplication` (save + prerequisites + gem actions), protocol `0x61`/`0x62`/`0xE7` routed | gem-economy costs, spell-table registration into the spell registry (wheel window now serialized) | `050` |
 | **43** | Exaltation Forge | Mixed | `systems/forge/`: `ForgeAction`, `PlayerForgeHistory`, dust/fusion math, `ForgeApplication`; protocol `0xBF` routed + window serializers | router application (needs `ForgePlayer` seam), forge history send | `051` |
-| **44** | Bestiary & Charms | Mixed | `systems/bestiary/`: `IOBestiary`, `Charm`, player state, registry, economy, `BestiaryApplication`, charm combat procs; `0xE1–0xE4` routed | outbound serializers (`0xD5`–`0xD9`), animus mastery | `052` |
+| **44** | Bestiary & Charms | Mixed | `systems/bestiary/`: `IOBestiary`, `Charm`, player state, registry, economy, `BestiaryApplication`, charm combat procs; `0xE1–0xE4` routed | animus mastery (outbound `0xD5`–`0xD9` now serialized) | `052` |
 | **45** | In-Game Store | Lua-dominant | `systems/gamestore/`: `CoinType`, account coin ledger | store opcodes are WIP/disabled in Canary; whole store module stays Lua | `053` |
 | **46** | Hazard System | Mixed | `systems/hazard/`: monster/player hazard + `handleHazardSystemAttack` + `CombatDamage` bridge + config | protocol/UI icons, loot/pods (Lua) | `054` |
 | **47** | Daily Reward | Mixed | `systems/dailyreward/`: enums, `setDailyReward`, streak KV | persistence columns, regen application, packet | `055` |
@@ -84,7 +84,7 @@ This document establishes the master inventory of all gameplay features from Can
 
 - **Implemented & Verified Gameplay Systems**: **56 / 56** ($100\%$)
 - **Advanced Gameplay Systems**: **15 / 15** implemented (engine scope); residual parity gaps per feature above.
-- **Automated Test Coverage**: 156 test suites / 1005 tests passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered).
+- **Automated Test Coverage**: 159 test suites / 1048 tests passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered).
 - **Combat stack**: `combat/CombatDamage` + `Combat` (damage/armor/mitigation/crit), `combat/condition/*` (Condition engine core + outfit/light/invisible/cooldown/serene).
 - **Combat consumers**: bestiary charm procs, weapon-proficiency combat application, and hazard `CombatDamage` bridge.
 - **Lua engine**: bindings installed at `LuaEnvironment.initState()`; core primitive bindings (Game/Player/Creature/Item/Container/Position) + Spell/CreatureEvent/GlobalEvent/MoveEvent registries; `LuaEventDispatcher`/`ScriptingDispatch`; best-effort `data/libs` load.
