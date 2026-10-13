@@ -39,3 +39,7 @@ Each agent adds its own install line(s) in `lua/runtime/WorldLuaOperations.kt` (
 ## Post-wave (§6)
 
 Update the `src/lua/` rows and §1–§3; update `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+
+## Completion
+
+Part 2 completed: player 277/305, monster/npc/weapon/spell/combat complete, libraries complete, map/items complete, creatures complete, events complete. Remaining lua: ~28 player methods, `modules` recvbyte, some enum groups.
