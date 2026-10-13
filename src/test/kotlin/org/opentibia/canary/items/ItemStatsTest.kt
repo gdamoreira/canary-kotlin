@@ -31,7 +31,7 @@ class ItemStatsTest {
             shootRange = 4,
             mantra = 7,
             weaponType = WeaponType_t.WEAPON_SWORD,
-            ammoType = Ammo_t.AMMO_NONE,
+            ammoType = Ammo_t.AMMO_NONE.value,
             imbuementSlot = 2,
             slotPosition = SLOTP_HAND,
         )

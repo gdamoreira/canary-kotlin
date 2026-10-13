@@ -3,6 +3,7 @@ package org.opentibia.canary.items
 import org.opentibia.canary.combat.condition.ConditionId
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.game.movement.getNextPosition
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.house.AccessHouseLevel
@@ -95,7 +96,8 @@ interface BedWorld {
  * the own position (src/utils/tools.cpp:625).
  */
 fun BedItem.getNextBedItem(world: BedWorld): BedItem? {
-    val direction = type?.bedPartnerDir
+    val directionValue = type?.bedPartnerDir ?: DIRECTION_NONE
+    val direction = Direction.entries.firstOrNull { it.byteValue.toInt() == directionValue }
     val position = world.getPosition(this) ?: return null
     val targetPosition = if (direction == null) position else getNextPosition(direction, position)
     return world.getBedItem(targetPosition)

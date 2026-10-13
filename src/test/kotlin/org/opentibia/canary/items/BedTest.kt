@@ -124,7 +124,7 @@ class BedTest {
     fun `sleep marks both bed parts and the sleeper registry`() {
         val world = RecordingBedWorld()
         val player = player(id = 1, name = "Alice")
-        val (bed, partner) = completeBedPair(world, transformToOnUse = listOf(20, 21))
+        val (bed, partner) = completeBedPair(world, transformToOnUse = intArrayOf(20, 21))
         world.playersById[player.id] = player
 
         assertThat(bed.sleep(player, world)).isTrue()
@@ -411,7 +411,7 @@ class BedTest {
     @Test
     fun `getNextBedItem follows the bed partner direction`() {
         val world = RecordingBedWorld()
-        val bed = BedItem(1750, type = pillowType().copy(bedPartnerDir = Direction.East))
+        val bed = BedItem(1750, type = pillowType().copy(bedPartnerDir = Direction.East.byteValue.toInt()))
         val partner = BedItem(1751, type = pillowType(id = 1751))
         world.positions[bed] = bedPosition
         world.bedsByPosition[partnerPosition] = partner
@@ -422,7 +422,7 @@ class BedTest {
     @Test
     fun `getNextBedItem without a partner direction looks at the own tile`() {
         val world = RecordingBedWorld()
-        val bed = BedItem(1750, type = pillowType().copy(bedPartnerDir = null))
+        val bed = BedItem(1750, type = pillowType().copy(bedPartnerDir = DIRECTION_NONE))
         world.positions[bed] = bedPosition
         world.bedsByPosition[bedPosition] = bed
 
@@ -453,7 +453,7 @@ class BedTest {
         isMovable = true,
         bedPartOf = bedPartOf,
         bedPart = BedItemPart.BED_PILLOW_PART,
-        bedPartnerDir = Direction.East,
+        bedPartnerDir = Direction.East.byteValue.toInt(),
     )
 
     private fun player(id: Long, name: String, premium: Boolean = false): Player = Player(
@@ -478,7 +478,7 @@ class BedTest {
 
     private fun completeBedPair(
         world: RecordingBedWorld,
-        transformToOnUse: List<Int> = listOf(0, 0),
+        transformToOnUse: IntArray = intArrayOf(0, 0),
         transformToFree: Int = 0,
     ): Pair<BedItem, BedItem> {
         world.itemTypes[1750] = pillowType().copy(
@@ -486,7 +486,7 @@ class BedTest {
             transformToFree = transformToFree,
         )
         world.itemTypes[1751] = pillowType(id = 1751, bedPartOf = 1750).copy(
-            bedPartnerDir = Direction.West,
+            bedPartnerDir = Direction.West.byteValue.toInt(),
             transformToOnUse = transformToOnUse,
             transformToFree = transformToFree,
         )

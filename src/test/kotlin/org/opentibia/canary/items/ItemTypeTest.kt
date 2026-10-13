@@ -124,7 +124,7 @@ class ItemTypeTest {
         val itemType = ItemType(
             id = 1,
             name = "sword",
-            imbuementTypes = mapOf(ImbuementTypes_t.IMBUEMENT_SKILLBOOST_SWORD to 3),
+            imbuementTypes = mutableMapOf(ImbuementTypes_t.IMBUEMENT_SKILLBOOST_SWORD to 3),
         )
 
         assertThat(itemType.hasImbuementType(ImbuementTypes_t.IMBUEMENT_SKILLBOOST_SWORD, 3)).isTrue()

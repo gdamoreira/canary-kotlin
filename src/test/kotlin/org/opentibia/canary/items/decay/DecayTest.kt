@@ -65,7 +65,7 @@ class DecayTest {
         id = id,
         name = "decaying item",
         isMovable = true,
-        decayTime = decayTime,
+        decayTime = decayTime.toLong(),
         decayTo = decayTo,
     )
 
