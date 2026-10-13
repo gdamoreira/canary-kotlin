@@ -12,9 +12,16 @@ import org.opentibia.canary.creatures.Npc
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.creatures.grouping.Party
+import org.opentibia.canary.creatures.players.components.CyclopediaDatabaseTasks
+import org.opentibia.canary.creatures.players.components.CyclopediaQueryResult
 import org.opentibia.canary.creatures.players.components.HighscoreCategories_t
+import org.opentibia.canary.creatures.players.components.NullCyclopediaDatabaseTasks
+import org.opentibia.canary.creatures.players.components.PlayerAsyncTask
 import org.opentibia.canary.creatures.players.vip.PlayerVip
 import org.opentibia.canary.creatures.players.vip.VipStatus
+import org.opentibia.canary.creatures.vocations.Vocation
+import org.opentibia.canary.creatures.vocations.Vocations
+import org.opentibia.canary.database.Database
 import org.opentibia.canary.database.PlayerLoginRepository
 import org.opentibia.canary.game.movement.areInRange
 import org.opentibia.canary.game.movement.getDistanceX
@@ -24,20 +31,31 @@ import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.game.zones.Zone
 import org.opentibia.canary.game.zones.ZoneType
+import org.opentibia.canary.items.BedItem
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.Items
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Tile
+import org.opentibia.canary.map.house.CyclopediaHouseState
+import org.opentibia.canary.map.house.House
 import org.opentibia.canary.map.house.TradeEvents_t
+import org.opentibia.canary.network.protocol.AcceptTransferErrorMessage
+import org.opentibia.canary.network.protocol.BidErrorMessage
+import org.opentibia.canary.network.protocol.BidSuccessMessage
+import org.opentibia.canary.network.protocol.HighscoresWindowSerializer
+import org.opentibia.canary.network.protocol.HouseAuctionType
 import org.opentibia.canary.network.protocol.MessageClass
 import org.opentibia.canary.network.protocol.SourceEffect
+import org.opentibia.canary.network.protocol.StoreWindowWriter
+import org.opentibia.canary.network.protocol.TransferErrorMessage
 import org.opentibia.canary.persistence.PlayerStorage
 import org.opentibia.canary.social.guild.Guild
 import org.opentibia.canary.social.guild.GuildRepository
 import org.opentibia.canary.spells.SoundEffect
 import org.opentibia.canary.systems.rewardchest.ReturnValue
+import org.opentibia.canary.utils.Tools
 import java.lang.ref.WeakReference
 import java.util.IdentityHashMap
 import kotlin.math.abs
@@ -87,6 +105,22 @@ data class HighscoreCategory(
     val id: Int,
 )
 
+/** `HighscoreType_t` (`src/game/game_definitions.hpp:109-111`). */
+enum class HighscoreType_t {
+    HIGHSCORE_GETENTRIES,
+    HIGHSCORE_OURRANK,
+}
+
+/**
+ * Kotlin carrier for the `uint8_t &skill` in/out parameter of
+ * `Game::getSkillNameById` (game.cpp:10157): [category] is the resolved
+ * category (the C++ function rewrites an unknown skill to `EXPERIENCE`).
+ */
+data class HighscoreSkillName(
+    val name: String,
+    val category: Int,
+)
+
 /**
  * Faithful facade over the Kotlin world model mirroring Canary's `Game`
  * (src/game/game.hpp:95). Every method transcribes an existing `Game::` member;
@@ -124,6 +158,22 @@ data class HighscoreCategory(
  *    `playerReportBug` game.cpp:10193)
  *  - highscore helpers (`calculateHighscorePages` game.cpp:10033,
  *    `getHighscoreCategoriesName` game.cpp:12473, `getHighscoreCategories` game.cpp:12477)
+ *  - async highscores (`playerHighscores` game.cpp:10124, `getSkillNameById`
+ *    game.cpp:10157, `generateHighscoreQuery` game.cpp:9890,
+ *    `generateVocationConditionHighscore` game.cpp:9968,
+ *    `processHighscoreResults` game.cpp:9986,
+ *    `generateHighscoreOrGetCachedQueryForEntries` game.cpp:10084,
+ *    `generateHighscoreOrGetCachedQueryForOurRank` game.cpp:10104)
+ *  - house auctions (`playerCyclopediaHousesByTown` game.cpp:12762 …
+ *    `playerCyclopediaHouseRejectTransfer` game.cpp:13042, `processBankAuction`
+ *    game.cpp:13081, `playerUpdateHouseWindow` game.cpp:5780)
+ *  - item wrapping (`wrapItem` game.cpp:5472, `unwrapItem` game.cpp:5501,
+ *    `transformItem` game.cpp:3401)
+ *  - house transfer persistence (`setTransferPlayerHouseItems` game.cpp:12399,
+ *    `transferHouseItemsToDepot` game.cpp:12363)
+ *  - `getPlayerByGUID` (game.cpp:1419)
+ *  - MOTD counter (`saveMotdNum` game.cpp:9613, `getMotdNum`/`getMotdHash`/
+ *    `incrementMotdNum` game.hpp:559-567)
  *  - `beforeCreatureZoneChange` (game.cpp:12417) / `afterCreatureZoneChange` (game.cpp:12447)
  *
  * All state is thread-confined: mutating methods must run inside the injected
@@ -151,6 +201,14 @@ class Game(
     private val isInGhostMode: (Player) -> Boolean = { false },
     /** `Item::items` registry (src/items/items.hpp:389) used by the shop handlers. */
     private val itemTypes: Items? = null,
+    /** `g_database()` (game.cpp:9592-9630) seam for the MOTD counter persistence. */
+    private val database: Database? = null,
+    /** `g_databaseTasks()` (game.cpp:10152) seam for the async highscore query. */
+    private val databaseTasks: CyclopediaDatabaseTasks = NullCyclopediaDatabaseTasks(),
+    /** `g_vocations()` (game.cpp:9968, 10021) seam for the highscore queries. */
+    private val vocations: Vocations? = null,
+    /** `IOLoginData::loadPlayerById` (game.cpp:1436, 12378) seam. */
+    private val loadPlayerById: (Long) -> Player? = { null },
 ) {
     private val players = mutableMapOf<Long, Player>()
 
@@ -340,6 +398,108 @@ class Game(
 
     /** `g_configManager().getNumber(MAX_CONTAINER)` default (configmanager.cpp:308). */
     var maxContainer: Int = 500
+
+    /** `g_configManager().getBoolean(CYCLOPEDIA_HOUSE_AUCTION)` default (configmanager.cpp:171). */
+    var cyclopediaHouseAuction: Boolean = true
+
+    /** `g_configManager().getNumber(DAYS_TO_CLOSE_BID)` default (configmanager.cpp:289). */
+    var daysToCloseBid: Int = 7
+
+    /** `g_configManager().getBoolean(TOGGLE_HOUSE_TRANSFER_ON_SERVER_RESTART)` default (configmanager.cpp:154). */
+    var toggleHouseTransferOnServerRestart: Boolean = false
+
+    /** `g_configManager().getString(SERVER_MOTD)` default (configmanager.cpp:408). */
+    var serverMotd: String = ""
+
+    /** `Player::getBankBalance()` (player.hpp:354) seam. */
+    var getBankBalance: (Player) -> Long = { 0L }
+
+    /** `Player::setBankBalance(uint64_t)` (player.hpp:355) seam. */
+    var setBankBalance: (Player, Long) -> Unit = { _, _ -> }
+
+    /** `Player::sendResourceBalance(Resource_t, uint64_t)` (player.hpp:1129) protocol seam. */
+    var sendResourceBalance: (Player, StoreWindowWriter.Resource, Long) -> Unit = { _, _, _ -> }
+
+    /** `Player::sendHouseAuctionMessage(houseId, type, index, bidSuccess)` (player.hpp:1130) protocol seam. */
+    var sendHouseAuctionMessage: (Player, Long, HouseAuctionType, Int, Boolean) -> Unit = { _, _, _, _, _ -> }
+
+    /** `Player::sendCyclopediaHouseList(const HouseMap&)` (player.hpp:1128) protocol seam. */
+    var sendCyclopediaHouseList: (Player, Map<Int, House>) -> Unit = { _, _ -> }
+
+    /** `Player::sendCancelMessage(const std::string&)` (player.hpp:1066) protocol seam. */
+    var sendCancelMessageText: (Player, String) -> Unit = { _, _ -> }
+
+    /** `BedItem::wakeUp(nullptr)` (src/items/bed.cpp:216-255) seam. */
+    var wakeUpBed: (BedItem) -> Unit = { _ -> }
+
+    /** `Item::startDecaying()` (src/items/item.cpp:3501-3541) seam. */
+    var startDecaying: (Item) -> Unit = { _ -> }
+
+    /** `Player::sendHighscoresNoData()` (player.hpp:1162) protocol seam. */
+    var sendHighscoresNoData: (Player) -> Unit = { _ -> }
+
+    /** `Player::sendHighscores(characters, categoryId, vocationId, page, pages, updateTimer)` (player.hpp:1163) protocol seam. */
+    var sendHighscores: (
+        Player,
+        List<HighscoresWindowSerializer.HighscoreCharacterEntry>,
+        Int,
+        Long,
+        Int,
+        Int,
+        Long,
+    ) -> Unit = { _, _, _, _, _, _, _ -> }
+
+    /** `Game::transferHouseItemsToPlayer` (game.hpp:905): house id -> owner GUID. */
+    private val transferHouseItemsToPlayer = sortedMapOf<Int, Long>()
+
+    /**
+     * Facade storage for `Player::editHouse` / `Player::windowTextId` /
+     * `Player::editListId` (player.hpp:1765, 1798-1799). The Kotlin [Player]
+     * does not carry the edit-house members yet (PARITY GAP); [setEditHouse] and
+     * [getEditHouse] are the only writers.
+     */
+    private class EditHouseState {
+        var house: House? = null
+        var windowTextId: Long = 0
+        var editListId: Int = 0
+    }
+
+    private val editHouseByPlayer = IdentityHashMap<Player, EditHouseState>()
+
+    /** `Game::queryCache` (game.hpp:860): generated highscore queries by cache key. */
+    private val queryCache = linkedMapOf<String, QueryHighscoreCacheEntry>()
+
+    /** `Game::highscoreCache` (game.hpp:861): served highscore frames by cache key. */
+    private val highscoreCache = linkedMapOf<String, HighscoreCacheEntry>()
+
+    /** `QueryHighscoreCacheEntry` (game.hpp:76-81). */
+    private data class QueryHighscoreCacheEntry(
+        val query: String,
+        val page: Long,
+        val entriesPerPage: Int,
+    )
+
+    /** `HighscoreCacheEntry` (game.hpp:83-88); [pages] is the C++ `entriesPerPage` field. */
+    private data class HighscoreCacheEntry(
+        val characters: List<HighscoresWindowSerializer.HighscoreCharacterEntry>,
+        val page: Long,
+        val pages: Int,
+        val timestamp: Long,
+    )
+
+    /**
+     * Facade storage for the `Item` custom attribute `"unWrapId"`
+     * (`src/items/functions/item/custom_attribute.cpp`); the Kotlin [Item] has
+     * no custom-attribute store (PARITY GAP). Written by [wrapItem] and read by
+     * [unwrapItem].
+     */
+    private val itemUnWrapIds = IdentityHashMap<Item, Int>()
+
+    /** `Game::motdNum` (game.hpp:942). */
+    private var motdNum: Long = 0
+
+    /** `Game::motdHash` (game.hpp:941). */
+    private var motdHash: String = ""
 
     /** `Game::addPlayer` (src/game/game.cpp:11624). */
     fun addPlayer(player: Player) {
@@ -1865,6 +2025,1000 @@ class Game(
         }
     }
 
+    /**
+     * `Game::getPlayerByGUID` (src/game/game.cpp:1419): online lookup by GUID,
+     * with the `IOLoginData::loadPlayerById` fallback behind `allowOffline`.
+     * PARITY GAP: the loaded temporary player's `setOnline(false)` has no Kotlin
+     * counterpart (the Kotlin [Player] carries no online flag).
+     */
+    fun getPlayerByGUID(guid: Long, allowOffline: Boolean = false): Player? {
+        if (guid == 0L) {
+            return null
+        }
+
+        players.values.firstOrNull { it.getGUID() == guid }?.let { return it }
+        if (!allowOffline) {
+            return null
+        }
+        return loadPlayerById(guid)
+    }
+
+    /**
+     * `Game::playerCyclopediaHousesByTown` (src/game/game.cpp:12762): an empty
+     * [townName] sends the player's owned houses plus the house he currently
+     * bids on; otherwise every house of the named town. The `HouseMap` is keyed
+     * by client id and iterated in ascending order like the C++ `std::map`.
+     */
+    fun playerCyclopediaHousesByTown(playerId: Long, townName: String) {
+        val player = getPlayerByID(playerId) ?: return
+
+        val houses = sortedMapOf<Int, House>()
+        if (townName.isNotEmpty()) {
+            for (house in map.houses.getHouses()) {
+                val town = map.towns.getTown(house.townId) ?: continue
+                if (town.getName() == townName) {
+                    houses.putIfAbsent(house.clientId, house)
+                }
+            }
+        } else {
+            for (playerHouse in map.houses.getAllHousesByPlayerId(player.getGUID())) {
+                houses.putIfAbsent(playerHouse.clientId, playerHouse)
+            }
+
+            val house = map.houses.getHouseByBidderName(player.name)
+            if (house != null) {
+                houses.putIfAbsent(house.clientId, house)
+            }
+        }
+        sendCyclopediaHouseList(player, houses)
+    }
+
+    /**
+     * `Game::playerCyclopediaHouseBid` (src/game/game.cpp:12802). Faithful to
+     * the C++ control flow: a `Player::canBidHouse` error is reported but the
+     * bid is still processed; a failed [processBankAuction] reports
+     * `NotEnoughMoney` and returns; the success message is sent with the extra
+     * `bidSuccess` flag and the town list is refreshed.
+     */
+    fun playerCyclopediaHouseBid(playerId: Long, houseId: Long, bidValue: Long) {
+        if (!cyclopediaHouseAuction) {
+            return
+        }
+
+        val player = getPlayerByID(playerId) ?: return
+        val house = map.houses.getHouseByClientId(houseId.toInt()) ?: return
+
+        var ret = canBidHouse(player, houseId)
+        if (ret != BidErrorMessage.NoError) {
+            sendHouseAuctionMessage(player, houseId, HouseAuctionType.Bid, ret.value, false)
+        }
+        ret = BidErrorMessage.NotEnoughMoney
+        var retSuccess = BidSuccessMessage.BidSuccess
+
+        if (house.bidderName.isEmpty()) {
+            if (!processBankAuction(player, house, bidValue)) {
+                sendHouseAuctionMessage(player, houseId, HouseAuctionType.Bid, ret.value, false)
+                return
+            }
+            house.highestBid = 0
+            house.internalBid = bidValue
+            house.bidHolderLimit = bidValue
+            house.bidderName = player.name
+            house.bidder = player.getGUID()
+            house.calculateBidEndDate(daysToCloseBid)
+        } else if (house.bidderName == player.name) {
+            if (!processBankAuction(player, house, bidValue, true)) {
+                sendHouseAuctionMessage(player, houseId, HouseAuctionType.Bid, ret.value, false)
+                return
+            }
+            house.internalBid = bidValue
+            house.bidHolderLimit = bidValue
+        } else if (bidValue <= house.internalBid) {
+            house.highestBid = bidValue
+            retSuccess = BidSuccessMessage.LowerBid
+        } else {
+            if (!processBankAuction(player, house, bidValue)) {
+                sendHouseAuctionMessage(player, houseId, HouseAuctionType.Bid, ret.value, false)
+                return
+            }
+            house.highestBid = house.internalBid + 1
+            house.internalBid = bidValue
+            house.bidHolderLimit = bidValue
+            house.bidderName = player.name
+            house.bidder = player.getGUID()
+        }
+
+        val town = map.towns.getTown(house.townId) ?: return
+        val houseTown = town.getName()
+        sendHouseAuctionMessage(player, houseId, HouseAuctionType.Bid, retSuccess.value, true)
+        playerCyclopediaHousesByTown(playerId, houseTown)
+    }
+
+    /** `Game::playerCyclopediaHouseMoveOut` (src/game/game.cpp:12867). */
+    fun playerCyclopediaHouseMoveOut(playerId: Long, houseId: Long, timestamp: Long) {
+        if (!cyclopediaHouseAuction) {
+            return
+        }
+
+        val player = getPlayerByID(playerId)
+        if (player == null) {
+            logger.warn { "[playerCyclopediaHouseMoveOut] Player $playerId not found while handling house auction request." }
+            return
+        }
+
+        val house = map.houses.getHouseByClientId(houseId.toInt())
+        if (house == null || house.state != CyclopediaHouseState.Rented) {
+            sendHouseAuctionMessage(player, houseId, HouseAuctionType.MoveOut, TransferErrorMessage.Internal.value, false)
+            return
+        }
+
+        if (house.owner != player.getGUID()) {
+            sendHouseAuctionMessage(player, houseId, HouseAuctionType.MoveOut, TransferErrorMessage.NotHouseOwner.value, false)
+            return
+        }
+
+        house.bidEndDate = timestamp
+        house.state = CyclopediaHouseState.MoveOut
+
+        sendHouseAuctionMessage(player, houseId, HouseAuctionType.MoveOut, TransferErrorMessage.Success.value, false)
+        playerCyclopediaHousesByTown(playerId, "")
+    }
+
+    /** `Game::playerCyclopediaHouseCancelMoveOut` (src/game/game.cpp:12896). */
+    fun playerCyclopediaHouseCancelMoveOut(playerId: Long, houseId: Long) {
+        if (!cyclopediaHouseAuction) {
+            return
+        }
+
+        val player = getPlayerByID(playerId)
+        if (player == null) {
+            logger.warn { "[playerCyclopediaHouseCancelMoveOut] Player $playerId not found while handling house auction request." }
+            return
+        }
+
+        val house = map.houses.getHouseByClientId(houseId.toInt())
+        if (house == null || house.state != CyclopediaHouseState.MoveOut) {
+            sendHouseAuctionMessage(player, houseId, HouseAuctionType.CancelMoveOut, TransferErrorMessage.Internal.value, false)
+            return
+        }
+
+        if (house.owner != player.getGUID()) {
+            sendHouseAuctionMessage(player, houseId, HouseAuctionType.CancelMoveOut, TransferErrorMessage.NotHouseOwner.value, false)
+            return
+        }
+
+        house.bidEndDate = 0
+        house.state = CyclopediaHouseState.Rented
+
+        sendHouseAuctionMessage(player, houseId, HouseAuctionType.CancelMoveOut, TransferErrorMessage.Success.value, false)
+        playerCyclopediaHousesByTown(playerId, "")
+    }
+
+    /** `Game::playerCyclopediaHouseTransfer` (src/game/game.cpp:12925). */
+    fun playerCyclopediaHouseTransfer(
+        playerId: Long,
+        houseId: Long,
+        timestamp: Long,
+        newOwnerName: String,
+        bidValue: Long,
+    ) {
+        if (!cyclopediaHouseAuction) {
+            return
+        }
+
+        val owner = getPlayerByID(playerId)
+        if (owner == null) {
+            logger.warn { "[playerCyclopediaHouseTransfer] Player $playerId not found while handling house auction request." }
+            return
+        }
+
+        val newOwner = getPlayerByName(newOwnerName, true)
+        if (newOwner == null) {
+            sendHouseAuctionMessage(owner, houseId, HouseAuctionType.Transfer, TransferErrorMessage.CharacterNotExist.value, false)
+            return
+        }
+
+        val house = map.houses.getHouseByClientId(houseId.toInt())
+        if (house == null || house.state != CyclopediaHouseState.Rented) {
+            sendHouseAuctionMessage(owner, houseId, HouseAuctionType.Transfer, TransferErrorMessage.Internal.value, false)
+            return
+        }
+
+        val ret = canTransferHouse(owner, houseId, newOwner.getGUID())
+        if (ret != TransferErrorMessage.Success) {
+            sendHouseAuctionMessage(owner, houseId, HouseAuctionType.Transfer, ret.value, false)
+            return
+        }
+
+        house.bidderName = newOwnerName
+        house.bidder = newOwner.getGUID()
+        house.internalBid = bidValue
+        house.bidEndDate = timestamp
+        house.state = CyclopediaHouseState.Transfer
+
+        sendHouseAuctionMessage(owner, houseId, HouseAuctionType.Transfer, ret.value, false)
+        playerCyclopediaHousesByTown(playerId, "")
+    }
+
+    /** `Game::playerCyclopediaHouseCancelTransfer` (src/game/game.cpp:12964). */
+    fun playerCyclopediaHouseCancelTransfer(playerId: Long, houseId: Long) {
+        if (!cyclopediaHouseAuction) {
+            return
+        }
+
+        val player = getPlayerByID(playerId)
+        if (player == null) {
+            logger.warn { "[playerCyclopediaHouseCancelTransfer] Player $playerId not found while handling house auction request." }
+            return
+        }
+
+        val house = map.houses.getHouseByClientId(houseId.toInt())
+        if (house == null || house.state != CyclopediaHouseState.Transfer) {
+            sendHouseAuctionMessage(player, houseId, HouseAuctionType.CancelTransfer, TransferErrorMessage.Internal.value, false)
+            return
+        }
+
+        if (house.owner != player.getGUID()) {
+            sendHouseAuctionMessage(player, houseId, HouseAuctionType.CancelTransfer, TransferErrorMessage.NotHouseOwner.value, false)
+            return
+        }
+
+        if (house.transferStatus) {
+            refundTransfer(house)
+        }
+
+        house.bidderName = ""
+        house.bidder = 0
+        house.internalBid = 0
+        house.bidEndDate = 0
+        house.state = CyclopediaHouseState.Rented
+        house.transferStatus = false
+
+        sendHouseAuctionMessage(player, houseId, HouseAuctionType.CancelTransfer, TransferErrorMessage.Success.value, false)
+        playerCyclopediaHousesByTown(playerId, "")
+    }
+
+    /** `Game::playerCyclopediaHouseAcceptTransfer` (src/game/game.cpp:13008). */
+    fun playerCyclopediaHouseAcceptTransfer(playerId: Long, houseId: Long) {
+        if (!cyclopediaHouseAuction) {
+            return
+        }
+
+        val player = getPlayerByID(playerId)
+        if (player == null) {
+            logger.warn { "[playerCyclopediaHouseAcceptTransfer] Player $playerId not found while handling house auction request." }
+            return
+        }
+
+        val house = map.houses.getHouseByClientId(houseId.toInt())
+        if (house == null || house.state != CyclopediaHouseState.Transfer) {
+            sendHouseAuctionMessage(player, houseId, HouseAuctionType.AcceptTransfer, AcceptTransferErrorMessage.Internal.value, false)
+            return
+        }
+
+        val ret = canAcceptTransferHouse(player, houseId)
+        if (ret != AcceptTransferErrorMessage.Success) {
+            sendHouseAuctionMessage(player, houseId, HouseAuctionType.AcceptTransfer, ret.value, false)
+            return
+        }
+
+        if (!processBankAuction(player, house, house.internalBid)) {
+            sendHouseAuctionMessage(player, houseId, HouseAuctionType.AcceptTransfer, AcceptTransferErrorMessage.Frozen.value, false)
+            return
+        }
+
+        house.transferStatus = true
+
+        sendHouseAuctionMessage(player, houseId, HouseAuctionType.AcceptTransfer, ret.value, false)
+        playerCyclopediaHousesByTown(playerId, "")
+    }
+
+    /** `Game::playerCyclopediaHouseRejectTransfer` (src/game/game.cpp:13042). */
+    fun playerCyclopediaHouseRejectTransfer(playerId: Long, houseId: Long) {
+        if (!cyclopediaHouseAuction) {
+            return
+        }
+
+        val player = getPlayerByID(playerId)
+        if (player == null) {
+            logger.warn { "[playerCyclopediaHouseRejectTransfer] Player $playerId not found while handling house auction request." }
+            return
+        }
+
+        val house = map.houses.getHouseByClientId(houseId.toInt())
+        if (house == null || house.bidder != player.getGUID() || house.state != CyclopediaHouseState.Transfer) {
+            sendHouseAuctionMessage(player, houseId, HouseAuctionType.Transfer, TransferErrorMessage.NotHouseOwner.value, false)
+            return
+        }
+
+        if (house.transferStatus) {
+            refundTransfer(house)
+        }
+
+        house.bidderName = ""
+        house.bidder = 0
+        house.internalBid = 0
+        house.bidEndDate = 0
+        house.state = CyclopediaHouseState.Rented
+        house.transferStatus = false
+
+        sendHouseAuctionMessage(player, houseId, HouseAuctionType.RejectTransfer, TransferErrorMessage.Success.value, false)
+        playerCyclopediaHousesByTown(playerId, "")
+    }
+
+    /**
+     * `Game::processBankAuction` (src/game/game.cpp:13081): charges the rent
+     * plus bid (or only the bid delta on [replace]) and refunds the previous
+     * bidder's holder limit plus rent, online through [setBankBalance] or
+     * offline through `IOLoginData::increaseBankBalance`.
+     */
+    fun processBankAuction(player: Player, house: House, bid: Long, replace: Boolean = false): Boolean {
+        if (!replace && getBankBalance(player) < house.getRent() + bid) {
+            return false
+        }
+
+        if (getBankBalance(player) < bid) {
+            return false
+        }
+
+        val balance = getBankBalance(player)
+        if (replace) {
+            setBankBalance(player, balance - (bid - house.internalBid))
+        } else {
+            setBankBalance(player, balance - (house.getRent() + bid))
+        }
+
+        sendResourceBalance(player, StoreWindowWriter.Resource.BANK, getBankBalance(player))
+
+        if (house.bidderName != player.name) {
+            val otherPlayer = getPlayerByName(house.bidderName)
+            if (otherPlayer == null) {
+                val bidderGuid = loginRepository?.getGuidByName(house.bidderName) ?: 0L
+                loginRepository?.increaseBankBalance(bidderGuid, house.bidHolderLimit + house.getRent())
+            } else {
+                setBankBalance(otherPlayer, getBankBalance(otherPlayer) + house.bidHolderLimit + house.getRent())
+                sendResourceBalance(otherPlayer, StoreWindowWriter.Resource.BANK, getBankBalance(otherPlayer))
+            }
+        }
+
+        return true
+    }
+
+    /**
+     * `Player::canBidHouse` (player.cpp:13052) transcribed into the facade
+     * because the Kotlin [Player] does not carry the auction entry point yet
+     * (PARITY GAP). The guild-hall branch needs `Player::getGuildRank` and
+     * `Guild::getBankBalance`, both ported.
+     */
+    private fun canBidHouse(player: Player, houseId: Long): BidErrorMessage {
+        val house = map.houses.getHouseByClientId(houseId.toInt()) ?: return BidErrorMessage.Internal
+
+        if (player.getPlayerVocationEnum() == Vocation.VOCATION_NONE) {
+            return BidErrorMessage.Rookgaard
+        }
+
+        if (!player.isPremium()) {
+            return BidErrorMessage.Premium
+        }
+
+        if ((player.account?.houseBidId ?: 0) != 0) {
+            return BidErrorMessage.OnlyOneBid
+        }
+
+        if (getBankBalance(player) < (house.getRent() + house.highestBid)) {
+            return BidErrorMessage.NotEnoughMoney
+        }
+
+        if (house.isGuildhall()) {
+            val rank = player.getGuildRank()
+            if (rank != null && rank.level != 3) {
+                return BidErrorMessage.Guildhall
+            }
+
+            val guild = player.getGuild()
+            if (guild != null && guild.getBankBalance() < (house.getRent() + house.highestBid)) {
+                return BidErrorMessage.NotEnoughGuildMoney
+            }
+        }
+
+        return BidErrorMessage.NoError
+    }
+
+    /** `Player::canTransferHouse` (player.cpp:13088) transcribed into the facade (PARITY GAP). */
+    private fun canTransferHouse(player: Player, houseId: Long, newOwnerGuid: Long): TransferErrorMessage {
+        val house = map.houses.getHouseByClientId(houseId.toInt()) ?: return TransferErrorMessage.Internal
+
+        if (player.getGUID() != house.owner) {
+            return TransferErrorMessage.NotHouseOwner
+        }
+
+        if (player.getGUID() == newOwnerGuid) {
+            return TransferErrorMessage.AlreadyTheOwner
+        }
+
+        val newOwner = getPlayerByGUID(newOwnerGuid, true) ?: return TransferErrorMessage.CharacterNotExist
+
+        if (newOwner.getPlayerVocationEnum() == Vocation.VOCATION_NONE) {
+            return TransferErrorMessage.Rookgaard
+        }
+
+        if (!newOwner.isPremium()) {
+            return TransferErrorMessage.Premium
+        }
+
+        if ((newOwner.account?.houseBidId ?: 0) != 0) {
+            return TransferErrorMessage.OnlyOneBid
+        }
+
+        return TransferErrorMessage.Success
+    }
+
+    /** `Player::canAcceptTransferHouse` (player.cpp:13123) transcribed into the facade (PARITY GAP). */
+    private fun canAcceptTransferHouse(player: Player, houseId: Long): AcceptTransferErrorMessage {
+        val house = map.houses.getHouseByClientId(houseId.toInt()) ?: return AcceptTransferErrorMessage.Internal
+
+        if (player.getGUID() != house.bidder) {
+            return AcceptTransferErrorMessage.NotNewOwner
+        }
+
+        if (!player.isPremium()) {
+            return AcceptTransferErrorMessage.Premium
+        }
+
+        if ((player.account?.houseBidId ?: 0) != 0) {
+            return AcceptTransferErrorMessage.AlreadyBid
+        }
+
+        if (player.getPlayerVocationEnum() == Vocation.VOCATION_NONE) {
+            return AcceptTransferErrorMessage.Rookgaard
+        }
+
+        if (getBankBalance(player) < (house.getRent() + house.internalBid)) {
+            return AcceptTransferErrorMessage.Frozen
+        }
+
+        if (house.transferStatus) {
+            return AcceptTransferErrorMessage.AlreadyAccepted
+        }
+
+        return AcceptTransferErrorMessage.Success
+    }
+
+    /**
+     * The refund tail shared by `Game::playerCyclopediaHouseCancelTransfer`
+     * (game.cpp:12979-12990) and `Game::playerCyclopediaHouseRejectTransfer`
+     * (game.cpp:13052-13063): `internalBid + rent` back to the accepted new
+     * owner, online or through `IOLoginData::increaseBankBalance`.
+     */
+    private fun refundTransfer(house: House) {
+        val newOwner = getPlayerByGUID(house.bidder)
+        val amountPaid = house.internalBid + house.getRent()
+        if (newOwner != null) {
+            setBankBalance(newOwner, getBankBalance(newOwner) + amountPaid)
+            sendResourceBalance(newOwner, StoreWindowWriter.Resource.BANK, getBankBalance(newOwner))
+        } else {
+            loginRepository?.increaseBankBalance(house.bidder, amountPaid)
+        }
+    }
+
+    /**
+     * `Game::playerUpdateHouseWindow` (src/game/game.cpp:5780): applies the
+     * text when the stored edit list, window text id and client list id all
+     * match, then clears the edit house (which advances `windowTextId`).
+     */
+    fun playerUpdateHouseWindow(playerId: Long, listId: Int, windowTextId: Long, text: String) {
+        val player = getPlayerByID(playerId) ?: return
+
+        val state = editHouseState(player)
+        val house = state.house
+        if (house != null && house.canEditAccessList(state.editListId, player) &&
+            state.windowTextId == windowTextId && listId == 0
+        ) {
+            house.setAccessList(state.editListId, text)
+        }
+
+        setEditHouse(player, null)
+    }
+
+    /**
+     * `Player::setEditHouse` (player.cpp:3116-3120) facade over the Kotlin
+     * player's missing members (PARITY GAP): the window text id advances on
+     * every call, exactly like the C++ `windowTextId++`.
+     */
+    fun setEditHouse(player: Player, house: House?, listId: Int = 0) {
+        val state = editHouseState(player)
+        state.windowTextId++
+        state.house = house
+        state.editListId = listId
+    }
+
+    /** `Player::getEditHouse` (player.cpp:3110-3114) facade: the stored house. */
+    fun getEditHouse(player: Player): House? = editHouseState(player).house
+
+    private fun editHouseState(player: Player): EditHouseState =
+        editHouseByPlayer.getOrPut(player) { EditHouseState() }
+
+    /**
+     * `Game::wrapItem` (src/game/game.cpp:5472): wakes and detaches a bed,
+     * transforms the item into `ITEM_DECORATION_KIT` and stamps the store
+     * attribute, the `unWrapId` custom attribute, the description, the hidden
+     * cask charges and the amount.
+     *
+     * PARITY GAP: the Kotlin [Item] has no custom-attribute store, so
+     * `unWrapId` is held by the facade's [itemUnWrapIds] identity map.
+     */
+    fun wrapItem(item: Item, house: House?): Item? {
+        var hiddenCharges = 0
+        val amount = item.getItemCount()
+        if (Tools.isCaskItem(item.id)) {
+            hiddenCharges = item.getSubType()
+        }
+
+        if (house != null && (item.type ?: itemTypes?.get(item.id))?.isBed == true) {
+            val bed = item.getBed()
+            if (bed != null) {
+                wakeUpBed(bed)
+                house.removeBed(bed)
+            }
+        }
+
+        val oldItemID = item.id
+        val itemName = item.getName()
+        val attributeStore = item.getAttribute(ItemAttribute.STORE) as? Long ?: 0L
+        val newItem = transformItem(item, Items.ITEM_DECORATION_KIT) ?: return null
+        if (attributeStore != 0L) {
+            newItem.setAttribute(ItemAttribute.STORE, attributeStore)
+        }
+        itemUnWrapIds[newItem] = oldItemID
+        newItem.setAttribute(
+            ItemAttribute.DESCRIPTION,
+            "You bought this item in the Store.\nUnwrap it in your own house to create a <$itemName>.",
+        )
+        if (hiddenCharges > 0) {
+            newItem.setAttribute(ItemAttribute.DATE, hiddenCharges.toLong())
+        }
+        if (amount > 0) {
+            newItem.setAttribute(ItemAttribute.AMOUNT, amount.toLong())
+        }
+        startDecaying(newItem)
+        return newItem
+    }
+
+    /**
+     * `Game::unwrapItem` (src/game/game.cpp:5501): ownership and bed-limit
+     * gates, then the transform back to `unWrapId`, restoring the store
+     * attribute, registering the bed, the hidden cask charges and clearing the
+     * wrap description.
+     */
+    fun unwrapItem(item: Item, unWrapId: Int, house: House?, player: Player?) {
+        if (item.hasOwner() && !(player != null && item.isOwner(player.getGUID()))) {
+            if (player != null) {
+                sendCancelMessage(player, ReturnValue.ITEMISNOTYOURS)
+            }
+            return
+        }
+
+        val hiddenCharges = (item.getAttribute(ItemAttribute.DATE) as? Long ?: 0L).toInt()
+        val newType = itemTypes?.get(unWrapId)
+        if (player != null && house != null && newType?.isBed == true &&
+            house.maxBeds > -1 && house.getBedCount() >= house.maxBeds.toLong()
+        ) {
+            sendCancelMessageText(player, "You reached the maximum beds in this house")
+            return
+        }
+
+        var amount = (item.getAttribute(ItemAttribute.AMOUNT) as? Long ?: 0L).toInt()
+        if (amount == 0) {
+            amount = 1
+        }
+
+        val attributeStore = item.getAttribute(ItemAttribute.STORE) as? Long ?: 0L
+        val newItem = transformItem(item, unWrapId, amount) ?: return
+        if (attributeStore != 0L) {
+            newItem.setAttribute(ItemAttribute.STORE, attributeStore)
+        }
+        if (house != null && newType?.isBed == true) {
+            val bed = newItem.getBed()
+            if (bed != null) {
+                house.addBed(bed)
+            }
+        }
+        if (hiddenCharges > 0 && Tools.isCaskItem(unWrapId)) {
+            newItem.setSubType(hiddenCharges)
+        }
+        itemUnWrapIds.remove(newItem)
+        newItem.removeAttribute(ItemAttribute.DESCRIPTION)
+        startDecaying(newItem)
+    }
+
+    /**
+     * `Game::transformItem` (src/game/game.cpp:3401) reduced to the paths used
+     * by [wrapItem]/[unwrapItem]: the no-op early return, the always-on-top
+     * re-add, the same-`ItemTypes_t` in-place update and the replacement path
+     * of `Item::transform` (src/items/item.cpp:3501).
+     *
+     * PARITY GAPS: the browse-field remap, the decay/group/equip branches, the
+     * quiver inventory update and the `postAddNotification` spectator fanout
+     * are not modelled.
+     */
+    fun transformItem(item: Item, newId: Int, newCount: Int = -1): Item? {
+        if (item.id == newId && (newCount == -1 || (newCount == item.getSubType() && newCount != 0))) {
+            return item
+        }
+
+        val cylinder = item.getParent() ?: itemParents[item] ?: return null
+        val itemIndex = cylinder.getThingIndex(item)
+        if (itemIndex == -1) {
+            return item
+        }
+
+        val newType = itemTypes?.get(newId) ?: return item
+        if (newType.id == 0) {
+            return item
+        }
+
+        val curType = item.type ?: itemTypes.get(item.id)
+        if (((curType?.alwaysOnTopOrder ?: 0) != 0) != (newType.alwaysOnTopOrder != 0)) {
+            cylinder.removeThing(item, item.getItemCount())
+            item.setID(newId)
+            if (newCount != -1) {
+                item.setSubType(newCount)
+            }
+            cylinder.addThing(item)
+            startDecaying(item)
+            return item
+        }
+
+        if (curType != null && curType.type == newType.type) {
+            cylinder.updateThing(item, newId, if (newCount != -1) newCount else item.getSubType())
+            startDecaying(item)
+            return item
+        }
+
+        val createCount = if (newCount == 0) 1 else (newCount and 0xFFFF)
+        val newItem = Item.create(newId, createCount, itemTypes)
+        val duration = item.getDuration()
+        if (duration > 0) {
+            newItem.setDuration(duration)
+        }
+
+        cylinder.replaceThing(itemIndex, newItem)
+        cylinder.postAddNotification(newItem, cylinder, itemIndex)
+        item.resetParent()
+        cylinder.postRemoveNotification(item, cylinder, itemIndex)
+        item.stopDecaying()
+        startDecaying(newItem)
+        return newItem
+    }
+
+    /** `Game::setTransferPlayerHouseItems` (src/game/game.cpp:12399). */
+    fun setTransferPlayerHouseItems(houseId: Int, playerId: Long) {
+        transferHouseItemsToPlayer[houseId] = playerId
+    }
+
+    /**
+     * `Game::transferHouseItemsToDepot` (src/game/game.cpp:12363): behind the
+     * `TOGGLE_HOUSE_TRANSFER_ON_SERVER_RESTART` config, loads each recorded
+     * owner, moves the house items to his depot inbox through
+     * `House::tryTransferOwnership(serverStartup = true)`, schedules the new
+     * owner `-1` and saves the map once at least one transfer succeeded.
+     */
+    fun transferHouseItemsToDepot() {
+        if (!toggleHouseTransferOnServerRestart) {
+            return
+        }
+
+        if (transferHouseItemsToPlayer.isNotEmpty()) {
+            logger.info { "Initializing house transfer items" }
+        }
+
+        var transferSuccess = 0
+        for ((houseId, playerGuid) in transferHouseItemsToPlayer) {
+            val house = map.houses.getHouse(houseId) ?: continue
+            val offlinePlayer = loadPlayerById(playerGuid) ?: continue
+
+            logger.info { "Tranfering items to the inbox from player '${offlinePlayer.name}'" }
+            if (house.tryTransferOwnership(offlinePlayer, true)) {
+                transferSuccess++
+                house.setNewOwnerGuid(-1, true)
+            }
+        }
+
+        if (transferSuccess > 0) {
+            logger.info { "Finished house transfer items from '$transferSuccess' players" }
+            transferHouseItemsToPlayer.clear()
+            map.save()
+        }
+    }
+
+    /**
+     * `Game::playerHighscores` (src/game/game.cpp:10124): drops a request while
+     * the player already has an async highscore task, resolves the SQL through
+     * the query cache and schedules it on `g_databaseTasks()`; the callback
+     * runs [processHighscoreResults].
+     */
+    fun playerHighscores(
+        player: Player,
+        type: HighscoreType_t,
+        category: Int,
+        vocation: Long,
+        worldName: String,
+        page: Int,
+        entriesPerPage: Int,
+    ) {
+        if (player.hasAsyncOngoingTask(PlayerAsyncTask.Highscore)) {
+            return
+        }
+        if (entriesPerPage == 0) {
+            sendHighscoresNoData(player)
+            return
+        }
+
+        val resolved = getSkillNameById(category)
+        val categoryName = resolved.name
+        val resolvedCategory = resolved.category
+
+        val query = when (type) {
+            HighscoreType_t.HIGHSCORE_GETENTRIES -> generateHighscoreOrGetCachedQueryForEntries(
+                categoryName,
+                page,
+                entriesPerPage,
+                Tools.getVocationIdFromClientId(vocation),
+            )
+
+            HighscoreType_t.HIGHSCORE_OURRANK -> generateHighscoreOrGetCachedQueryForOurRank(
+                categoryName,
+                entriesPerPage,
+                player.getGUID(),
+                Tools.getVocationIdFromClientId(vocation),
+            )
+        }
+        if (query.isEmpty()) {
+            sendHighscoresNoData(player)
+            return
+        }
+
+        val playerID = player.id
+        databaseTasks.store(query) { result, _ ->
+            processHighscoreResults(result, playerID, resolvedCategory, vocation, entriesPerPage)
+        }
+        player.addAsyncOngoingTask(PlayerAsyncTask.Highscore)
+    }
+
+    /**
+     * `Game::getSkillNameById` (src/game/game.cpp:10157). The C++ `uint8_t&`
+     * out-parameter becomes [HighscoreSkillName.category]: an unknown category
+     * resolves to `EXPERIENCE` with the `experience` column.
+     */
+    fun getSkillNameById(skill: Int): HighscoreSkillName = when (skill) {
+        HighscoreCategories_t.FIST_FIGHTING.value -> HighscoreSkillName("skill_fist", skill)
+        HighscoreCategories_t.CLUB_FIGHTING.value -> HighscoreSkillName("skill_club", skill)
+        HighscoreCategories_t.SWORD_FIGHTING.value -> HighscoreSkillName("skill_sword", skill)
+        HighscoreCategories_t.AXE_FIGHTING.value -> HighscoreSkillName("skill_axe", skill)
+        HighscoreCategories_t.DISTANCE_FIGHTING.value -> HighscoreSkillName("skill_dist", skill)
+        HighscoreCategories_t.SHIELDING.value -> HighscoreSkillName("skill_shielding", skill)
+        HighscoreCategories_t.FISHING.value -> HighscoreSkillName("skill_fishing", skill)
+        HighscoreCategories_t.MAGIC_LEVEL.value -> HighscoreSkillName("maglevel", skill)
+        HighscoreCategories_t.BOSS_POINTS.value -> HighscoreSkillName("boss_points", skill)
+        else -> HighscoreSkillName("experience", HighscoreCategories_t.EXPERIENCE.value)
+    }
+
+    /**
+     * `Game::generateHighscoreQuery` (src/game/game.cpp:9890). The `uint32_t`
+     * page arithmetic wraps like the C++ code; `GROUP_TYPE_GAMEMASTER` filters
+     * the staff out of the ranking.
+     */
+    fun generateHighscoreQuery(
+        categoryName: String,
+        page: Int,
+        entriesPerPage: Int,
+        vocation: Long,
+        playerGUID: Long = 0,
+    ): String {
+        if (categoryName.isEmpty()) {
+            logger.error { "Category name cannot be empty." }
+            return ""
+        }
+        if (entriesPerPage == 0) {
+            logger.warn { "[generateHighscoreQuery] entriesPerPage cannot be 0." }
+            return ""
+        }
+
+        val startPage = ((page - 1).toLong() * entriesPerPage) and 0xFFFFFFFFL
+        val endPage = (startPage + entriesPerPage) and 0xFFFFFFFFL
+        val entriesStr = entriesPerPage.toString()
+
+        val vocationCondition = if (vocation != 0xFFFFFFFFL) generateVocationConditionHighscore(vocation) else ""
+        val countVocationCondition =
+            if (vocation != 0xFFFFFFFFL) generateVocationConditionHighscore(vocation, " AND ") else ""
+
+        var query = "SELECT `id`, `name`, `level`, `vocation`, `points`, `rank`, `rn` AS `entries`, " +
+            "(SELECT COUNT(*) FROM `players` WHERE `group_id` < $GROUP_TYPE_GAMEMASTER$countVocationCondition) AS `total`, "
+
+        query += if (playerGUID != 0L) {
+            "(@ourRow DIV $entriesStr) + 1 AS `page` FROM ("
+        } else {
+            "$page AS `page` FROM ("
+        }
+
+        query += "SELECT `id`, `name`, `level`, `vocation`, `$categoryName` AS `points`, " +
+            "@curRank := IF(@prevRank = `$categoryName`, @curRank, IF(@prevRank := `$categoryName`, @curRank + 1, @curRank + 1)) AS `rank`, " +
+            "(@row := @row + 1) AS `rn`"
+
+        if (playerGUID != 0L) {
+            query += ", @ourRow := IF(`id` = $playerGUID, @row - 1, @ourRow) AS `rw`"
+        }
+
+        query += " FROM (SELECT `id`, `name`, `level`, `vocation`, `$categoryName` FROM `players` `p`, " +
+            "(SELECT @curRank := 0, @prevRank := NULL, @row := 0, @ourRow := 0) `r` " +
+            "WHERE `group_id` < $GROUP_TYPE_GAMEMASTER ORDER BY `$categoryName` DESC) `t`"
+
+        if (vocation != 0xFFFFFFFFL) {
+            query += vocationCondition
+        }
+
+        query += ") `T` WHERE "
+
+        query += if (playerGUID != 0L) {
+            "`rn` > ((@ourRow DIV $entriesStr) * $entriesStr) AND `rn` <= (((@ourRow DIV $entriesStr) * $entriesStr) + $entriesStr)"
+        } else {
+            "`rn` > $startPage AND `rn` <= $endPage"
+        }
+
+        return query
+    }
+
+    /** `Game::generateVocationConditionHighscore` (src/game/game.cpp:9968). */
+    fun generateVocationConditionHighscore(vocation: Long, conditionPrefix: String = ""): String {
+        val queryPart = StringBuilder()
+        var firstVocation = true
+
+        for (voc in vocations?.getVocations()?.values ?: emptyList()) {
+            if (voc.getFromVocation().toLong() == vocation) {
+                if (firstVocation) {
+                    queryPart.append(conditionPrefix).append("(`vocation` = ").append(voc.getId())
+                    firstVocation = false
+                } else {
+                    queryPart.append(" OR `vocation` = ").append(voc.getId())
+                }
+            }
+        }
+
+        if (!firstVocation) {
+            queryPart.append(")")
+        }
+
+        return queryPart.toString()
+    }
+
+    /** `Game::cacheQueryHighscore` (src/game/game.cpp:10079). */
+    private fun cacheQueryHighscore(key: String, query: String, page: Long, entriesPerPage: Int) {
+        queryCache[key] = QueryHighscoreCacheEntry(query, page, entriesPerPage)
+    }
+
+    /** `Game::generateHighscoreOrGetCachedQueryForEntries` (src/game/game.cpp:10084). */
+    fun generateHighscoreOrGetCachedQueryForEntries(
+        categoryName: String,
+        page: Int,
+        entriesPerPage: Int,
+        vocation: Long,
+    ): String {
+        val cacheKey = "Entries_${categoryName}_${page}_${entriesPerPage}_$vocation"
+        queryCache[cacheKey]?.let { cached ->
+            if (cached.page == page.toLong()) {
+                return cached.query
+            }
+        }
+
+        val newQuery = generateHighscoreQuery(categoryName, page, entriesPerPage, vocation)
+        if (newQuery.isNotEmpty()) {
+            cacheQueryHighscore(cacheKey, newQuery, page.toLong(), entriesPerPage)
+        }
+
+        return newQuery
+    }
+
+    /** `Game::generateHighscoreOrGetCachedQueryForOurRank` (src/game/game.cpp:10104). */
+    fun generateHighscoreOrGetCachedQueryForOurRank(
+        categoryName: String,
+        entriesPerPage: Int,
+        playerGUID: Long,
+        vocation: Long,
+    ): String {
+        val cacheKey = "OurRank_${categoryName}_${entriesPerPage}_${playerGUID}_$vocation"
+        queryCache[cacheKey]?.let { cached ->
+            if (cached.page == entriesPerPage.toLong()) {
+                return cached.query
+            }
+        }
+
+        val newQuery = generateHighscoreQuery(categoryName, 0, entriesPerPage, vocation, playerGUID)
+        if (newQuery.isNotEmpty()) {
+            cacheQueryHighscore(cacheKey, newQuery, entriesPerPage.toLong(), entriesPerPage)
+        }
+
+        return newQuery
+    }
+
+    /**
+     * `Game::processHighscoreResults` (src/game/game.cpp:9986): resets the
+     * async task, answers `sendHighscoresNoData` for a missing result and
+     * serves the 10-minute [highscoreCache] frame when present, otherwise
+     * builds the rows through the injected [vocations] registry.
+     *
+     * PARITY GAP: the per-row loyalty title stays empty exactly like the C++
+     * `// todo get loyalty title from player` branch.
+     */
+    fun processHighscoreResults(
+        result: CyclopediaQueryResult?,
+        playerID: Long,
+        category: Int,
+        vocationCID: Long,
+        entriesPerPage: Int,
+    ) {
+        val player = getPlayerByID(playerID) ?: return
+
+        player.resetAsyncOngoingTask(PlayerAsyncTask.Highscore)
+
+        if (result == null) {
+            sendHighscoresNoData(player)
+            return
+        }
+
+        val page = result.getNumber("page") and 0xFFFFL
+        val pages = calculateHighscorePages(result.getNumber("total") and 0xFFFFFFFFL, entriesPerPage)
+
+        val vocationId = Tools.getVocationIdFromClientId(vocationCID)
+        val cacheKey = "Highscore_${category}_${vocationId}_${entriesPerPage}_$page"
+
+        val now = Tools.getTimeNow()
+        val cached = highscoreCache[cacheKey]
+        if (cached != null && now - cached.timestamp < HIGHSCORE_CACHE_EXPIRATION_SECONDS) {
+            sendHighscores(player, cached.characters, category, vocationCID, cached.page.toInt(), cached.pages, cached.timestamp)
+        } else {
+            val characters = mutableListOf<HighscoresWindowSerializer.HighscoreCharacterEntry>()
+            do {
+                val voc = vocations?.getVocation(result.getNumber("vocation").toInt())
+                val characterVocation = voc?.getClientId() ?: 0
+                characters.add(
+                    HighscoresWindowSerializer.HighscoreCharacterEntry(
+                        rank = result.getNumber("rank"),
+                        name = result.getString("name"),
+                        loyaltyTitle = "",
+                        vocation = characterVocation,
+                        level = result.getNumber("level").toInt(),
+                        id = result.getNumber("id"),
+                        points = result.getNumber("points"),
+                    ),
+                )
+            } while (result.next())
+
+            sendHighscores(player, characters, category, vocationCID, page.toInt(), pages, Tools.getTimeNow())
+            highscoreCache[cacheKey] = HighscoreCacheEntry(characters, page, pages, now)
+        }
+    }
+
+    /** `Game::saveMotdNum` (src/game/game.cpp:9613). */
+    fun saveMotdNum() {
+        val db = database ?: return
+
+        db.executeQuery("UPDATE `server_config` SET `value` = '$motdNum' WHERE `config` = 'motd_num'")
+        db.executeQuery(
+            "UPDATE `server_config` SET `value` = '${Tools.transformToSHA1(serverMotd)}' WHERE `config` = 'motd_hash'",
+        )
+    }
+
+    /** `Game::getMotdHash` (src/game/game.hpp:559). */
+    fun getMotdHash(): String = motdHash
+
+    /** `Game::getMotdNum` (src/game/game.hpp:562). */
+    fun getMotdNum(): Long = motdNum
+
+    /** `Game::incrementMotdNum` (src/game/game.hpp:566). */
+    fun incrementMotdNum() {
+        motdNum++
+    }
+
     /** `Tile::getTopDownItem` equivalent (src/items/tile.cpp:408): last inserted down item. */
     private fun topDownItem(tile: Tile): Item? = tile.items.lastOrNull()
 
@@ -2040,6 +3194,12 @@ class Game(
             }
             return ((totalEntries + entriesPerPage - 1) / entriesPerPage).toInt()
         }
+
+        /** `GROUP_TYPE_GAMEMASTER` (`src/enums/account_group_type.hpp:21`). */
+        private const val GROUP_TYPE_GAMEMASTER = 4
+
+        /** `Game::HIGHSCORE_CACHE_EXPIRATION_TIME` (game.hpp:73). */
+        private const val HIGHSCORE_CACHE_EXPIRATION_SECONDS = 600L
 
         /** `Game::DAY_LENGTH_SECONDS` (src/game/game.hpp:916). */
         private const val DAY_LENGTH_SECONDS = 3600

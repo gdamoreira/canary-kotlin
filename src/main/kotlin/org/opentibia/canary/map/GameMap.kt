@@ -27,6 +27,8 @@ import kotlin.math.abs
  */
 class GameMap(
     val houses: Houses = Houses(),
+    /** `Map::towns` (src/map/map.hpp:168). */
+    val towns: Towns = Towns(),
     val zones: Zones = Zones(),
 ) {
     /** `Map::spawnsMonster` (`src/map/map.hpp:178`), loaded by `IOMap::loadMonsters`. */

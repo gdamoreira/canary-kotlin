@@ -34,6 +34,24 @@ enum class BidErrorMessage(val value: Int) {
     Internal(24),
 }
 
+/** `BidSuccessMessage` (`src/enums/player_cyclopedia.hpp:76-79`). */
+enum class BidSuccessMessage(val value: Int) {
+    BidSuccess(0),
+    LowerBid(1),
+}
+
+/** `TransferErrorMessage` (`src/enums/player_cyclopedia.hpp:93-104`). */
+enum class TransferErrorMessage(val value: Int) {
+    Success(0),
+    NotHouseOwner(2),
+    CharacterNotExist(4),
+    Premium(7),
+    Rookgaard(16),
+    AlreadyTheOwner(19),
+    OnlyOneBid(25),
+    Internal(32),
+}
+
 /** `AcceptTransferErrorMessage` (`src/enums/player_cyclopedia.hpp:111-120`). */
 enum class AcceptTransferErrorMessage(val value: Int) {
     Success(0),
