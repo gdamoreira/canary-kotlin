@@ -155,13 +155,13 @@ The port is a faithful, incremental transcription of Canary's C++ engine. Two vi
 | View | Progress |
 |---|---|
 | **Tracked gameplay features** (`docs/game-play-features.md`) | **56 / 56 (100%)** — engine scope, tested |
-| **Inbound `ProtocolGame` opcodes** | ~56 / ~105 (**~53%**) |
-| **Outbound `ProtocolGame` senders** | ~87 / ~180 (**~48%**) |
-| **Lua bindings** | ~264 / 1,310 (**~20%**) |
-| **`Player` methods** | ~70 / ~765 (**~9%**) |
-| **Monster engine** | **~15%** (A* + targeting + loot ported) |
-| **Map engine** | **~30%** |
-| **Persistence** | **~15%** |
-| **Estimated full-parity completion** | **~40–45%** |
+| **Inbound `ProtocolGame` opcodes** | 76 / 141 decoded (**~54%**; 38 fully applied — **~27%**) |
+| **Outbound `ProtocolGame` senders** | 57 / 190 (**~30%**) |
+| **Lua bindings** | 167 / 1,246 method registrations (**~13%**) |
+| **`Player` methods** | ~409 / 821 (**~50%** raw count) |
+| **Monster engine** | **~20%** (A* + targeting + loot + intention/relevance) |
+| **Map engine** | **~35%** |
+| **Persistence** | **~30%** |
+| **Estimated full-parity completion** | **~45–50%** |
 
 The 56 tracked gameplay features are engine-complete, but Canary's full surface (`player.cpp` ~765 methods, `game.cpp` ~352 methods, ~1,310 Lua registrations, ~105 opcodes) is far larger. The complete per-subsystem inventory and ranked remaining work lives in **[`docs/missing-features.md`](docs/missing-features.md)**.

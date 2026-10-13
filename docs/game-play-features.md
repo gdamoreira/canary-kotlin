@@ -89,3 +89,20 @@ This document establishes the master inventory of all gameplay features from Can
 - **Combat consumers**: bestiary charm procs, weapon-proficiency combat application, and hazard `CombatDamage` bridge.
 - **Lua engine**: bindings installed at `LuaEnvironment.initState()`; core primitive bindings (Game/Player/Creature/Item/Container/Position) + Spell/CreatureEvent/GlobalEvent/MoveEvent registries; `LuaEventDispatcher`/`ScriptingDispatch`; best-effort `data/libs` load.
 - **Router**: opcodes `0x61`/`0x62`/`0xE7` (wheel), `0x74` (offline training), `0xE1`–`0xE4` (bestiary), `0xBF` (forge), `0xFF` (reward chest) dispatched via `GamePacketRouter` on the WorldCommit lane.
+
+### Module completion (verified, `docs/missing-features.md` §1.2)
+
+| Module | Rows | IMPLEMENTED | Weighted % | Notes |
+|---|---|---|---|---|
+| `src/` bootstrap, `src/account/`, `src/config/`, `src/database/`, `src/enums/`, `src/security/`, `src/creatures/` | 53 | 53 | **100%** | sections complete (waves 24–34) |
+| `src/protobuf/` | 2 | 1 | **50%** | `kv.proto` missing |
+| `src/io/` | 9 | 0 | **44%** | persistence depth |
+| `src/items/` | 10 | 0 | **35%** | cylinder/bed/decay/Tile |
+| `src/map/` | 6 | 0 | **33%** | sight/canWalkTo/houses |
+| `src/game/` | 10 | 0 | **30%** | game.cpp depth, scheduler, compute service |
+| `src/server/` | 5 | 0 | **30%** | opcodes/senders |
+| `src/lua/` | 12 | 0 | **21%** | 167/1,246 method bindings |
+| `src/utils/` | 3 | 0 | **17%** | `tools.cpp` |
+| `src/lib/` | 5 | 0 | **10%** | DI/logger/metrics |
+| `src/kv/` | 1 | 0 | **0%** | KV engine |
+| **Overall** | **116** | **54** | **62%** (rows 47%) | full-parity estimate **~45–50%** |
