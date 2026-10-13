@@ -12,6 +12,7 @@ import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.creatures.spawns.MonsterType
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.items.Container
+import org.opentibia.canary.items.INDEX_WHEREEVER
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.ItemProperty
@@ -1074,13 +1075,11 @@ class WorldItemOperations(
 
 /**
  * `ItemType` metatable seam backed by the Kotlin [ItemType] domain object plus the
- * optional [ItemTypeRegistry] and name catalog for `ItemType(id or name)`. Fields the
- * Kotlin type does not model inherit the documented Canary `ItemType` struct defaults
- * from [ItemTypeOperations].
+ * optional [ItemTypeRegistry] and name catalog for `ItemType(id or name)`. Every getter
+ * reads the domain fields through [ItemTypeOperations]' documented implementations.
  *
- * Parity gaps: `create` resolves only through the supplied registry/catalog (Canary's
- * global `Item::items` catalog is not wired into this class), and `getWeight` converts
- * the domain's ounces to Canary's hundredths.
+ * Parity gap: `create` resolves only through the supplied registry/catalog (Canary's
+ * global `Item::items` catalog is not wired into this class).
  */
 class WorldItemTypeOperations(
     private val itemTypes: ItemTypeRegistry? = null,
@@ -1091,35 +1090,17 @@ class WorldItemTypeOperations(
         is String -> itemIdsByName[idOrName]?.let { itemTypes?.get(it) }
         else -> null
     }
-
-    override fun getId(itemType: Any): Int = (itemType as? ItemType)?.id ?: 0
-
-    override fun getName(itemType: Any): String = (itemType as? ItemType)?.name ?: ""
-
-    override fun isContainer(itemType: Any): Boolean = (itemType as? ItemType)?.isContainer ?: false
-
-    override fun isStackable(itemType: Any): Boolean = (itemType as? ItemType)?.isStackable ?: false
-
-    override fun isPickupable(itemType: Any): Boolean = (itemType as? ItemType)?.isPickupable ?: false
-
-    override fun getCapacity(itemType: Any): Int = (itemType as? ItemType)?.capacity ?: 0
-
-    /** Canary reports hundredths of an ounce; the domain stores ounces. */
-    override fun getWeight(itemType: Any, count: Int): Int =
-        (((itemType as? ItemType)?.weight ?: 0.0) * 100.0 * max(1, count)).roundToInt()
-
-    override fun hasSubType(itemType: Any): Boolean = isStackable(itemType)
 }
 
 /**
- * `Tile` metatable seam backed by the Kotlin [Tile] domain object (ground plus item
- * list) and the optional [GameMap] for `Tile(x, y, z)`/`Position:getTile`.
+ * `Tile` metatable seam backed by the Kotlin [Tile] domain object (ground, top/down
+ * item list, creature list, tile flags, house link) and the optional [GameMap] for
+ * `Tile(x, y, z)`/`Tile:create`.
  *
- * Parity gaps: the Kotlin tile models no creatures, top/down item ordering, tile flags,
- * `ItemProperty` data, magic-field classification, house link or reward sweep; those
- * methods inherit the documented defaults from [TileOperations]. `addItem` does not cap
- * the count by `ItemType::stackSize` (not modeled), `addItemEx` treats every item as
- * parentless, and `queryAdd` allows any item because the domain has no tile query rules.
+ * `addItem` builds the item through [Item.create] so container/door/bed subtypes and
+ * the `ItemType::stackSize` cap match Canary's `Item::CreateItem` plus
+ * `Game::internalAddItem`; the remaining methods inherit the domain-backed
+ * implementations from [TileOperations].
  */
 class WorldTileOperations(
     private val gameMap: GameMap? = null,
@@ -1130,94 +1111,20 @@ class WorldTileOperations(
 
     override fun create(position: Position): Any? = gameMap?.getTile(position)
 
-    override fun getPosition(tile: Any): Position? = (tile as? Tile)?.position
-
-    override fun getGround(tile: Any): Any? = (tile as? Tile)?.ground
-
-    /** 0 is the ground item, then the tile item list in order. */
-    override fun getThing(tile: Any, index: Int): Any? {
-        val target = tile as? Tile ?: return null
-        if (index < 0) {
-            return null
-        }
-        if (index == 0 && target.ground != null) {
-            return target.ground
-        }
-        val offset = if (target.ground != null) 1 else 0
-        return target.items.getOrNull(index - offset)
-    }
-
-    override fun getThingCount(tile: Any): Int {
-        val target = tile as? Tile ?: return 0
-        return target.items.size + if (target.ground != null) 1 else 0
-    }
-
-    override fun getItems(tile: Any): List<Any> = (tile as? Tile)?.items?.toList() ?: emptyList()
-
-    override fun getItemCount(tile: Any): Int = (tile as? Tile)?.items?.size ?: 0
-
-    /** Mirrors `Tile::getItemTypeCount` (ground first, then the item list). */
-    override fun getItemCountById(tile: Any, itemId: Int, subType: Int): Int {
-        val target = tile as? Tile ?: return 0
-        var count = 0
-        val ground = target.ground
-        if (ground != null && ground.id == itemId && (subType == -1 || subType == subtype(ground))) {
-            count += ground.count
-        }
-        for (item in target.items) {
-            if (item.id == itemId && (subType == -1 || subType == subtype(item))) {
-                count += item.count
-            }
-        }
-        return count
-    }
-
-    /** Mirrors `Game::findItemOfType` on a tile (ground first, then the item list). */
-    override fun getItemById(tile: Any, itemId: Int, subType: Int): Any? {
-        val target = tile as? Tile ?: return null
-        val ground = target.ground
-        if (ground != null && ground.id == itemId && (subType == -1 || subType == subtype(ground))) {
-            return ground
-        }
-        return target.items.firstOrNull { it.id == itemId && (subType == -1 || subType == subtype(it)) }
-    }
-
     override fun addItem(tile: Any, itemId: Int, count: Int, flags: Long): Any? {
         val target = tile as? Tile ?: return null
-        val item = Item.create(itemId, count.coerceAtLeast(1), itemTypes)
-        target.addItem(item)
+        val itemType = itemTypes?.get(itemId)
+        if (itemTypes != null && itemType == null) {
+            return null
+        }
+        val stackSize = itemType?.stackSize ?: 100
+        val item = Item.create(itemId, minOf(count.coerceAtLeast(1), stackSize), itemTypes)
+        if (target.queryAdd(INDEX_WHEREEVER, item, item.getItemCount(), flags.toInt()) != ReturnValue.NOERROR) {
+            return null
+        }
+        target.internalAddThing(item)
         return item
     }
-
-    override fun addItemEx(tile: Any, item: Any, flags: Long): Int {
-        val target = tile as? Tile ?: return ReturnValue.NOTPOSSIBLE.ordinal
-        val candidate = item as? Item ?: return ReturnValue.NOTPOSSIBLE.ordinal
-        if (target.ground === candidate || target.items.any { it === candidate }) {
-            return ReturnValue.NOTPOSSIBLE.ordinal
-        }
-        target.addItem(candidate)
-        return ReturnValue.NOERROR.ordinal
-    }
-
-    /** Mirrors `Tile::queryAdd` for the domain, which accepts any item on any tile. */
-    override fun queryAdd(tile: Any, thing: Any, flags: Long): Int =
-        if (tile is Tile && thing is Item) ReturnValue.NOERROR.ordinal else ReturnValue.NOTPOSSIBLE.ordinal
-
-    /** Mirrors `Tile::getThingIndex` for the modeled ground/item order. */
-    override fun getThingIndex(tile: Any, thing: Any): Int? {
-        val target = tile as? Tile ?: return null
-        if (target.ground === thing) {
-            return 0
-        }
-        val index = target.items.indexOfFirst { it === thing }
-        if (index < 0) {
-            return -1
-        }
-        return index + if (target.ground != null) 1 else 0
-    }
-
-    private fun subtype(item: Item): Int =
-        if (item.type?.isStackable == true) item.count else 0
 }
 
 /**

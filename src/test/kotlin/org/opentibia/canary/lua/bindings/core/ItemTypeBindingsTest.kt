@@ -189,10 +189,10 @@ class ItemTypeBindingsTest {
             "type", "charges", "fluidSource", "hitChance", "attack", "defense", "extraDefense",
             "imbuementSlot", "armor", "weaponType", "transformEquip", "transformDeEquip",
             "destroy", "requiredLevel", "ammoType", "decayTime", "wrapableTo", "baseSpeed",
-            "elementalBond",
         )) {
             assertThat(environment.getGlobal(name).toint()).describedAs(name).isEqualTo(0)
         }
+        assertThat(environment.getGlobal("elementalBond").toint()).isEqualTo(255)
         assertThat(environment.getGlobal("elementType").isnil()).isTrue()
         assertThat(environment.getGlobal("elementDamage").isnil()).isTrue()
         assertThat(environment.getGlobal("speed").isnil()).isTrue()

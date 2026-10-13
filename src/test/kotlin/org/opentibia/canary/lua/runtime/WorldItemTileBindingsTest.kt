@@ -26,7 +26,7 @@ class WorldItemTileBindingsTest {
     @Test
     fun `World ItemType resolves registry types with the domain flags`() {
         val registry = ItemTypeRegistry().apply {
-            register(ItemType(1987, "backpack", isContainer = true, capacity = 20, weight = 18.0))
+            register(ItemType(1987, "backpack", isContainer = true, maxItems = 20, weight = 18.0))
             register(ItemType(2160, "crystal coin", isStackable = true, weight = 0.1))
         }
         val environment = envWith(
@@ -115,6 +115,7 @@ class WorldItemTileBindingsTest {
     fun `World Tile addItem appends to the domain tile`() {
         val map = GameMap()
         val tile = map.getOrCreateTile(Position(100, 100, 7))
+        tile.setGround(Item(4608, type = ItemType(4608, "grass", isGroundTile = true)))
         val registry = ItemTypeRegistry().apply {
             register(ItemType(2160, "crystal coin", isStackable = true))
         }
@@ -129,7 +130,7 @@ class WorldItemTileBindingsTest {
         assertThat(tile.items).hasSize(1)
         assertThat(tile.items[0].id).isEqualTo(2160)
         assertThat(environment.getGlobal("queried").toint()).isEqualTo(ReturnValue.NOERROR.ordinal)
-        assertThat(environment.getGlobal("addedEx").toint()).isEqualTo(ReturnValue.NOTPOSSIBLE.ordinal)
+        assertThat(environment.getGlobal("addedEx").isnil()).isTrue()
     }
 
     @Test
