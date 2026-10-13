@@ -1,12 +1,21 @@
 package org.opentibia.canary.game
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import org.opentibia.canary.chat.CHANNEL_GUILD
+import org.opentibia.canary.chat.ChatClient
+import org.opentibia.canary.chat.NoopChatClient
+import org.opentibia.canary.chat.SpeakClasses
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.LightInfo
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Npc
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.creatures.grouping.Party
+import org.opentibia.canary.creatures.players.components.HighscoreCategories_t
+import org.opentibia.canary.creatures.players.vip.PlayerVip
+import org.opentibia.canary.creatures.players.vip.VipStatus
+import org.opentibia.canary.database.PlayerLoginRepository
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.zones.TileFlags
@@ -19,6 +28,8 @@ import org.opentibia.canary.map.Tile
 import org.opentibia.canary.network.protocol.MessageClass
 import org.opentibia.canary.network.protocol.SourceEffect
 import org.opentibia.canary.persistence.PlayerStorage
+import org.opentibia.canary.social.guild.Guild
+import org.opentibia.canary.social.guild.GuildRepository
 import org.opentibia.canary.spells.SoundEffect
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import java.lang.ref.WeakReference
@@ -35,6 +46,15 @@ enum class LightState {
     LIGHT_STATE_SUNSET,
     LIGHT_STATE_SUNRISE,
 }
+
+/**
+ * `struct HighscoreCategory` (`src/server/server_definitions.hpp:174`): the
+ * `m_name` / `m_id` pair exposed by `Game::getHighscoreCategories`.
+ */
+data class HighscoreCategory(
+    val name: String,
+    val id: Int,
+)
 
 /**
  * Faithful facade over the Kotlin world model mirroring Canary's `Game`
@@ -56,6 +76,17 @@ enum class LightState {
  *    `checkLight` (game.cpp:9402)
  *  - `sendSingleSoundEffect` (game.cpp:7833) / `sendDoubleSoundEffect` (game.cpp:7853)
  *  - `playerStopAutoWalk` (game.cpp:4567)
+ *  - party family (`playerInviteToParty` game.cpp:9657 … `playerEnableSharedPartyExperience`
+ *    game.cpp:9778)
+ *  - `checkCreatures` (game.cpp:7719)
+ *  - guild registry (`getGuild` game.cpp:11727, `getGuildByName` game.cpp:11738,
+ *    `addGuild` game.cpp:11750, `removeGuild` game.cpp:11757) and
+ *    `sendGuildMotd` (game.cpp:9793)
+ *  - VIP (`playerRequestAddVip` game.cpp:7058 … `playerRequestEditVip` game.cpp:7107)
+ *  - reports (`playerReportRuleViolationReport` game.cpp:10183,
+ *    `playerReportBug` game.cpp:10193)
+ *  - highscore helpers (`calculateHighscorePages` game.cpp:10033,
+ *    `getHighscoreCategoriesName` game.cpp:12473, `getHighscoreCategories` game.cpp:12477)
  *  - `beforeCreatureZoneChange` (game.cpp:12417) / `afterCreatureZoneChange` (game.cpp:12447)
  *
  * All state is thread-confined: mutating methods must run inside the injected
@@ -65,8 +96,62 @@ class Game(
     val map: GameMap,
     val dispatcher: GameDispatcher,
     private val playerStorage: PlayerStorage? = null,
+    /**
+     * `IOGuild` persistence seam (src/io/ioguild.cpp): `loadGuild` and
+     * `getGuildIdByName` for the `getGuild`/`getGuildByName` `allowOffline`
+     * fallback.
+     */
+    private val guildRepository: GuildRepository? = null,
+    /** `g_saveManager().saveGuild` seam (game.cpp:11760). */
+    private val saveGuild: (Guild) -> Unit = {},
+    /** `Player::client` channel sender seam (`Player::sendChannelMessage`). */
+    private val chatClient: ChatClient = NoopChatClient,
+    /** `IOLoginData::getGuidByNameEx` seam (game.cpp:7073). */
+    private val loginRepository: PlayerLoginRepository? = null,
+    /** `Player::vip()` accessor (player.hpp:739). */
+    private val playerVip: (Player) -> PlayerVip? = { null },
+    /** `Player::isInGhostMode` (player.cpp:568). */
+    private val isInGhostMode: (Player) -> Boolean = { false },
 ) {
     private val players = mutableMapOf<Long, Player>()
+
+    /** `Game::guilds` (game.hpp:866). */
+    private val guilds = mutableMapOf<Long, Guild>()
+
+    /** `Game::checkCreatures` rotation cursor (game.cpp:7721). */
+    private var checkCreatureIndex = 0
+
+    /** `Game::m_highscoreCategoriesNames` (game.cpp:705-721). */
+    private val highscoreCategoriesNames: Map<Int, String> = linkedMapOf(
+        HighscoreCategories_t.ACHIEVEMENTS.value to "Achievement Points",
+        HighscoreCategories_t.AXE_FIGHTING.value to "Axe Fighting",
+        HighscoreCategories_t.BOSS_POINTS.value to "Boss Points",
+        HighscoreCategories_t.CHARMS.value to "Charm Points",
+        HighscoreCategories_t.CLUB_FIGHTING.value to "Club Fighting",
+        HighscoreCategories_t.DISTANCE_FIGHTING.value to "Distance Fighting",
+        HighscoreCategories_t.DROME.value to "Drome Score",
+        HighscoreCategories_t.EXPERIENCE.value to "Experience Points",
+        HighscoreCategories_t.FISHING.value to "Fishing",
+        HighscoreCategories_t.FIST_FIGHTING.value to "Fist Fighting",
+        HighscoreCategories_t.GOSHNAR.value to "Goshnar's Taint",
+        HighscoreCategories_t.LOYALTY_POINTS.value to "Loyalty Points",
+        HighscoreCategories_t.MAGIC_LEVEL.value to "Magic Level",
+        HighscoreCategories_t.SHIELDING.value to "Shielding",
+        HighscoreCategories_t.SWORD_FIGHTING.value to "Sword Fighting",
+    )
+
+    /** `Game::m_highscoreCategories` (game.cpp:723-733). */
+    private val highscoreCategories: List<HighscoreCategory> = listOf(
+        HighscoreCategory("Experience Points", HighscoreCategories_t.EXPERIENCE.value),
+        HighscoreCategory("Fist Fighting", HighscoreCategories_t.FIST_FIGHTING.value),
+        HighscoreCategory("Club Fighting", HighscoreCategories_t.CLUB_FIGHTING.value),
+        HighscoreCategory("Sword Fighting", HighscoreCategories_t.SWORD_FIGHTING.value),
+        HighscoreCategory("Axe Fighting", HighscoreCategories_t.AXE_FIGHTING.value),
+        HighscoreCategory("Distance Fighting", HighscoreCategories_t.DISTANCE_FIGHTING.value),
+        HighscoreCategory("Shielding", HighscoreCategories_t.SHIELDING.value),
+        HighscoreCategory("Fishing", HighscoreCategories_t.FISHING.value),
+        HighscoreCategory("Magic Level", HighscoreCategories_t.MAGIC_LEVEL.value),
+    )
 
     /** `Creature::getParent()` equivalent (src/creatures/creature.hpp): the tile each placed creature lives on. */
     private val placedCreatures = IdentityHashMap<Creature, Tile>()
@@ -133,6 +218,22 @@ class Game(
      */
     var executePeriodChange: (LightState, LightInfo) -> Unit = { _, _ -> }
 
+    /**
+     * `g_events().eventPlayerOnReportRuleViolation` dispatch seam
+     * (src/game/game.cpp:10189). Reports are Lua-side dispatch only (AGENTS.md
+     * 1.4), so the port exposes the two buckets as injected seams.
+     */
+    var eventPlayerOnReportRuleViolation: (Player, String, Int, Int, String, String) -> Unit = { _, _, _, _, _, _ -> }
+
+    /** `g_callbacks().executeCallback(playerOnReportRuleViolation, ...)` seam (game.cpp:10190). */
+    var callbackPlayerOnReportRuleViolation: (Player, String, Int, Int, String, String) -> Unit = { _, _, _, _, _, _ -> }
+
+    /** `g_events().eventPlayerOnReportBug` dispatch seam (src/game/game.cpp:10199). */
+    var eventPlayerOnReportBug: (Player, String, Position, Int) -> Unit = { _, _, _, _ -> }
+
+    /** `g_callbacks().executeCallback(playerOnReportBug, ...)` seam (game.cpp:10200). */
+    var callbackPlayerOnReportBug: (Player, String, Position, Int) -> Unit = { _, _, _, _ -> }
+
     /** `Game::addPlayer` (src/game/game.cpp:11624). */
     fun addPlayer(player: Player) {
         players[player.id] = player
@@ -177,6 +278,149 @@ class Game(
         }
         return null
     }
+
+    /**
+     * `Game::getGuild` (src/game/game.cpp:11727): the online guild registry with
+     * the `IOGuild::loadGuild` fallback behind `allowOffline`.
+     */
+    fun getGuild(id: Long, allowOffline: Boolean = false): Guild? {
+        guilds[id]?.let { return it }
+        if (!allowOffline) {
+            return null
+        }
+        return guildRepository?.loadGuild(id)
+    }
+
+    /**
+     * `Game::getGuildByName` (src/game/game.cpp:11738): resolves the id through
+     * `IOGuild::getGuildIdByName` first, then falls back like [getGuild].
+     */
+    fun getGuildByName(name: String, allowOffline: Boolean = false): Guild? {
+        val id = guildRepository?.getGuildIdByName(name) ?: 0L
+        guilds[id]?.let { return it }
+        if (!allowOffline) {
+            return null
+        }
+        return guildRepository?.loadGuild(id)
+    }
+
+    /** `Game::addGuild` (src/game/game.cpp:11750). */
+    fun addGuild(guild: Guild?) {
+        if (guild == null) {
+            return
+        }
+        guilds[guild.id] = guild
+    }
+
+    /** `Game::removeGuild` (src/game/game.cpp:11757): save through the manager, then erase. */
+    fun removeGuild(guildId: Long) {
+        val guild = guilds.remove(guildId) ?: return
+        saveGuild(guild)
+    }
+
+    /** `Game::getGuilds` (src/game/game.hpp:574). */
+    fun getGuilds(): Map<Long, Guild> = guilds
+
+    /**
+     * `Game::sendGuildMotd` (src/game/game.cpp:9793): the online player's guild
+     * MOTD on `CHANNEL_GUILD` with `TALKTYPE_CHANNEL_R1`.
+     */
+    fun sendGuildMotd(playerId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+        val guild = player.getGuild() ?: return
+        chatClient.sendChannelMessage(player, "Message of the Day", guild.getMotd(), SpeakClasses.TALKTYPE_CHANNEL_R1, CHANNEL_GUILD)
+    }
+
+    /**
+     * `Game::playerRequestAddVip` (src/game/game.cpp:7058): names over 25
+     * characters are discarded. An offline target resolves through
+     * `IOLoginData::getGuidByNameEx` ([loginRepository]) and is added with
+     * `VipStatus_t::Offline`; an online ghost is hidden from non-access players.
+     */
+    fun playerRequestAddVip(playerId: Long, name: String) {
+        if (name.length > 25) {
+            return
+        }
+
+        val player = getPlayerByID(playerId) ?: return
+        val vipPlayer = getPlayerByName(name)
+        if (vipPlayer == null) {
+            val lookup = loginRepository?.getGuidByNameEx(name)
+            if (lookup == null) {
+                player.sendTextMessageTyped(MessageClass.MESSAGE_FAILURE, "A player with this name does not exist.")
+                return
+            }
+
+            if (lookup.specialVip && !player.hasFlag(PlayerFlags_t.SpecialVIP)) {
+                player.sendTextMessageTyped(MessageClass.MESSAGE_FAILURE, "You can not add this player")
+                return
+            }
+
+            playerVip(player)?.add(lookup.guid, lookup.name, VipStatus.Offline)
+        } else {
+            if (vipPlayer.hasFlag(PlayerFlags_t.SpecialVIP) && !player.hasFlag(PlayerFlags_t.SpecialVIP)) {
+                player.sendTextMessageTyped(MessageClass.MESSAGE_FAILURE, "You can not add this player")
+                return
+            }
+
+            if (!isInGhostMode(vipPlayer) || player.isAccessPlayer()) {
+                val status = playerVip(vipPlayer)?.getStatus() ?: VipStatus.Online
+                playerVip(player)?.add(vipPlayer.getGUID(), vipPlayer.name, status)
+            } else {
+                playerVip(player)?.add(vipPlayer.getGUID(), vipPlayer.name, VipStatus.Offline)
+            }
+        }
+    }
+
+    /** `Game::playerRequestRemoveVip` (src/game/game.cpp:7098). */
+    fun playerRequestRemoveVip(playerId: Long, guid: Long) {
+        val player = getPlayerByID(playerId) ?: return
+        playerVip(player)?.remove(guid)
+    }
+
+    /**
+     * `Game::playerRequestEditVip` (src/game/game.cpp:7107). The `vipGroupsId`
+     * vector is the `std::vector<uint8_t>` widened to `Int` like the rest of the
+     * port.
+     */
+    fun playerRequestEditVip(
+        playerId: Long,
+        guid: Long,
+        description: String,
+        icon: Int,
+        notify: Boolean,
+        vipGroupsId: List<Int>,
+    ) {
+        val player = getPlayerByID(playerId) ?: return
+        playerVip(player)?.edit(guid, description, icon, notify, vipGroupsId)
+    }
+
+    /** `Game::playerReportRuleViolationReport` (src/game/game.cpp:10183). */
+    fun playerReportRuleViolationReport(
+        playerId: Long,
+        targetName: String,
+        reportType: Int,
+        reportReason: Int,
+        comment: String,
+        translation: String,
+    ) {
+        val player = getPlayerByID(playerId) ?: return
+        eventPlayerOnReportRuleViolation(player, targetName, reportType, reportReason, comment, translation)
+        callbackPlayerOnReportRuleViolation(player, targetName, reportType, reportReason, comment, translation)
+    }
+
+    /** `Game::playerReportBug` (src/game/game.cpp:10193). */
+    fun playerReportBug(playerId: Long, message: String, position: Position, category: Int) {
+        val player = getPlayerByID(playerId) ?: return
+        eventPlayerOnReportBug(player, message, position, category)
+        callbackPlayerOnReportBug(player, message, position, category)
+    }
+
+    /** `Game::getHighscoreCategoriesName` (src/game/game.cpp:12473). */
+    fun getHighscoreCategoriesName(): Map<Int, String> = highscoreCategoriesNames
+
+    /** `Game::getHighscoreCategories` (src/game/game.cpp:12477). */
+    fun getHighscoreCategories(): List<HighscoreCategory> = highscoreCategories
 
     /**
      * Kotlin accessor for Canary's public `Game::map` member (src/game/game.hpp:627) as
@@ -371,6 +615,33 @@ class Game(
         if (creature.inCheckCreaturesVector) {
             creature.creatureCheck = false
         }
+    }
+
+    /**
+     * `Game::checkCreatures` (src/game/game.cpp:7719): advances the rotating
+     * `checkCreatureLists` cursor and, per flagged alive creature, runs
+     * `Creature::onThink(EVENT_CREATURE_THINK_INTERVAL)`. Dead or unflagged
+     * entries clear `inCheckCreaturesVector` and are pruned.
+     *
+     * PARITY GAPS: `Monster::trySchedulePostThink` and the non-monster
+     * `Creature::onAttacking` call are not ported; the condition tick
+     * (`executeConditions`) is folded into [Creature.onThink] by the Kotlin
+     * creature port, so it must not run twice here.
+     */
+    fun checkCreatures() {
+        val bucket = checkCreatureLists[checkCreatureIndex]
+        val iterator = bucket.iterator()
+        while (iterator.hasNext()) {
+            val creature = iterator.next().get()
+            if (creature != null && creature.creatureCheck && creature.isAlive()) {
+                creature.onThink(EVENT_CREATURE_THINK_INTERVAL)
+            } else {
+                creature?.inCheckCreaturesVector = false
+                iterator.remove()
+            }
+        }
+
+        checkCreatureIndex = (checkCreatureIndex + 1) % EVENT_CREATURECOUNT
     }
 
     /**
@@ -1031,6 +1302,17 @@ class Game(
         /** `INDEX_WHEREEVER` (src/items/cylinder.hpp:18). */
         const val INDEX_WHEREEVER = -1
 
+        /**
+         * `Game::calculateHighscorePages` (src/game/game.cpp:10033): a zero page
+         * size yields zero pages, otherwise the rounded-up division.
+         */
+        fun calculateHighscorePages(totalEntries: Long, entriesPerPage: Int): Int {
+            if (entriesPerPage == 0) {
+                return 0
+            }
+            return ((totalEntries + entriesPerPage - 1) / entriesPerPage).toInt()
+        }
+
         /** `Game::DAY_LENGTH_SECONDS` (src/game/game.hpp:916). */
         private const val DAY_LENGTH_SECONDS = 3600
 
@@ -1054,6 +1336,9 @@ class Game(
 
         /** `Creature::EVENT_CREATURECOUNT` (src/creatures/creature.hpp:46). */
         private const val EVENT_CREATURECOUNT = 10
+
+        /** `Creature::EVENT_CREATURE_THINK_INTERVAL` (src/creatures/creature.hpp:47). */
+        private const val EVENT_CREATURE_THINK_INTERVAL = 1000
 
         /** `MAP_MAX_LAYERS` (src/map/map_const.hpp:17). */
         private const val MAP_MAX_LAYERS = 16
