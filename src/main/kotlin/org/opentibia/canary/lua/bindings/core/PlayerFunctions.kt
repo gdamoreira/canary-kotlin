@@ -1,8 +1,13 @@
 package org.opentibia.canary.lua.bindings.core
 
+import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
 import org.opentibia.canary.combat.condition.SpellGroup
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.PlayerPronoun_t
+import org.opentibia.canary.creatures.appearance.outfit.OutfitPlayer
+import org.opentibia.canary.creatures.appearance.outfit.Outfits
+import org.opentibia.canary.creatures.appearance.outfit.PlayerOutfits
 import org.opentibia.canary.creatures.players.components.Achievement
 import org.opentibia.canary.creatures.players.components.AchievementPlayer
 import org.opentibia.canary.creatures.players.components.AchievementRegistry
@@ -17,10 +22,12 @@ import org.opentibia.canary.spells.Spells
 import org.opentibia.canary.systems.bestiary.CharmRune
 import org.opentibia.canary.systems.bestiary.IOBestiary
 import org.opentibia.canary.systems.bestiary.MonsterBestiaryInfo
+import org.opentibia.canary.systems.mount.Mounts
 import org.opentibia.canary.systems.offlinetraining.Skill
 import org.opentibia.canary.systems.prey.PreyBonus
 import org.opentibia.canary.systems.prey.PreyDataState
 import org.opentibia.canary.systems.taskhunting.PreyTaskDataState
+import java.util.WeakHashMap
 import kotlin.math.max
 
 /**
@@ -438,6 +445,37 @@ interface PlayerOperations {
  *   player:kv()
  *   player:save()
  *
+ * Remainder (outfits/mounts/familiars/identity, reward chest, client info and XP
+ * boosts), registered through [PlayerRemainderOperations]:
+ *
+ *   player:addOutfit(lookType or name[, addon = 0])
+ *   player:addOutfitAddon(lookType, addon)
+ *   player:removeOutfit(lookType)
+ *   player:removeOutfitAddon(lookType, addon)
+ *   player:hasOutfit(lookType[, addon = 0])
+ *   player:sendOutfitWindow()
+ *   player:addMount(mountId or mountName)
+ *   player:removeMount(mountId or mountName)
+ *   player:hasMount(mountId or mountName)
+ *   player:addFamiliar(lookType)
+ *   player:removeFamiliar(lookType)
+ *   player:hasFamiliar(lookType)
+ *   player:setFamiliarLooktype(lookType)
+ *   player:getFamiliarLooktype()
+ *   player:getPronoun()
+ *   player:setPronoun(newPronoun)
+ *   player:getReward(rewardId[, autoCreate = false])
+ *   player:removeReward(rewardId)
+ *   player:getRewardList()
+ *   player:setDailyReward(value)
+ *   player:getClient()
+ *   player:getBaseXpGain() / setBaseXpGain(value)
+ *   player:getVoucherXpBoost() / setVoucherXpBoost(value)
+ *   player:getGrindingXpBoost() / setGrindingXpBoost(value)
+ *   player:getXpBoostPercent() / setXpBoostPercent(value)
+ *   player:getXpBoostTime() / setXpBoostTime(value)
+ *   player:getStaminaXpBoost() / setStaminaXpBoost(value)
+ *
  * Canary registers Player methods on the `Player` shared class, which inherits
  * `Creature` through metatables. The Kotlin [org.opentibia.canary.lua.userdata.UserdataRegistry]
  * has no class-inheritance chain, so the methods are registered on the `Player`,
@@ -454,6 +492,7 @@ object PlayerFunctions {
         env: LuaEnvironment,
         operations: PlayerOperations = UnwiredPlayerOperations,
         batch3: PlayerBatch3Operations = WorldPlayerBatch3Operations(),
+        remainder: PlayerRemainderOperations = WorldPlayerRemainderOperations(),
     ) {
         val registry = env.userdata
         val register: (String, LuaValue) -> Unit = { name, fn ->
@@ -1474,6 +1513,222 @@ object PlayerFunctions {
         register("save", luaFunction { args ->
             val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             batch3.save(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("addOutfit", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val outfit = args.arg(2)
+            val addon = args.arg(3).optint(0)
+            val lookType = when {
+                outfit.isnumber() -> outfit.toint()
+                outfit.isstring() -> remainder.outfitLookTypeByName(player, outfit.tojstring())
+                    ?: return@luaFunction LuaValue.NIL
+                else -> return@luaFunction LuaValue.valueOf(true)
+            }
+            remainder.addOutfit(player, lookType, addon)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("addOutfitAddon", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.addOutfitAddon(player, args.arg(2).optint(0), args.arg(3).optint(0))
+                ?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("removeOutfit", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.removeOutfit(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("removeOutfitAddon", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.removeOutfitAddon(player, args.arg(2).optint(0), args.arg(3).optint(0))
+                ?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("hasOutfit", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.hasOutfit(player, args.arg(2).optint(0), args.arg(3).optint(0))
+                ?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("sendOutfitWindow", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.sendOutfitWindow(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("addMount", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val mount = args.arg(2)
+            val mountId = when {
+                mount.isnumber() -> mount.toint()
+                mount.isstring() -> remainder.mountIdByName(mount.tojstring()).takeIf { it != 0 }
+                    ?: return@luaFunction LuaValue.NIL
+                else -> return@luaFunction LuaValue.NIL
+            }
+            remainder.addMount(player, mountId)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("removeMount", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val mount = args.arg(2)
+            val mountId = when {
+                mount.isnumber() -> mount.toint()
+                mount.isstring() -> remainder.mountIdByName(mount.tojstring()).takeIf { it != 0 }
+                    ?: return@luaFunction LuaValue.NIL
+                else -> return@luaFunction LuaValue.NIL
+            }
+            remainder.removeMount(player, mountId)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("hasMount", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val mount = args.arg(2)
+            val mountId = when {
+                mount.isnumber() -> mount.toint()
+                mount.isstring() -> remainder.mountIdByName(mount.tojstring()).takeIf { it != 0 }
+                    ?: return@luaFunction LuaValue.NIL
+                else -> return@luaFunction LuaValue.NIL
+            }
+            remainder.hasMount(player, mountId)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("addFamiliar", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.addFamiliar(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("removeFamiliar", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.removeFamiliar(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("hasFamiliar", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.hasFamiliar(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("setFamiliarLooktype", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.setFamiliarLooktype(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) }
+                ?: LuaValue.NIL
+        })
+
+        register("getFamiliarLooktype", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.getFamiliarLooktype(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getPronoun", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.getPronoun(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("setPronoun", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.setPronoun(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getReward", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val rewardId = args.arg(2).optlong(0)
+            val autoCreate = args.arg(3).optboolean(false)
+            remainder.getReward(player, rewardId, autoCreate)?.let { wrapItemUserdata(env, it) }
+                ?: LuaValue.valueOf(false)
+        })
+
+        register("removeReward", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.removeReward(player, args.arg(2).optlong(0))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getRewardList", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val rewards = remainder.getRewardList(player) ?: return@luaFunction LuaValue.NIL
+            LuaTable().also { table ->
+                rewards.forEachIndexed { index, rewardId ->
+                    table.set(index + 1, LuaValue.valueOf(rewardId.toDouble()))
+                }
+            }
+        })
+
+        register("setDailyReward", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.setDailyReward(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getClient", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val client = remainder.getClient(player) ?: return@luaFunction LuaValue.NIL
+            LuaTable().also { table ->
+                table.set("version", LuaValue.valueOf(client.version))
+                table.set("versionString", LuaValue.valueOf(client.versionString))
+                table.set("os", LuaValue.valueOf(client.os))
+            }
+        })
+
+        register("getBaseXpGain", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.getBaseXpGain(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("setBaseXpGain", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.setBaseXpGain(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getVoucherXpBoost", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.getVoucherXpBoost(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("setVoucherXpBoost", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.setVoucherXpBoost(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) }
+                ?: LuaValue.NIL
+        })
+
+        register("getGrindingXpBoost", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.getGrindingXpBoost(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("setGrindingXpBoost", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.setGrindingXpBoost(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) }
+                ?: LuaValue.NIL
+        })
+
+        register("getXpBoostPercent", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.getXpBoostPercent(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("setXpBoostPercent", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.setXpBoostPercent(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) }
+                ?: LuaValue.NIL
+        })
+
+        register("getXpBoostTime", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.getXpBoostTime(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("setXpBoostTime", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.setXpBoostTime(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) }
+                ?: LuaValue.NIL
+        })
+
+        register("getStaminaXpBoost", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.getStaminaXpBoost(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("setStaminaXpBoost", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            remainder.setStaminaXpBoost(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) }
+                ?: LuaValue.NIL
         })
     }
 }
@@ -2762,5 +3017,343 @@ class WorldPlayerBatch3Operations(
     private companion object {
         /** `FACTION_PLAYER` (`src/game/game_definitions.hpp:45`). */
         const val FACTION_PLAYER = 1
+    }
+}
+
+/**
+ * Canary `player:getClient()` payload, mirroring the table
+ * `PlayerFunctions::luaPlayerGetClient` pushes: `version`
+ * (`Player::getProtocolVersion`), `versionString`
+ * (`Client::getClientVersionString`) and `os` (`Player::getOperatingSystem`).
+ */
+data class LuaClientInfo(
+    val version: Int,
+    val versionString: String,
+    val os: Int,
+)
+
+/**
+ * Engine seam for the remaining `Player` metatable methods of
+ * `PlayerFunctions::init` (src/lua/functions/creatures/player/player_functions.cpp).
+ *
+ * Nullable results mirror Canary's `lua_pushnil` guards (non-player receiver,
+ * unknown outfit/mount name, missing reward, missing client info).
+ */
+interface PlayerRemainderOperations {
+    /**
+     * `Outfits::getOutfitByName(player->getSex(), name)` (outfit.cpp:115-123);
+     * null mirrors the `Outfit not found` miss.
+     */
+    fun outfitLookTypeByName(player: Any, name: String): Int?
+
+    /** `PlayerFunctions::luaPlayerAddOutfit` (player_functions.cpp:2922). */
+    fun addOutfit(player: Any, lookType: Int, addon: Int): Boolean?
+
+    /** `PlayerFunctions::luaPlayerAddOutfitAddon` (player_functions.cpp:2947). */
+    fun addOutfitAddon(player: Any, lookType: Int, addon: Int): Boolean?
+
+    /** `PlayerFunctions::luaPlayerRemoveOutfit` (player_functions.cpp:2961). */
+    fun removeOutfit(player: Any, lookType: Int): Boolean?
+
+    /** `PlayerFunctions::luaPlayerRemoveOutfitAddon` (player_functions.cpp:2973). */
+    fun removeOutfitAddon(player: Any, lookType: Int, addon: Int): Boolean?
+
+    /** `PlayerFunctions::luaPlayerHasOutfit` (player_functions.cpp:2986). */
+    fun hasOutfit(player: Any, lookType: Int, addon: Int): Boolean?
+
+    /** `PlayerFunctions::luaPlayerSendOutfitWindow` (player_functions.cpp:2999). */
+    fun sendOutfitWindow(player: Any): Boolean?
+
+    /** `g_game().mounts->getMountByName(name)` (`mounts.cpp`); 0 when unknown. */
+    fun mountIdByName(name: String): Int
+
+    /** `PlayerFunctions::luaPlayerAddMount` (player_functions.cpp:3011); `Player::tameMount`. */
+    fun addMount(player: Any, mountId: Int): Boolean?
+
+    /** `PlayerFunctions::luaPlayerRemoveMount` (player_functions.cpp:3034); `Player::untameMount`. */
+    fun removeMount(player: Any, mountId: Int): Boolean?
+
+    /** `PlayerFunctions::luaPlayerHasMount` (player_functions.cpp:3057); `Player::hasMount`. */
+    fun hasMount(player: Any, mountId: Int): Boolean?
+
+    /** `PlayerFunctions::luaPlayerAddFamiliar` (player_functions.cpp:3080). */
+    fun addFamiliar(player: Any, lookType: Int): Boolean?
+
+    /** `PlayerFunctions::luaPlayerRemoveFamiliar` (player_functions.cpp:3092). */
+    fun removeFamiliar(player: Any, lookType: Int): Boolean?
+
+    /** `PlayerFunctions::luaPlayerHasFamiliar` (player_functions.cpp:3104); `Player::canFamiliar`. */
+    fun hasFamiliar(player: Any, lookType: Int): Boolean?
+
+    /** `PlayerFunctions::luaPlayerSetFamiliarLooktype` (player_functions.cpp:3116). */
+    fun setFamiliarLooktype(player: Any, lookType: Int): Boolean?
+
+    /** `PlayerFunctions::luaPlayerGetFamiliarLooktype` (player_functions.cpp:3128). */
+    fun getFamiliarLooktype(player: Any): Int?
+
+    /** `PlayerFunctions::luaPlayerGetPronoun` (player_functions.cpp:2016). */
+    fun getPronoun(player: Any): Int?
+
+    /** `PlayerFunctions::luaPlayerSetPronoun` (player_functions.cpp:2027). */
+    fun setPronoun(player: Any, pronoun: Int): Boolean?
+
+    /**
+     * `Player::getReward(rewardId, autoCreate)` (player.cpp:2058). Null mirrors
+     * Canary's `lua_pushboolean(false)` miss; the binding returns it as `false`.
+     */
+    fun getReward(player: Any, rewardId: Long, autoCreate: Boolean): Any?
+
+    /** `PlayerFunctions::luaPlayerRemoveReward` (player_functions.cpp:1244). */
+    fun removeReward(player: Any, rewardId: Long): Boolean?
+
+    /** `PlayerFunctions::luaPlayerGetRewardList` (player_functions.cpp:1258). */
+    fun getRewardList(player: Any): List<Long>?
+
+    /** `PlayerFunctions::luaPlayerSetDailyReward` (player_functions.cpp:1278). */
+    fun setDailyReward(player: Any, value: Int): Boolean?
+
+    /** `PlayerFunctions::luaPlayerGetClient` (player_functions.cpp:3663). */
+    fun getClient(player: Any): LuaClientInfo?
+
+    /** `PlayerFunctions::luaPlayerGetBaseXpGain` (player_functions.cpp:3928). */
+    fun getBaseXpGain(player: Any): Int?
+
+    /** `PlayerFunctions::luaPlayerSetBaseXpGain` (player_functions.cpp:3939). */
+    fun setBaseXpGain(player: Any, value: Int): Boolean?
+
+    /** `PlayerFunctions::luaPlayerGetVoucherXpBoost` (player_functions.cpp:3952). */
+    fun getVoucherXpBoost(player: Any): Int?
+
+    /** `PlayerFunctions::luaPlayerSetVoucherXpBoost` (player_functions.cpp:3963). */
+    fun setVoucherXpBoost(player: Any, value: Int): Boolean?
+
+    /** `PlayerFunctions::luaPlayerGetGrindingXpBoost` (player_functions.cpp:3976). */
+    fun getGrindingXpBoost(player: Any): Int?
+
+    /** `PlayerFunctions::luaPlayerSetGrindingXpBoost` (player_functions.cpp:3987). */
+    fun setGrindingXpBoost(player: Any, value: Int): Boolean?
+
+    /** `PlayerFunctions::luaPlayerGetXpBoostPercent` (player_functions.cpp:4000). */
+    fun getXpBoostPercent(player: Any): Int?
+
+    /** `PlayerFunctions::luaPlayerSetXpBoostPercent` (player_functions.cpp:4011). */
+    fun setXpBoostPercent(player: Any, value: Int): Boolean?
+
+    /** `PlayerFunctions::luaPlayerGetXpBoostTime` (player_functions.cpp:4062). */
+    fun getXpBoostTime(player: Any): Int?
+
+    /** `PlayerFunctions::luaPlayerSetXpBoostTime` (player_functions.cpp:4048). */
+    fun setXpBoostTime(player: Any, value: Int): Boolean?
+
+    /** `PlayerFunctions::luaPlayerGetStaminaXpBoost` (player_functions.cpp:4024). */
+    fun getStaminaXpBoost(player: Any): Int?
+
+    /** `PlayerFunctions::luaPlayerSetStaminaXpBoost` (player_functions.cpp:4035). */
+    fun setStaminaXpBoost(player: Any, value: Int): Boolean?
+}
+
+/**
+ * Real, non-no-op implementation of [PlayerRemainderOperations] backed by the
+ * Kotlin domain objects.
+ *
+ * PARITY GAPS (recorded, not invented):
+ *  - The Kotlin `Player` has no XP-boost fields (Canary `player.hpp:1813-1824`),
+ *    so the six boosts are held per player here; a domain field would be the
+ *    faithful location but `Player` is outside this file's ownership.
+ *  - `sendOutfitWindow` has no protocol sink on `Player`
+ *    (`PlayerAttachedEffectsPlayer` owns the send seam); it succeeds without
+ *    transmitting. `getClient` needs a protocol/client seam and reports nil
+ *    until a [clientInfoProvider] is injected.
+ *  - `Player::tameMount` validates the id against the player's internal `Mounts`
+ *    registry, which the port cannot populate from here; [mountDefinitions] only
+ *    resolves names and looks up mounts for [hasMount].
+ *  - `addOutfit` with an unknown outfit name raises Canary's `reportErrorFunc`
+ *    (which only logs) and returns a stack artifact; the binding normalizes that
+ *    miss to nil.
+ *  - `getPronoun`/`setPronoun` map out-of-range numbers to `PLAYERPRONOUN_UNSET`
+ *    instead of the C++ cast of arbitrary integers into `PlayerPronoun_t`.
+ *
+ * The per-player outfit and XP-boost maps are weak keys (`Player` uses identity
+ * equality) so a released player is not retained, matching the lifetime rule for
+ * state that outlives the scripting call.
+ */
+class WorldPlayerRemainderOperations(
+    private val outfitDefinitions: Outfits = Outfits(),
+    private val mountDefinitions: Mounts = Mounts(),
+    private val clientInfoProvider: ((Player) -> LuaClientInfo?)? = null,
+) : PlayerRemainderOperations {
+
+    private val outfitsByPlayer = WeakHashMap<Player, PlayerOutfits>()
+
+    private val xpBoostsByPlayer = WeakHashMap<Player, XpBoostState>()
+
+    override fun outfitLookTypeByName(player: Any, name: String): Int? {
+        val target = player as? Player ?: return null
+        return outfitDefinitions.getOutfitByName(target.getSex(), name)?.lookType
+    }
+
+    override fun addOutfit(player: Any, lookType: Int, addon: Int): Boolean? {
+        val target = player as? Player ?: return null
+        outfitsOf(target).addOutfit(lookType, addon)
+        return true
+    }
+
+    override fun addOutfitAddon(player: Any, lookType: Int, addon: Int): Boolean? {
+        val target = player as? Player ?: return null
+        outfitsOf(target).addOutfit(lookType, addon)
+        return true
+    }
+
+    override fun removeOutfit(player: Any, lookType: Int): Boolean? =
+        (player as? Player)?.let { outfitsOf(it).removeOutfit(lookType) }
+
+    override fun removeOutfitAddon(player: Any, lookType: Int, addon: Int): Boolean? =
+        (player as? Player)?.let { outfitsOf(it).removeOutfitAddon(lookType, addon) }
+
+    override fun hasOutfit(player: Any, lookType: Int, addon: Int): Boolean? =
+        (player as? Player)?.let { outfitsOf(it).canWear(lookType, addon) }
+
+    /** PARITY GAP: no outfit-window protocol sink; succeeds without transmitting. */
+    override fun sendOutfitWindow(player: Any): Boolean? = (player as? Player)?.let { true }
+
+    override fun mountIdByName(name: String): Int = mountDefinitions.getMountByName(name)?.id ?: 0
+
+    override fun addMount(player: Any, mountId: Int): Boolean? =
+        (player as? Player)?.features?.mounts?.tameMount(mountId)
+
+    override fun removeMount(player: Any, mountId: Int): Boolean? =
+        (player as? Player)?.features?.mounts?.untameMount(mountId)
+
+    override fun hasMount(player: Any, mountId: Int): Boolean? {
+        val target = player as? Player ?: return null
+        val mount = mountDefinitions.getMountByID(mountId) ?: return null
+        return target.features.mounts.hasMount(mount)
+    }
+
+    override fun addFamiliar(player: Any, lookType: Int): Boolean? {
+        val target = player as? Player ?: return null
+        target.features.familiars.addFamiliar(lookType)
+        return true
+    }
+
+    override fun removeFamiliar(player: Any, lookType: Int): Boolean? =
+        (player as? Player)?.features?.familiars?.removeFamiliar(lookType)
+
+    override fun hasFamiliar(player: Any, lookType: Int): Boolean? =
+        (player as? Player)?.features?.familiars?.canFamiliar(lookType)
+
+    override fun setFamiliarLooktype(player: Any, lookType: Int): Boolean? {
+        val target = player as? Player ?: return null
+        target.features.familiars.setFamiliarLooktype(lookType)
+        return true
+    }
+
+    override fun getFamiliarLooktype(player: Any): Int? =
+        (player as? Player)?.features?.familiars?.familiarLooktype
+
+    override fun getPronoun(player: Any): Int? = (player as? Player)?.getPronoun()?.value
+
+    override fun setPronoun(player: Any, pronoun: Int): Boolean? {
+        val target = player as? Player ?: return null
+        val value = PlayerPronoun_t.entries.firstOrNull { it.value == pronoun }
+            ?: PlayerPronoun_t.PLAYERPRONOUN_UNSET
+        target.setPronoun(value)
+        return true
+    }
+
+    override fun getReward(player: Any, rewardId: Long, autoCreate: Boolean): Any? =
+        (player as? Player)?.features?.rewardChest?.getReward(rewardId, autoCreate)
+
+    override fun removeReward(player: Any, rewardId: Long): Boolean? {
+        val target = player as? Player ?: return null
+        target.features.rewardChest.removeReward(rewardId)
+        return true
+    }
+
+    override fun getRewardList(player: Any): List<Long>? =
+        (player as? Player)?.features?.rewardChest?.getRewardList()
+
+    override fun setDailyReward(player: Any, value: Int): Boolean? {
+        val target = player as? Player ?: return null
+        target.features.dailyReward.setDailyReward(value)
+        return true
+    }
+
+    override fun getClient(player: Any): LuaClientInfo? {
+        val target = player as? Player ?: return null
+        return clientInfoProvider?.invoke(target)
+    }
+
+    override fun getBaseXpGain(player: Any): Int? = (player as? Player)?.let { boostsOf(it).baseXpGain }
+
+    override fun setBaseXpGain(player: Any, value: Int): Boolean? {
+        val target = player as? Player ?: return null
+        boostsOf(target).baseXpGain = value
+        return true
+    }
+
+    override fun getVoucherXpBoost(player: Any): Int? =
+        (player as? Player)?.let { boostsOf(it).voucherXpBoost }
+
+    override fun setVoucherXpBoost(player: Any, value: Int): Boolean? {
+        val target = player as? Player ?: return null
+        boostsOf(target).voucherXpBoost = value
+        return true
+    }
+
+    override fun getGrindingXpBoost(player: Any): Int? =
+        (player as? Player)?.let { boostsOf(it).grindingXpBoost }
+
+    override fun setGrindingXpBoost(player: Any, value: Int): Boolean? {
+        val target = player as? Player ?: return null
+        boostsOf(target).grindingXpBoost = value
+        return true
+    }
+
+    override fun getXpBoostPercent(player: Any): Int? =
+        (player as? Player)?.let { boostsOf(it).xpBoostPercent }
+
+    override fun setXpBoostPercent(player: Any, value: Int): Boolean? {
+        val target = player as? Player ?: return null
+        boostsOf(target).xpBoostPercent = value
+        return true
+    }
+
+    override fun getXpBoostTime(player: Any): Int? = (player as? Player)?.let { boostsOf(it).xpBoostTime }
+
+    override fun setXpBoostTime(player: Any, value: Int): Boolean? {
+        val target = player as? Player ?: return null
+        boostsOf(target).xpBoostTime = value
+        return true
+    }
+
+    override fun getStaminaXpBoost(player: Any): Int? =
+        (player as? Player)?.let { boostsOf(it).staminaXpBoost }
+
+    override fun setStaminaXpBoost(player: Any, value: Int): Boolean? {
+        val target = player as? Player ?: return null
+        boostsOf(target).staminaXpBoost = value
+        return true
+    }
+
+    private fun outfitsOf(player: Player): PlayerOutfits = outfitsByPlayer.getOrPut(player) {
+        PlayerOutfits(
+            outfits = outfitDefinitions,
+            player = OutfitPlayer { player.getSex() },
+            isPremium = { player.isPremium() },
+            hasAccess = { player.isAccessPlayer() },
+        )
+    }
+
+    private fun boostsOf(player: Player): XpBoostState = xpBoostsByPlayer.getOrPut(player) { XpBoostState() }
+
+    /** Canary `Player` XP-boost fields and their declared defaults (player.hpp:1813-1824). */
+    private class XpBoostState {
+        var baseXpGain: Int = 100
+        var voucherXpBoost: Int = 0
+        var grindingXpBoost: Int = 0
+        var xpBoostPercent: Int = 0
+        var xpBoostTime: Int = 0
+        var staminaXpBoost: Int = 100
     }
 }
