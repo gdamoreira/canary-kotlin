@@ -6,6 +6,8 @@ import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionId
 import org.opentibia.canary.combat.condition.ConditionTarget
 import org.opentibia.canary.combat.condition.ConditionType
+import org.opentibia.canary.combat.condition.LightInfo
+import org.opentibia.canary.combat.condition.Outfit
 import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.grouping.Group
 import org.opentibia.canary.creatures.grouping.Party
@@ -26,7 +28,7 @@ abstract class Creature(
     var health: Int,
     var maxMana: Int = 0,
     var mana: Int = 0,
-    var speed: Int = 200,
+    speed: Int = 200,
     var position: Position,
     var direction: org.opentibia.canary.game.movement.Direction = org.opentibia.canary.game.movement.Direction.South
 ) {
@@ -50,6 +52,133 @@ abstract class Creature(
         health = kotlin.math.min(maxHealth, health + amount)
     }
 
+    /**
+     * `Creature::changeHealth` (`creature.cpp:845-876`). The
+     * `g_game().addCreatureHealth` broadcast (`sendHealthChange`) is a world
+     * side effect owned by the protocol senders, and Canary queues `onDeath`
+     * through the dispatcher (`creature.cpp:862-874`); the port runs confined on
+     * the world lane and invokes [onDeath] directly when the lifeless guard lets
+     * the transition through.
+     */
+    open fun changeHealth(healthChange: Int, sendHealthChange: Boolean = true) {
+        if (isDead) {
+            return
+        }
+
+        if (healthChange > 0) {
+            health += minOf(healthChange, maxHealth - health)
+        } else {
+            health = maxOf(0, health + healthChange)
+        }
+
+        if (sendHealthChange) {
+            // `g_game().addCreatureHealth` protocol broadcast is not ported.
+        }
+
+        if (health <= 0 && !isRemoved()) {
+            onDeath()
+        }
+    }
+
+    /** `Creature::gainHealth` (`creature.cpp:886-891`). */
+    fun gainHealth(healer: Creature?, healthGain: Int) {
+        changeHealth(healthGain)
+        healer?.onTargetCreatureGainHealth(this, healthGain)
+    }
+
+    /**
+     * `Creature::baseSpeed` (creature.hpp:901) seeded from the constructor's
+     * `speed`; `Creature::varSpeed` (creature.hpp:903) starts at zero.
+     */
+    private var baseSpeedValue: Int = speed.coerceIn(0, PLAYER_MAX_SPEED)
+    private var varSpeedValue: Int = 0
+
+    /** `Creature::getSpeed` (`creature.cpp:1643-1645`). */
+    fun getSpeed(): Int = (baseSpeedValue + varSpeedValue).coerceIn(0, PLAYER_MAX_SPEED)
+
+    /**
+     * `Creature::setSpeed` (`creature.cpp:1647-1664`). The walk rescheduling side
+     * effects (`stopEventWalk`/`addEventWalk`/`updateCalculatedStepSpeed`) belong
+     * to the movement subsystem in this port (PARITY GAP); the variance state is
+     * applied exactly.
+     */
+    fun setSpeed(varSpeedDelta: Int) {
+        if (getSpeed() >= PLAYER_MAX_SPEED) {
+            return
+        }
+        varSpeedValue = varSpeedDelta
+    }
+
+    /** `Creature::getBaseSpeed` (creature.hpp:267-269). */
+    fun getBaseSpeed(): Int = baseSpeedValue
+
+    /**
+     * `Creature::setBaseSpeed` (creature.hpp:264-266). Canary stores into a
+     * `uint16_t` (implicit wrap through `Game::setCreatureSpeed`); this port
+     * clamps to the representable range instead of wrapping (PARITY GAP).
+     */
+    fun setBaseSpeed(newBaseSpeed: Int) {
+        baseSpeedValue = newBaseSpeed.coerceIn(0, PLAYER_MAX_SPEED)
+    }
+
+    /** `Creature::getStepSpeed` (creature.hpp:258-260); `Player` overrides it. */
+    open fun getStepSpeed(): Int = getSpeed()
+
+    /**
+     * Port seam kept for the existing storage/Lua call sites: reads map to
+     * [getSpeed] and writes map to [setBaseSpeed]
+     * (`g_game().setCreatureSpeed`, game.cpp:7759-7761). The accessors are
+     * renamed at the JVM level so they do not clash with the Canary-parity
+     * `getSpeed`/`setSpeed` methods.
+     */
+    @get:JvmName("getSpeedValue")
+    @set:JvmName("setSpeedValue")
+    var speed: Int
+        get() = getSpeed()
+        set(value) {
+            setBaseSpeed(value)
+        }
+
+    /** `Creature::currentOutfit` / `Creature::defaultOutfit` (creature.hpp:918-919). */
+    private var currentOutfit = Outfit()
+    private var defaultOutfit = Outfit()
+
+    /** `Creature::getCurrentOutfit` (creature.hpp:364-366). */
+    fun getCurrentOutfit(): Outfit = currentOutfit.copy()
+
+    /** `Creature::setCurrentOutfit` (creature.hpp:367-369). */
+    fun setCurrentOutfit(outfit: Outfit) {
+        currentOutfit = outfit.copy()
+    }
+
+    /** `Creature::getDefaultOutfit` (creature.hpp:370-372). */
+    fun getDefaultOutfit(): Outfit = defaultOutfit.copy()
+
+    /** `Creature::setDefaultOutfit` (creature.hpp:373-375). */
+    fun setDefaultOutfit(outfit: Outfit) {
+        defaultOutfit = outfit.copy()
+    }
+
+    /** `Creature::isWearingSupportOutfit` (creature.hpp:376-379). */
+    fun isWearingSupportOutfit(): Boolean =
+        currentOutfit.lookType == 75 || currentOutfit.lookType == 266 || currentOutfit.lookType == 302
+
+    /** `Creature::internalLight` (creature.hpp:922); default color 215. */
+    private var internalLight: LightInfo = LightInfo()
+
+    /** `Creature::getCreatureLight` (`creature.cpp:1639-1641`). */
+    open fun getCreatureLight(): LightInfo = internalLight.copy()
+
+    /** `Creature::setCreatureLight` (`creature.cpp:1666-1668`). */
+    fun setCreatureLight(lightInfo: LightInfo) {
+        internalLight = lightInfo.copy()
+    }
+
+    /** `Creature::setNormalCreatureLight` (`creature.cpp:1670-1672`). */
+    open fun setNormalCreatureLight() {
+        internalLight = LightInfo()
+    }
+
     /** `Creature::skull` (creature.hpp:925), default `SKULL_NONE`. */
     private var skull: Skulls_t = Skulls_t.SKULL_NONE
 
@@ -63,6 +192,156 @@ abstract class Creature(
      */
     fun setSkull(newSkull: Skulls_t) {
         skull = newSkull
+    }
+
+    /** `Creature::canSee(pos)` (`creature.cpp:89-91`). */
+    open fun canSee(pos: Position): Boolean =
+        canSee(position, pos, MAP_MAX_VIEW_PORT_X, MAP_MAX_VIEW_PORT_Y)
+
+    /** `Creature::canSeeCreature` (`creature.cpp:93-98`). */
+    open fun canSeeCreature(creature: Creature): Boolean =
+        !(!canSeeInvisibility() && creature.isInvisible())
+
+    /** `Creature::canSeeInvisibility` (creature.hpp:213-215); base is false. */
+    open fun canSeeInvisibility(): Boolean = false
+
+    /**
+     * `Creature::isInvisible` (`creature.cpp:1849-1853`): any stored
+     * `CONDITION_INVISIBLE`, without an end-time check.
+     */
+    fun isInvisible(): Boolean = conditionList.any { it.type == ConditionType.CONDITION_INVISIBLE }
+
+    /**
+     * `Creature::m_master` / `Creature::m_summons` (creature.hpp:879, 482-484)
+     * and the `summoned` latch (creature.hpp:890). Canary holds the master as a
+     * `std::weak_ptr`; the port keeps strong references because world entities
+     * are released through explicit removal (`setRemoved`), not GC reachability
+     * (PARITY GAP).
+     */
+    private var master: Creature? = null
+    private val summonList = mutableListOf<Creature>()
+    private var summoned = false
+
+    /**
+     * `Creature::setMaster` (`creature.cpp:1339-1369`). The `reloadCreature`
+     * branch (`setFollowCreature`/`setDropLoot`/`setSkillLoss`/`reloadCreature`)
+     * belongs to the follow and protocol subsystems (PARITY GAP).
+     */
+    fun setMaster(newMaster: Creature?, reloadCreature: Boolean = false): Boolean {
+        summoned = true
+        val oldMaster = master
+
+        if (newMaster == null && oldMaster == null) {
+            return false
+        }
+
+        if (newMaster != null) {
+            newMaster.summonList.add(this)
+        }
+
+        master = newMaster
+
+        if (oldMaster != null) {
+            oldMaster.summonList.remove(this)
+        }
+
+        return true
+    }
+
+    /** `Creature::removeMaster` (creature.hpp:462-466) — only resets the pointer. */
+    fun removeMaster() {
+        if (master != null) {
+            master = null
+        }
+    }
+
+    /** `Creature::isSummon` (creature.hpp:468-470). */
+    fun isSummon(): Boolean = master != null
+
+    /** `Creature::hasBeenSummoned` (creature.hpp:475-477). */
+    fun hasBeenSummoned(): Boolean = summoned
+
+    /** `Creature::getMaster` (creature.hpp:478-480). */
+    fun getMaster(): Creature? = master
+
+    /** `Creature::getSummons` (creature.hpp:482-484). */
+    fun getSummons(): List<Creature> = summonList
+
+    /** `Creature::getSummonCount` (creature.hpp:624-626). */
+    fun getSummonCount(): Int = summonList.size
+
+    /** `Creature::hasSummons` (creature.hpp:634-639). */
+    fun hasSummons(): Boolean = summonList.isNotEmpty()
+
+    /** `Creature::m_attackedCreature` (creature.hpp:878). */
+    private var attackedCreature: Creature? = null
+
+    /** `Creature::getAttackedCreature` (creature.hpp:438-440). */
+    fun getAttackedCreature(): Creature? = attackedCreature
+
+    /**
+     * `Creature::setAttackedCreature` (`creature.cpp:1011-1036`). The
+     * familiar-in-protection-zone rejection (`creature.cpp:1013-1017`) needs the
+     * tile and monster-type state and is not ported (PARITY GAP).
+     */
+    open fun setAttackedCreature(creature: Creature?): Boolean {
+        if (creature != null) {
+            if (creature.position.z != position.z || !canSee(creature.position)) {
+                attackedCreature = null
+                return false
+            }
+
+            attackedCreature = creature
+            onAttackedCreature(creature)
+            creature.onAttacked()
+        } else {
+            attackedCreature = null
+        }
+
+        for (summon in summonList.toList()) {
+            summon.setAttackedCreature(creature)
+        }
+
+        return true
+    }
+
+    /**
+     * `Creature::iconChanged` (`creature.cpp:2020-2029`); the spectator
+     * broadcast (`sendCreatureIcon`) is a world side effect owned by the
+     * protocol senders.
+     */
+    open fun iconChanged() {
+        // No behaviour without a world/protocol layer.
+    }
+
+    /** `Creature::creatureIcons` (creature.hpp:948) — a `std::map`, key ordered. */
+    private val creatureIcons: MutableMap<String, CreatureIcon> = sortedMapOf()
+
+    /** `Creature::getIcons` (creature.hpp:325-334). */
+    open fun getIcons(): List<CreatureIcon> = creatureIcons.values.filter { it.isSet() }
+
+    /** `Creature::getIcon` (creature.hpp:336-341). */
+    open fun getIcon(key: String): CreatureIcon = creatureIcons[key] ?: CreatureIcon()
+
+    /** `Creature::hasIcon` (creature.hpp:343-345). */
+    fun hasIcon(key: String): Boolean = creatureIcons.containsKey(key)
+
+    /** `Creature::setIcon` (creature.hpp:347-350). */
+    fun setIcon(key: String, icon: CreatureIcon) {
+        creatureIcons[key] = icon
+        iconChanged()
+    }
+
+    /** `Creature::removeIcon` (creature.hpp:352-355). */
+    fun removeIcon(key: String) {
+        creatureIcons.remove(key)
+        iconChanged()
+    }
+
+    /** `Creature::clearIcons` (creature.hpp:357-360). */
+    fun clearIcons() {
+        creatureIcons.clear()
+        iconChanged()
     }
 
     /** `Creature::conditions` (creature.hpp:843) — kept in insertion order. */
@@ -234,6 +513,140 @@ abstract class Creature(
     open fun onThink(interval: Int) {
         executeConditions(interval)
     }
+
+    // --- combat event hooks (creature.hpp:552-566) --------------------------------
+
+    /**
+     * Listener seams replacing the scripting dispatch Canary performs around the
+     * virtual hooks (AGENTS.md 1.1): the C++ base bodies are empty
+     * (`creature.cpp:1273-1275`, creature.hpp:558, 561) and the Lua layer is
+     * driven through `ScriptingDispatch`; the creature itself only owns the
+     * registration the port needs to observe them.
+     */
+    private val onAttackedHandlers = mutableListOf<(Creature) -> Unit>()
+    private val onAttackedCreatureHandlers = mutableListOf<(Creature, Creature?) -> Unit>()
+    private val onTargetCreatureGainHealthHandlers = mutableListOf<(Creature, Creature?, Int) -> Unit>()
+    private val onDeathHandlers = mutableListOf<(Creature) -> Unit>()
+
+    /** Registers a listener for [onAttacked]. */
+    fun registerOnAttackedHandler(handler: (Creature) -> Unit) {
+        onAttackedHandlers.add(handler)
+    }
+
+    /** Removes a listener registered with [registerOnAttackedHandler]. */
+    fun unregisterOnAttackedHandler(handler: (Creature) -> Unit) {
+        onAttackedHandlers.remove(handler)
+    }
+
+    /** Registers a listener for [onAttackedCreature]. */
+    fun registerOnAttackedCreatureHandler(handler: (Creature, Creature?) -> Unit) {
+        onAttackedCreatureHandlers.add(handler)
+    }
+
+    /** Removes a listener registered with [registerOnAttackedCreatureHandler]. */
+    fun unregisterOnAttackedCreatureHandler(handler: (Creature, Creature?) -> Unit) {
+        onAttackedCreatureHandlers.remove(handler)
+    }
+
+    /** Registers a listener for [onTargetCreatureGainHealth]. */
+    fun registerOnTargetCreatureGainHealthHandler(handler: (Creature, Creature?, Int) -> Unit) {
+        onTargetCreatureGainHealthHandlers.add(handler)
+    }
+
+    /** Removes a listener registered with [registerOnTargetCreatureGainHealthHandler]. */
+    fun unregisterOnTargetCreatureGainHealthHandler(handler: (Creature, Creature?, Int) -> Unit) {
+        onTargetCreatureGainHealthHandlers.remove(handler)
+    }
+
+    /** Registers a listener for [onDeath]. */
+    fun registerOnDeathHandler(handler: (Creature) -> Unit) {
+        onDeathHandlers.add(handler)
+    }
+
+    /** Removes a listener registered with [registerOnDeathHandler]. */
+    fun unregisterOnDeathHandler(handler: (Creature) -> Unit) {
+        onDeathHandlers.remove(handler)
+    }
+
+    /** `Creature::onAttacked` (`creature.cpp:1273-1275`). */
+    open fun onAttacked() {
+        onAttackedHandlers.toList().forEach { it(this) }
+    }
+
+    /** `Creature::onAttackedCreature` (creature.hpp:558) — the target hook. */
+    open fun onAttackedCreature(target: Creature?) {
+        onAttackedCreatureHandlers.toList().forEach { it(this, target) }
+    }
+
+    /** `Creature::onTargetCreatureGainHealth` (creature.hpp:561). */
+    open fun onTargetCreatureGainHealth(target: Creature?, points: Int) {
+        onTargetCreatureGainHealthHandlers.toList().forEach { it(this, target, points) }
+    }
+
+    /**
+     * `Creature::onDeath` (`creature.cpp:579-692`). The portable tail runs the
+     * registered death listeners (the scripting `onDeath` events fire while the
+     * corpse exists, `creature.cpp:819-824`), the `death(lastHitCreature)` hook
+     * and `removeMaster()` (`creature.cpp:671-673`). Damage-map killer
+     * resolution, corpse/loot and bestiary handling stay with their owning
+     * subsystems (PARITY GAP).
+     */
+    fun onDeath() {
+        onDeathHandlers.toList().forEach { it(this) }
+        death(null)
+        if (getMaster() != null) {
+            removeMaster()
+        }
+    }
+
+    /** `Creature::death` (creature.hpp:968) — virtual base no-op hook. */
+    open fun death(lastHitCreature: Creature? = null) {
+        // No behaviour.
+    }
+
+    companion object {
+        /** `MAP_MAX_CLIENT_VIEW_PORT_X/Y` (`src/map/map_const.hpp:12-13`). */
+        const val MAP_MAX_CLIENT_VIEW_PORT_X = 8
+        const val MAP_MAX_CLIENT_VIEW_PORT_Y = 6
+
+        /** `MAP_MAX_VIEW_PORT_X/Y` (`src/map/map_const.hpp:14-15`). */
+        const val MAP_MAX_VIEW_PORT_X = MAP_MAX_CLIENT_VIEW_PORT_X + 3
+        const val MAP_MAX_VIEW_PORT_Y = MAP_MAX_CLIENT_VIEW_PORT_Y + 5
+
+        /** `MAP_INIT_SURFACE_LAYER` (`src/map/map_const.hpp:18`). */
+        const val MAP_INIT_SURFACE_LAYER = 7
+
+        /** `MAP_LAYER_VIEW_LIMIT` (`src/map/map_const.hpp:19`). */
+        const val MAP_LAYER_VIEW_LIMIT = 2
+
+        /** `PLAYER_MAX_SPEED` (`src/creatures/players/player.hpp:125`). */
+        const val PLAYER_MAX_SPEED = 65535
+
+        /**
+         * `Creature::canSee(myPos, pos, viewRangeX, viewRangeY)`
+         * (`creature.cpp:68-87`).
+         */
+        fun canSee(myPos: Position, pos: Position, viewRangeX: Int, viewRangeY: Int): Boolean {
+            if (myPos.z <= MAP_INIT_SURFACE_LAYER) {
+                // On ground level or above (7 -> 0) the view only reaches down
+                // to the surface layer.
+                if (pos.z > MAP_INIT_SURFACE_LAYER) {
+                    return false
+                }
+            } else if (myPos.z >= MAP_INIT_SURFACE_LAYER + 1) {
+                // Underground the view is +/- MAP_LAYER_VIEW_LIMIT floors.
+                if (kotlin.math.abs(myPos.z - pos.z) > MAP_LAYER_VIEW_LIMIT) {
+                    return false
+                }
+            }
+
+            val offsetz = myPos.z - pos.z
+            return pos.x >= myPos.x - viewRangeX + offsetz &&
+                pos.x <= myPos.x + viewRangeX + offsetz &&
+                pos.y >= myPos.y - viewRangeY + offsetz &&
+                pos.y <= myPos.y + viewRangeY + offsetz
+        }
+    }
 }
 
 class Monster(
@@ -352,6 +765,22 @@ class Player(
 
     /** `Player::isAccessPlayer()` (player.cpp:7524). */
     fun isAccessPlayer(): Boolean = group?.access ?: false
+
+    /** `Player::canSeeInvisibility()` (player.cpp:12989-12991). */
+    override fun canSeeInvisibility(): Boolean =
+        hasFlag(PlayerFlags_t.CanSenseInvisibility) || isAccessPlayer()
+
+    /**
+     * `Player::getStepSpeed()` (player.hpp:1909-1913):
+     * `max(PLAYER_MIN_SPEED, min(maxStepSpeed, getSpeed()))` with the
+     * `PLAYER_MAX_STAFF_SPEED` cap (both max constants are 65535,
+     * player.hpp:125-127).
+     */
+    override fun getStepSpeed(): Int {
+        val maxStepSpeed =
+            if (hasFlag(PlayerFlags_t.SetMaxSpeed)) PLAYER_MAX_STAFF_SPEED else PLAYER_MAX_SPEED
+        return maxOf(PLAYER_MIN_SPEED, minOf(maxStepSpeed, getSpeed()))
+    }
 
     /** `Player::m_party` (player.hpp:1767). */
     private var mParty: Party? = null
@@ -710,6 +1139,12 @@ class Player(
     }
 
     companion object {
+        /** `PLAYER_MAX_STAFF_SPEED` (`src/creatures/players/player.hpp:126`). */
+        const val PLAYER_MAX_STAFF_SPEED = 65535
+
+        /** `PLAYER_MIN_SPEED` (`src/creatures/players/player.hpp:127`). */
+        const val PLAYER_MIN_SPEED = 10
+
         /**
          * Matches Canary / OpenTibia formula:
          * (50 * n^3 - 300 * n^2 + 850 * n - 600) / 3
