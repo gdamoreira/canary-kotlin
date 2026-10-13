@@ -74,6 +74,9 @@ object MonsterLoot {
     const val MAX_LOOT_CHANCE = 100000
     const val ITEM_FORGE_SLIVER = 37109
 
+    /** `Monster::canDropLoot` (src/creatures/monsters/monster.cpp:3945-3947). */
+    fun canDropLoot(lootItems: List<LootBlock>): Boolean = lootItems.isNotEmpty()
+
     /**
      * Rolls a loot table once per entry with Canary's `generateLootRoll` arithmetic:
      * an entry drops when `roll < chance`; stackable counts use
