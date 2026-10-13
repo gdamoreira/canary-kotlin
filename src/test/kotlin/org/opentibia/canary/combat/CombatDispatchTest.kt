@@ -88,8 +88,8 @@ class CombatDispatchTest {
 
     @Test
     fun `doCombat leaves everything untouched when params have no combat type`() {
-        // src/creatures/combat/combat.cpp:1480 `doCombatDefault` (condition-only
-        // branch) is not part of this dispatch layer.
+        // src/creatures/combat/combat.cpp:1480 `doCombatDefault` runs for the
+        // condition-only branch and the call still reports true.
         val target = FakeCombatTarget(health = 1000, mana = 100)
         val applied = Combat.doCombat(
             caster = null,
@@ -98,7 +98,7 @@ class CombatDispatchTest {
             params = CombatParams(),
             random = Random(1),
         )
-        assertThat(applied).isFalse()
+        assertThat(applied).isTrue()
         assertThat(target.getHealth()).isEqualTo(1000)
         assertThat(target.getMana()).isEqualTo(100)
     }

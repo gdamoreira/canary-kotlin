@@ -1,5 +1,6 @@
 package org.opentibia.canary.combat
 
+import org.opentibia.canary.combat.condition.ConditionParam
 import java.util.Random
 
 /**
@@ -18,6 +19,7 @@ import java.util.Random
  *  - `Combat::getLevelFormula`: src/creatures/combat/combat.cpp:135-152
  *  - `Combat::getCombatDamage`: src/creatures/combat/combat.cpp:154-231
  *  - `Combat::doCombat`: src/creatures/combat/combat.cpp:1469-1483
+ *  - `Combat::doCombatDefault`: src/creatures/combat/combat.cpp:1829-1864
  *  - `Combat::doCombatHealth`: src/creatures/combat/combat.cpp:1649-1711
  *  - `Combat::doCombatMana`: src/creatures/combat/combat.cpp:1722-1754
  *  - `Game::combatBlockHit`/`combatChangeHealth`/`combatChangeMana`:
@@ -111,9 +113,8 @@ object Combat {
      * port keeps that resolution explicit (call [getCombatDamage] first) and
      * dispatches the supplied [damage].
      *
-     * The `params.combatType == COMBAT_NONE` branch runs `Combat::doCombatDefault`
-     * (condition/dispel application), which is owned by the condition engine;
-     * this layer returns false for it instead of silently dropping it.
+     * The `params.combatType == COMBAT_NONE` branch falls through to
+     * [doCombatDefault] (combat.cpp:1480) and still reports true.
      */
     fun doCombat(
         caster: CombatTarget?,
@@ -124,7 +125,8 @@ object Combat {
         affected: Int = 1,
     ): Boolean {
         if (params.combatType == CombatType.NONE) {
-            return false
+            doCombatDefault(caster, target, params)
+            return true
         }
 
         damage.affected = affected
@@ -154,9 +156,10 @@ object Combat {
      * `!params.aggressive || caster !== target` (combat.cpp:1650); the healing
      * summon/player/monster restrictions (combat.cpp:1660-1685),
      * `Combat::applyExtensions` critical/fatal resolution, absorb/buff
-     * modifiers, ghost mode, dodge/reflection, mana shield, creature events,
-     * condition/dispel application and every protocol effect stay in their
-     * owning systems.
+     * modifiers, ghost mode, dodge/reflection, mana shield, creature events and
+     * every protocol effect stay in their owning systems; the post-change
+     * `CombatConditionFunc`/`CombatDispelFunc` call (combat.cpp:911-913) is not
+     * wired into this damage path.
      */
     fun doCombatHealth(
         caster: CombatTarget?,
@@ -234,8 +237,10 @@ object Combat {
      *
      * PARITY GAPS: the `CombatManaFunc` black-skull player halving
      * (combat.cpp:984-996) needs the player/skull model; `applyExtensions`,
-     * conditions, dispel, leech and protocol effects stay in their owning
-     * systems. [random] is accepted for signature parity with [doCombatHealth].
+     * leech and protocol effects stay in their owning systems, and the
+     * post-change condition/dispel call (combat.cpp:997-999) is not wired into
+     * this mana path. [random] is accepted for signature parity with
+     * [doCombatHealth].
      */
     fun doCombatMana(
         caster: CombatTarget?,
@@ -249,6 +254,68 @@ object Combat {
         }
 
         target.changeMana(damage.primaryValue + damage.secondaryValue)
+    }
+
+    /**
+     * Reduced port of `Combat::doCombatDefault`
+     * (src/creatures/combat/combat.cpp:1829-1864).
+     *
+     * Applies `params.conditionList` to the target through [combatConditionFunc]
+     * after the `canCombat` gate `!params.aggressive || caster != target`
+     * (combat.cpp:1834); `canDoCombatWithExpertPvp` is reduced exactly as in
+     * [doCombatHealth].
+     *
+     * PARITY GAPS: tile/magic effects, target callbacks and sounds stay in their
+     * owning systems, and `CombatDispelFunc` (`removeCombatCondition`) is not
+     * part of this condition-application slice.
+     */
+    fun doCombatDefault(
+        caster: CombatTarget?,
+        target: CombatTarget,
+        params: CombatParams,
+    ) {
+        if (params.aggressive && caster === target) {
+            return
+        }
+
+        combatConditionFunc(caster, target, params)
+    }
+
+    /**
+     * Port of `Combat::CombatConditionFunc`
+     * (src/creatures/combat/combat.cpp:1031-1092) reduced to the condition-list
+     * path. `CombatNullFunc` (combat.cpp:1100-1103) drives it with no damage
+     * data, so the `ORIGIN_MELEE` zero-damage gate (combat.cpp:1032) does not
+     * apply; the player cleanse/fear gates (combat.cpp:1039-1077) need the
+     * charm/cleanse model.
+     *
+     * For every template condition Canary clones it and stamps the caster owner,
+     * then adds it via
+     * `Creature::addCombatCondition(copy, caster->getPlayer() != nullptr)`
+     * (combat.cpp:1080-1088). A target immune to the condition type skips it
+     * unless caster and target are the same creature (combat.cpp:1079).
+     *
+     * PARITY GAP: `setPositionParam(CONDITION_PARAM_CASTER_POSITION, ...)`
+     * (combat.cpp:1083) needs the map `Position`, which the combat seam does not
+     * carry.
+     */
+    private fun combatConditionFunc(
+        caster: CombatTarget?,
+        target: CombatTarget,
+        params: CombatParams,
+    ) {
+        for (condition in params.conditionList) {
+            if (caster !== target && target.isImmune(condition.type)) {
+                continue
+            }
+
+            val conditionCopy = condition.clone()
+            if (caster != null) {
+                conditionCopy.setParam(ConditionParam.CONDITION_PARAM_OWNER, caster.getID())
+            }
+
+            target.addCombatCondition(conditionCopy, caster?.getPlayer() != null)
+        }
     }
 
     /**

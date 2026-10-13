@@ -1,5 +1,9 @@
 package org.opentibia.canary.combat
 
+import org.opentibia.canary.combat.condition.Condition
+import org.opentibia.canary.combat.condition.ConditionPlayer
+import org.opentibia.canary.combat.condition.ConditionType
+
 /**
  * Test double for the injected [CombatTarget] seam.
  *
@@ -8,12 +12,14 @@ package org.opentibia.canary.combat
  * *not* Canary's `Creature`.
  */
 class FakeCombatTarget(
+    id: Int = 0,
     health: Int = 1000,
     maxHealth: Int = 1000,
     mana: Int = 100,
     maxMana: Int = 500,
 ) : CombatTarget {
 
+    var idValue: Int = id
     var healthValue: Int = health
     var maxHealthValue: Int = maxHealth
     var manaValue: Int = mana
@@ -26,6 +32,11 @@ class FakeCombatTarget(
     var mitigationValue: Double = 0.0
     var hasDefenseValue: Boolean = true
     var canUseDefenseValue: Boolean = true
+    var immuneConditionTypes: MutableSet<ConditionType> = mutableSetOf()
+    var playerValue: ConditionPlayer? = null
+
+    /** Every `addCombatCondition` call as `(condition, attackerPlayer)` in order. */
+    val appliedConditions: MutableList<Pair<Condition, Boolean>> = mutableListOf()
 
     /** Every `drainHealth` amount in order. */
     val drainedHealth: MutableList<Int> = mutableListOf()
@@ -75,4 +86,15 @@ class FakeCombatTarget(
     override fun canUseDefense(): Boolean = canUseDefenseValue
 
     override fun getMitigation(): Double = mitigationValue
+
+    override fun getID(): Int = idValue
+
+    override fun getPlayer(): ConditionPlayer? = playerValue
+
+    override fun isImmune(conditionType: ConditionType): Boolean = conditionType in immuneConditionTypes
+
+    override fun addCombatCondition(condition: Condition, attackerPlayer: Boolean): Boolean {
+        appliedConditions.add(condition to attackerPlayer)
+        return true
+    }
 }

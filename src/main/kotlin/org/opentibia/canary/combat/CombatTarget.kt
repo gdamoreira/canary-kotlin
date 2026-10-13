@@ -1,5 +1,9 @@
 package org.opentibia.canary.combat
 
+import org.opentibia.canary.combat.condition.Condition
+import org.opentibia.canary.combat.condition.ConditionPlayer
+import org.opentibia.canary.combat.condition.ConditionType
+
 /**
  * Injected view of the target `Creature` used by the combat dispatch layer.
  *
@@ -65,4 +69,24 @@ interface CombatTarget {
 
     /** `Creature::getMitigation()` (`creature.cpp:910-922`). */
     fun getMitigation(): Double
+
+    /** `Creature::getID()` (`src/creatures/creature.hpp:156`); the owner stamped on conditions. */
+    fun getID(): Int
+
+    /**
+     * `Creature::getPlayer()` (`src/creatures/creature.hpp:92`); non-null when
+     * this creature is a player. `Combat::CombatConditionFunc` uses
+     * `caster->getPlayer() != nullptr` as the `attackerPlayer` flag
+     * (`combat.cpp:1088`).
+     */
+    fun getPlayer(): ConditionPlayer?
+
+    /** `Creature::isImmune(ConditionType_t)` (`src/creatures/creature.hpp:522`). */
+    fun isImmune(conditionType: ConditionType): Boolean
+
+    /**
+     * `Creature::addCombatCondition` (`src/creatures/creature.cpp:1397-1410`).
+     * Returns whether the condition was added.
+     */
+    fun addCombatCondition(condition: Condition, attackerPlayer: Boolean): Boolean
 }
