@@ -1,27 +1,263 @@
 package org.opentibia.canary.items
 
+import org.opentibia.canary.combat.CombatType
+import org.opentibia.canary.combat.condition.ConditionDamage
+import org.opentibia.canary.creatures.WeaponType_t
 import org.opentibia.canary.io.PropStream
 import org.opentibia.canary.io.PropWriteStream
 import org.opentibia.canary.map.house.Door
+import org.opentibia.canary.systems.imbuement.ImbuementTypes_t
+
+/** `SLOTP_HAND` (`SLOTP_LEFT | SLOTP_RIGHT`, src/items/items_definitions.hpp:440). */
+const val SLOTP_HAND = 48
+
+/** `DIRECTION_NONE` (`src/game/movement/position.hpp:23`). */
+const val DIRECTION_NONE = 8
+
+/** `IMBUEMENT_MAX_TIER` (`src/utils/const.hpp:27`). */
+const val IMBUEMENT_MAX_TIER = 3
+
+/** `PLAYERSEX_FEMALE` (`src/creatures/creatures_definitions.hpp:448`). */
+const val PLAYERSEX_FEMALE = 0
+
+/** `PLAYERSEX_MALE` (`src/creatures/creatures_definitions.hpp:449`). */
+const val PLAYERSEX_MALE = 1
+
+/** `ItemGroup_t` (`src/items/items_definitions.hpp:113-121`). */
+enum class ItemGroup_t(val value: Int) {
+    ITEM_GROUP_NONE(0),
+    ITEM_GROUP_GROUND(1),
+    ITEM_GROUP_CONTAINER(2),
+    ITEM_GROUP_SPLASH(3),
+    ITEM_GROUP_FLUID(4),
+    ITEM_GROUP_LAST(5),
+}
+
+/** `ItemTypes_t` (`src/items/items_definitions.hpp:122-170`). */
+enum class ItemTypes_t(val value: Int) {
+    ITEM_TYPE_NONE(0),
+    ITEM_TYPE_ARMOR(1),
+    ITEM_TYPE_AMULET(2),
+    ITEM_TYPE_BOOTS(3),
+    ITEM_TYPE_CONTAINER(4),
+    ITEM_TYPE_DECORATION(5),
+    ITEM_TYPE_FOOD(6),
+    ITEM_TYPE_HELMET(7),
+    ITEM_TYPE_LEGS(8),
+    ITEM_TYPE_OTHER(9),
+    ITEM_TYPE_POTION(10),
+    ITEM_TYPE_RING(11),
+    ITEM_TYPE_RUNE(12),
+    ITEM_TYPE_SHIELD(13),
+    ITEM_TYPE_TOOLS(14),
+    ITEM_TYPE_VALUABLE(15),
+    ITEM_TYPE_AMMO(16),
+    ITEM_TYPE_AXE(17),
+    ITEM_TYPE_CLUB(18),
+    ITEM_TYPE_DISTANCE(19),
+    ITEM_TYPE_SWORD(20),
+    ITEM_TYPE_WAND(21),
+    ITEM_TYPE_PREMIUMSCROLL(22),
+    ITEM_TYPE_TIBIACOIN(23),
+    ITEM_TYPE_CREATUREPRODUCT(24),
+    ITEM_TYPE_QUIVER(25),
+    ITEM_TYPE_SOULCORES(26),
+    ITEM_TYPE_FIST(27),
+    ITEM_TYPE_DEPOT(28),
+    ITEM_TYPE_MAILBOX(29),
+    ITEM_TYPE_TRASHHOLDER(30),
+    ITEM_TYPE_DOOR(31),
+    ITEM_TYPE_MAGICFIELD(32),
+    ITEM_TYPE_TELEPORT(33),
+    ITEM_TYPE_BED(34),
+    ITEM_TYPE_KEY(35),
+    ITEM_TYPE_SUPPLY(36),
+    ITEM_TYPE_REWARDCHEST(37),
+    ITEM_TYPE_CARPET(38),
+    ITEM_TYPE_RETRIEVE(39),
+    ITEM_TYPE_GOLD(40),
+    ITEM_TYPE_UNASSIGNED(41),
+    ITEM_TYPE_LADDER(42),
+    ITEM_TYPE_DUMMY(43),
+    ITEM_TYPE_LAST(44),
+}
+
+/** `Fluids_t` (`src/utils/utils_definitions.hpp:412-435`). */
+enum class Fluids_t(val value: Int) {
+    FLUID_NONE(0),
+    FLUID_WATER(1),
+    FLUID_WINE(2),
+    FLUID_BEER(3),
+    FLUID_MUD(4),
+    FLUID_BLOOD(5),
+    FLUID_SLIME(6),
+    FLUID_OIL(7),
+    FLUID_URINE(8),
+    FLUID_MILK(9),
+    FLUID_MANA(10),
+    FLUID_LIFE(11),
+    FLUID_LEMONADE(12),
+    FLUID_RUM(13),
+    FLUID_FRUITJUICE(14),
+    FLUID_COCONUTMILK(15),
+    FLUID_MEAD(16),
+    FLUID_TEA(17),
+    FLUID_INK(18),
+    FLUID_CANDY(19),
+    FLUID_CHOCOLATE(20),
+}
+
+/** `Ammo_t` (`src/utils/utils_definitions.hpp:483-492`). */
+enum class Ammo_t(val value: Int) {
+    AMMO_NONE(0),
+    AMMO_BOLT(1),
+    AMMO_ARROW(2),
+    AMMO_SPEAR(3),
+    AMMO_THROWINGSTAR(4),
+    AMMO_THROWINGKNIFE(5),
+    AMMO_STONE(6),
+    AMMO_SNOWBALL(7),
+}
+
+/** `BedItemPart_t` (`src/utils/utils_definitions.hpp:764-768`). */
+enum class BedItemPart_t(val value: Int) {
+    BED_NONE_PART(0),
+    BED_PILLOW_PART(1),
+    BED_BLANKET_PART(2),
+}
+
+/** `WeaponAction_t` (`src/utils/utils_definitions.hpp:494-499`). */
+enum class WeaponAction_t(val value: Int) {
+    WEAPONACTION_NONE(0),
+    WEAPONACTION_REMOVECOUNT(1),
+    WEAPONACTION_REMOVECHARGE(2),
+    WEAPONACTION_MOVE(3),
+}
+
+/** `Augment_t` (`src/items/items_definitions.hpp:280-302`). */
+enum class Augment_t(val value: Int) {
+    None(0),
+    ManaCost(1),
+    BaseDamage(2),
+    BaseHealing(3),
+    DurationIncreased(4),
+    AdditionalTargets(5),
+    Cooldown(6),
+    SecondaryGroupCooldown(7),
+    AffectedAreaEnlarged(8),
+    IncreasedDamageReduction(9),
+    EnhancedEffect(12),
+    IncreasedSkill(13),
+    LifeLeech(14),
+    ManaLeech(15),
+    CriticalExtraDamage(16),
+    CriticalHitChance(17),
+    PowerfulImpact(100),
+    StrongImpact(101),
+    IncreasedDamage(102),
+}
+
+/** `AugmentInfo` (`src/items/items_definitions.hpp:651-658`). */
+data class AugmentInfo(
+    val spellName: String,
+    val type: Augment_t,
+    val value: Int,
+)
+
+/**
+ * `struct Abilities` (`src/items/items.hpp:19-93`).
+ *
+ * The C++ array widths come from `SKILL_LAST + 1` (12 + 1), `STAT_LAST + 1`
+ * (4 + 1) and `COMBAT_COUNT` (14).
+ */
+class Abilities {
+    /** `skills[SKILL_LAST + 1]` (items.hpp:31). */
+    val skills: IntArray = IntArray(SKILL_COUNT)
+
+    /** `stats[STAT_LAST + 1]` (items.hpp:27). */
+    val stats: IntArray = IntArray(STAT_COUNT)
+
+    /** `statsPercent[STAT_LAST + 1]` (items.hpp:28). */
+    val statsPercent: IntArray = IntArray(STAT_COUNT)
+
+    /** `fieldAbsorbPercent[COMBAT_COUNT]` (items.hpp:37, `int16_t`). */
+    val fieldAbsorbPercent: ShortArray = ShortArray(COMBAT_COUNT)
+
+    /** `absorbPercent[COMBAT_COUNT]` (items.hpp:40, `int16_t`). */
+    val absorbPercent: ShortArray = ShortArray(COMBAT_COUNT)
+
+    /** `reflectPercent[COMBAT_COUNT]` (items.hpp:43, `int16_t`). */
+    val reflectPercent: ShortArray = ShortArray(COMBAT_COUNT)
+
+    /** `reflectFlat[COMBAT_COUNT]` (items.hpp:49, `int32_t`). */
+    val reflectFlat: IntArray = IntArray(COMBAT_COUNT)
+
+    /** `specializedMagicLevel[COMBAT_COUNT]` (items.hpp:51, `int32_t`). */
+    val specializedMagicLevel: IntArray = IntArray(COMBAT_COUNT)
+
+    /** `conditionImmunities` (items.hpp:20). */
+    val conditionImmunities: IntArray = IntArray(CONDITION_COUNT)
+
+    /** `conditionSuppressions` (items.hpp:21). */
+    val conditionSuppressions: IntArray = IntArray(CONDITION_COUNT)
+
+    var speed: Int = 0
+    var elementDamage: Int = 0
+    var elementType: CombatType = CombatType.NONE
+    var magicShieldCapacityPercent: Int = 0
+    var magicShieldCapacityFlat: Int = 0
+    var cleavePercent: Int = 0
+    var perfectShotDamage: Int = 0
+    var perfectShotRange: Int = 0
+    var manaShield: Boolean = false
+    var invisible: Boolean = false
+    var regeneration: Boolean = false
+
+    /** `Abilities::setHealthGain`/`getHealthGain` (items.hpp:69-79). */
+    var healthGain: Int = 0
+
+    /** `Abilities::setHealthTicks`/`getHealthTicks` (items.hpp:81-91). */
+    var healthTicks: Int = 0
+
+    /** `Abilities::setManaGain`/`getManaGain` (items.hpp:93-103). */
+    var manaGain: Int = 0
+
+    /** `Abilities::setManaTicks`/`getManaTicks` (items.hpp:105-115). */
+    var manaTicks: Int = 0
+
+    companion object {
+        /** `SKILL_LAST + 1` with `SKILL_LAST = SKILL_MANA_LEECH_AMOUNT` (12). */
+        private const val SKILL_COUNT = 13
+
+        /** `STAT_LAST + 1` with `STAT_LAST = STAT_CAPACITY` (4). */
+        private const val STAT_COUNT = 5
+
+        /** `COMBAT_COUNT` (`src/creatures/creatures_definitions.hpp:847`). */
+        private const val COMBAT_COUNT = 14
+
+        /** `CONDITION_COUNT` (`src/creatures/creatures_definitions.hpp:397`). */
+        private const val CONDITION_COUNT = 40
+    }
+}
 
 data class ItemType(
     val id: Int,
-    val name: String,
+    var name: String,
     val isStackable: Boolean = false,
-    val isContainer: Boolean = false,
+    var isContainer: Boolean = false,
     val capacity: Int = 0,
-    val weight: Double = 0.0,
+    var weight: Double = 0.0,
     /** Mirrors `ItemType::upgradeClassification` (src/items/items.hpp:329). */
     val upgradeClassification: Int = 0,
-    val isPickupable: Boolean = true,
+    var isPickupable: Boolean = true,
     /** Mirrors `ItemType::magicEffect` (src/items/items.hpp:318); default `CONST_ME_NONE` (0). */
-    val magicEffect: Int = 0,
+    var magicEffect: Int = 0,
     /** `ItemType::movable` (src/items/items.hpp:288), the house-serialization guard. */
-    val isMovable: Boolean = false,
+    var isMovable: Boolean = false,
     /** `ItemType::isBed()` (src/items/items.hpp:378). */
     val isBed: Boolean = false,
     /** `ItemType::bedPartOf` (src/items/items.hpp:468), the partner id `BedItem::isBedComplete` checks. */
-    val bedPartOf: Int = 0,
+    var bedPartOf: Int = 0,
     /** `ItemType::isCarpet()` (src/items/items.hpp:420). */
     val isCarpet: Boolean = false,
     /** `ItemType::isTrashHolder()` (src/items/items.hpp:410). */
@@ -31,9 +267,9 @@ data class ItemType(
     /** `ItemType::isWrappable()` (src/items/items.hpp:411). */
     val isWrappable: Boolean = false,
     /** `ItemType::canWriteText` (src/items/items.hpp:342). */
-    val canWriteText: Boolean = false,
+    var canWriteText: Boolean = false,
     /** `ItemType::m_transformOnUse` (src/items/items.hpp:347). */
-    val transformOnUse: Int = 0,
+    var transformOnUse: Int = 0,
     /** `ItemType::isFluidContainer()` (src/items/items.hpp:416). */
     val isFluidContainer: Boolean = false,
     /** `ItemType::isSplash()` (src/items/items.hpp:417). */
@@ -41,8 +277,216 @@ data class ItemType(
     /** `ItemType::isGroundTile()` (src/items/items.hpp:407). */
     val isGroundTile: Boolean = false,
     /** `ItemType::charges` (src/items/items.hpp:290), used by `getSubType`/`setSubType`. */
-    val charges: Int = 0,
-)
+    var charges: Int = 0,
+
+    // ---- Canary ItemType parse state (src/items/items.hpp:262-407) ----
+    /** `ItemType::group` (items.hpp:262); default `ITEM_GROUP_NONE`. */
+    var group: ItemGroup_t = ItemGroup_t.ITEM_GROUP_NONE,
+    /** `ItemType::type` (items.hpp:263); default `ITEM_TYPE_NONE`. */
+    var type: ItemTypes_t = ItemTypes_t.ITEM_TYPE_NONE,
+    /** `ItemType::article` (items.hpp:266). */
+    var article: String = "",
+    /** `ItemType::pluralName` (items.hpp:267). */
+    var pluralName: String = "",
+    /** `ItemType::description` (items.hpp:268). */
+    var description: String = "",
+    /** `ItemType::runeSpellName` (items.hpp:269). */
+    var runeSpellName: String = "",
+    /** `ItemType::vocationString` (items.hpp:270). */
+    var vocationString: String = "",
+    /** `ItemType::m_primaryType` (items.hpp:271). */
+    var primaryType: String = "",
+    /** `std::unique_ptr<Abilities> abilities` (items.hpp:273); null until `getAbilities()`. */
+    @get:JvmName("abilitiesValue")
+    var abilities: Abilities? = null,
+    /** `std::shared_ptr<ConditionDamage> conditionDamage` (items.hpp:274). */
+    var conditionDamage: ConditionDamage? = null,
+    /** `ItemType::levelDoor` (items.hpp:276). */
+    var levelDoor: Long = 0,
+    /** `ItemType::decayTime` (items.hpp:277). */
+    var decayTime: Long = 0,
+    /** `ItemType::wieldInfo` (items.hpp:278). */
+    var wieldInfo: Long = 0,
+    /** `ItemType::minReqLevel` (items.hpp:279). */
+    var minReqLevel: Long = 0,
+    /** `ItemType::minReqMagicLevel` (items.hpp:280). */
+    var minReqMagicLevel: Long = 0,
+    /** `ItemType::buyPrice` (items.hpp:281). */
+    var buyPrice: Long = 0,
+    /** `ItemType::sellPrice` (items.hpp:282). */
+    var sellPrice: Long = 0,
+    /** `ItemType::maxHitChance` (items.hpp:286); `-1` disables the table. */
+    var maxHitChance: Int = -1,
+    /** `ItemType::decayTo` (items.hpp:287); `-1` means "does not decay". */
+    var decayTo: Int = -1,
+    /** `ItemType::attack` (items.hpp:288). */
+    var attack: Int = 0,
+    /** `ItemType::defense` (items.hpp:289). */
+    var defense: Int = 0,
+    /** `ItemType::extraDefense` (items.hpp:290). */
+    var extraDefense: Int = 0,
+    /** `ItemType::armor` (items.hpp:291). */
+    var armor: Int = 0,
+    /** `ItemType::mantra` (items.hpp:292). */
+    var mantra: Int = 0,
+    /** `ItemType::rotateTo` (items.hpp:293). */
+    var rotateTo: Int = 0,
+    /** `ItemType::runeMagLevel` (items.hpp:294). */
+    var runeMagLevel: Int = 0,
+    /** `ItemType::runeLevel` (items.hpp:295). */
+    var runeLevel: Int = 0,
+    /** `ItemType::wrapableTo` (items.hpp:296). */
+    var wrapableTo: Int = 0,
+    /** `ItemType::combatType` (items.hpp:298). */
+    var combatType: CombatType = CombatType.NONE,
+    /** `ItemType::elementalBond` (items.hpp:299). */
+    var elementalBond: CombatType = CombatType.NONE,
+    /** `uint16_t transformToOnUse[2]` (items.hpp:303); index by `PLAYERSEX_*`. */
+    val transformToOnUse: IntArray = IntArray(2),
+    /** `ItemType::transformToFree` (items.hpp:303). */
+    var transformToFree: Int = 0,
+    /** `ItemType::destroyTo` (items.hpp:304). */
+    var destroyTo: Int = 0,
+    /** `ItemType::maxTextLen` (items.hpp:305). */
+    var maxTextLen: Int = 0,
+    /** `ItemType::writeOnceItemId` (items.hpp:306). */
+    var writeOnceItemId: Int = 0,
+    /** `ItemType::transformEquipTo` (items.hpp:307). */
+    var transformEquipTo: Int = 0,
+    /** `ItemType::transformDeEquipTo` (items.hpp:308). */
+    var transformDeEquipTo: Int = 0,
+    /** `ItemType::maxItems` (items.hpp:309), default 8. */
+    var maxItems: Int = 8,
+    /** `ItemType::slotPosition` (items.hpp:310), default `SLOTP_HAND`. */
+    var slotPosition: Int = SLOTP_HAND,
+    /** `ItemType::speed` (items.hpp:311). */
+    var speed: Int = 0,
+    /** `ItemType::wareId` (items.hpp:312). */
+    var wareId: Int = 0,
+    /** `ItemType::bedPartnerDir` (items.hpp:319); `DIRECTION_NONE` until parsed. */
+    var bedPartnerDir: Int = DIRECTION_NONE,
+    /** `ItemType::bedPart` (items.hpp:320). */
+    var bedPart: BedItemPart_t = BedItemPart_t.BED_NONE_PART,
+    /** `ItemType::weaponType` (items.hpp:321). */
+    var weaponType: WeaponType_t = WeaponType_t.WEAPON_NONE,
+    /** `ItemType::ammoType` (items.hpp:322). */
+    var ammoType: Int = 0,
+    /** `ItemType::shootType` (items.hpp:323). */
+    var shootType: Int = 0,
+    /** `ItemType::corpseType` (items.hpp:324). */
+    var corpseType: Int = 0,
+    /** `ItemType::fluidSource` (items.hpp:325). */
+    var fluidSource: Int = 0,
+    /** `ItemType::floorChange` (items.hpp:326). */
+    var floorChange: Int = 0,
+    /** `ItemType::imbuementTypes` (items.hpp:327). */
+    val imbuementTypes: MutableMap<ImbuementTypes_t, Int> = linkedMapOf(),
+    /** `ItemType::alwaysOnTopOrder` (items.hpp:330). */
+    var alwaysOnTopOrder: Int = 0,
+    /** `ItemType::lightLevel` (items.hpp:331). */
+    var lightLevel: Int = 0,
+    /** `ItemType::lightColor` (items.hpp:332). */
+    var lightColor: Int = 0,
+    /** `ItemType::shootRange` (items.hpp:333), default 1. */
+    var shootRange: Int = 1,
+    /** `ItemType::imbuementSlot` (items.hpp:334). */
+    var imbuementSlot: Int = 0,
+    /** `ItemType::stackSize` (items.hpp:335), default 100. */
+    var stackSize: Int = 100,
+    /** `ItemType::proficiencyId` (items.hpp:337). */
+    var proficiencyId: Int = 0,
+    /** `ItemType::hitChance` (items.hpp:339). */
+    var hitChance: Int = 0,
+    /** `std::vector<std::shared_ptr<AugmentInfo>> augments` (items.hpp:341). */
+    val augments: MutableList<AugmentInfo> = mutableListOf(),
+    /** `ItemType::wearOut` (items.hpp:344). */
+    var wearOut: Boolean = false,
+    /** `ItemType::clockExpire` (items.hpp:345). */
+    var clockExpire: Boolean = false,
+    /** `ItemType::expire` (items.hpp:346). */
+    var expire: Boolean = false,
+    /** `ItemType::expireStop` (items.hpp:347). */
+    var expireStop: Boolean = false,
+    /** `ItemType::forceUse` (items.hpp:349). */
+    var forceUse: Boolean = false,
+    /** `ItemType::hasHeight` (items.hpp:350). */
+    var hasHeight: Boolean = false,
+    /** `ItemType::walkStack` (items.hpp:351), default true. */
+    var walkStack: Boolean = true,
+    /** `ItemType::blockSolid` (items.hpp:352). */
+    var blockSolid: Boolean = false,
+    /** `ItemType::blockPickupable` (items.hpp:353). */
+    var blockPickupable: Boolean = false,
+    /** `ItemType::blockProjectile` (items.hpp:354). */
+    var blockProjectile: Boolean = false,
+    /** `ItemType::blockPathFind` (items.hpp:355). */
+    var blockPathFind: Boolean = false,
+    /** `ItemType::showDuration` (items.hpp:356). */
+    var showDuration: Boolean = false,
+    /** `ItemType::showCharges` (items.hpp:357). */
+    var showCharges: Boolean = false,
+    /** `ItemType::showAttributes` (items.hpp:358). */
+    var showAttributes: Boolean = false,
+    /** `ItemType::replaceable` (items.hpp:359), default true. */
+    var replaceable: Boolean = true,
+    /** `ItemType::rotatable` (items.hpp:360). */
+    var rotatable: Boolean = false,
+    /** `ItemType::wrapable` (items.hpp:361); set by `wrapableto`. */
+    var wrapable: Boolean = false,
+    /** `ItemType::wrapContainer` (items.hpp:362). */
+    var wrapContainer: Boolean = false,
+    /** `ItemType::multiUse` (items.hpp:363). */
+    var multiUse: Boolean = false,
+    /** `ItemType::canReadText` (items.hpp:365). */
+    var canReadText: Boolean = false,
+    /** `ItemType::isVertical` (items.hpp:367). */
+    var isVertical: Boolean = false,
+    /** `ItemType::isHorizontal` (items.hpp:368). */
+    var isHorizontal: Boolean = false,
+    /** `ItemType::isHangable` (items.hpp:369). */
+    var isHangable: Boolean = false,
+    /** `ItemType::allowDistRead` (items.hpp:370). */
+    var allowDistRead: Boolean = false,
+    /** `ItemType::lookThrough` (items.hpp:371). */
+    var lookThrough: Boolean = false,
+    /** `ItemType::stopTime` (items.hpp:372). */
+    var stopTime: Boolean = false,
+    /** `ItemType::hasDeEquipEvent` (items.hpp:373). */
+    var hasDeEquipEvent: Boolean = false,
+    /** `ItemType::showCount` (items.hpp:374), default true. */
+    var showCount: Boolean = true,
+    /** `ItemType::stackable` (items.hpp:375); the XML parse does not set it. */
+    var stackable: Boolean = false,
+    /** `ItemType::isPodium` (items.hpp:376). */
+    var isPodium: Boolean = false,
+    /** `ItemType::isCorpse` (items.hpp:377). */
+    var isCorpse: Boolean = false,
+    /** `ItemType::loaded` (items.hpp:378). */
+    var loaded: Boolean = false,
+    /** `ItemType::spellbook` (items.hpp:379). */
+    var spellbook: Boolean = false,
+    /** `ItemType::isWrapKit` (items.hpp:380). */
+    var isWrapKit: Boolean = false,
+    /** `ItemType::m_canBeUsedByGuests` (items.hpp:381). */
+    var canBeUsedByGuests: Boolean = false,
+    /** `ItemType::isDualWielding` (items.hpp:384). */
+    var isDualWielding: Boolean = false,
+    /** `ItemType::m_isMagicShieldPotion` (items.hpp:385). */
+    var isMagicShieldPotion: Boolean = false,
+) {
+    /** `ItemType::getAbilities()` (src/items/items.hpp:196-201). */
+    fun getAbilities(): Abilities = abilities ?: Abilities().also { abilities = it }
+
+    /** `ItemType::setImbuementType` (src/items/items.cpp:123-125). */
+    fun setImbuementType(imbuementType: ImbuementTypes_t, slotMaxTier: Int) {
+        imbuementTypes[imbuementType] = minOf(IMBUEMENT_MAX_TIER, slotMaxTier)
+    }
+
+    /** `ItemType::addAugment` (src/items/items.cpp:118-121). */
+    fun addAugment(spellName: String, augmentType: Augment_t, value: Int) {
+        augments.add(AugmentInfo(spellName, augmentType, value))
+    }
+}
 
 class ItemTypeRegistry {
     private val types = mutableMapOf<Int, ItemType>()
