@@ -32,3 +32,7 @@
 ## Post-wave (§6)
 
 Flip the 3 PARTIAL rows if closed; update §1–§4 (sender counts), `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+
+## Completion
+
+Completed: `luascript.cpp`/`script_environment.cpp` row flipped to IMPLEMENTED; game.cpp and protocolgame.cpp rows advanced (houses/auctions + opcode application); outbound sender campaign started (creature/map/tile/player-UI/chat/text/cyclopedia). 506 suites / 5359 tests.

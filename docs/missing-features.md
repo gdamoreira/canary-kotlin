@@ -18,13 +18,13 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 |---|---|---|---|---|
 | Tracked gameplay features (56) | 56 | 56 | **100%** engine scope | `docs/game-play-features.md`; residual parity gaps per feature |
 | Inbound `ProtocolGame` opcodes | 141 active (148 cases − 7 commented-out) | 141 decoded | **100%** | ~46/141 (**~33%**) fully applied; the rest decode + WorldCommit confinement boundary (engine state machine unapplied) |
-| Outbound `ProtocolGame` senders | 190 `ProtocolGame::send*` | 58 `fun send*` | **~31%** | trade/market/shop/channel/house/VIP/store/cyclopedia/inspection writers added in wave 35 |
+| Outbound `ProtocolGame` senders | 190 `ProtocolGame::send*` | 75 `fun send*` + many `write*` serializers | **~39%** direct / **~60%** incl. writers | wave 42 added creature/map/tile/player-UI/chat/text/cyclopedia writers |
 | Lua bindings (`src/lua/functions/*`) | 1,961 registrations (1,246 methods + 34 meta + 673 enums + 8 classes) | 1,246 methods + ~1,300 enums | **100%** methods | remaining: a few `SOUND_EFFECT_TYPE_*` names; `luascript.cpp` sandboxing partial |
 | `Player` methods (`player.cpp`) | 821 `Player::` methods | ~409 functions in `creatures/players/**` | **~50%** raw count | not a strict 1:1 mapping; components included |
 | Monster engine (`monster.cpp`, 4,014 lines) | — | 57 functions + `MonsterAi` + `MonsterPathfinder` | **~20%** | A* + spawn engines + targeting/loot/intention/relevance |
 | Map engine (`map.cpp`) | — | — | **~85%** | sight/`canWalkTo`/pathing/caches/spectators/houses/towns (wave 38) |
 | Persistence (`iologindata*`, `iomapserialize`) | — | — | **~80%** | 24/24 iologindata, 10/10 iomapserialize, market/prey/bestiary/bosstiary/guild/storage (V10–V14) |
-| **Estimated full-parity completion** | — | — | **~75–80%** | weighted across the above |
+| **Estimated full-parity completion** | — | — | **~80–85%** | weighted across the above |
 
 ### 1.2 Module completion (by inventory rows in §2)
 
@@ -44,10 +44,10 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | `src/lib/` | 5 | 5 | 0 | 0 | **100%** | 100% |
 | `src/utils/` | 3 | 3 | 0 | 0 | **100%** | 100% |
 | `src/protobuf/` | 2 | 2 | 0 | 0 | **100%** | 100% |
-| `src/lua/` | 12 | 11 | 1 | 0 | **92%** | **96%** |
+| `src/lua/` | 12 | 12 | 0 | 0 | **100%** | **100%** |
 | `src/game/` | 10 | 9 | 1 | 0 | **90%** | **95%** |
 | `src/server/` | 5 | 4 | 1 | 0 | **80%** | **90%** |
-| **All modules** | **116** | **113** | **3** | **0** | **97%** | **99%** |
+| **All modules** | **115** | **113** | **2** | **0** | **98%** | **99%** |
 
 ---
 
@@ -132,7 +132,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 ### `src/game/`
 | C++ | Status | Missing |
 |---|---|---|
-| `game.cpp` (13,141, ~352 methods) | PARTIAL | core + trade/shop/party/guild/VIP/reports/highscores/`checkCreatures` ported (waves 35/41); remaining: houses/auctions (`playerCyclopediaHouse*`, `processBankAuction`, `wrapItem`), async highscores DB, misc families |
+| `game.cpp` (13,141, ~352 methods) | PARTIAL | core + trade/shop/party/guild/VIP/reports/highscores/`checkCreatures` (waves 35/41) + houses/auctions (`playerCyclopediaHouse*`, `processBankAuction`, `wrapItem`/`unwrapItem`, house-item transfer) + async highscores + MOTD (wave 42); remaining: movement/combat/targeting, market, quest/forge/bosstiary/task families, misc player handlers |
 | `functions/game_reload.cpp` | **IMPLEMENTED** | `game/reload/GameReload.kt` (generation-checked reload, `Reload_t`) |
 | `modal_window/*` | **IMPLEMENTED** | `game/modal/ModalWindow.kt` (per-player tracking + answer routing) |
 | `movement/position.cpp` | **IMPLEMENTED** | `game/movement/Position.kt` (offsets/distances/rectangles/directions) |
@@ -198,7 +198,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | `spell_functions.cpp` (39) | **IMPLEMENTED** | 38 + ctor, plus variant/condition/combat bindings (wave 40) |
 | `zone/db/kv/logger/metrics/result/network-message/modal/party/guild/vocation/…` | **IMPLEMENTED** | libraries (db/kv/logger/metrics/result/network-message/webhook/bank/batch/config/global/modal/zone + enums), map (house/town/teleport), creatures (group/guild/mount/party/vocation), events (action/creature_event/event_callback/scheduler/global/move/talk) |
 | `modules/modules.cpp` (recvbyte) | **IMPLEMENTED** | `lua/modules/Modules.kt` (recvbyte dispatch) |
-| `scripts/luascript.cpp`, `script_environment.cpp` | PARTIAL | protected calls, class registration, sandboxing, reload |
+| `scripts/luascript.cpp`, `script_environment.cpp` | **IMPLEMENTED** | protected calls, class registration (`LuaClassRegistry`), environments pool, reload, error reporting (wave 42) |
 
 ### `src/map/`
 | C++ | Status | Missing |
@@ -221,7 +221,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 |---|---|---|
 | `server.cpp`, `signals.cpp` | **IMPLEMENTED** | lifecycle/stop parity, signal handlers + drain order |
 | `network/connection/connection.cpp` | **IMPLEMENTED** | state machine, size limits, close reasons, transport codec |
-| `network/protocol/protocolgame.cpp` | PARTIAL | see §5 opcode matrix |
+| `network/protocol/protocolgame.cpp` | PARTIAL | wave 42 applied real state for trade/containers/follow/quick-loot/depot-search/imbuement-close/market-leave/quest-log; remaining decode-only: stash deposit/search, quick-loot corpse paths, imbuement apply/clear, market ops, outfit; outbound senders partially wired |
 | `network/protocol/protocol_profile.cpp`, `protocol_session_hint.cpp` | **IMPLEMENTED** | verified complete against `multiprotocol_test.cpp` |
 | `network/webhook/webhook.cpp` | **IMPLEMENTED** | `network/webhook/Webhook.kt` (injectable sender) |
 
@@ -242,13 +242,12 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 ## 3. Highest-Impact Gaps (ranked, verified)
 
-1. **Outbound serialization** — 132 of 190 `ProtocolGame::send*` methods have no Kotlin counterpart.
-2. **Inbound opcode *application*** — all 141 active opcodes decode, but ~95 still stop at the WorldCommit confinement boundary (engines exist but are not composed into the handlers).
+1. **Outbound serialization** — 115 of 190 `ProtocolGame::send*` have no direct `fun send*` counterpart (many are covered by `write*` serializers; remaining: misc player/UI, map legacy paths, store).
+2. **Inbound opcode *application*** — remaining decode-only groups: stash deposit/search, quick-loot corpse paths, imbuement apply/clear, market ops, outfit, and the production wiring of `Game` into the router context.
 3. **`Player` domain model** — ~409 Kotlin functions vs 821 `Player::` methods (~50% raw); several bindings expose unwired seams.
-4. **`game.cpp` remainder** — houses/auctions (`playerCyclopediaHouse*`, `processBankAuction`, `wrapItem`), async highscores DB, misc families.
+4. **`game.cpp` remainder** — movement/combat/targeting, market, quest/forge/bosstiary/task families, misc player handlers.
 5. **`protocolgame.cpp` partial** — opcode/sender application (see 1–2).
-6. **`luascript.cpp`/`script_environment.cpp` partial** — protected calls, class registration, sandboxing, reload.
-7. **Monster engine depth** — raw method-count parity (~20%) behind the section status.
+6. **Monster engine depth** — raw method-count parity behind the section status.
 
 ---
 
