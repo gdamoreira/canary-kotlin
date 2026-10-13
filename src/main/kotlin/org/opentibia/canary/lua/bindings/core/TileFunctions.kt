@@ -3,18 +3,29 @@ package org.opentibia.canary.lua.bindings.core
 import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
 import org.luaj.vm2.Varargs
+import org.opentibia.canary.creatures.Creature
+import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.game.zones.TileFlags
+import org.opentibia.canary.items.INDEX_WHEREEVER
+import org.opentibia.canary.items.Item
+import org.opentibia.canary.items.ItemProperty
+import org.opentibia.canary.items.ItemTypes_t
+import org.opentibia.canary.items.Thing
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.map.Tile
+import org.opentibia.canary.map.house.AccessHouseLevel
+import org.opentibia.canary.map.house.HouseTile
+import org.opentibia.canary.systems.rewardchest.ReturnValue
 
 /**
  * Engine seam for the `Tile` metatable. Mirrors the primitives in
- * src/lua/functions/map/tile_functions.cpp.
+ * src/lua/functions/map/tile_functions.cpp over the Kotlin
+ * [org.opentibia.canary.map.Tile] domain object (ground, top/down item list,
+ * creature list, tile flags, house link).
  *
- * The Kotlin [org.opentibia.canary.map.Tile] models a ground item plus a flat item list
- * and carries no creature list, tile flags, always-on-top ordering, magic-field
- * classification, house link or `ItemProperty` data. Members whose state the domain
- * does not model carry a documented default (empty list, null, false, 0) so scripts
- * keep running instead of failing.
+ * Operations backed by another object fall back to the previously documented
+ * defaults (empty list, null, false, 0) so scripts keep running against an unwired map.
  */
 interface TileOperations {
     /** Resolves an item name to its id, returning 0 when unknown. */
@@ -23,90 +34,162 @@ interface TileOperations {
     /** Mirrors `Tile(x, y, z)`/`Tile(position)` resolving `g_game().map.getTile`. */
     fun create(position: Position): Any?
 
-    fun getPosition(tile: Any): Position?
-    fun getGround(tile: Any): Any?
+    fun getPosition(tile: Any): Position? = (tile as? Tile)?.position
 
-    /** 0 is the ground item, then the tile item list in order. */
-    fun getThing(tile: Any, index: Int): Any?
+    fun getGround(tile: Any): Any? = (tile as? Tile)?.ground
 
-    fun getThingCount(tile: Any): Int
+    /** 0 is the ground item, then Canary's top-item/creature/down-item order. */
+    fun getThing(tile: Any, index: Int): Any? = (tile as? Tile)?.getThing(index)
+
+    fun getThingCount(tile: Any): Int = (tile as? Tile)?.getThingCount() ?: 0
+
+    /** Mirrors `getTopVisibleThing`: first visible creature, else the first visible item. */
+    fun getTopVisibleThing(tile: Any, creature: Any?): Any? =
+        (tile as? Tile)?.getTopVisibleThing(creature as? Creature)
+            ?: getItems(tile).firstOrNull() ?: getGround(tile)
+
+    /** Mirrors `getTopTopItem`; the last always-on-top item in the tile list. */
+    fun getTopTopItem(tile: Any): Any? = (tile as? Tile)?.getTopTopItem() ?: getItems(tile).lastOrNull()
+
+    /** Mirrors `getTopDownItem`; the first down item in the tile list. */
+    fun getTopDownItem(tile: Any): Any? = (tile as? Tile)?.getTopDownItem() ?: getItems(tile).firstOrNull()
+
+    /** Mirrors `getFieldItem`; the first `MagicField` on the tile, else null. */
+    fun getFieldItem(tile: Any): Any? = (tile as? Tile)?.getFieldItem()
+
+    /**
+     * Mirrors `getItemByType(itemType)`: the tile flag gates the search for
+     * teleport/magic-field/mailbox/trash-holder/bed/depot, then the ground and the
+     * item list are scanned by `ItemType::type`.
+     */
+    fun getItemByType(tile: Any, itemType: Int): Any? {
+        val target = tile as? Tile ?: return null
+        val found = when (itemType) {
+            ItemTypes_t.ITEM_TYPE_TELEPORT.value -> target.hasFlag(TileFlags.TILESTATE_TELEPORT.value)
+            ItemTypes_t.ITEM_TYPE_MAGICFIELD.value -> target.hasFlag(TileFlags.TILESTATE_MAGICFIELD.value)
+            ItemTypes_t.ITEM_TYPE_MAILBOX.value -> target.hasFlag(TileFlags.TILESTATE_MAILBOX.value)
+            ItemTypes_t.ITEM_TYPE_TRASHHOLDER.value -> target.hasFlag(TileFlags.TILESTATE_TRASHHOLDER.value)
+            ItemTypes_t.ITEM_TYPE_BED.value -> target.hasFlag(TileFlags.TILESTATE_BED.value)
+            ItemTypes_t.ITEM_TYPE_DEPOT.value -> target.hasFlag(TileFlags.TILESTATE_DEPOT.value)
+            else -> true
+        }
+        if (!found) {
+            return null
+        }
+        target.ground?.let { if (it.type?.type?.value == itemType) return it }
+        return target.items.firstOrNull { it.type?.type?.value == itemType }
+    }
+
+    /** Mirrors `getItemByTopOrder`; the top item with the requested `alwaysOnTopOrder`. */
+    fun getItemByTopOrder(tile: Any, topOrder: Int): Any? = (tile as? Tile)?.getItemByTopOrder(topOrder)
+
+    /** Mirrors `getBottomCreature`; the last creature on the tile, else null. */
+    fun getBottomCreature(tile: Any): Any? = (tile as? Tile)?.getBottomCreature()
+
+    /** Mirrors `getTopCreature`; the first creature on the tile, else null. */
+    fun getTopCreature(tile: Any): Any? = (tile as? Tile)?.getTopCreature()
+
+    /** Mirrors `getBottomVisibleCreature`; nil when the seeing creature is absent. */
+    fun getBottomVisibleCreature(tile: Any, creature: Any?): Any? {
+        val seer = creature as? Creature ?: return null
+        return (tile as? Tile)?.getBottomVisibleCreature(seer)
+    }
+
+    /** Mirrors `getTopVisibleCreature`; nil when the seeing creature is absent. */
+    fun getTopVisibleCreature(tile: Any, creature: Any?): Any? {
+        val seer = creature as? Creature ?: return null
+        return (tile as? Tile)?.getTopVisibleCreature(seer)
+    }
 
     /** The tile item list (ground excluded), matching Canary's `getItems`. */
-    fun getItems(tile: Any): List<Any>
+    fun getItems(tile: Any): List<Any> = (tile as? Tile)?.items?.toList() ?: emptyList()
 
-    fun getItemCount(tile: Any): Int
-    fun getItemCountById(tile: Any, itemId: Int, subType: Int): Int
-    fun getItemById(tile: Any, itemId: Int, subType: Int): Any?
+    fun getItemCount(tile: Any): Int = (tile as? Tile)?.getItemCount() ?: 0
+
+    /** Mirrors `Tile::getItemTypeCount` (ground first, then the item list). */
+    fun getItemCountById(tile: Any, itemId: Int, subType: Int): Int =
+        (tile as? Tile)?.getItemTypeCount(itemId, subType) ?: 0
+
+    /** Mirrors `Game::findItemOfType` over the tile's `getThing` order. */
+    fun getItemById(tile: Any, itemId: Int, subType: Int): Any? {
+        val target = tile as? Tile ?: return null
+        for (index in 0 until target.getThingCount()) {
+            val item = target.getThing(index)?.getItem() ?: continue
+            if (item.id == itemId && (subType == -1 || subType == item.getSubType())) {
+                return item
+            }
+        }
+        return null
+    }
 
     /** Mirrors `tile:addItem(itemId or name[, count = 1[, flags = 0]])`. */
     fun addItem(tile: Any, itemId: Int, count: Int, flags: Long): Any?
 
-    /** Mirrors `tile:addItemEx(item[, flags = 0])`; returns a `ReturnValue`. */
-    fun addItemEx(tile: Any, item: Any, flags: Long): Int
+    /**
+     * Mirrors `tile:addItemEx(item[, flags = 0])`; null is Canary's nil (item already
+     * parented), otherwise the `ReturnValue` ordinal.
+     */
+    fun addItemEx(tile: Any, item: Any, flags: Long): Int? {
+        val target = tile as? Tile ?: return null
+        val candidate = item as? Item ?: return null
+        if (candidate.getParent() != null) {
+            return null
+        }
+        val ret = target.queryAdd(INDEX_WHEREEVER, candidate, candidate.getItemCount(), flags.toInt())
+        if (ret == ReturnValue.NOERROR) {
+            target.internalAddThing(candidate)
+        }
+        return ret.ordinal
+    }
 
-    /** Mirrors `tile:queryAdd(thing[, flags = 0])`; returns a `ReturnValue`. */
-    fun queryAdd(tile: Any, thing: Any, flags: Long): Int
+    /** Mirrors `tile:queryAdd(thing[, flags = 0])`; returns the `ReturnValue` ordinal. */
+    fun queryAdd(tile: Any, thing: Any, flags: Long): Int {
+        val target = tile as? Tile ?: return ReturnValue.NOTPOSSIBLE.ordinal
+        val cylinder = thing as? Thing ?: return ReturnValue.NOTPOSSIBLE.ordinal
+        return target.queryAdd(0, cylinder, 1, flags.toInt()).ordinal
+    }
 
     /** Index of [thing] on the tile, or -1 when it is not on the tile. */
-    fun getThingIndex(tile: Any, thing: Any): Int?
+    fun getThingIndex(tile: Any, thing: Any): Int? = (tile as? Tile)?.getThingIndex(thing as? Thing)
 
-    /**
-     * Mirrors `getTopVisibleThing`: without a creature list or `lookThrough` data the
-     * first item (Canary's first down item) is returned, else the ground.
-     */
-    fun getTopVisibleThing(tile: Any, creature: Any?): Any? =
-        getItems(tile).firstOrNull() ?: getGround(tile)
+    /** Mirrors `getDownItemCount`; the down-item prefix of the tile item list. */
+    fun getDownItemCount(tile: Any): Int = (tile as? Tile)?.getDownItemCount() ?: getItems(tile).size
 
-    /** Mirrors `getTopTopItem`; the Kotlin tile keeps no top/down split, so the last item. */
-    fun getTopTopItem(tile: Any): Any? = getItems(tile).lastOrNull()
+    /** Mirrors `getTopItemCount`; the always-on-top suffix of the tile item list. */
+    fun getTopItemCount(tile: Any): Int = (tile as? Tile)?.getTopItemCount() ?: 0
 
-    /** Mirrors `getTopDownItem`; the Kotlin tile keeps no top/down split, so the first item. */
-    fun getTopDownItem(tile: Any): Any? = getItems(tile).firstOrNull()
+    /** Mirrors `getCreatures`; the tile creature list in Canary's stack order. */
+    fun getCreatures(tile: Any): List<Any> = (tile as? Tile)?.getCreatures()?.toList() ?: emptyList()
 
-    /** Mirrors `getFieldItem`; null until magic-field classification is modeled. */
-    fun getFieldItem(tile: Any): Any? = null
+    /** Mirrors `getCreatureCount`. */
+    fun getCreatureCount(tile: Any): Int = (tile as? Tile)?.getCreatureCount() ?: 0
 
-    /** Mirrors `getItemByType`; null until `ItemTypes_t` is modeled. */
-    fun getItemByType(tile: Any, itemType: Int): Any? = null
+    /** Mirrors `hasProperty(property[, item])`. */
+    fun hasProperty(tile: Any, property: Int, item: Any?): Boolean {
+        val target = tile as? Tile ?: return false
+        val prop = ItemProperty.entries.firstOrNull { it.value == property } ?: return false
+        return if (item != null) target.hasProperty(item as? Item, prop) else target.hasProperty(prop)
+    }
 
-    /** Mirrors `getItemByTopOrder`; null until `alwaysOnTopOrder` is modeled. */
-    fun getItemByTopOrder(tile: Any, topOrder: Int): Any? = null
+    /** Mirrors `hasFlag`; false until the flag is set on the tile. */
+    fun hasFlag(tile: Any, flag: Int): Boolean = (tile as? Tile)?.hasFlag(flag) ?: false
 
-    /** Mirrors `getBottomCreature`; null until a tile creature list is modeled. */
-    fun getBottomCreature(tile: Any): Any? = null
+    /** Mirrors `getHouse`; the linked house for a house tile, else null. */
+    fun getHouse(tile: Any): Any? = (tile as? Tile)?.getHouse()
 
-    /** Mirrors `getTopCreature`; null until a tile creature list is modeled. */
-    fun getTopCreature(tile: Any): Any? = null
-
-    /** Mirrors `getBottomVisibleCreature`; null until a tile creature list is modeled. */
-    fun getBottomVisibleCreature(tile: Any, creature: Any?): Any? = null
-
-    /** Mirrors `getTopVisibleCreature`; null until a tile creature list is modeled. */
-    fun getTopVisibleCreature(tile: Any, creature: Any?): Any? = null
-
-    /** Mirrors `getDownItemCount`; every Kotlin tile item counts as a down item. */
-    fun getDownItemCount(tile: Any): Int = getItems(tile).size
-
-    /** Mirrors `getTopItemCount`; 0 because the Kotlin tile keeps no top/down split. */
-    fun getTopItemCount(tile: Any): Int = 0
-
-    /** Mirrors `getCreatures`; empty until a tile creature list is modeled. */
-    fun getCreatures(tile: Any): List<Any> = emptyList()
-
-    /** Mirrors `getCreatureCount`; 0 until a tile creature list is modeled. */
-    fun getCreatureCount(tile: Any): Int = 0
-
-    /** Mirrors `hasProperty`; false until `ItemProperty` data is modeled. */
-    fun hasProperty(tile: Any, property: Int, item: Any?): Boolean = false
-
-    /** Mirrors `hasFlag`; false until `TileFlags_t` is modeled. */
-    fun hasFlag(tile: Any, flag: Int): Boolean = false
-
-    /** Mirrors `getHouse`; null until a house link is modeled. */
-    fun getHouse(tile: Any): Any? = null
-
-    /** Mirrors `sweep`; null until house ownership/transfer is modeled. */
-    fun sweep(tile: Any, actor: Any): Boolean? = null
+    /** Mirrors `sweep`; null when the actor is missing, not the owner, or the tile is not a house. */
+    fun sweep(tile: Any, actor: Any): Boolean? {
+        val target = tile as? Tile ?: return null
+        val player = actor as? Player ?: return null
+        val house = target.getHouse() ?: return null
+        if (house.getHouseAccessLevel(player).value < AccessHouseLevel.HOUSE_OWNER.value) {
+            return null
+        }
+        if (target.houseId == 0) {
+            return null
+        }
+        return house.transferToDepot(player, HouseTile(target.position, target.houseId))
+    }
 }
 
 /**
@@ -335,7 +418,7 @@ object TileFunctions {
         registry.registerMethod(TILE_TYPE, "addItemEx", luaFunction { args ->
             val tile = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             val item = retrieveUserdata(args, 2) ?: return@luaFunction LuaValue.NIL
-            LuaValue.valueOf(operations.addItemEx(tile, item, args.arg(3).optlong(0)))
+            operations.addItemEx(tile, item, args.arg(3).optlong(0))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
         })
 
         registry.registerMethod(TILE_TYPE, "getHouse", luaFunction { args ->
@@ -378,39 +461,6 @@ internal object UnwiredTileOperations : TileOperations {
     override fun create(position: Position): Any? =
         throw NotImplementedError("TileFunctions.create seam is not wired")
 
-    override fun getPosition(tile: Any): Position? =
-        throw NotImplementedError("TileFunctions.getPosition seam is not wired")
-
-    override fun getGround(tile: Any): Any? =
-        throw NotImplementedError("TileFunctions.getGround seam is not wired")
-
-    override fun getThing(tile: Any, index: Int): Any? =
-        throw NotImplementedError("TileFunctions.getThing seam is not wired")
-
-    override fun getThingCount(tile: Any): Int =
-        throw NotImplementedError("TileFunctions.getThingCount seam is not wired")
-
-    override fun getItems(tile: Any): List<Any> =
-        throw NotImplementedError("TileFunctions.getItems seam is not wired")
-
-    override fun getItemCount(tile: Any): Int =
-        throw NotImplementedError("TileFunctions.getItemCount seam is not wired")
-
-    override fun getItemCountById(tile: Any, itemId: Int, subType: Int): Int =
-        throw NotImplementedError("TileFunctions.getItemCountById seam is not wired")
-
-    override fun getItemById(tile: Any, itemId: Int, subType: Int): Any? =
-        throw NotImplementedError("TileFunctions.getItemById seam is not wired")
-
     override fun addItem(tile: Any, itemId: Int, count: Int, flags: Long): Any? =
         throw NotImplementedError("TileFunctions.addItem seam is not wired")
-
-    override fun addItemEx(tile: Any, item: Any, flags: Long): Int =
-        throw NotImplementedError("TileFunctions.addItemEx seam is not wired")
-
-    override fun queryAdd(tile: Any, thing: Any, flags: Long): Int =
-        throw NotImplementedError("TileFunctions.queryAdd seam is not wired")
-
-    override fun getThingIndex(tile: Any, thing: Any): Int? =
-        throw NotImplementedError("TileFunctions.getThingIndex seam is not wired")
 }
