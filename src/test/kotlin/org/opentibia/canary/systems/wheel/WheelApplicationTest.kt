@@ -78,6 +78,104 @@ class WheelApplicationTest {
     }
 
     @Test
+    fun `save of a slot whose prerequisite is empty is rejected`() {
+        val state = wheel(level = 250)
+        val result = application.applySave(state, save(WheelSlots.SLOT_GREEN_TOP_100 to 100))
+
+        assertThat(result).isEqualTo(
+            WheelSaveResult.Failure(
+                WheelSaveRejection.PREREQUISITES_NOT_MET,
+                WheelSlots.SLOT_GREEN_TOP_100,
+            ),
+        )
+        assertThat(state.getPointsBySlotType(WheelSlots.SLOT_GREEN_TOP_100)).isZero()
+    }
+
+    @Test
+    fun `save below the slot player-point threshold is rejected`() {
+        val state = wheel(level = 200)
+        val result = application.applySave(state, save(WheelSlots.SLOT_GREEN_TOP_150 to 150))
+
+        assertThat(result).isEqualTo(
+            WheelSaveResult.Failure(
+                WheelSaveRejection.PREREQUISITES_NOT_MET,
+                WheelSlots.SLOT_GREEN_TOP_150,
+            ),
+        )
+        assertThat(state.getPointsBySlotType(WheelSlots.SLOT_GREEN_TOP_150)).isZero()
+    }
+
+    @Test
+    fun `save accepts a slot whose prerequisite is filled in the same command`() {
+        val state = wheel(level = 250)
+        val result = application.applySave(
+            state,
+            save(
+                WheelSlots.SLOT_GREEN_50 to 50,
+                WheelSlots.SLOT_GREEN_TOP_75 to 75,
+            ),
+        )
+
+        assertThat(result).isInstanceOf(WheelSaveResult.Success::class.java)
+        result as WheelSaveResult.Success
+        assertThat(result.applied).containsEntry(WheelSlots.SLOT_GREEN_50, 50)
+        assertThat(result.applied).containsEntry(WheelSlots.SLOT_GREEN_TOP_75, 75)
+        assertThat(result.unsatisfied).isEmpty()
+        assertThat(state.getUnusedPoints()).isEqualTo(75)
+    }
+
+    @Test
+    fun `save resolves prerequisites independently of the submitted slot order`() {
+        val state = wheel(level = 250)
+        val result = application.applySave(
+            state,
+            save(
+                WheelSlots.SLOT_GREEN_TOP_75 to 75,
+                WheelSlots.SLOT_GREEN_50 to 50,
+            ),
+        )
+
+        assertThat(result).isInstanceOf(WheelSaveResult.Success::class.java)
+        result as WheelSaveResult.Success
+        assertThat(result.applied).containsEntry(WheelSlots.SLOT_GREEN_50, 50)
+        assertThat(result.applied).containsEntry(WheelSlots.SLOT_GREEN_TOP_75, 75)
+    }
+
+    @Test
+    fun `save accepts a slot whose cross-quadrant prerequisite is already full`() {
+        val state = wheel(level = 500)
+        state.setPointsBySlotType(WheelSlots.SLOT_RED_TOP_100, 100)
+
+        val result = application.applySave(state, save(WheelSlots.SLOT_GREEN_TOP_100 to 100))
+
+        assertThat(result).isInstanceOf(WheelSaveResult.Success::class.java)
+        result as WheelSaveResult.Success
+        assertThat(result.applied).containsEntry(WheelSlots.SLOT_GREEN_TOP_100, 100)
+        assertThat(state.getPointsBySlotType(WheelSlots.SLOT_GREEN_TOP_100)).isEqualTo(100)
+    }
+
+    @Test
+    fun `save violating prerequisites is rejected atomically`() {
+        val state = wheel(level = 250)
+        val result = application.applySave(
+            state,
+            save(
+                WheelSlots.SLOT_GREEN_50 to 50,
+                WheelSlots.SLOT_GREEN_TOP_150 to 100,
+            ),
+        )
+
+        assertThat(result).isEqualTo(
+            WheelSaveResult.Failure(
+                WheelSaveRejection.PREREQUISITES_NOT_MET,
+                WheelSlots.SLOT_GREEN_TOP_150,
+            ),
+        )
+        assertThat(state.getPointsBySlotType(WheelSlots.SLOT_GREEN_50)).isZero()
+        assertThat(state.getPointsBySlotType(WheelSlots.SLOT_GREEN_TOP_150)).isZero()
+    }
+
+    @Test
     fun `destroy removes an unlocked gem`() {
         val state = wheel()
         state.gems.revealedGems.add(PlayerWheelGem(affinity = WheelGemAffinity.Green))
