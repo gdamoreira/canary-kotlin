@@ -46,3 +46,7 @@
 ## Post-wave (AGENTS.md §6)
 
 Flip the covered rows to `IMPLEMENTED` in `docs/missing-features.md`; update `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/Done/`; commit the docs separately and push to `origin`.
+
+## Completion
+
+Completed. Player runtime chunk 1 (conditions/spells/cooldowns/PvP/async tasks), `PlayerStorage`, forge-history persistence (V8), and combat completion. Rows flipped.

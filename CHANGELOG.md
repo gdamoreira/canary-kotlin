@@ -292,10 +292,17 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Stash/vocations/imbuements** — `Stash` + `Storages` XML, Vocation req/promotion/wheel-gems, `createScrollImbuement`. 37 tests.
 - Rows flipped to IMPLEMENTED (NPC, PvP, ban/waitlist/livestream, stash, vocations, imbuements).
 
+### Phase 28: `src/creatures/` Part 4 — Player Runtime 1, Storage, Forge History, Combat (11:00 – 11:30)
+- **Player runtime 1** — condition integration/suppression, learned spells + spell/group cooldowns, PZ lock/in-fight, async task queue. 45 tests.
+- **PlayerStorage** — delta/dirty/ingest lifecycle + reserved ranges. 19 tests.
+- **Forge history persistence** — JDBC repository + Flyway `V8`. 10 tests.
+- **Combat completion** — full `getCombatDamage` matrix, absorb/increase/mantra, target validation, combat areas. 30 tests.
+- Rows flipped: `combat/combat.cpp`, `player_storage.cpp`, `player_forge_history.cpp`.
+
 ---
 
 ### Current Status
-- **Automated Tests**: **271 test suites / 2665 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **280 test suites / 2769 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.

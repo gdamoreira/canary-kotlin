@@ -50,7 +50,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | C++ | Status | Missing |
 |---|---|---|
 | `creature.cpp` (2,239 lines) | **IMPLEMENTED** | conditions, outfit/light/speed, onThink/onAttacked/onTarget/onDeath, master/summon, spectator `canSee`, creature icons |
-| `combat/combat.cpp` | PARTIAL | full `getCombatDamage` matrix, callbacks, target validation, areas |
+| `combat/combat.cpp` | **IMPLEMENTED** | full `getCombatDamage` matrix, absorb/increase/mantra, target validation, areas |
 | `combat/condition.cpp` (2,955) | **IMPLEMENTED** | full condition family, attribute params, `ConditionFeared`, Player suppression |
 | `combat/spells.cpp` (1,654) | PARTIAL | runes, groups/cooldowns, areas/effects, learn/forget, Lua callbacks |
 | `appearance/outfit/outfit.cpp` | **IMPLEMENTED** | `Outfits`/`Outfit`/`PlayerOutfits` (XML registry, addons, `getOutfitByLookType`) |
@@ -66,8 +66,9 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | `monsters/spawns/spawn_monster.cpp` | **IMPLEMENTED** | `SpawnMonster` + `SpawnXmlLoader` (blocks, intervals, despawn) |
 | `npcs/npc.cpp` (1,282) | **IMPLEMENTED** | interaction/focus, walk-to/queue, shop buy/sell runtime (dialogue stays Lua) |
 | `npcs/npcs.cpp`, `spawns/spawn_npc.cpp` | **IMPLEMENTED** | `Npcs` registry + `SpawnNpc` engine |
-| `players/player.cpp` (13,456, ~765 methods) | PARTIAL | conditions, spells/cooldowns, PvP/skull, party/guild, VIP, blessings, stash, containers, wheel/forge/prey/task-hunting/cyclopedia, harmony/serene, ban/waitlist/livestream |
-| `players/components/player_storage.cpp` | PARTIAL | delta/dirty/ingest lifecycle, reserved ranges |
+| `players/player.cpp` (13,456, ~765 methods) | PARTIAL | chunk 1 done (conditions, spells/cooldowns, PvP/skull, async tasks); remaining: blessings, containers, wheel/forge/prey/task-hunting/cyclopedia hooks, harmony/serene |
+| `players/components/player_storage.cpp` | **IMPLEMENTED** | `PlayerStorage` delta/dirty/ingest lifecycle + reserved ranges |
+| `players/components/player_forge_history.cpp` | **IMPLEMENTED** | DB load/save + Flyway `V8` |
 | `players/components/player_achievement/title/badge/vip/cyclopedia/attached_effects` | MISSING | entire components |
 | `players/components/pvp/*` | **IMPLEMENTED** | `PlayerPvp` (situations/unjustified/skull) + `ExpertPvp` |
 | `players/components/weapon_proficiency.cpp` | PARTIAL | gain-on-hit/kill runtime; perks applied in combat |
