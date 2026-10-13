@@ -273,6 +273,18 @@ class PlayerPvp(
     /** `Player::getUnjustifiedKills`; read view of `unjustifiedKills`. */
     fun getUnjustifiedKills(): List<Kill> = unjustifiedKills
 
+    /**
+     * `Player::unjustifiedKills` direct assignment
+     * (`player.hpp:1754`; `PlayerFunctions::luaPlayerSetKills`,
+     * player_functions.cpp:1219). The C++ member is public and the Lua binding
+     * replaces the whole vector; the component keeps the list private, so this
+     * seam transcribes the assignment.
+     */
+    fun setUnjustifiedKills(kills: List<Kill>) {
+        unjustifiedKills.clear()
+        unjustifiedKills.addAll(kills)
+    }
+
     /** `Player::hasKilled` (player.cpp:6981-6984). */
     fun hasKilled(player: PlayerPvp): Boolean = unjustifiedKills.any { kill ->
         kill.target == player.player.id &&
