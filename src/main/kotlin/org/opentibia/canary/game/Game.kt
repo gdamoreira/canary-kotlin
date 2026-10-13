@@ -16,15 +16,21 @@ import org.opentibia.canary.creatures.players.components.HighscoreCategories_t
 import org.opentibia.canary.creatures.players.vip.PlayerVip
 import org.opentibia.canary.creatures.players.vip.VipStatus
 import org.opentibia.canary.database.PlayerLoginRepository
+import org.opentibia.canary.game.movement.areInRange
+import org.opentibia.canary.game.movement.getDistanceX
+import org.opentibia.canary.game.movement.getDistanceY
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.game.zones.Zone
 import org.opentibia.canary.game.zones.ZoneType
 import org.opentibia.canary.items.Item
+import org.opentibia.canary.items.ItemAttribute
+import org.opentibia.canary.items.Items
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Tile
+import org.opentibia.canary.map.house.TradeEvents_t
 import org.opentibia.canary.network.protocol.MessageClass
 import org.opentibia.canary.network.protocol.SourceEffect
 import org.opentibia.canary.persistence.PlayerStorage
@@ -45,6 +51,31 @@ enum class LightState {
     LIGHT_STATE_NIGHT,
     LIGHT_STATE_SUNSET,
     LIGHT_STATE_SUNRISE,
+}
+
+/**
+ * `TradeState_t` (`src/creatures/creatures_definitions.hpp:825-831`): the trade
+ * window state machine driven by the `Game` trade handlers.
+ */
+enum class TradeState_t {
+    TRADE_NONE,
+    TRADE_INITIATED,
+    TRADE_ACCEPT,
+    TRADE_ACKNOWLEDGE,
+    TRADE_TRANSFER,
+}
+
+/**
+ * `StackPosType_t` (`src/game/game_definitions.hpp:13-20`): the target selector
+ * of `Game::internalGetThing`.
+ */
+enum class StackPosType_t {
+    STACKPOS_MOVE,
+    STACKPOS_LOOK,
+    STACKPOS_TOPDOWN_ITEM,
+    STACKPOS_USEITEM,
+    STACKPOS_USETARGET,
+    STACKPOS_FIND_THING,
 }
 
 /**
@@ -112,6 +143,8 @@ class Game(
     private val playerVip: (Player) -> PlayerVip? = { null },
     /** `Player::isInGhostMode` (player.cpp:568). */
     private val isInGhostMode: (Player) -> Boolean = { false },
+    /** `Item::items` registry (src/items/items.hpp:389) used by the shop handlers. */
+    private val itemTypes: Items? = null,
 ) {
     private val players = mutableMapOf<Long, Player>()
 
@@ -152,6 +185,18 @@ class Game(
         HighscoreCategory("Fishing", HighscoreCategories_t.FISHING.value),
         HighscoreCategory("Magic Level", HighscoreCategories_t.MAGIC_LEVEL.value),
     )
+
+    /** `Game::tradeItems` (game.hpp:843): the traded item and its offering player id. */
+    private val tradeItems = IdentityHashMap<Item, Long>()
+
+    /**
+     * Facade storage for `Player::tradeState` / `tradeItem` / `tradePartner`
+     * (player.hpp:1762-1768, 1856). The Kotlin [Player] does not carry the trade
+     * members yet (PARITY GAP); the handlers below are the only writers.
+     */
+    private val tradeStates = IdentityHashMap<Player, TradeState_t>()
+    private val tradeItemByPlayer = IdentityHashMap<Player, Item?>()
+    private val tradePartnerByPlayer = IdentityHashMap<Player, Player?>()
 
     /** `Creature::getParent()` equivalent (src/creatures/creature.hpp): the tile each placed creature lives on. */
     private val placedCreatures = IdentityHashMap<Creature, Tile>()
@@ -233,6 +278,62 @@ class Game(
 
     /** `g_callbacks().executeCallback(playerOnReportBug, ...)` seam (game.cpp:10200). */
     var callbackPlayerOnReportBug: (Player, String, Position, Int) -> Unit = { _, _, _, _ -> }
+
+    /** `Player::sendCancelMessage` protocol seam (player.cpp). */
+    var sendCancelMessage: (Player, ReturnValue) -> Unit = { _, _ -> }
+
+    /**
+     * `Player::sendTradeItemRequest` protocol seam (player.cpp:2499-2503), used
+     * by the trade window handlers.
+     */
+    var sendTradeItemRequest: (Player, String, Item, Boolean) -> Unit = { _, _, _, _ -> }
+
+    /** `Player::sendTradeClose` protocol seam (player.cpp:2505-2509). */
+    var sendTradeClose: (Player) -> Unit = { _ -> }
+
+    /** `Item::onTradeEvent` dispatch seam (src/items/item.hpp:651). */
+    var onTradeEvent: (Item, TradeEvents_t, Player) -> Unit = { _, _, _ -> }
+
+    /** `g_events().eventPlayerOnTradeRequest` veto seam (game.cpp:5940). */
+    var eventPlayerOnTradeRequest: (Player, Player, Item) -> Boolean = { _, _, _ -> true }
+
+    /** `g_callbacks().checkCallback(playerOnTradeRequest, ...)` veto seam (game.cpp:5944). */
+    var callbackPlayerOnTradeRequest: (Player, Player, Item) -> Boolean = { _, _, _ -> true }
+
+    /** `g_events().eventPlayerOnTradeAccept` veto seam (game.cpp:6011). */
+    var eventPlayerOnTradeAccept: (Player, Player, Item?, Item?) -> Boolean = { _, _, _, _ -> true }
+
+    /** `g_callbacks().checkCallback(playerOnTradeAccept, ...)` veto seam (game.cpp:6016). */
+    var callbackPlayerOnTradeAccept: (Player, Player, Item?, Item?) -> Boolean = { _, _, _, _ -> true }
+
+    /** `g_events().eventPlayerOnLookInTrade` dispatch seam (game.cpp:6149). */
+    var eventPlayerOnLookInTrade: (Player, Player, Item, Int) -> Unit = { _, _, _, _ -> }
+
+    /** `g_callbacks().executeCallback(playerOnLookInTrade, ...)` seam (game.cpp:6150). */
+    var callbackPlayerOnLookInTrade: (Player, Player, Item, Int) -> Unit = { _, _, _, _ -> }
+
+    /**
+     * `Map::canThrowObjectTo` with `SightLine_CheckSightLineAndFloor`
+     * (game.cpp:5816, 6001) as an overridable seam.
+     */
+    var canThrowObjectTo: (Position, Position) -> Boolean = { from, to ->
+        map.canThrowObjectTo(from, to, GameMap.SightLine_CheckSightLineAndFloor)
+    }
+
+    /** `Player::getShopOwner` accessor (player.hpp:739). */
+    var getShopOwner: (Player) -> Npc? = { null }
+
+    /** `Player::closeShopWindow` protocol seam (player.cpp). */
+    var closeShopWindow: (Player) -> Unit = { _ -> }
+
+    /** `Player::isUIExhausted` seam (player.cpp); `time` defaults to 0 in Canary. */
+    var isUIExhausted: (Player) -> Boolean = { false }
+
+    /** `Player::updateUIExhausted` seam (player.cpp). */
+    var updateUIExhausted: (Player) -> Unit = { _ -> }
+
+    /** `g_configManager().getNumber(MAX_CONTAINER)` default (configmanager.cpp:308). */
+    var maxContainer: Int = 500
 
     /** `Game::addPlayer` (src/game/game.cpp:11624). */
     fun addPlayer(player: Player) {
@@ -1071,6 +1172,626 @@ class Game(
         party.setSharedExperience(player, sharedExpActive)
     }
 
+    /**
+     * `Game::playerRequestTrade` (src/game/game.cpp:5797): validates the trade
+     * target, the sight line, the top-down item and its tradeability, then
+     * starts the trade through [internalStartTrade]. The trade-request event
+     * and callback may veto.
+     *
+     * PARITY GAPS: `canThrowObjectTo` ranges are resolved through [map];
+     * the `ONLY_INVITED_CAN_MOVE_HOUSE_ITEMS` house-tile check needs
+     * `HouseTile`/`Item::getRealParent` and is skipped; the out-of-reach
+     * auto-walk retry (`Player::getPathTo`, `queuePlayerAutoWalk`,
+     * `Player::setNextWalkActionTask`) is not ported, so the no-path
+     * `THEREISNOWAY` cancel is the only reachable outcome.
+     */
+    fun playerRequestTrade(playerId: Long, pos: Position, stackPos: Int, tradePlayerId: Long, itemId: Int) {
+        val player = getPlayerByID(playerId) ?: return
+        val tradePartner = getPlayerByID(tradePlayerId)
+        if (tradePartner == null || tradePartner === player) {
+            player.sendTextMessageTyped(MessageClass.MESSAGE_FAILURE, "Sorry, not possible.")
+            return
+        }
+
+        if (!areInRange(tradePartner.position, player.position, 2, 2, 0)) {
+            player.sendTextMessageTyped(MessageClass.MESSAGE_TRADE, "${tradePartner.name} tells you to move closer.")
+            return
+        }
+
+        if (!canThrowObjectTo(tradePartner.position, player.position)) {
+            sendCancelMessage(player, ReturnValue.CREATUREISNOTREACHABLE)
+            return
+        }
+
+        val tradeThing = internalGetThing(player, pos, stackPos, itemId, StackPosType_t.STACKPOS_TOPDOWN_ITEM)
+        if (tradeThing == null) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        val tradeItem = tradeThing
+        if (tradeItem.id != itemId || !tradeItem.isPickupable() || tradeItem.hasAttribute(ItemAttribute.UNIQUEID)) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        if (tradeItem.isRemoved() || itemParents[tradeItem] == null) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        if (tradeItem.isStoreItem() || tradeItem.hasOwner()) {
+            sendCancelMessage(player, ReturnValue.ITEMUNTRADEABLE)
+            return
+        }
+
+        val playerPosition = player.position
+        val tradeItemPosition = itemParents[tradeItem]!!.position
+        if (playerPosition.z != tradeItemPosition.z) {
+            sendCancelMessage(
+                player,
+                if (playerPosition.z > tradeItemPosition.z) ReturnValue.FIRSTGOUPSTAIRS else ReturnValue.FIRSTGODOWNSTAIRS,
+            )
+            return
+        }
+
+        if (!areInRange(tradeItemPosition, playerPosition, 1, 1)) {
+            sendCancelMessage(player, ReturnValue.THEREISNOWAY)
+            return
+        }
+
+        val tradeItemContainer = tradeItem.getContainer()
+        if (tradeItemContainer != null) {
+            for (tradedItem in tradeItems.keys) {
+                if (tradeItem === tradedItem) {
+                    player.sendTextMessageTyped(MessageClass.MESSAGE_TRADE, "This item is already being traded.")
+                    return
+                }
+
+                if (tradeItemContainer.isHoldingItem(tradedItem)) {
+                    player.sendTextMessageTyped(MessageClass.MESSAGE_TRADE, "This item is already being traded.")
+                    return
+                }
+
+                val container = tradedItem.getContainer()
+                if (container != null && container.isHoldingItem(tradeItem)) {
+                    player.sendTextMessageTyped(MessageClass.MESSAGE_TRADE, "This item is already being traded.")
+                    return
+                }
+            }
+        } else {
+            for (tradedItem in tradeItems.keys) {
+                if (tradeItem === tradedItem) {
+                    player.sendTextMessageTyped(MessageClass.MESSAGE_TRADE, "This item is already being traded.")
+                    return
+                }
+
+                val container = tradedItem.getContainer()
+                if (container != null && container.isHoldingItem(tradeItem)) {
+                    player.sendTextMessageTyped(MessageClass.MESSAGE_TRADE, "This item is already being traded.")
+                    return
+                }
+            }
+        }
+
+        if (tradeItemContainer != null && tradeItemContainer.getItemHoldingCount() + 1 > 100) {
+            player.sendTextMessageTyped(MessageClass.MESSAGE_TRADE, "You can not trade more than 100 items.")
+            return
+        }
+
+        if (tradeItem.isStoreItem()) {
+            player.sendTextMessageTyped(MessageClass.MESSAGE_TRADE, "This item cannot be trade.")
+            return
+        }
+
+        if (tradeItemContainer != null) {
+            for (containerItem in tradeItemContainer.getItems(true)) {
+                if (containerItem.isStoreItem()) {
+                    player.sendTextMessageTyped(MessageClass.MESSAGE_TRADE, "This item cannot be trade.")
+                    return
+                }
+            }
+        }
+
+        if (!eventPlayerOnTradeRequest(player, tradePartner, tradeItem)) {
+            return
+        }
+
+        if (!callbackPlayerOnTradeRequest(player, tradePartner, tradeItem)) {
+            return
+        }
+
+        internalStartTrade(player, tradePartner, tradeItem)
+    }
+
+    /**
+     * `Game::internalStartTrade` (src/game/game.cpp:5951): records the offered
+     * item on both sides; a fresh partner becomes `TRADE_ACKNOWLEDGE`, an
+     * already-offering partner receives the counter offers.
+     */
+    fun internalStartTrade(player: Player, tradePartner: Player, tradeItem: Item): Boolean {
+        val playerState = getTradeState(player)
+        if (playerState != TradeState_t.TRADE_NONE &&
+            !(playerState == TradeState_t.TRADE_ACKNOWLEDGE && getTradePartner(player) === tradePartner)
+        ) {
+            sendCancelMessage(player, ReturnValue.YOUAREALREADYTRADING)
+            return false
+        } else if (getTradeState(tradePartner) != TradeState_t.TRADE_NONE && getTradePartner(tradePartner) !== player) {
+            sendCancelMessage(player, ReturnValue.THISPLAYERISALREADYTRADING)
+            return false
+        }
+
+        if (tradeItem.isStoreItem() || tradeItem.hasOwner()) {
+            sendCancelMessage(player, ReturnValue.ITEMUNTRADEABLE)
+            return false
+        }
+
+        setTradePartner(player, tradePartner)
+        setTradeItem(player, tradeItem)
+        setTradeState(player, TradeState_t.TRADE_INITIATED)
+        tradeItems[tradeItem] = player.id
+
+        sendTradeItemRequest(player, player.name, tradeItem, true)
+
+        if (getTradeState(tradePartner) == TradeState_t.TRADE_NONE) {
+            tradePartner.sendTextMessageTyped(MessageClass.MESSAGE_TRANSACTION, "${player.name} wants to trade with you.")
+            setTradeState(tradePartner, TradeState_t.TRADE_ACKNOWLEDGE)
+            setTradePartner(tradePartner, player)
+        } else {
+            val counterOfferItem = getTradeItem(tradePartner) ?: return true
+            sendTradeItemRequest(player, tradePartner.name, counterOfferItem, false)
+            sendTradeItemRequest(tradePartner, player.name, tradeItem, false)
+        }
+
+        return true
+    }
+
+    /**
+     * `Game::playerAcceptTrade` (src/game/game.cpp:5986): the second accept
+     * swaps both offered items through the player-cylinder item operations and
+     * closes the window; a failed swap reports the trade error on both sides and
+     * fires the `ON_TRADE_CANCEL` item events.
+     */
+    fun playerAcceptTrade(playerId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+        val playerState = getTradeState(player)
+        if (playerState != TradeState_t.TRADE_ACKNOWLEDGE && playerState != TradeState_t.TRADE_INITIATED) {
+            return
+        }
+
+        val tradePartner = getTradePartner(player) ?: return
+        if (!canThrowObjectTo(tradePartner.position, player.position)) {
+            sendCancelMessage(player, ReturnValue.CREATUREISNOTREACHABLE)
+            return
+        }
+
+        setTradeState(player, TradeState_t.TRADE_ACCEPT)
+
+        if (getTradeState(tradePartner) != TradeState_t.TRADE_ACCEPT) {
+            return
+        }
+
+        val tradeItem1 = getTradeItem(player)
+        val tradeItem2 = getTradeItem(tradePartner)
+        if (!eventPlayerOnTradeAccept(player, tradePartner, tradeItem1, tradeItem2)) {
+            internalCloseTrade(player)
+            return
+        }
+
+        if (!callbackPlayerOnTradeAccept(player, tradePartner, tradeItem1, tradeItem2)) {
+            internalCloseTrade(player)
+            return
+        }
+
+        setTradeState(player, TradeState_t.TRADE_TRANSFER)
+        setTradeState(tradePartner, TradeState_t.TRADE_TRANSFER)
+
+        tradeItem1?.let { tradeItems.remove(it) }
+        tradeItem2?.let { tradeItems.remove(it) }
+
+        var isSuccess = false
+
+        var ret1 = internalAddItem(tradePartner, tradeItem1, INDEX_WHEREEVER, 0, true)
+        var ret2 = internalAddItem(player, tradeItem2, INDEX_WHEREEVER, 0, true)
+        if (ret1 == ReturnValue.NOERROR && ret2 == ReturnValue.NOERROR) {
+            ret1 = internalRemoveItem(tradeItem1, tradeItem1?.count ?: -1, test = true)
+            ret2 = internalRemoveItem(tradeItem2, tradeItem2?.count ?: -1, test = true)
+            if (ret1 == ReturnValue.NOERROR && ret2 == ReturnValue.NOERROR) {
+                val cylinder1 = tradeItem1?.let { itemParents[it] }
+                val cylinder2 = tradeItem2?.let { itemParents[it] }
+
+                val count1 = tradeItem1?.count ?: 0
+                val count2 = tradeItem2?.count ?: 0
+
+                ret1 = if (tradeItem1 != null && cylinder1 != null) {
+                    internalMoveItemToPlayer(cylinder1, tradePartner, tradeItem1, count1, CylinderFlags.FLAG_IGNOREAUTOSTACK)
+                } else {
+                    ReturnValue.NOTPOSSIBLE
+                }
+                if (ret1 == ReturnValue.NOERROR && tradeItem1 != null && tradeItem2 != null && cylinder2 != null) {
+                    internalMoveItemToPlayer(cylinder2, player, tradeItem2, count2, CylinderFlags.FLAG_IGNOREAUTOSTACK)
+
+                    onTradeEvent(tradeItem1, TradeEvents_t.ON_TRADE_TRANSFER, tradePartner)
+                    onTradeEvent(tradeItem2, TradeEvents_t.ON_TRADE_TRANSFER, player)
+
+                    isSuccess = true
+                }
+            }
+        }
+
+        if (!isSuccess) {
+            val partnerItem = getTradeItem(tradePartner)
+            if (partnerItem != null) {
+                tradePartner.sendTextMessageTyped(MessageClass.MESSAGE_TRANSACTION, getTradeErrorDescription(ret1, tradeItem1))
+                onTradeEvent(partnerItem, TradeEvents_t.ON_TRADE_CANCEL, tradePartner)
+            }
+
+            val playerItem = getTradeItem(player)
+            if (playerItem != null) {
+                player.sendTextMessageTyped(MessageClass.MESSAGE_TRANSACTION, getTradeErrorDescription(ret2, tradeItem2))
+                onTradeEvent(playerItem, TradeEvents_t.ON_TRADE_CANCEL, player)
+            }
+        }
+
+        resetTrade(player)
+        resetTrade(tradePartner)
+    }
+
+    /** `Game::getTradeErrorDescription` (src/game/game.cpp:6088). */
+    fun getTradeErrorDescription(ret: ReturnValue, item: Item?): String {
+        if (item != null) {
+            if (ret == ReturnValue.NOTENOUGHCAPACITY) {
+                val suffix = if (item.isStackable() && item.count > 1) " these objects." else " this object."
+                return "You do not have enough capacity to carry$suffix\n ${item.getWeightDescription()}"
+            } else if (ret == ReturnValue.NOTENOUGHROOM || ret == ReturnValue.CONTAINERNOTENOUGHROOM) {
+                val suffix = if (item.isStackable() && item.count > 1) " these objects." else " this object."
+                return "You do not have enough room to carry$suffix"
+            }
+        }
+        return "Trade could not be completed."
+    }
+
+    /**
+     * `Game::playerLookInTrade` (src/game/game.cpp:6119): `index == 0` looks at
+     * the offered item itself, a higher index walks the container tree of the
+     * item in FIFO order.
+     *
+     * PARITY GAP: the item position resolves through the facade's tile parent
+     * ([itemParents]) because the Kotlin [Item] does not expose `getPosition`.
+     */
+    fun playerLookInTrade(playerId: Long, lookAtCounterOffer: Boolean, index: Int) {
+        val player = getPlayerByID(playerId) ?: return
+        val tradePartner = getTradePartner(player) ?: return
+
+        val tradeItem = if (lookAtCounterOffer) getTradeItem(tradePartner) else getTradeItem(player)
+        if (tradeItem == null) {
+            return
+        }
+
+        val playerPosition = player.position
+        val tradeItemPosition = itemParents[tradeItem]?.position ?: playerPosition
+        val lookDistance = maxOf(getDistanceX(playerPosition, tradeItemPosition), getDistanceY(playerPosition, tradeItemPosition))
+        if (index == 0) {
+            eventPlayerOnLookInTrade(player, tradePartner, tradeItem, lookDistance)
+            callbackPlayerOnLookInTrade(player, tradePartner, tradeItem, lookDistance)
+            return
+        }
+
+        val tradeContainer = tradeItem.getContainer() ?: return
+
+        val containers = mutableListOf(tradeContainer)
+        var i = 0
+        var remaining = index
+        while (i < containers.size) {
+            val container = containers[i++]
+            for (item in container.getItemList()) {
+                item.getContainer()?.let { containers.add(it) }
+
+                if (--remaining == 0) {
+                    eventPlayerOnLookInTrade(player, tradePartner, item, lookDistance)
+                    callbackPlayerOnLookInTrade(player, tradePartner, item, lookDistance)
+                    return
+                }
+            }
+        }
+    }
+
+    /** `Game::playerCloseTrade` (src/game/game.cpp:6178). */
+    fun playerCloseTrade(playerId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+        internalCloseTrade(player)
+    }
+
+    /**
+     * `Game::internalCloseTrade` (src/game/game.cpp:6187): a transfer in
+     * progress is not interrupted; otherwise both sides lose their offer, the
+     * `ON_TRADE_CANCEL` item event fires and "Trade cancelled." is sent.
+     */
+    fun internalCloseTrade(player: Player) {
+        val tradePartner = getTradePartner(player)
+        if ((tradePartner != null && getTradeState(tradePartner) == TradeState_t.TRADE_TRANSFER) ||
+            getTradeState(player) == TradeState_t.TRADE_TRANSFER
+        ) {
+            return
+        }
+
+        getTradeItem(player)?.let { item ->
+            tradeItems.remove(item)
+            onTradeEvent(item, TradeEvents_t.ON_TRADE_CANCEL, player)
+            setTradeItem(player, null)
+        }
+
+        setTradeState(player, TradeState_t.TRADE_NONE)
+        setTradePartner(player, null)
+
+        player.sendTextMessageTyped(MessageClass.MESSAGE_FAILURE, "Trade cancelled.")
+        sendTradeClose(player)
+
+        if (tradePartner != null) {
+            getTradeItem(tradePartner)?.let { item ->
+                tradeItems.remove(item)
+                onTradeEvent(item, TradeEvents_t.ON_TRADE_CANCEL, tradePartner)
+                setTradeItem(tradePartner, null)
+            }
+
+            setTradeState(tradePartner, TradeState_t.TRADE_NONE)
+            setTradePartner(tradePartner, null)
+
+            tradePartner.sendTextMessageTyped(MessageClass.MESSAGE_FAILURE, "Trade cancelled.")
+            sendTradeClose(tradePartner)
+        }
+    }
+
+    /**
+     * `Game::playerBuyItem` (src/game/game.cpp:6228): the interacting merchant
+     * must sell the item to the player, the UI must not be exhausted and the
+     * backpack/tile limits hint the item delivery.
+     *
+     * PARITY GAPS: `g_configManager().getNumber(MAX_CONTAINER)` is [maxContainer]
+     * and the `MAX_CONTAINER_ITEM` per-item ceiling is not modeled.
+     */
+    fun playerBuyItem(
+        playerId: Long,
+        itemId: Int,
+        count: Int,
+        amount: Int,
+        ignoreCap: Boolean = false,
+        inBackpacks: Boolean = false,
+    ) {
+        if (amount == 0) {
+            return
+        }
+
+        val player = getPlayerByID(playerId) ?: return
+        val merchant = getInteractableShopOwner(player) ?: return
+        val itemType = itemTypes?.get(itemId) ?: return
+        if (itemType.id == 0) {
+            return
+        }
+
+        if ((itemType.isStackable && amount > 10000) || (!itemType.isStackable && amount > 100)) {
+            return
+        }
+
+        if (!hasShopItemForSale(player, merchant, itemType.id, count)) {
+            return
+        }
+
+        if (isUIExhausted(player)) {
+            sendCancelMessage(player, ReturnValue.YOUAREEXHAUSTED)
+            return
+        }
+
+        if (inBackpacks || itemType.isContainer) {
+            val mainBackpack = player.getBackpack()
+            if (mainBackpack != null && mainBackpack.getContainerHoldingCount() >= maxContainer) {
+                sendCancelMessage(player, ReturnValue.CONTAINERISFULL)
+                return
+            }
+
+            val tile = placedCreatures[player]
+            if (tile != null && tile.getItemCount() >= 20) {
+                sendCancelMessage(player, ReturnValue.CONTAINERISFULL)
+                return
+            }
+        }
+
+        merchant.onPlayerBuyItem(player, itemType.id, count, amount, ignoreCap, inBackpacks)
+        updateUIExhausted(player)
+    }
+
+    /** `Game::playerSellItem` (src/game/game.cpp:6284). */
+    fun playerSellItem(playerId: Long, itemId: Int, count: Int, amount: Int, ignoreEquipped: Boolean) {
+        if (amount == 0) {
+            return
+        }
+
+        val player = getPlayerByID(playerId) ?: return
+        val merchant = getInteractableShopOwner(player) ?: return
+        val itemType = itemTypes?.get(itemId) ?: return
+        if (itemType.id == 0) {
+            return
+        }
+
+        if ((itemType.isStackable && amount > 10000) || (!itemType.isStackable && amount > 100)) {
+            return
+        }
+
+        if (isUIExhausted(player)) {
+            sendCancelMessage(player, ReturnValue.YOUAREEXHAUSTED)
+            return
+        }
+
+        merchant.onPlayerSellItem(player, itemType.id, count, amount, ignoreEquipped)
+        updateUIExhausted(player)
+    }
+
+    /** `Game::playerCloseShop` (src/game/game.cpp:6319). */
+    fun playerCloseShop(playerId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+        closeShopWindow(player)
+    }
+
+    /**
+     * `getInteractableShopOwner` (`src/game/game.cpp:196-212`, anonymous
+     * namespace): the stored shop owner must still be within interaction range,
+     * otherwise the shop window closes.
+     */
+    private fun getInteractableShopOwner(player: Player): Npc? {
+        val merchant = getShopOwner(player) ?: return null
+        if (merchant.canInteract(player.position)) {
+            return merchant
+        }
+
+        closeShopWindow(player)
+        return null
+    }
+
+    /** `Player::hasShopItemForSale` (player.cpp:6066-6076). */
+    private fun hasShopItemForSale(player: Player, merchant: Npc, itemId: Int, subType: Int): Boolean {
+        val itemType = itemTypes?.get(itemId) ?: return false
+        val shopList = merchant.getShopItemVector(player.getGUID())
+        return shopList.any { shopBlock ->
+            shopBlock.itemId == itemId &&
+                shopBlock.itemBuyPrice != 0L &&
+                (!itemType.isFluidContainer || shopBlock.itemSubType == subType)
+        }
+    }
+
+    /** `Player::tradeState` getter (player.hpp:718). */
+    private fun getTradeState(player: Player): TradeState_t = tradeStates[player] ?: TradeState_t.TRADE_NONE
+
+    /** `Player::setTradeState` (player.cpp:6105-6107). */
+    private fun setTradeState(player: Player, state: TradeState_t) {
+        tradeStates[player] = state
+    }
+
+    /** `Player::tradeItem` accessor (player.hpp:1762). */
+    private fun getTradeItem(player: Player): Item? = tradeItemByPlayer[player]
+
+    /** `Player::tradeItem` assignment (player.cpp trade handlers). */
+    private fun setTradeItem(player: Player, item: Item?) {
+        tradeItemByPlayer[player] = item
+    }
+
+    /** `Player::tradePartner` accessor (player.hpp:1768). */
+    private fun getTradePartner(player: Player): Player? = tradePartnerByPlayer[player]
+
+    /** `Player::tradePartner` assignment (player.cpp trade handlers). */
+    private fun setTradePartner(player: Player, partner: Player?) {
+        tradePartnerByPlayer[player] = partner
+    }
+
+    /** The trade-window reset tail shared by `playerAcceptTrade` (game.cpp:6076-6084). */
+    private fun resetTrade(player: Player) {
+        setTradeState(player, TradeState_t.TRADE_NONE)
+        setTradeItem(player, null)
+        setTradePartner(player, null)
+        sendTradeClose(player)
+    }
+
+    /**
+     * Player-cylinder branch of `Game::internalAddItem` (game.cpp:2693): the
+     * `Player::queryAdd` ownership/pickupable/capacity gate plus the
+     * `Player::addThing` insertion modelled by `Player::addItem`.
+     */
+    private fun internalAddItem(
+        toPlayer: Player,
+        item: Item?,
+        index: Int = INDEX_WHEREEVER,
+        flags: Int = 0,
+        test: Boolean = false,
+    ): ReturnValue {
+        if (item == null) {
+            return ReturnValue.NOTPOSSIBLE
+        }
+
+        if (item.hasOwner() && !item.isOwner(toPlayer.getGUID())) {
+            return ReturnValue.ITEMISNOTYOURS
+        }
+
+        if (!item.isPickupable()) {
+            return ReturnValue.CANNOTPICKUP
+        }
+
+        if (!playerHasCapacity(toPlayer, item, flags)) {
+            return ReturnValue.NOTENOUGHCAPACITY
+        }
+
+        if (test) {
+            return ReturnValue.NOERROR
+        }
+        return toPlayer.addItem(item)
+    }
+
+    /**
+     * `Player::hasCapacity` subset (player.cpp:4557-4571): the flag gates and
+     * the free-capacity comparison. The container/base-weight split is reduced
+     * to `Item::weight` (PARITY GAP: container contents are not added).
+     */
+    private fun playerHasCapacity(player: Player, item: Item, flags: Int): Boolean {
+        if (player.hasFlag(PlayerFlags_t.CannotPickupItem)) {
+            return false
+        }
+
+        if (player.hasFlag(PlayerFlags_t.HasInfiniteCapacity) ||
+            (flags and CylinderFlags.FLAG_NOLIMIT) != 0
+        ) {
+            return true
+        }
+
+        return item.weight <= player.getFreeCapacity()
+    }
+
+    /**
+     * Player-cylinder branch of `Game::internalMoveItem` (game.cpp:2436) used
+     * by the trade transfer: the source tile removal path is the facade's
+     * [queryRemove]/[removeThing] pair and the destination is
+     * `Player::addItem` (PARITY GAP: no auto-stack into the trade window, which
+     * `FLAG_IGNOREAUTOSTACK` also suppresses in Canary).
+     */
+    private fun internalMoveItemToPlayer(fromTile: Tile?, toPlayer: Player, item: Item, count: Int, flags: Int): ReturnValue {
+        if (fromTile == null) {
+            return ReturnValue.NOTPOSSIBLE
+        }
+
+        var ret = queryRemove(fromTile, item, 1, flags)
+        if (ret != ReturnValue.NOERROR) {
+            return ret
+        }
+
+        val maxQueryCount = queryMaxCount(count)
+        val m = if (isStackable(item)) minOf(count, maxQueryCount) else maxQueryCount
+
+        ret = queryRemove(fromTile, item, m, flags)
+        if (ret != ReturnValue.NOERROR) {
+            return ret
+        }
+
+        if (isStackable(item) && m < item.count) {
+            removeThing(fromTile, item, m)
+            return toPlayer.addItem(cloneItem(item, m))
+        }
+
+        removeThing(fromTile, item, m)
+        return toPlayer.addItem(item)
+    }
+
+    /**
+     * `Game::internalGetThing` reduced to the `STACKPOS_TOPDOWN_ITEM` tile
+     * branch (game.cpp:1130-1205) needed by [playerRequestTrade]. PARITY GAPS:
+     * the look/move/use/find stack-pos branches, containers, depot search and
+     * inventory targets are not modeled.
+     */
+    private fun internalGetThing(player: Player, pos: Position, index: Int, itemId: Int, type: StackPosType_t): Item? {
+        if (pos.x == 0xFFFF || type != StackPosType_t.STACKPOS_TOPDOWN_ITEM) {
+            return null
+        }
+
+        val tile = map.getTile(pos) ?: return null
+        return topDownItem(tile)
+    }
+
     /** `Player::isPartner` (player.cpp:7790-7796), transcribed for the party handlers. */
     private fun isPartner(player: Player, other: Player?): Boolean {
         if (other == null || other === player) {
@@ -1173,6 +1894,7 @@ class Game(
      */
     private fun addThing(tile: Tile, item: Item, index: Int) {
         tile.addItem(item)
+        item.setParent(tile)
         itemParents[item] = tile
     }
 
