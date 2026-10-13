@@ -36,6 +36,16 @@ object MovePacketHandler {
         }
 
         return when (opcode) {
+            // Stop auto walk: 0x69 playerStopAutoWalk
+            0x69 -> {
+                // Game::playerStopAutoWalk (game.cpp:4567-4574) calls
+                // Player::stopWalk, which only affects the queued walk task;
+                // this port moves instantly through MovementEngine and keeps no
+                // walk queue, so the packet only marks the handled boundary
+                // (PARITY GAP).
+                true
+            }
+
             // Movement: Cardinal directions
             0x65 -> move(player, Direction.North, map, scripting)
             0x66 -> move(player, Direction.East, map, scripting)

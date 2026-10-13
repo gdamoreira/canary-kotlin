@@ -53,6 +53,19 @@ class MovePacketHandlerTest {
     }
 
     @Test
+    fun `handles stop auto walk opcode 0x69 without a payload`() {
+        val map = GameMap()
+        val startPos = Position(100, 100, 7)
+        map.getOrCreateTile(startPos)
+        val player = Player(1, "Hero", 100, 100, position = startPos)
+
+        val handled = MovePacketHandler.handle(player, opcode = 0x69, payload = Unpooled.EMPTY_BUFFER, map = map)
+
+        assertThat(handled).isTrue()
+        assertThat(player.position).isEqualTo(startPos)
+    }
+
+    @Test
     fun `rejects movement when destination tile does not exist`() {
         val map = GameMap()
         val startPos = Position(100, 100, 7)

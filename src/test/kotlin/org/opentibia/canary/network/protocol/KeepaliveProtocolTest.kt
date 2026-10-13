@@ -18,6 +18,11 @@ class KeepaliveProtocolTest {
     }
 
     @Test
+    fun `handles the ping back opcode without a payload`() {
+        assertThat(KeepaliveHandler.handlePingBack()).isTrue()
+    }
+
+    @Test
     fun `allows logout when player is out of combat`() {
         val player = Player(1, "Hero", 100, 100, position = Position(100, 100, 7))
         player.inCombat = false
