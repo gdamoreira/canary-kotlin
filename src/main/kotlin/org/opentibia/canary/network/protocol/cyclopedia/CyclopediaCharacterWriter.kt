@@ -3,11 +3,14 @@ package org.opentibia.canary.network.protocol.cyclopedia
 import io.netty.buffer.ByteBuf
 import kotlin.math.pow
 import org.opentibia.canary.combat.condition.Outfit
+import org.opentibia.canary.combat.condition.Skill
+import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.players.components.RecentDeathEntry
 import org.opentibia.canary.creatures.players.components.RecentPvPKillEntry
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.network.message.writeTibiaString
 import org.opentibia.canary.network.protocol.GameWindowWriter
+import org.opentibia.canary.systems.wheel.WheelStat
 
 /**
  * The remaining outbound cyclopedia character-info frames, ported from Canary
@@ -34,7 +37,10 @@ import org.opentibia.canary.network.protocol.GameWindowWriter
  * with the caller: every value Canary reads from the player, wheel, forge,
  * weapon proficiency or item registry is passed in through the frame types.
  * The `addCyclopedia*`, `handleImbuementDamage`, `getCipbia*` and
- * `calculateAbsorbValues` computations are likewise pre-resolved by the caller.
+ * `calculateAbsorbValues` computations are ported in `CyclopediaComputation`
+ * and wired through the `*Source` overloads of the general/offence/defence/
+ * misc writers, so callers can pass live state instead of final wire values
+ * (the frame overloads remain for callers that already hold the wire values).
  * The `IgnoreItemList`/house-map order is preserved from the caller; every
  * multi-byte field is Little-Endian and strings are `uint16` length plus UTF-8.
  */
@@ -264,6 +270,58 @@ object CyclopediaCharacterWriter {
         ) : CyclopediaWeapon
     }
 
+    /**
+     * The `it.abilities && it.abilities->elementType != COMBAT_NONE` branch of
+     * the distance/melee weapon blocks (protocolgame.cpp:5472-5479, 5513-5519):
+     * `convertedDamage` is `elementalAttack / attackValue` unless physical
+     * attack is 0, and [element] is `getCipbiaElement(elementType)`.
+     */
+    data class ElementalConversion(
+        val physicalAttack: Int,
+        val elementalAttack: Int,
+        val attackValue: Int,
+        val element: Int,
+    )
+
+    /**
+     * The weapon inputs of `sendCyclopediaCharacterOffenceStats`
+     * (protocolgame.cpp:5429-5543) ahead of the imbuement fallback: when
+     * [Distance]/[Melee] carry no [ElementalConversion], the writer resolves the
+     * converted-damage block through `handleImbuementDamage`.
+     */
+    sealed interface CyclopediaWeaponSource {
+        data class Wand(val maxHitChance: Int, val element: Int) : CyclopediaWeaponSource
+
+        data class Distance(
+            val attackTotal: Int,
+            val flatBonus: Int,
+            val attackValue: Int,
+            val attackSkill: Int,
+            val attackRawTotal: Int,
+            val conversion: ElementalConversion?,
+            val accuracyPercent: List<Double> = emptyList(),
+        ) : CyclopediaWeaponSource
+
+        data class Melee(
+            val attackTotal: Int,
+            val flatBonus: Int,
+            val weaponAttack: Int,
+            val skillId: Int,
+            val attackSkill: Int,
+            val attackRawTotal: Int,
+            val conversion: ElementalConversion?,
+        ) : CyclopediaWeaponSource
+
+        data class Fist(
+            val attackTotal: Int,
+            val flatBonus: Int,
+            val attackValue: Int,
+            val skillId: Int,
+            val attackSkill: Int,
+            val attackRawTotal: Int,
+        ) : CyclopediaWeaponSource
+    }
+
     /** The 0xDA `OFFENCESTATS` payload. */
     data class OffenceStatsFrame(
         val criticals: List<CriticalSkillEntry>,
@@ -274,6 +332,37 @@ object CyclopediaCharacterWriter {
         val perfectShotDamage: List<Int>,
         val flatDamageHealing: Int,
         val weapon: CyclopediaWeapon,
+        val powerfulFoeDamage: Double,
+        val bestiaryDamages: List<Pair<String, Double>>,
+        val elementalCriticalChance: Pair<Int, Double>?,
+        val runesCriticalChance: Double,
+        val autoAttackCriticalChance: Double,
+        val elementalCriticalDamage: Pair<Int, Double>?,
+        val runesCriticalDamage: Double,
+        val autoAttackCriticalDamage: Double,
+        val lifeGainOnHit: Int,
+        val manaGainOnHit: Int,
+        val lifeGainOnKill: Int,
+        val manaGainOnKill: Int,
+        val autoAttackSkill: SkillPercentage?,
+        val spellDamage: SkillPercentage?,
+        val spellHealing: SkillPercentage?,
+    )
+
+    /**
+     * The live-state inputs `sendCyclopediaCharacterOffenceStats` reads besides
+     * the blocks resolved by `CyclopediaComputation`: [skillsEquipment] is
+     * `Player::getSkillsEquipment()` (player.cpp:13214) indexed by skill, and
+     * [weapon] carries the resolved weapon branch. The criticals, leeches,
+     * onslaught, and imbuement converted-damage values are computed by
+     * [writeOffenceStats]'s computation overload.
+     */
+    data class OffenceStatsSource(
+        val skillsEquipment: (Skill) -> SkillsEquipment,
+        val weapon: CyclopediaWeaponSource,
+        val cleave: Double,
+        val perfectShotDamage: List<Int>,
+        val flatDamageHealing: Int,
         val powerfulFoeDamage: Double,
         val bestiaryDamages: List<Pair<String, Double>>,
         val elementalCriticalChance: Pair<Int, Double>?,
@@ -321,6 +410,29 @@ object CyclopediaCharacterWriter {
         val absorbs: List<AbsorbEntry>,
     )
 
+    /**
+     * The live-state inputs `sendCyclopediaCharacterDefenceStats` reads besides
+     * the `getForgeSkillStat` dodge values, the wheel dodge stat and the
+     * `calculateAbsorbValues` list.
+     */
+    data class DefenceStatsSource(
+        val magicShieldTotal: Long,
+        val magicShieldFlat: Int,
+        val magicShieldPercent: Double,
+        val reflectFlat: Int,
+        val armor: Int,
+        val mantra: Int,
+        val defense: Int,
+        val defenseEquipment: Int,
+        val shielding: Int,
+        val defenseWheel: Int,
+        val mitigation: Double,
+        val mitigationZero: Double,
+        val equipmentMitigation: Double,
+        val skillMitigation: Double,
+        val wheelMitigation: Double,
+    )
+
     /** One active concoction/food (`Player::getActiveConcoctions`/`getActiveFoods`). */
     data class ActiveEffect(
         val id: Int,
@@ -351,6 +463,21 @@ object CyclopediaCharacterWriter {
         val wheelAugments: List<SpellAugment>,
         val equippedAugments: List<SpellAugment>,
         val feetForgeEquipment: Double = 0.0,
+    )
+
+    /**
+     * The live-state inputs `sendCyclopediaCharacterMiscStats` reads besides the
+     * `getForgeSkillStat` momentum/transcendence/amplification values and the
+     * wheel momentum.
+     */
+    data class MiscStatsSource(
+        val haveBlesses: Int,
+        val blessingsTotal: Int,
+        val concoctions: List<ActiveEffect>,
+        val foods: List<ActiveEffect>,
+        val weaponAugments: List<SpellAugment>,
+        val wheelAugments: List<SpellAugment>,
+        val equippedAugments: List<SpellAugment>,
     )
 
     /** The `HouseMap` entry branches `sendCyclopediaHouseList` serializes. */
@@ -780,6 +907,60 @@ object CyclopediaCharacterWriter {
         out.writeByte(0x00)
     }
 
+    /**
+     * `sendCyclopediaCharacterOffenceStats` (protocolgame.cpp:5391-5642) with
+     * the `addCyclopedia*`, `getForgeSkillStat` and `handleImbuementDamage`
+     * blocks resolved from [source] and [computation].
+     */
+    fun writeOffenceStats(out: ByteBuf, source: OffenceStatsSource, computation: CyclopediaComputation) {
+        writeOffenceStats(
+            out,
+            OffenceStatsFrame(
+                criticals = listOf(
+                    computation.addCyclopediaCriticalSkill(
+                        Skill.SKILL_CRITICAL_HIT_CHANCE,
+                        source.skillsEquipment(Skill.SKILL_CRITICAL_HIT_CHANCE),
+                    ),
+                    computation.addCyclopediaCriticalSkill(
+                        Skill.SKILL_CRITICAL_HIT_DAMAGE,
+                        source.skillsEquipment(Skill.SKILL_CRITICAL_HIT_DAMAGE),
+                    ),
+                ),
+                leeches = listOf(
+                    computation.addCyclopediaSkills(
+                        Skill.SKILL_LIFE_LEECH_AMOUNT,
+                        source.skillsEquipment(Skill.SKILL_LIFE_LEECH_AMOUNT),
+                    ),
+                    computation.addCyclopediaSkills(
+                        Skill.SKILL_MANA_LEECH_AMOUNT,
+                        source.skillsEquipment(Skill.SKILL_MANA_LEECH_AMOUNT),
+                    ),
+                ),
+                onslaughtTotal = computation.getForgeSkillStat(Slots_t.CONST_SLOT_LEFT),
+                onslaughtEquipment = computation.getForgeSkillStat(Slots_t.CONST_SLOT_LEFT, false),
+                cleave = source.cleave,
+                perfectShotDamage = source.perfectShotDamage,
+                flatDamageHealing = source.flatDamageHealing,
+                weapon = resolveWeaponSource(source.weapon, computation),
+                powerfulFoeDamage = source.powerfulFoeDamage,
+                bestiaryDamages = source.bestiaryDamages,
+                elementalCriticalChance = source.elementalCriticalChance,
+                runesCriticalChance = source.runesCriticalChance,
+                autoAttackCriticalChance = source.autoAttackCriticalChance,
+                elementalCriticalDamage = source.elementalCriticalDamage,
+                runesCriticalDamage = source.runesCriticalDamage,
+                autoAttackCriticalDamage = source.autoAttackCriticalDamage,
+                lifeGainOnHit = source.lifeGainOnHit,
+                manaGainOnHit = source.manaGainOnHit,
+                lifeGainOnKill = source.lifeGainOnKill,
+                manaGainOnKill = source.manaGainOnKill,
+                autoAttackSkill = source.autoAttackSkill,
+                spellDamage = source.spellDamage,
+                spellHealing = source.spellHealing,
+            ),
+        )
+    }
+
     /** `sendCyclopediaCharacterDefenceStats` (protocolgame.cpp:5644-5700). */
     fun writeDefenceStats(out: ByteBuf, frame: DefenceStatsFrame) {
         out.writeByte(PACKET)
@@ -819,6 +1000,43 @@ object CyclopediaCharacterWriter {
         }
     }
 
+    /**
+     * `sendCyclopediaCharacterDefenceStats` (protocolgame.cpp:5644-5700) with
+     * the `getForgeSkillStat(ARMOR)` dodge values, the wheel dodge stat and the
+     * `calculateAbsorbValues` list resolved from [source] and [computation].
+     */
+    fun writeDefenceStats(out: ByteBuf, source: DefenceStatsSource, computation: CyclopediaComputation) {
+        val dodge = computation.getForgeSkillStat(Slots_t.CONST_SLOT_ARMOR)
+        val dodgeEquipment = computation.getForgeSkillStat(Slots_t.CONST_SLOT_ARMOR, false)
+        val wheelDodge = computation.getWheelStat(WheelStat.DODGE)
+
+        writeDefenceStats(
+            out,
+            DefenceStatsFrame(
+                dodgeTotal = dodge + wheelDodge,
+                dodgeEquipment = dodgeEquipment,
+                dodgeEquipmentDiff = dodge - dodgeEquipment,
+                wheelDodge = wheelDodge.toDouble(),
+                magicShieldTotal = source.magicShieldTotal,
+                magicShieldFlat = source.magicShieldFlat,
+                magicShieldPercent = source.magicShieldPercent,
+                reflectFlat = source.reflectFlat,
+                armor = source.armor,
+                mantra = source.mantra,
+                defense = source.defense,
+                defenseEquipment = source.defenseEquipment,
+                shielding = source.shielding,
+                defenseWheel = source.defenseWheel,
+                mitigation = source.mitigation,
+                mitigationZero = source.mitigationZero,
+                equipmentMitigation = source.equipmentMitigation,
+                skillMitigation = source.skillMitigation,
+                wheelMitigation = source.wheelMitigation,
+                absorbs = computation.calculateAbsorbValues().entries,
+            ),
+        )
+    }
+
     /** `sendCyclopediaCharacterMiscStats` (protocolgame.cpp:5702-5795). */
     fun writeMiscStats(out: ByteBuf, frame: MiscStatsFrame) {
         out.writeByte(PACKET)
@@ -856,6 +1074,40 @@ object CyclopediaCharacterWriter {
         writeAugments(out, frame.weaponAugments)
         writeAugments(out, frame.wheelAugments)
         writeAugments(out, frame.equippedAugments)
+    }
+
+    /**
+     * `sendCyclopediaCharacterMiscStats` (protocolgame.cpp:5702-5795) with the
+     * `getForgeSkillStat` momentum/transcendence/amplification values and the
+     * wheel momentum resolved from [source] and [computation].
+     */
+    fun writeMiscStats(out: ByteBuf, source: MiscStatsSource, computation: CyclopediaComputation) {
+        val momentum = computation.getForgeSkillStat(Slots_t.CONST_SLOT_HEAD)
+        val momentumEquipment = computation.getForgeSkillStat(Slots_t.CONST_SLOT_HEAD, false)
+        val wheelMomentum = computation.getWheelMomentum()
+        val legsForgeTotal = computation.getForgeSkillStat(Slots_t.CONST_SLOT_LEGS)
+        val legsForgeEquipment = computation.getForgeSkillStat(Slots_t.CONST_SLOT_LEGS, false)
+
+        writeMiscStats(
+            out,
+            MiscStatsFrame(
+                momentumTotal = momentum + wheelMomentum,
+                momentumEquipment = momentumEquipment,
+                momentumEquipmentDiff = momentum - momentumEquipment,
+                wheelMomentum = wheelMomentum,
+                legsForgeTotal = legsForgeTotal,
+                legsForgeEquipment = legsForgeEquipment,
+                legsForgeEquipmentDiff = legsForgeTotal - legsForgeEquipment,
+                haveBlesses = source.haveBlesses,
+                blessingsTotal = source.blessingsTotal,
+                concoctions = source.concoctions,
+                foods = source.foods,
+                weaponAugments = source.weaponAugments,
+                wheelAugments = source.wheelAugments,
+                equippedAugments = source.equippedAugments,
+                feetForgeEquipment = computation.getForgeSkillStat(Slots_t.CONST_SLOT_FEET, false),
+            ),
+        )
     }
 
     /** `sendCyclopediaHouseList` (protocolgame.cpp:12013-12095). */
@@ -939,6 +1191,93 @@ object CyclopediaCharacterWriter {
             out.writeIntLE(entry.count.toInt())
         }
     }
+
+    /**
+     * Resolves the `sendCyclopediaCharacterOffenceStats` weapon branch: a
+     * [CyclopediaWeaponSource.Distance]/[CyclopediaWeaponSource.Melee] without
+     * an [ElementalConversion] runs `handleImbuementDamage` exactly like the
+     * C++ `else` branches (protocolgame.cpp:5480, 5521).
+     */
+    private fun resolveWeaponSource(
+        source: CyclopediaWeaponSource,
+        computation: CyclopediaComputation,
+    ): CyclopediaWeapon = when (source) {
+        is CyclopediaWeaponSource.Wand ->
+            CyclopediaWeapon.Wand(source.maxHitChance, source.element)
+
+        is CyclopediaWeaponSource.Distance -> {
+            val conversion = source.conversion
+            if (conversion != null) {
+                CyclopediaWeapon.Distance(
+                    attackTotal = source.attackTotal,
+                    flatBonus = source.flatBonus,
+                    attackValue = source.attackValue,
+                    attackSkill = source.attackSkill,
+                    attackRawTotal = source.attackRawTotal,
+                    convertedDamage = convertedDamage(conversion),
+                    convertedElement = conversion.element,
+                    accuracyPercent = source.accuracyPercent,
+                )
+            } else {
+                val imbuementDamage = computation.handleImbuementDamage()
+                CyclopediaWeapon.Distance(
+                    attackTotal = source.attackTotal,
+                    flatBonus = source.flatBonus,
+                    attackValue = source.attackValue,
+                    attackSkill = source.attackSkill,
+                    attackRawTotal = source.attackRawTotal,
+                    convertedDamage = imbuementDamage?.damage ?: 0.0,
+                    convertedElement = imbuementDamage?.element ?: 0,
+                    accuracyPercent = source.accuracyPercent,
+                )
+            }
+        }
+
+        is CyclopediaWeaponSource.Melee -> {
+            val conversion = source.conversion
+            if (conversion != null) {
+                CyclopediaWeapon.Melee(
+                    attackTotal = source.attackTotal,
+                    flatBonus = source.flatBonus,
+                    weaponAttack = source.weaponAttack,
+                    skillId = source.skillId,
+                    attackSkill = source.attackSkill,
+                    attackRawTotal = source.attackRawTotal,
+                    convertedDamage = convertedDamage(conversion),
+                    convertedElement = conversion.element,
+                )
+            } else {
+                val imbuementDamage = computation.handleImbuementDamage()
+                CyclopediaWeapon.Melee(
+                    attackTotal = source.attackTotal,
+                    flatBonus = source.flatBonus,
+                    weaponAttack = source.weaponAttack,
+                    skillId = source.skillId,
+                    attackSkill = source.attackSkill,
+                    attackRawTotal = source.attackRawTotal,
+                    convertedDamage = imbuementDamage?.damage ?: 0.0,
+                    convertedElement = imbuementDamage?.element ?: 0,
+                )
+            }
+        }
+
+        is CyclopediaWeaponSource.Fist -> CyclopediaWeapon.Fist(
+            attackTotal = source.attackTotal,
+            flatBonus = source.flatBonus,
+            attackValue = source.attackValue,
+            skillId = source.skillId,
+            attackSkill = source.attackSkill,
+            attackRawTotal = source.attackRawTotal,
+        )
+    }
+
+    /** `elementalAttack / (double)attackValue` or 0 when physical attack is 0 (protocolgame.cpp:5474,5515). */
+    private fun convertedDamage(conversion: ElementalConversion): Double =
+        if (conversion.physicalAttack != 0) {
+            conversion.elementalAttack / conversion.attackValue.toDouble()
+        } else {
+            0.0
+        }
 
     private fun writeWeapon(out: ByteBuf, weapon: CyclopediaWeapon) {
         when (weapon) {

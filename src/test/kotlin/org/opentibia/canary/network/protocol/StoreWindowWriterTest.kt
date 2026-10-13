@@ -126,4 +126,19 @@ class StoreWindowWriterTest {
             )
         )
     }
+
+    @Test
+    fun `writes the special containers available 0x2A with stash and market flags`() {
+        val out = Unpooled.buffer()
+
+        StoreWindowWriter.writeSpecialContainersAvailable(out, stashMenu = true, marketMenu = false)
+
+        assertThat(out.toByteArray()).containsExactly(
+            *bytes(
+                0x2A,
+                0x01,
+                0x00,
+            )
+        )
+    }
 }

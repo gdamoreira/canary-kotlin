@@ -11,6 +11,7 @@ import io.netty.buffer.ByteBuf
  *  - `ProtocolGame::sendCharmResourcesBalance` (protocolgame.cpp:6648-6653)
  *  - `ProtocolGame::sendCharmResourceBalance`  (0xEE, protocolgame.cpp:6655-6667)
  *  - `ProtocolGame::sendCoinBalance`           (0xF2/0xDF, protocolgame.cpp:6803-6829)
+ *  - `ProtocolGame::sendSpecialContainersAvailable` (0x2A, protocolgame.cpp:10317-10327)
  *
  * The `version < 1100`, `ProtocolFeature::ResourceBalancePackets` and
  * `m_isLivestreamViewer` guards stay with the caller. `Resource_t` and
@@ -26,6 +27,9 @@ object StoreWindowWriter {
     const val PACKET_RESOURCE_BALANCE: Int = 0xEE
     const val PACKET_COIN_BALANCE_UPDATE: Int = 0xF2
     const val PACKET_COIN_BALANCE: Int = 0xDF
+
+    /** `SpecialContainersAvailable` opcode (protocolgame.cpp:10323). */
+    const val PACKET_SPECIAL_CONTAINERS_AVAILABLE: Int = 0x2A
 
     /** `Resource_t` (`src/server/server_definitions.hpp:57-75`). */
     enum class Resource(val value: Int) {
@@ -157,6 +161,18 @@ object StoreWindowWriter {
         if (!oldProtocol) {
             out.writeIntLE(coinBalance.toInt())
         }
+    }
+
+    /**
+     * `sendSpecialContainersAvailable` (protocolgame.cpp:10317-10327). The
+     * `player->isStashMenuAvailable()` / `isMarketMenuAvailable()` reads and the
+     * `oldProtocol`/`!player` guard stay with the caller; the depot-search flag
+     * is not written by Canary.
+     */
+    fun writeSpecialContainersAvailable(out: ByteBuf, stashMenu: Boolean, marketMenu: Boolean) {
+        out.writeByte(PACKET_SPECIAL_CONTAINERS_AVAILABLE)
+        out.writeByte(if (stashMenu) 0x01 else 0x00)
+        out.writeByte(if (marketMenu) 0x01 else 0x00)
     }
 
     /** `resourceBalanceUsesU32` (protocolgame.cpp:150-164). */
