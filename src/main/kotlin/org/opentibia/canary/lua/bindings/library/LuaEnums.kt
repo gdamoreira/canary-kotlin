@@ -108,12 +108,30 @@ private val SPELL_TYPE_ENUM_NAMES = listOf(
     "SPELL_RUNE" to SpellType.SPELL_RUNE.value,
 )
 
+private val GAME_STATE_ENUM_NAMES = listOf(
+    "GAME_STATE_STARTUP", "GAME_STATE_INIT", "GAME_STATE_NORMAL", "GAME_STATE_CLOSED",
+    "GAME_STATE_SHUTDOWN", "GAME_STATE_CLOSING", "GAME_STATE_MAINTAIN",
+)
+
+private val CREATURE_EVENT_ENUM_NAMES = listOf(
+    "CREATURE_EVENT_NONE", "CREATURE_EVENT_LOGIN", "CREATURE_EVENT_LOGOUT", "CREATURE_EVENT_THINK",
+    "CREATURE_EVENT_PREPAREDEATH", "CREATURE_EVENT_DEATH", "CREATURE_EVENT_KILL",
+    "CREATURE_EVENT_ADVANCE", "CREATURE_EVENT_MODALWINDOW", "CREATURE_EVENT_TEXTEDIT",
+    "CREATURE_EVENT_HEALTHCHANGE", "CREATURE_EVENT_MANACHANGE", "CREATURE_EVENT_EXTENDED_OPCODE",
+)
+
+private val DIRECTION_ENUM_NAMES = listOf(
+    "DIRECTION_NORTH", "DIRECTION_EAST", "DIRECTION_SOUTH", "DIRECTION_WEST",
+    "DIRECTION_SOUTHWEST", "DIRECTION_SOUTHEAST", "DIRECTION_NORTHWEST", "DIRECTION_NORTHEAST",
+)
+
 /**
  * Port of `LuaEnums::init` (src/lua/functions/core/game/lua_enums.cpp:64-121): the
  * global enumerator names Lua scripts rely on, sourced from the port's enum mirrors
  * (each one a faithful transcription of its C++ enum).
  *
- * Registered families: `WORLD_TYPE_*`, `AMMO_*`, `ORIGIN_*`, `SPELL_*`, `ZONE_*`,
+ * Registered families: `WORLD_TYPE_*`, `GAME_STATE_*`, `CREATURE_EVENT_*`, `DIRECTION_*`,
+ * `AMMO_*`, `ORIGIN_*`, `SPELL_*`, `ZONE_*`,
  * `WEAPON_*`, `COMBAT_*`, `CONDITIONID_*`, `CONDITION_PARAM_*`, `CONDITION_*`,
  * `SKILL_*`, `SKULL_*`, `TALKTYPE_*`, `FIGHTMODE_*`, `ITEM_ATTRIBUTE_*`,
  * `ITEM_TYPE_*`, `FLUID_*`, `TILESTATE_*`, `RETURNVALUE_*`, `RELOAD_TYPE_*`,
@@ -130,6 +148,9 @@ private val SPELL_TYPE_ENUM_NAMES = listOf(
 object LuaEnums {
     fun install(env: LuaEnvironment) {
         WorldType.entries.forEach { env.registerEnum("WORLD_TYPE_${it.name}", it.value) }
+        GAME_STATE_ENUM_NAMES.forEachIndexed { index, name -> env.registerEnum(name, index) }
+        CREATURE_EVENT_ENUM_NAMES.forEachIndexed { index, name -> env.registerEnum(name, index) }
+        DIRECTION_ENUM_NAMES.forEachIndexed { index, name -> env.registerEnum(name, index) }
         Ammo_t.entries.forEach { env.registerEnum(it.name, it.value) }
         COMBAT_ORIGIN_ENUM_NAMES.forEach { (name, origin) -> env.registerEnum(name, origin.value) }
         SPELL_TYPE_ENUM_NAMES.forEach { (name, value) -> env.registerEnum(name, value) }

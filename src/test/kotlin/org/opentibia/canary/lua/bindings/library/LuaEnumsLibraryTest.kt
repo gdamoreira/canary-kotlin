@@ -111,6 +111,29 @@ class LuaEnumsLibraryTest {
     }
 
     @Test
+    fun `direction game state and creature event enums match the C++ values`() {
+        val environment = environment()
+
+        environment.loadChunk(
+            """
+            north = DIRECTION_NORTH
+            northeast = DIRECTION_NORTHEAST
+            normal = GAME_STATE_NORMAL
+            maintain = GAME_STATE_MAINTAIN
+            login = CREATURE_EVENT_LOGIN
+            extended = CREATURE_EVENT_EXTENDED_OPCODE
+            """.trimIndent(),
+        )
+
+        assertThat(environment.getGlobal("north").toint()).isEqualTo(0)
+        assertThat(environment.getGlobal("northeast").toint()).isEqualTo(7)
+        assertThat(environment.getGlobal("normal").toint()).isEqualTo(2)
+        assertThat(environment.getGlobal("maintain").toint()).isEqualTo(6)
+        assertThat(environment.getGlobal("login").toint()).isEqualTo(1)
+        assertThat(environment.getGlobal("extended").toint()).isEqualTo(12)
+    }
+
+    @Test
     fun `sound weapon skull and player flag enums match the C++ values`() {
         val environment = environment()
 
