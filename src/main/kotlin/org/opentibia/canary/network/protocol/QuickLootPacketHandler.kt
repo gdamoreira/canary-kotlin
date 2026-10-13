@@ -1,6 +1,11 @@
 package org.opentibia.canary.network.protocol
 
 import io.netty.buffer.ByteBuf
+import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.Slots_t
+import org.opentibia.canary.items.Container
+import org.opentibia.canary.items.Item
+import org.opentibia.canary.items.ObjectCategory_t
 import org.opentibia.canary.map.Position
 
 /**
@@ -231,6 +236,113 @@ object QuickLootPacketHandler {
         }
         return QuickLootBlackWhitelistCommand(filter = filter, itemIds = itemIds)
     }
+
+    /**
+     * Applies the managed-container actions of `0x90` on the WorldCommit lane:
+     *
+     *  - action `0`/`4` `Game::playerSetManagedContainer` (game.cpp:6822)
+     *    registers the container through `Player::refreshManagedContainer`;
+     *  - action `1`/`5` `Game::playerClearManagedContainer` (game.cpp:6867)
+     *    clears the category slot;
+     *  - action `2`/`6` `Game::playerOpenManagedContainer` (game.cpp:6884)
+     *    re-sends the registered container through `Player::sendContainer`.
+     *
+     * The corpse/nearby loot paths and the `0x91` list stay with the caller.
+     * PARITY GAPS: the `sendCancelMessage`/`sendTextMessage`/`sendLootContainers`
+     * replies have no protocol sink in this context, the C++
+     * `container->getHoldingPlayer() != player` gate has no ported holding-player
+     * model, and the `TOGGLE_GOLD_POUCH_ALLOW_ANYTHING` /
+     * `TOGGLE_GOLD_POUCH_QUICKLOOT_ONLY` config defaults are modelled as false
+     * parameters.
+     */
+    fun apply(player: Player, command: QuickLootCommand) {
+        when (command) {
+            is SetManagedContainerCommand -> applySetManagedContainer(player, command)
+            is ClearManagedContainerCommand -> applyClearManagedContainer(player, command)
+            is OpenManagedContainerCommand -> applyOpenManagedContainer(player, command)
+            else -> Unit
+        }
+    }
+
+    /**
+     * `Game::playerSetManagedContainer` (game.cpp:6822-6865).
+     */
+    fun applySetManagedContainer(
+        player: Player,
+        command: SetManagedContainerCommand,
+        allowGoldPouchAnything: Boolean = false,
+        allowGoldPouchQuickLootOnly: Boolean = false,
+    ) {
+        if (command.position.x != 0xFFFF) {
+            return
+        }
+
+        val category = categoryOf(command.category) ?: return
+        val item = resolveUseItem(player, command.position) ?: return
+        val container = item.getContainer() ?: return
+
+        val allowConfig = allowGoldPouchAnything || allowGoldPouchQuickLootOnly
+        if (container.id == Container.ITEM_GOLD_POUCH &&
+            category != ObjectCategory_t.OBJECTCATEGORY_GOLD &&
+            !allowConfig
+        ) {
+            return
+        }
+
+        if (container.id == Container.ITEM_GOLD_POUCH && !command.isLootContainer) {
+            return
+        }
+
+        player.refreshManagedContainer(category, container, command.isLootContainer)
+    }
+
+    /**
+     * `Game::playerClearManagedContainer` (game.cpp:6867-6882).
+     */
+    fun applyClearManagedContainer(player: Player, command: ClearManagedContainerCommand) {
+        val category = categoryOf(command.category) ?: return
+        player.refreshManagedContainer(category, null, command.isLootContainer)
+    }
+
+    /**
+     * `Game::playerOpenManagedContainer` (game.cpp:6884-6894): the container id
+     * is sent as a single byte (`static_cast<uint8_t>(container->getID())`).
+     */
+    fun applyOpenManagedContainer(player: Player, command: OpenManagedContainerCommand) {
+        val category = categoryOf(command.category) ?: return
+        val container = player.getManagedContainer(category, command.isLootContainer) ?: return
+        player.sendContainer(container.id and 0xFF, container, container.hasParent(), 0)
+    }
+
+    /**
+     * `Game::internalGetThing` `STACKPOS_USEITEM` branch for `pos.x == 0xFFFF`
+     * (game.cpp:1205-1263): an open-container position (`pos.y & 0x40`) resolves
+     * `container->getItemByIndex(player->getContainerIndex(cid) + pos.z)`, the
+     * `0x20`/`0x21` depot-search positions need the unported depot-search item
+     * lookup, and every other `pos.y` is an inventory slot.
+     */
+    private fun resolveUseItem(player: Player, position: Position): Item? {
+        if ((position.y and 0x40) != 0) {
+            val fromCid = position.y and 0x0F
+            val parentContainer = player.getContainerByID(fromCid) ?: return null
+            val containerIndex = player.getContainerIndex(fromCid) + position.z
+            return parentContainer.getItemByIndex(containerIndex)
+        }
+
+        if (position.y == 0x20 || position.y == 0x21) {
+            return null
+        }
+
+        if (position.y == 0 && position.z == 0) {
+            return null
+        }
+
+        val slot = Slots_t.fromValue(position.y) ?: return null
+        return player.getInventoryItem(slot)
+    }
+
+    private fun categoryOf(value: Int): ObjectCategory_t? =
+        ObjectCategory_t.entries.firstOrNull { it.value == value }
 
     /** `parseQuickLoot` variant `2` (`Game::playerLootNearby`). */
     private const val QUICK_LOOT_VARIANT_NEARBY = 2

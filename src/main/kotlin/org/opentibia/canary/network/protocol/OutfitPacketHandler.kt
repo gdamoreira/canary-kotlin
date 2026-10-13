@@ -1,8 +1,11 @@
 package org.opentibia.canary.network.protocol
 
 import io.netty.buffer.ByteBuf
+import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.Outfit
+import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.systems.mount.Mount
 
 /**
  * Self-contained command produced by the outfit/mount client opcodes, mirroring
@@ -165,6 +168,117 @@ object OutfitPacketHandler {
     fun parseToggleMount(buffer: ByteBuf): ToggleMountCommand? {
         val mount = readBoolean(buffer) ?: return null
         return ToggleMountCommand(mount = mount)
+    }
+
+    /**
+     * `Game::playerChangeOutfit` (game.cpp:7300-7332) reduced to the outfit and
+     * mount state this port models. Every registry Canary reaches through a
+     * global is an injected seam per AGENTS.md 1.1, and the seam defaults
+     * reproduce an unwired registry:
+     *
+     *  - [outfitExists] `Outfits::getInstance().getOutfitByLookType(...) !=
+     *    nullptr` (game.cpp:7257): no registry entry means the mount is cleared
+     *    and no outfit is stored, exactly like a look type missing from
+     *    `outfits.xml`.
+     *  - [canWear] `Player::canWear` (player.cpp:6783): without the outfit
+     *    storage the outfit is refused.
+     *  - [outfitSupportsMount] `Game::outfitSupportsMount` (game.cpp:10071):
+     *    the C++ returns true while `m_appearancesPtr` is null, which is the
+     *    default here.
+     *  - [getMountByClientId]/[getMountById]/[resolveRandomMountClientId]:
+     *    `mounts->getMountByClientID` / `mounts->getMountByID` /
+     *    `Game::resolveRandomMountClientId` (game.cpp:10041); an unknown mount
+     *    aborts the change like the C++ early returns.
+     *
+     * PARITY GAPS: the attached-effects wing/aura/effect/shader block
+     * (game.cpp:7333-7410) has no composed `PlayerAttachedEffects`; the
+     * `Outfits`/mount registries are not composed into `Player`; and the
+     * `Game::playerChangeOutfit` `ALLOW_CHANGEOUTFIT` config gate is not
+     * modelled (the router call always applies).
+     */
+    fun apply(
+        player: Player,
+        command: SetOutfitCommand,
+        canWear: (lookType: Int, addons: Int) -> Boolean = { _, _ -> false },
+        hasOutfitCondition: () -> Boolean = { player.hasCondition(ConditionType.CONDITION_OUTFIT) },
+        outfitExists: (lookType: Int) -> Boolean = { false },
+        outfitSupportsMount: (lookType: Int) -> Boolean = { true },
+        resolveRandomMountClientId: (randomMountId: Int) -> Int = { 0 },
+        getMountByClientId: (clientId: Int) -> Mount? = { null },
+        getMountById: (mountId: Int) -> Mount? = { null },
+        isWearingSupportOutfit: () -> Boolean = { player.isWearingSupportOutfit() },
+        isInProtectionZone: () -> Boolean = { false },
+        toggleMountInPz: Boolean = false,
+        changeSpeed: (delta: Int) -> Unit = {},
+    ) {
+        val outfit = command.outfit
+        val setMount = command.setMount
+        var isMountRandomized = command.isMountRandomized
+
+        if (isWearingSupportOutfit()) {
+            outfit.lookMount = 0
+            isMountRandomized = 0
+        }
+
+        player.features.mounts.setRandomMount(isMountRandomized)
+
+        if (isMountRandomized != 0 && setMount && player.features.mounts.hasAnyMount()) {
+            outfit.lookMount = resolveRandomMountClientId(player.features.mounts.getRandomMountId())
+            if (outfit.lookMount == 0) {
+                isMountRandomized = 0
+                player.features.mounts.setRandomMount(0)
+            }
+        }
+
+        val playerOutfit = outfitExists(outfit.lookType)
+        if (!playerOutfit || !setMount) {
+            outfit.lookMount = 0
+            isMountRandomized = 0
+            player.features.mounts.setRandomMount(0)
+        }
+
+        if (outfit.lookMount != 0 && !outfitSupportsMount(outfit.lookType)) {
+            outfit.lookMount = 0
+            isMountRandomized = 0
+            player.features.mounts.setRandomMount(0)
+        }
+
+        if (outfit.lookMount != 0) {
+            val mount = getMountByClientId(outfit.lookMount) ?: return
+
+            if (!player.features.mounts.hasMount(mount)) {
+                return
+            }
+
+            if (!toggleMountInPz && isInProtectionZone()) {
+                outfit.lookMount = 0
+            } else {
+                var deltaSpeedChange = mount.speed
+                val prevMount = if (player.features.mounts.isMounted()) {
+                    getMountById(player.features.mounts.getCurrentMount())
+                } else {
+                    null
+                }
+                if (prevMount != null) {
+                    deltaSpeedChange -= prevMount.speed
+                }
+                changeSpeed(deltaSpeedChange)
+            }
+
+            player.features.mounts.setCurrentMount(mount.id)
+        } else if (player.features.mounts.isMounted()) {
+            player.features.mounts.dismount()
+        }
+
+        if (canWear(outfit.lookType, outfit.lookAddons)) {
+            player.setDefaultOutfit(outfit)
+
+            if (hasOutfitCondition()) {
+                return
+            }
+
+            player.setCurrentOutfit(outfit)
+        }
     }
 
     private fun readOutfitHeader(buffer: ByteBuf): Outfit? {

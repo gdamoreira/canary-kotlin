@@ -34,7 +34,10 @@ import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Cylinder
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
+import org.opentibia.canary.items.ObjectCategory_t
 import org.opentibia.canary.items.Thing
+import org.opentibia.canary.items.containers.Inbox
+import org.opentibia.canary.items.containers.depot.DepotLocker
 import org.opentibia.canary.creatures.vocations.Vocation
 import org.opentibia.canary.creatures.vocations.VocationRequirementsAdapter
 import org.opentibia.canary.creatures.vocations.Vocations
@@ -1489,6 +1492,156 @@ class Player(
     /** `Player::setImbuingItem` (player.cpp:2418-2420). */
     fun setImbuingItem(item: Item?) {
         imbuingItem = item
+    }
+
+    /** `Player::lastDepotId` (player.hpp:1825). */
+    private var lastDepotId: Int = -1
+
+    /** `Player::getLastDepotId` (player.hpp:560-562). */
+    fun getLastDepotId(): Int = lastDepotId
+
+    /** `Player::setLastDepotId` (player.hpp:557-559). */
+    fun setLastDepotId(newId: Int) {
+        lastDepotId = newId
+    }
+
+    /** `Player::inbox` (player.hpp:1760), built by `IOLoginDataLoad::loadPlayer`. */
+    val inbox: Inbox = Inbox(Inbox.ITEM_INBOX)
+
+    /** `Player::depotLockerMap` (player.hpp:1672). */
+    private val depotLockerMap = mutableMapOf<Int, DepotLocker>()
+
+    /**
+     * `Player::getDepotLocker` (player.cpp:2024-2058). The port always builds
+     * the locker through [DepotLocker.create] for the current (non-old)
+     * protocol, so it fills the stash slot exactly like `!client->oldProtocol`.
+     * PARITY GAPS: the depot-box reparenting reads `getDepotChest` persistence
+     * state the port does not model, and `IOLoginData` never assigns
+     * [lastDepotId].
+     */
+    fun getDepotLocker(depotId: Int): DepotLocker {
+        depotLockerMap[depotId]?.let { return it }
+        val locker = DepotLocker.create(depotId, inbox)
+        depotLockerMap[depotId] = locker
+        return locker
+    }
+
+    /** `Player::lastUIInteraction` (player.hpp:1742). */
+    internal var lastUIInteraction: Long = 0
+
+    /**
+     * `Player::isUIExhausted` (player.cpp:3412-3414) with the header default
+     * `exhaustionTime = 250` (player.hpp:1263).
+     */
+    fun isUIExhausted(exhaustionTime: Int = 250): Boolean =
+        getTimeNow() - lastUIInteraction < exhaustionTime
+
+    /** `Player::updateUIExhausted` (player.cpp:3416-3418). */
+    fun updateUIExhausted() {
+        lastUIInteraction = getTimeNow()
+    }
+
+    /**
+     * `Player::requestDepotItems` (player.cpp:10707-10761). PARITY GAP: the
+     * `sendDepotItems` payload that the locker/stash scan feeds is not ported,
+     * so only the locker build and the `setDepotSearchIsOpen(1, 0)` state
+     * transition are applied.
+     */
+    fun requestDepotItems() {
+        getDepotLocker(getLastDepotId())
+        setDepotSearchIsOpen(1, 0)
+    }
+
+    /**
+     * `Player::requestDepotSearchItem` (player.cpp:10763-10811). PARITY GAP:
+     * `sendDepotSearchResultDetail` and its depot/inbox/stash scan are not
+     * ported; the requested item and tier are still recorded.
+     */
+    fun requestDepotSearchItem(itemId: Int, tier: Int) {
+        getDepotLocker(getLastDepotId())
+        setDepotSearchIsOpen(itemId, tier)
+    }
+
+    /**
+     * `Player::ManagedContainerMap m_managedContainers` (player.hpp:1682): the
+     * per-category `(lootContainer, obtainContainer)` pair.
+     */
+    private val managedContainers = mutableMapOf<ObjectCategory_t, Pair<Container?, Container?>>()
+
+    /**
+     * `Player::refreshManagedContainer` (player.cpp:1595-1649), including the
+     * `QUICKLOOTCONTAINER`/`OBTAINCONTAINER` attribute bit for the category.
+     * PARITY GAPS: the C++ `previousContainer` client refresh of the parent
+     * cylinders stays with the caller (no spectator sink here), and
+     * `checkLootContainers` (player.cpp:1670) is not ported.
+     */
+    fun refreshManagedContainer(
+        category: ObjectCategory_t,
+        container: Container?,
+        isLootContainer: Boolean,
+        loading: Boolean = false,
+    ): Container? {
+        var previousContainer: Container? = null
+        val toSetAttribute =
+            if (isLootContainer) ItemAttribute.QUICKLOOTCONTAINER else ItemAttribute.OBTAINCONTAINER
+
+        val existing = managedContainers[category]
+        if (existing != null && !loading) {
+            previousContainer = if (isLootContainer) existing.first else existing.second
+            if (previousContainer != null) {
+                val flags = (previousContainer.getAttribute(toSetAttribute) as? Number)?.toLong() ?: 0L
+                val cleared = flags and (1L shl category.value).inv()
+                if (cleared == 0L) {
+                    previousContainer.removeAttribute(toSetAttribute)
+                } else {
+                    previousContainer.setAttribute(toSetAttribute, cleared)
+                }
+            }
+
+            val first = if (isLootContainer) null else existing.first
+            val second = if (isLootContainer) existing.second else null
+            if (first == null && second == null) {
+                managedContainers.remove(category)
+            } else {
+                managedContainers[category] = first to second
+            }
+        }
+
+        if (container != null) {
+            previousContainer = container
+            val current = managedContainers[category]
+            managedContainers[category] = if (current != null) {
+                if (isLootContainer) container to current.second else current.first to container
+            } else {
+                if (isLootContainer) container to null else null to container
+            }
+
+            if (!loading) {
+                val flags = (container.getAttribute(toSetAttribute) as? Number)?.toLong() ?: 0L
+                container.setAttribute(toSetAttribute, flags or (1L shl category.value))
+            }
+        }
+
+        return previousContainer
+    }
+
+    /**
+     * `Player::getManagedContainer` (player.cpp:1651-1668): a non-default
+     * category falls back to `OBJECTCATEGORY_DEFAULT` for non-premium players
+     * and to the default category's container when the category has none.
+     */
+    fun getManagedContainer(category: ObjectCategory_t, isLootContainer: Boolean): Container? {
+        var resolvedCategory = category
+        if (resolvedCategory != ObjectCategory_t.OBJECTCATEGORY_DEFAULT && !isPremium()) {
+            resolvedCategory = ObjectCategory_t.OBJECTCATEGORY_DEFAULT
+        }
+
+        val pair = managedContainers[resolvedCategory]
+        val container = if (isLootContainer) pair?.first else pair?.second
+        if (container == null && resolvedCategory != ObjectCategory_t.OBJECTCATEGORY_DEFAULT) {
+            return getManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, isLootContainer)
+        }
+        return container
     }
 
     /**

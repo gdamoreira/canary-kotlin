@@ -8,6 +8,10 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.game.Game
 import org.opentibia.canary.game.QuickLootFilter_t
 import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.items.Container
+import org.opentibia.canary.items.ItemAttribute
+import org.opentibia.canary.items.ItemType
+import org.opentibia.canary.items.ObjectCategory_t
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
@@ -16,9 +20,12 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Router application tests for the quick-loot state opcodes: `0x90` action `3`
- * (`Game::playerSetQuickLootFallback`, game.cpp:6898) and `0x91`
- * (`Game::playerQuickLootBlackWhitelist`, game.cpp:6907). The corpse-loot and
- * managed-container actions stay decode-only where their engines are unported.
+ * (`Game::playerSetQuickLootFallback`, game.cpp:6898), `0x90` actions
+ * `0`/`1`/`2` (`Game::playerSetManagedContainer`/`playerClearManagedContainer`/
+ * `playerOpenManagedContainer`, game.cpp:6822-6894) and `0x91`
+ * (`Game::playerQuickLootBlackWhitelist`, game.cpp:6907). The corpse/nearby
+ * loot paths (`0x8F`, game.cpp:6428/6766) stay decode-only until the corpse
+ * loot engine is ported.
  */
 class OpcodeApplicationQuickLootRouterTest {
 
@@ -119,6 +126,103 @@ class OpcodeApplicationQuickLootRouterTest {
 
             assertThat(route(frame, player)).isEqualTo(1)
             assertThat(player.quickLootListItemIds).containsExactly(2148)
+        } finally {
+            stop()
+        }
+    }
+
+    private fun backpack(id: Int, capacity: Int = 20): Container =
+        Container(id = id, capacity = capacity, type = ItemType(id = id, name = "backpack", isContainer = true))
+
+    private fun writeManagedContainer(frame: ByteBuf, action: Int, category: Int, position: Position, itemId: Int) {
+        frame.writeByte(QuickLootPacketHandler.OPCODE_LOOT_CONTAINER)
+        frame.writeByte(action)
+        frame.writeByte(category)
+        if (action == 0 || action == 4) {
+            frame.writeShortLE(position.x)
+            frame.writeShortLE(position.y)
+            frame.writeByte(position.z)
+            frame.writeShortLE(itemId)
+            frame.writeByte(0)
+        }
+    }
+
+    @Test
+    fun `set managed container action 0 registers the loot container`() {
+        start()
+        try {
+            val player = hero()
+            val openContainer = backpack(2000)
+            val managed = backpack(2001, capacity = 10)
+            openContainer.addItem(managed)
+            player.addContainer(2, openContainer)
+
+            val frame = Unpooled.buffer()
+            writeManagedContainer(
+                frame,
+                action = 0,
+                category = ObjectCategory_t.OBJECTCATEGORY_DEFAULT.value,
+                position = Position(0xFFFF, 0x42, 0),
+                itemId = 2001,
+            )
+
+            assertThat(route(frame, player)).isEqualTo(1)
+            assertThat(player.getManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, true)).isSameAs(managed)
+            assertThat(managed.getAttribute(ItemAttribute.QUICKLOOTCONTAINER))
+                .isEqualTo(1L shl ObjectCategory_t.OBJECTCATEGORY_DEFAULT.value)
+        } finally {
+            stop()
+        }
+    }
+
+    @Test
+    fun `clear managed container action 1 drops the loot container`() {
+        start()
+        try {
+            val player = hero()
+            val managed = backpack(2001, capacity = 10)
+            player.refreshManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, managed, true)
+
+            val frame = Unpooled.buffer()
+            writeManagedContainer(
+                frame,
+                action = 1,
+                category = ObjectCategory_t.OBJECTCATEGORY_DEFAULT.value,
+                position = Position(0, 0, 0),
+                itemId = 0,
+            )
+
+            assertThat(route(frame, player)).isEqualTo(1)
+            assertThat(player.getManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, true)).isNull()
+            assertThat(managed.hasAttribute(ItemAttribute.QUICKLOOTCONTAINER)).isFalse()
+        } finally {
+            stop()
+        }
+    }
+
+    @Test
+    fun `open managed container action 2 sends the registered container`() {
+        start()
+        try {
+            val player = hero()
+            val managed = backpack(2001, capacity = 10)
+            player.refreshManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, managed, true)
+            val sent = mutableListOf<Triple<Int, Container, Boolean>>()
+            player.sendContainer = { cid, container, hasParent, _ ->
+                sent.add(Triple(cid, container, hasParent))
+            }
+
+            val frame = Unpooled.buffer()
+            writeManagedContainer(
+                frame,
+                action = 2,
+                category = ObjectCategory_t.OBJECTCATEGORY_DEFAULT.value,
+                position = Position(0, 0, 0),
+                itemId = 0,
+            )
+
+            assertThat(route(frame, player)).isEqualTo(1)
+            assertThat(sent).containsExactly(Triple(managed.id and 0xFF, managed, false))
         } finally {
             stop()
         }

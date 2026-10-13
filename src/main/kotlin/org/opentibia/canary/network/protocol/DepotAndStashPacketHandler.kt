@@ -1,6 +1,7 @@
 package org.opentibia.canary.network.protocol
 
 import io.netty.buffer.ByteBuf
+import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.map.Position
 
 /**
@@ -216,6 +217,68 @@ object DepotAndStashPacketHandler {
         val itemId = readShort(buffer) ?: return null
         val tier = readTier(buffer, itemId, upgradeClassification) ?: return null
         return DepotSearchItemRequestCommand(itemId = itemId, tier = tier)
+    }
+
+    /**
+     * Applies the state-transition part of the stash/depot-search handlers on
+     * the WorldCommit lane:
+     *
+     *  - `0x92` `Game::playerRequestDepotItems` (game.cpp:6920): the
+     *    `isDepotSearchAvailable` and `isUIExhausted(500)` gates, then
+     *    `Player::requestDepotItems` (player.cpp:10707) and
+     *    `Player::updateUIExhausted` (game.cpp:6930).
+     *  - `0x94` `Game::playerRequestDepotSearchItem` (game.cpp:6945): the
+     *    `isDepotSearchOpen` and `isUIExhausted(500)` gates, then
+     *    `Player::requestDepotSearchItem` (player.cpp:10763) and
+     *    `Player::updateUIExhausted` (game.cpp:6958).
+     *
+     * `0x28` (`Game::playerStowItem`/`playerStashWithdraw`), `0x29`
+     * (`Game::playerRequestDepotSearchRetrieve`) and `0x95`
+     * (`Game::playerRequestOpenContainerFromDepotSearch`) need the item-move
+     * engines (`Player::addItemFromStash`, `stowItem`,
+     * `retrieveAllItemsFromDepotSearch`, `openContainerFromDepotSearch`) and the
+     * depot-search senders, which are not ported (PARITY GAP).
+     */
+    fun apply(player: Player, command: DepotAndStashCommand) {
+        when (command) {
+            OpenDepotSearchCommand -> applyOpenDepotSearch(player)
+            is DepotSearchItemRequestCommand -> applyDepotSearchItemRequest(player, command)
+            else -> Unit
+        }
+    }
+
+    /**
+     * `Game::playerRequestDepotItems` (game.cpp:6920-6931). The
+     * `sendCancelMessage(RETURNVALUE_YOUAREEXHAUSTED)` reply has no protocol
+     * sink in this context (PARITY GAP).
+     */
+    fun applyOpenDepotSearch(player: Player) {
+        if (!player.isDepotSearchAvailable()) {
+            return
+        }
+        if (player.isUIExhausted(500)) {
+            return
+        }
+
+        player.requestDepotItems()
+        player.updateUIExhausted()
+    }
+
+    /**
+     * `Game::playerRequestDepotSearchItem` (game.cpp:6945-6958). The
+     * `sendCancelMessage(RETURNVALUE_YOUAREEXHAUSTED)` reply has no protocol
+     * sink in this context (PARITY GAP).
+     */
+    fun applyDepotSearchItemRequest(player: Player, command: DepotSearchItemRequestCommand) {
+        if (!player.isDepotSearchOpen()) {
+            return
+        }
+        if (player.isUIExhausted(500)) {
+            return
+        }
+
+        player.requestDepotSearchItem(command.itemId, command.tier)
+        player.updateUIExhausted()
     }
 
     private fun readTier(
