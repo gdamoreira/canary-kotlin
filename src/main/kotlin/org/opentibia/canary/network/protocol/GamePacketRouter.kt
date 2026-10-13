@@ -71,6 +71,11 @@ object GamePacketRouter {
                     LookPacketHandler.handleLook(player, buffer, context.map) != null
                 }
 
+                // Say / talkactions: 0x96 parseSay
+                TalkPacketHandler.OPCODE_SAY -> {
+                    TalkPacketHandler.handleSay(player, buffer, context.dispatcher, context.luaEnvironment)
+                }
+
                 // Combat
                 0xA0 -> {
                     CombatPacketHandler.handleFightModes(player, buffer)
