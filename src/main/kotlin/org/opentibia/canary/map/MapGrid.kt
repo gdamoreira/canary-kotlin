@@ -3,8 +3,6 @@ package org.opentibia.canary.map
 import org.opentibia.canary.creatures.spawns.SpawnsMonster
 import org.opentibia.canary.creatures.spawns.SpawnsNpc
 import org.opentibia.canary.game.zones.Zones
-import org.opentibia.canary.items.Cylinder
-import org.opentibia.canary.items.Item
 import org.opentibia.canary.map.house.Houses
 import kotlin.math.abs
 import kotlin.math.max
@@ -17,37 +15,6 @@ data class Position(val x: Int, val y: Int, val z: Int) {
 
     fun isWithinRange(other: Position, rangeX: Int, rangeY: Int): Boolean {
         return z == other.z && abs(x - other.x) <= rangeX && abs(y - other.y) <= rangeY
-    }
-}
-
-class Tile(val position: Position) : Cylinder {
-    var ground: Item? = null
-    private val _items = mutableListOf<Item>()
-    val items: List<Item> get() = _items
-
-    /** `HouseTile` marker; `0` for a plain tile. */
-    var houseId: Int = 0
-
-    /** `Tile::flags` (`TileFlags_t` bits, src/items/items_definitions.hpp:443-477). */
-    var flags: Int = 0
-
-    fun addItem(item: Item) {
-        _items.add(item)
-    }
-
-    /** `Tile::internalAddThing` — insert bypassing the query checks. */
-    override fun internalAddThing(item: Item) {
-        _items.add(item)
-    }
-
-    /** `Tile::isHouse` (src/items/tile.hpp). */
-    fun isHouse(): Boolean = houseId != 0
-
-    /** `Tile::isEmpty` (src/items/tile.hpp) with the house check enabled. */
-    fun isEmpty(): Boolean = ground == null && _items.isEmpty() && !isHouse()
-
-    fun removeItem(item: Item): Boolean {
-        return _items.remove(item)
     }
 }
 
@@ -110,7 +77,9 @@ class GameMap(
         val sy = position.y shr 5
         val key = getSectorKey(sx, sy, position.z)
         val sector = sectors.getOrPut(key) { MapSector(sx, sy, position.z) }
-        return sector.getOrCreateTile(position, position.x and 0x1F, position.y and 0x1F)
+        val tile = sector.getOrCreateTile(position, position.x and 0x1F, position.y and 0x1F)
+        tile.map = this
+        return tile
     }
 
     fun getTile(position: Position): Tile? {

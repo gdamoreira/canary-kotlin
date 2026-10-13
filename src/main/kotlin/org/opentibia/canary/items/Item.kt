@@ -1,8 +1,13 @@
 package org.opentibia.canary.items
 
+import org.opentibia.canary.creatures.Creature
+import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.game.movement.Teleport
 import org.opentibia.canary.io.PropStream
 import org.opentibia.canary.io.PropWriteStream
+import org.opentibia.canary.map.Tile
 import org.opentibia.canary.map.house.Door
+import org.opentibia.canary.systems.rewardchest.ReturnValue
 
 data class ItemType(
     val id: Int,
@@ -42,6 +47,26 @@ data class ItemType(
     val isGroundTile: Boolean = false,
     /** `ItemType::charges` (src/items/items.hpp:290), used by `getSubType`/`setSubType`. */
     val charges: Int = 0,
+    /** `ItemType::blockSolid` (src/items/items.hpp:352). */
+    val blockSolid: Boolean = false,
+    /** `ItemType::hasHeight` (src/items/items.hpp:350). */
+    val hasHeight: Boolean = false,
+    /** `ItemType::blockProjectile` (src/items/items.hpp:354). */
+    val blockProjectile: Boolean = false,
+    /** `ItemType::blockPathFind` (src/items/items.hpp:355). */
+    val blockPathFind: Boolean = false,
+    /** `ItemType::isVertical` (src/items/items.hpp:368). */
+    val isVertical: Boolean = false,
+    /** `ItemType::isHorizontal` (src/items/items.hpp:369). */
+    val isHorizontal: Boolean = false,
+    /** `ItemType::isMagicField()` (src/items/items.hpp:408). */
+    val isMagicField: Boolean = false,
+    /** `ItemType::alwaysOnTopOrder` (src/items/items.hpp:330). */
+    val alwaysOnTopOrder: Int = 0,
+    /** `ItemType::lookThrough` (src/items/items.hpp:372). */
+    val lookThrough: Boolean = false,
+    /** `ItemType::isHangable` (src/items/items.hpp:370). */
+    val isHangable: Boolean = false,
 )
 
 class ItemTypeRegistry {
@@ -181,11 +206,178 @@ internal const val ATTR_OBTAINCONTAINER = 44
 internal const val ATTR_MANTRA = 45
 
 open class Item(
-    val id: Int,
+    var id: Int,
     var count: Int = 1,
     val type: ItemType? = null
-) {
+) : Thing {
     private val attributes = mutableMapOf<ItemAttribute, Any>()
+
+    /**
+     * `Item::m_parent` (src/items/item.hpp:681-689). Canary holds the cylinder
+     * as a `std::weak_ptr`; the port keeps a strong reference because world
+     * entities are released through explicit removal (PARITY GAP), matching the
+     * existing `Creature` master/summon ownership note.
+     */
+    private var parentCylinder: Cylinder? = null
+
+    override fun getDescription(lookDistance: Int): String = ""
+
+    override fun getParent(): Cylinder? = parentCylinder
+
+    override fun setParent(cylinder: Cylinder?) {
+        parentCylinder = cylinder
+    }
+
+    /** `Item::resetParent` (src/items/item.hpp:687-689). */
+    fun resetParent() {
+        parentCylinder = null
+    }
+
+    /**
+     * `Item::getTopParent` (src/items/item.cpp:832-847): walks up the parent
+     * chain and returns the deepest cylinder that still has a parent; when the
+     * item itself is not a cylinder and the parent is the root, the root is
+     * returned (`prevaux ?: aux`).
+     */
+    fun getTopParent(): Cylinder? {
+        val aux = getParent() ?: return getCylinder()
+        var previous: Cylinder? = getCylinder()
+        var current = aux
+        while (current.getParent() != null) {
+            previous = current
+            current = current.getParent()!!
+        }
+        return previous ?: current
+    }
+
+    /** `Item::getTile` (src/items/item.cpp:850-857). */
+    override fun getTile(): Tile? {
+        var cylinder = getTopParent()
+        if (cylinder?.getParent() != null) {
+            cylinder = cylinder.getParent()!!
+        }
+        return cylinder as? Tile
+    }
+
+    /** `Item::isRemoved` (src/items/item.cpp:859-865). */
+    override fun isRemoved(): Boolean = getParent()?.isRemoved() ?: true
+
+    override fun getItem(): Item = this
+
+    /** `Item::getThrowRange` (src/items/item.hpp:327-329). */
+    override fun getThrowRange(): Int = if (isPickupable()) 15 else 2
+
+    /** `Item::isPushable` (src/items/item.hpp:324-326). */
+    override fun isPushable(): Boolean = isMovable()
+
+    /** `Item::getTeleport` (src/items/item.hpp:242-244). */
+    open fun getTeleport(): Teleport? = null
+
+    /** `Item::getTrashHolder` (src/items/item.hpp:245-247). */
+    open fun getTrashHolder(): TrashHolder? = null
+
+    /** `Item::getMagicField` (src/items/item.hpp:254-256). */
+    open fun getMagicField(): MagicField? = null
+
+    /** `Item::setID` (src/items/item.cpp:793-813); the decay re-stamp is a PARITY GAP. */
+    fun setID(newId: Int) {
+        id = newId
+    }
+
+    /** `Item::isBlocking` (src/items/item.hpp:485-487). */
+    fun isBlocking(): Boolean = type?.blockSolid == true
+
+    /** `Item::isStackable` (src/items/item.hpp:488-490). */
+    fun isStackable(): Boolean = type?.isStackable == true
+
+    /** `Item::isAlwaysOnTop` (src/items/item.hpp:496-498). */
+    fun isAlwaysOnTop(): Boolean = (type?.alwaysOnTopOrder ?: 0) != 0
+
+    /** `Item::isGroundTile` (src/items/item.hpp:499-501). */
+    fun isGroundTile(): Boolean = type?.isGroundTile == true
+
+    /** `Item::isMagicField` (src/items/item.hpp:502-504). */
+    fun isMagicField(): Boolean = type?.isMagicField == true
+
+    /** `Item::isMovable` (src/items/item.hpp:508-510). */
+    fun isMovable(): Boolean = type?.isMovable == true
+
+    /** `Item::isPickupable` (src/items/item.hpp:514-516). */
+    fun isPickupable(): Boolean = type?.isPickupable == true
+
+    /** `Item::isHangable` (src/items/item.hpp:520-522). */
+    fun isHangable(): Boolean = type?.isHangable == true
+
+    /** `Item::isCarpet` (src/items/item.hpp:562-564). */
+    fun isCarpet(): Boolean = type?.isCarpet == true
+
+    /** `Item::canReceiveAutoCarpet` (src/items/item.hpp:565-567). */
+    fun canReceiveAutoCarpet(): Boolean = isBlocking() && isAlwaysOnTop() && type?.hasHeight != true
+
+    /** `Item::getItemCount` (src/items/item.hpp:603-605). */
+    fun getItemCount(): Int = count
+
+    /** `Item::setItemCount` (src/items/item.hpp:610-612). */
+    fun setItemCount(n: Int) {
+        count = n
+    }
+
+    /** `Item::hasProperty` (src/items/item.cpp:1585-1615). */
+    fun hasProperty(prop: ItemProperty): Boolean {
+        val itemType = type
+        return when (prop) {
+            ItemProperty.CONST_PROP_BLOCKSOLID -> itemType?.blockSolid == true
+            ItemProperty.CONST_PROP_MOVABLE -> canBeMoved()
+            ItemProperty.CONST_PROP_HASHEIGHT -> itemType?.hasHeight == true
+            ItemProperty.CONST_PROP_BLOCKPROJECTILE -> itemType?.blockProjectile == true
+            ItemProperty.CONST_PROP_BLOCKPATH -> itemType?.blockPathFind == true
+            ItemProperty.CONST_PROP_ISVERTICAL -> itemType?.isVertical == true
+            ItemProperty.CONST_PROP_ISHORIZONTAL -> itemType?.isHorizontal == true
+            ItemProperty.CONST_PROP_IMMOVABLEBLOCKSOLID -> itemType?.blockSolid == true && !canBeMoved()
+            ItemProperty.CONST_PROP_IMMOVABLEBLOCKPATH -> itemType?.blockPathFind == true && !canBeMoved()
+            ItemProperty.CONST_PROP_IMMOVABLENOFIELDBLOCKPATH ->
+                itemType?.isMagicField != true && itemType?.blockPathFind == true && !canBeMoved()
+
+            ItemProperty.CONST_PROP_NOFIELDBLOCKPATH ->
+                itemType?.isMagicField != true && itemType?.blockPathFind == true
+
+            ItemProperty.CONST_PROP_SUPPORTHANGABLE -> itemType?.isHorizontal == true || itemType?.isVertical == true
+        }
+    }
+
+    /** `Item::canBeMoved` (src/items/item.cpp:1617-1628). */
+    fun canBeMoved(): Boolean {
+        if (hasAttribute(ItemAttribute.UNIQUEID)) {
+            return false
+        }
+        if (hasAttribute(ItemAttribute.ACTIONID) && getActionId() == IMMOVABLE_ACTION_ID) {
+            return false
+        }
+        return isMovable()
+    }
+
+    /** `Item::getOwnerId` (src/items/item.cpp:1563-1568). */
+    fun getOwnerId(): Long = intAttribute(ItemAttribute.OWNER)
+
+    /** `Item::hasOwner` (src/items/item.hpp:287-289). */
+    fun hasOwner(): Boolean = getOwnerId() != 0L
+
+    /**
+     * `Item::isOwner(uint32_t)` (src/items/item.cpp:818-830); the dynamic
+     * player-id/GUID re-resolution through `g_game()` is not modelled.
+     */
+    fun isOwner(ownerId: Long): Boolean = getOwnerId() == ownerId
+
+    /** `Item::isOwner(Creature)` (src/items/item.cpp:1549-1561); the player GUID fallback is a PARITY GAP. */
+    fun isOwner(owner: Creature?): Boolean {
+        if (owner == null) {
+            return false
+        }
+        return isOwner(owner.id)
+    }
+
+    /** `Item::getDescription(int32_t)` (src/items/item.cpp:1660+) is not ported yet (PARITY GAP). */
+    override fun getContainer(): Container? = null
 
     open val weight: Double
         get() = (type?.weight ?: 0.0) * if (type?.isStackable == true) count else 1
@@ -289,9 +481,6 @@ open class Item(
 
     /** `Item::getDoor` (src/items/item.hpp:253). */
     open fun getDoor(): Door? = null
-
-    /** `Item::getContainer` (src/items/item.hpp:249). */
-    open fun getContainer(): Container? = null
 
     /** `Item::isSavedToHouses` (src/items/item.cpp:2332-2335). */
     fun isSavedToHouses(): Boolean {
@@ -714,15 +903,30 @@ open class Item(
     private fun otsysTime(): Long = System.currentTimeMillis()
 
     companion object {
+        /** `IMMOVABLE_ACTION_ID` (src/utils/const.hpp:73). */
+        const val IMMOVABLE_ACTION_ID = 100
+
         /** `Item::CreateItem` (src/items/item.cpp:393-472), including the derived item types. */
         fun create(id: Int, count: Int = 1, registry: ItemTypeRegistry? = null): Item {
             val type = registry?.get(id)
             return when {
+                type?.isTrashHolder == true -> TrashHolder(id, type = type)
                 type?.isBed == true -> BedItem(id, type = type)
                 type?.isContainer == true -> Container(id, capacity = type.capacity, type = type)
                 type?.isDoor == true -> Door(id, type = type)
                 else -> Item(id, count = count, type = type)
             }
+        }
+
+        /** `Item::countByType` (src/items/item.hpp:614-624). */
+        fun countByType(item: Item?, subType: Int): Int {
+            if (item == null) {
+                return 0
+            }
+            if (subType == -1 || subType == item.getSubType()) {
+                return item.getItemCount()
+            }
+            return 0
         }
     }
 }
@@ -755,12 +959,57 @@ class Container(
     /** `Container::getReversedItems` (src/items/containers/container.hpp:227-232). */
     fun getReversedItems(): List<Item> = _items.asReversed()
 
-    /** `Container::internalAddThing` (`src/items/containers/container.hpp`). */
-    override fun internalAddThing(item: Item) {
-        _items.add(item)
+    /** `Container::internalAddThing` (src/items/containers/container.cpp:1068-1087). */
+    override fun internalAddThing(thing: Thing?) {
+        val item = thing?.getItem() ?: return
+        item.setParent(this)
+        _items.add(0, item)
     }
 
+    /** `Container::getCylinder` (src/items/containers/container.hpp:178-180). */
+    override fun getCylinder(): Cylinder = this
+
     override fun getContainer(): Container = this
+
+    /**
+     * `Container`'s `Cylinder` query/mutation contract is part of the container
+     * port (PARITY GAP): only [internalAddThing] and the direct [addItem] seam
+     * are modelled today, so the queries reject by default.
+     */
+    override fun queryAdd(index: Int, thing: Thing?, count: Int, flags: Int, actor: Creature?): ReturnValue =
+        ReturnValue.NOTPOSSIBLE
+
+    override fun queryMaxCount(
+        index: Int,
+        thing: Thing?,
+        count: Int,
+        maxQueryCount: Int,
+        flags: Int,
+    ): QueryMaxCountResult = QueryMaxCountResult(ReturnValue.NOTPOSSIBLE, maxQueryCount)
+
+    override fun queryRemove(thing: Thing?, count: Int, flags: Int, actor: Creature?): ReturnValue =
+        ReturnValue.NOTPOSSIBLE
+
+    override fun queryDestination(index: Int, thing: Thing?, destItem: Item?, flags: Int): QueryDestinationResult =
+        QueryDestinationResult(null, index, destItem, flags)
+
+    override fun addThing(thing: Thing?) {
+        internalAddThing(thing)
+    }
+
+    override fun addThing(index: Int, thing: Thing?) {
+        internalAddThing(thing)
+    }
+
+    override fun updateThing(thing: Thing?, itemId: Int, count: Int) {}
+
+    override fun replaceThing(index: Int, thing: Thing?) {}
+
+    override fun removeThing(thing: Thing?, count: Int) {}
+
+    override fun postAddNotification(thing: Thing?, oldParent: Cylinder?, index: Int, link: CylinderLink) {}
+
+    override fun postRemoveNotification(thing: Thing?, newParent: Cylinder?, index: Int, link: CylinderLink) {}
 
     /** `Container::readAttr` (src/items/containers/container.cpp:171-181). */
     override fun readAttr(attr: Int, propStream: PropStream): AttrReadValue {

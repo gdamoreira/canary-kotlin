@@ -67,7 +67,7 @@ class Teleport(
     }
 
     /** `Teleport::getTeleport` (src/game/movement/teleport.hpp:22-24). */
-    fun getTeleport(): Teleport = this
+    override fun getTeleport(): Teleport = this
 
     /** `Item::items[id].magicEffect` read by `Teleport::addThing` (teleport.cpp:94). */
     val magicEffect: Int get() = type?.magicEffect ?: CONST_ME_NONE
