@@ -1,5 +1,6 @@
 package org.opentibia.canary.combat
 
+import org.opentibia.canary.combat.condition.Buff
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionPlayer
 import org.opentibia.canary.combat.condition.ConditionType
@@ -34,6 +35,24 @@ class FakeCombatTarget(
     var canUseDefenseValue: Boolean = true
     var immuneConditionTypes: MutableSet<ConditionType> = mutableSetOf()
     var playerValue: ConditionPlayer? = null
+
+    /** `Creature::getAbsorbPercent(combat)` (`creature.cpp:1979`). */
+    var absorbPercentByType: MutableMap<CombatType, Int> = mutableMapOf()
+
+    /** `Creature::getAbsorbFlat(combat)` (`creature.cpp:1962`). */
+    var absorbFlatByType: MutableMap<CombatType, Int> = mutableMapOf()
+
+    /** `Creature::getIncreasePercent(combat)` (`creature.cpp:1996`). */
+    var increasePercentByType: MutableMap<CombatType, Int> = mutableMapOf()
+
+    /** `Player::getMantra()` (`player.hpp`). */
+    var mantraValue: Int = 0
+
+    /**
+     * `Creature::varBuffs` (`creature.hpp:909`); every buff starts at 100,
+     * exactly like the C++ array initializer.
+     */
+    var buffValues: MutableMap<Buff, Int> = mutableMapOf()
 
     /** Every `addCombatCondition` call as `(condition, attackerPlayer)` in order. */
     val appliedConditions: MutableList<Pair<Condition, Boolean>> = mutableListOf()
@@ -90,6 +109,16 @@ class FakeCombatTarget(
     override fun getID(): Int = idValue
 
     override fun getPlayer(): ConditionPlayer? = playerValue
+
+    override fun getAbsorbPercent(combatType: CombatType): Int = absorbPercentByType[combatType] ?: 0
+
+    override fun getAbsorbFlat(combatType: CombatType): Int = absorbFlatByType[combatType] ?: 0
+
+    override fun getIncreasePercent(combatType: CombatType): Int = increasePercentByType[combatType] ?: 0
+
+    override fun getMantra(): Int = mantraValue
+
+    override fun getBuff(buff: Buff): Int = buffValues[buff] ?: 100
 
     override fun isImmune(conditionType: ConditionType): Boolean = conditionType in immuneConditionTypes
 

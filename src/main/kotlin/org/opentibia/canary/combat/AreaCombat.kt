@@ -1,6 +1,7 @@
 package org.opentibia.canary.combat
 
 import org.opentibia.canary.game.movement.Direction
+import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.map.Position
 import kotlin.math.cos
 import kotlin.math.max
@@ -73,10 +74,10 @@ class MatrixArea(val rows: Int, val cols: Int) {
 /**
  * `AreaCombat` (`combat.hpp:148-176`, `combat.cpp:2268-2586`).
  *
- * The tile enumeration (`AreaCombat::getList`, `combat.cpp:2289-2325`) needs
- * the game map and sight line; it stays with the world system (PARITY GAP).
- * `getArea` is private in Canary and exposed here so the spell/combat systems
- * and tests can inspect the selected direction matrix.
+ * The tile enumeration (`AreaCombat::getList`, `combat.cpp:2289-2325`) is
+ * ported over the injected [CombatMap]/[CombatTile] seams. `getArea` is private
+ * in Canary and exposed here so the spell/combat systems and tests can inspect
+ * the selected direction matrix.
  */
 class AreaCombat {
 
@@ -215,6 +216,59 @@ class AreaCombat {
         areas[Direction.SouthWest.ordinal] = swArea
         areas[Direction.NorthEast.ordinal] = neArea
         areas[Direction.SouthEast.ordinal] = seArea
+    }
+
+    /**
+     * `AreaCombat::getList` (src/creatures/combat/combat.cpp:2289-2325).
+     *
+     * Walks the selected [MatrixArea] starting at the target position offset by
+     * the matrix centre. A floor-change tile advances x without being added
+     * (`combat.cpp:2311-2314`); every other marked cell must pass the
+     * `g_game().isSightClear(casterPos, pos, true)` gate before
+     * `getOrCreateTile` yields the tile (`combat.cpp:2316-2318`).
+     *
+     * [dir] is the direction from the target to the area center used to derive
+     * the caster-adjacent sight-line origin (`getNextPosition`, combat.cpp:2290);
+     * null stands for `DIRECTION_NONE` and keeps the target position.
+     */
+    fun getList(
+        centerPos: Position,
+        targetPos: Position,
+        list: MutableList<CombatTile>,
+        dir: Direction?,
+        map: CombatMap,
+    ) {
+        val casterPos = dir?.offset(targetPos) ?: targetPos
+
+        val area = getArea(centerPos, targetPos) ?: return
+
+        val centerY = area.centerY
+        val centerX = area.centerX
+        val rows = area.rows
+        val cols = area.cols
+
+        var tmpX = targetPos.x - centerX
+        var tmpY = targetPos.y - centerY
+
+        for (y in 0 until rows) {
+            for (x in 0 until cols) {
+                if (area.getValue(y, x)) {
+                    val tmpPos = Position(tmpX, tmpY, targetPos.z)
+                    val tile = map.getTile(tmpPos)
+                    if (tile != null && tile.hasFlag(TileFlags.TILESTATE_FLOORCHANGE)) {
+                        tmpX++
+                        continue
+                    }
+
+                    if (map.isSightClear(casterPos, Position(tmpX, tmpY, targetPos.z), true)) {
+                        list.add(map.getOrCreateTile(Position(tmpX, tmpY, targetPos.z)))
+                    }
+                }
+                tmpX++
+            }
+            tmpY++
+            tmpX -= cols
+        }
     }
 
     /**

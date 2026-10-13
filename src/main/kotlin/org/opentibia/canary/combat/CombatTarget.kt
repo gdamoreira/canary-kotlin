@@ -1,5 +1,6 @@
 package org.opentibia.canary.combat
 
+import org.opentibia.canary.combat.condition.Buff
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionPlayer
 import org.opentibia.canary.combat.condition.ConditionType
@@ -69,6 +70,39 @@ interface CombatTarget {
 
     /** `Creature::getMitigation()` (`creature.cpp:910-922`). */
     fun getMitigation(): Double
+
+    /**
+     * `Creature::getAbsorbPercent(combat)` (`creature.cpp:1979-1984`), read by
+     * `Creature::applyAbsorbDamageModifications` (`creature.cpp:926`).
+     *
+     * Defaults to 0 so pre-existing implementors keep their behavior.
+     */
+    fun getAbsorbPercent(combatType: CombatType): Int = 0
+
+    /**
+     * `Creature::getAbsorbFlat(combat)` (`creature.cpp:1962-1967`), read by
+     * `Creature::applyAbsorbDamageModifications` (`creature.cpp:930`).
+     */
+    fun getAbsorbFlat(combatType: CombatType): Int = 0
+
+    /**
+     * `Creature::getIncreasePercent(combat)` (`creature.cpp:1996-2001`), read
+     * from the attacker by `Creature::applyAbsorbDamageModifications`
+     * (`creature.cpp:936`).
+     */
+    fun getIncreasePercent(combatType: CombatType): Int = 0
+
+    /**
+     * `Player::getMantra()`, read by `Combat::applyMantraAbsorb`
+     * (`combat.cpp:748`). Zero for non-players.
+     */
+    fun getMantra(): Int = 0
+
+    /**
+     * `Creature::getBuff(index)` (`creature.cpp`), read by
+     * `Combat::applyMantraAbsorb` for `BUFF_MANTRA` (`combat.cpp:745`).
+     */
+    fun getBuff(buff: Buff): Int = 0
 
     /** `Creature::getID()` (`src/creatures/creature.hpp:156`); the owner stamped on conditions. */
     fun getID(): Int
