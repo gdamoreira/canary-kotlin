@@ -124,6 +124,17 @@ class ItemSerializationTest {
     }
 
     @Test
+    fun `tier above the configured maximum serializes as zero`() {
+        val type = ItemType(id = 2400, name = "Sword", isMovable = true, upgradeClassification = 3)
+        val item = Item(id = 2400, type = type).apply {
+            setAttribute(ItemAttribute.TIER, 99L)
+        }
+
+        assertThat(item.getTier()).isZero()
+        assertThat(serialize(item)).containsExactly(40, 0)
+    }
+
+    @Test
     fun `isSavedToHouses follows the Canary item-type predicate`() {
         val movable = Item(id = 1, type = ItemType(1, "movable", isMovable = true))
         val fixed = Item(id = 2, type = ItemType(2, "fixed"))

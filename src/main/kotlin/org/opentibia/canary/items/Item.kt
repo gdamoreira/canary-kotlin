@@ -1,9 +1,27 @@
 package org.opentibia.canary.items
 
+import io.github.oshai.kotlinlogging.KotlinLogging
+import org.opentibia.canary.combat.CombatType
+import org.opentibia.canary.combat.condition.LightInfo
+import org.opentibia.canary.creatures.WeaponType_t
 import org.opentibia.canary.io.PropStream
 import org.opentibia.canary.io.PropWriteStream
 import org.opentibia.canary.map.house.Door
+import org.opentibia.canary.systems.imbuement.ImbuementTypes_t
+import java.lang.ref.WeakReference
 
+private val logger = KotlinLogging.logger {}
+
+/**
+ * Mirror of `ItemType` (`src/items/items.hpp:96-387`).
+ *
+ * The legacy boolean flags (`isDoor`, `isBed`, `isCarpet`, `isTrashHolder`,
+ * `isWrappable`, `isContainer`, `isFluidContainer`, `isSplash`,
+ * `isGroundTile`) predate the [type]/[group] transcription and stay for the
+ * existing call sites; the predicates added by the item-core wave read [type],
+ * mirroring the C++ methods exactly until the registry wave reconciles both
+ * models.
+ */
 data class ItemType(
     val id: Int,
     val name: String,
@@ -42,7 +60,177 @@ data class ItemType(
     val isGroundTile: Boolean = false,
     /** `ItemType::charges` (src/items/items.hpp:290), used by `getSubType`/`setSubType`. */
     val charges: Int = 0,
-)
+    /** `ItemType::group` (src/items/items.hpp:262). */
+    val group: ItemGroup_t = ItemGroup_t.ITEM_GROUP_NONE,
+    /** `ItemType::type` (src/items/items.hpp:263). */
+    val type: ItemTypes_t = ItemTypes_t.ITEM_TYPE_NONE,
+    /** `ItemType::weaponType` (src/items/items.hpp:321). */
+    val weaponType: WeaponType_t = WeaponType_t.WEAPON_NONE,
+    /** `ItemType::ammoType` (src/items/items.hpp:322). */
+    val ammoType: Ammo_t = Ammo_t.AMMO_NONE,
+    val attack: Int = 0,
+    val defense: Int = 0,
+    val extraDefense: Int = 0,
+    val armor: Int = 0,
+    val mantra: Int = 0,
+    /** `ItemType::hitChance` (src/items/items.hpp:339). */
+    val hitChance: Int = 0,
+    /** `ItemType::shootRange` (src/items/items.hpp:333), C++ default 1. */
+    val shootRange: Int = 1,
+    /** `ItemType::slotPosition` (src/items/items.hpp:312), C++ default `SLOTP_HAND`. */
+    val slotPosition: Int = SLOTP_HAND,
+    /** `ItemType::imbuementSlot` (src/items/items.hpp:334). */
+    val imbuementSlot: Int = 0,
+    /** `ItemType::stackSize` (src/items/items.hpp:335), C++ default 100. */
+    val stackSize: Int = 100,
+    /** `ItemType::showCharges` (src/items/items.hpp:357). */
+    val showCharges: Boolean = false,
+    /** `ItemType::showDuration` (src/items/items.hpp:356). */
+    val showDuration: Boolean = false,
+    /** `ItemType::showCount` (src/items/items.hpp:375), C++ default true. */
+    val showCount: Boolean = true,
+    val pluralName: String = "",
+    val article: String = "",
+    val description: String = "",
+    /** `ItemType::decayTime` (src/items/items.hpp:278). */
+    val decayTime: Int = 0,
+    /** `ItemType::decayTo` (src/items/items.hpp:288), C++ default -1. */
+    val decayTo: Int = -1,
+    val stopTime: Boolean = false,
+    val transformEquipTo: Int = 0,
+    val transformDeEquipTo: Int = 0,
+    val hasDeEquipEvent: Boolean = false,
+    /** `ItemType::maxItems` (src/items/items.hpp:311), C++ default 8. */
+    val maxItems: Int = 8,
+    val runeSpellName: String = "",
+    val runeLevel: Int = 0,
+    val runeMagLevel: Int = 0,
+    val wieldInfo: Int = 0,
+    val minReqLevel: Int = 0,
+    val minReqMagicLevel: Int = 0,
+    val vocationString: String = "",
+    /** `ItemType::elementalBond` (src/items/items.hpp:300), C++ default `COMBAT_NONE`. */
+    val elementalBond: CombatType = CombatType.NONE,
+    val lightLevel: Int = 0,
+    val lightColor: Int = 0,
+    val multiUse: Boolean = false,
+    /** `ItemType::isCorpse` (src/items/items.hpp:378). */
+    val isCorpse: Boolean = false,
+    /** `ItemType::spellbook` (src/items/items.hpp:380), read by `isShield`/`isSpellBook`. */
+    val spellbook: Boolean = false,
+    /** `ItemType::wareId` (src/items/items.hpp:314). */
+    val wareId: Int = 0,
+    val blockSolid: Boolean = false,
+    val blockProjectile: Boolean = false,
+    val blockPathFind: Boolean = false,
+    val hasHeight: Boolean = false,
+    val isVertical: Boolean = false,
+    val isHorizontal: Boolean = false,
+    /** `ItemType::imbuementTypes` (src/items/items.hpp:327). */
+    val imbuementTypes: Map<ImbuementTypes_t, Int> = emptyMap(),
+) {
+    /** `ItemType::isWeapon` (src/items/items.hpp:195). */
+    fun isWeapon(): Boolean =
+        weaponType != WeaponType_t.WEAPON_NONE &&
+            weaponType != WeaponType_t.WEAPON_SHIELD &&
+            weaponType != WeaponType_t.WEAPON_AMMO
+
+    /** `ItemType::isWand` (src/items/items.hpp:198). */
+    fun isWand(): Boolean = weaponType == WeaponType_t.WEAPON_WAND
+
+    /** `ItemType::isShield` (src/items/items.hpp:121). */
+    fun isShield(): Boolean = type == ItemTypes_t.ITEM_TYPE_SHIELD && !isSpellBook()
+
+    /** `ItemType::isSpellBook` (src/items/items.hpp:124). */
+    fun isSpellBook(): Boolean = spellbook
+
+    /** `ItemType::isArmor` (src/items/items.hpp:201). */
+    fun isArmor(): Boolean = slotPosition and SLOTP_ARMOR != 0
+
+    /** `ItemType::isHelmet` (src/items/items.hpp:204). */
+    fun isHelmet(): Boolean = slotPosition and SLOTP_HEAD != 0
+
+    /** `ItemType::isLegs` (src/items/items.hpp:207). */
+    fun isLegs(): Boolean = slotPosition and SLOTP_LEGS != 0
+
+    /** `ItemType::isBoots` (src/items/items.hpp:210). */
+    fun isBoots(): Boolean = slotPosition and SLOTP_FEET != 0
+
+    /** `ItemType::isRanged` (src/items/items.hpp:213). */
+    fun isRanged(): Boolean =
+        weaponType == WeaponType_t.WEAPON_DISTANCE && weaponType != WeaponType_t.WEAPON_NONE
+
+    /** `ItemType::isMissile` (src/items/items.hpp:216). */
+    fun isMissile(): Boolean =
+        weaponType == WeaponType_t.WEAPON_MISSILE && weaponType != WeaponType_t.WEAPON_NONE
+
+    /** `ItemType::isKey` (src/items/items.hpp:137). */
+    fun isKey(): Boolean = type == ItemTypes_t.ITEM_TYPE_KEY
+
+    /** `ItemType::isRune` (src/items/items.hpp:161). */
+    fun isRune(): Boolean = type == ItemTypes_t.ITEM_TYPE_RUNE
+
+    /** `ItemType::isQuiver` (src/items/items.hpp:170). */
+    fun isQuiver(): Boolean = type == ItemTypes_t.ITEM_TYPE_QUIVER
+
+    /** `ItemType::isRing` (src/items/items.hpp:173). */
+    fun isRing(): Boolean = type == ItemTypes_t.ITEM_TYPE_RING
+
+    /** `ItemType::isAmulet` (src/items/items.hpp:176). */
+    fun isAmulet(): Boolean = type == ItemTypes_t.ITEM_TYPE_AMULET
+
+    /** `ItemType::isAmmo` (src/items/items.hpp:179). */
+    fun isAmmo(): Boolean = type == ItemTypes_t.ITEM_TYPE_AMMO
+
+    /** `ItemType::isLadder` (src/items/items.hpp:182). */
+    fun isLadder(): Boolean = type == ItemTypes_t.ITEM_TYPE_LADDER
+
+    /** `ItemType::isDummy` (src/items/items.hpp:185). */
+    fun isDummy(): Boolean = type == ItemTypes_t.ITEM_TYPE_DUMMY
+
+    /** `ItemType::isDepot` (src/items/items.hpp:140). */
+    fun isDepot(): Boolean = type == ItemTypes_t.ITEM_TYPE_DEPOT
+
+    /** `ItemType::isRewardChest` (src/items/items.hpp:143). */
+    fun isRewardChest(): Boolean = type == ItemTypes_t.ITEM_TYPE_REWARDCHEST
+
+    /** `ItemType::isMailbox` (src/items/items.hpp:149). */
+    fun isMailbox(): Boolean = type == ItemTypes_t.ITEM_TYPE_MAILBOX
+
+    /** `ItemType::isMagicField` (src/items/items.hpp:131). */
+    fun isMagicField(): Boolean = type == ItemTypes_t.ITEM_TYPE_MAGICFIELD
+
+    /** `ItemType::isTeleport` (src/items/items.hpp:134). */
+    fun isTeleport(): Boolean = type == ItemTypes_t.ITEM_TYPE_TELEPORT
+
+    /** `ItemType::isMultiUse` (src/items/items.hpp:167). */
+    fun isMultiUse(): Boolean = multiUse
+
+    /** `ItemType::hasSubType` (src/items/items.hpp:188). */
+    fun hasSubType(): Boolean = isFluidContainer || isSplash || isStackable || charges != 0
+
+    /** `ItemType::isActiveEquipment` (src/items/items.hpp:191). */
+    fun isActiveEquipment(): Boolean =
+        transformDeEquipTo != 0 && (hasDeEquipEvent || (decayTime != 0 && decayTo == transformDeEquipTo))
+
+    /** `ItemType::getPluralName` (src/items/items.hpp:239). */
+    @JvmName("resolvePluralName")
+    fun getPluralName(): String {
+        if (pluralName.isNotEmpty()) {
+            return pluralName
+        }
+        if (!showCount) {
+            return name
+        }
+        return name + "s"
+    }
+
+    /** `ItemType::hasImbuementType` (src/items/item.hpp:720). */
+    fun hasImbuementType(imbuementType: ImbuementTypes_t, imbuementTier: Int): Boolean {
+        val maxTier = imbuementTypes[imbuementType] ?: return false
+        return maxTier >= imbuementTier
+    }
+}
 
 class ItemTypeRegistry {
     private val types = mutableMapOf<Int, ItemType>()
@@ -182,16 +370,487 @@ internal const val ATTR_MANTRA = 45
 
 open class Item(
     val id: Int,
-    var count: Int = 1,
+    count: Int = 0,
     val type: ItemType? = null
 ) {
+    /** `Item::count` (src/items/item.hpp:775), the number of stacked items. */
+    var count: Int = count
+
     private val attributes = mutableMapOf<ItemAttribute, Any>()
+
+    /** `Item::m_parent` (src/items/item.hpp:772); weak like the C++ `std::weak_ptr`. */
+    private var parent: WeakReference<Cylinder>? = null
+
+    /** `Item::decayDisabled` (src/items/item.hpp:779); `isDecayDisabled` reads it. */
+    var decayDisabled: Boolean = false
+
+    init {
+        val itemCount = count
+        this.count = 1
+        val itemType = type
+        if (itemType == null) {
+            if (itemCount != 0) {
+                this.count = itemCount
+            }
+        } else {
+            val itemCharges = itemType.charges
+            when {
+                itemType.isFluidContainer || itemType.isSplash ->
+                    setAttribute(ItemAttribute.FLUIDTYPE, itemCount.coerceIn(0, FLUIDS_COUNT).toLong())
+
+                itemType.isStackable -> this.count = when {
+                    itemCount != 0 -> itemCount
+                    itemCharges != 0 -> itemCharges
+                    else -> 1
+                }
+
+                itemCharges != 0 ->
+                    setAttribute(ItemAttribute.CHARGES, if (itemCount != 0) itemCount else itemCharges)
+
+                else -> this.count = 1
+            }
+            setDefaultDuration()
+        }
+    }
 
     open val weight: Double
         get() = (type?.weight ?: 0.0) * if (type?.isStackable == true) count else 1
 
     /** Mirrors `Item::getClassification` (src/items/item.hpp:753). */
     fun getClassification(): Int = type?.upgradeClassification ?: 0
+
+    /** `Item::getDefaultDuration` (src/items/item.hpp:638). */
+    fun getDefaultDuration(): Int = (type?.decayTime ?: 0) * 1000
+
+    /** `Item::setDefaultDuration` (src/items/item.hpp:632). */
+    fun setDefaultDuration() {
+        val duration = getDefaultDuration()
+        if (duration != 0) {
+            setDuration(duration)
+        }
+    }
+
+    /** `Item::getParent` (src/items/item.hpp:681). */
+    fun getParent(): Cylinder? = parent?.get()
+
+    /** `Item::setParent` (src/items/item.hpp:684). */
+    fun setParent(cylinder: Cylinder?) {
+        parent = cylinder?.let { WeakReference(it) }
+    }
+
+    /** `Item::resetParent` (src/items/item.hpp:687). */
+    fun resetParent() {
+        parent = null
+    }
+
+    /** `Item::isRemoved` (src/items/item.cpp:859). */
+    open fun isRemoved(): Boolean {
+        val currentParent = getParent() ?: return true
+        return currentParent.isRemoved()
+    }
+
+    /** `Item::canDecay` (src/items/item.cpp:3438). */
+    open fun canDecay(): Boolean {
+        val itemType = type ?: return false
+        if (itemType.decayTo < 0 || itemType.decayTime == 0 || isDecayDisabled()) {
+            return false
+        }
+        if (hasAttribute(ItemAttribute.UNIQUEID)) {
+            return false
+        }
+        return !isRemoved()
+    }
+
+    /** `ItemProperties::isStoreItem` (src/items/item.hpp:113). */
+    fun isStoreItem(): Boolean = intAttribute(ItemAttribute.STORE) > 0
+
+    /** `Item::isDecayDisabled` (src/items/item.hpp:572). */
+    fun isDecayDisabled(): Boolean = decayDisabled
+
+    /** `Item::setDefaultSubtype` (src/items/item.cpp:770). */
+    fun setDefaultSubtype() {
+        count = 1
+        val itemCharges = type?.charges ?: 0
+        if (itemCharges != 0) {
+            if (type?.isStackable == true) {
+                count = itemCharges
+            } else {
+                setAttribute(ItemAttribute.CHARGES, itemCharges.toLong())
+            }
+        }
+    }
+
+    /** `Item::getWeaponType` (src/items/item.hpp:339). */
+    fun getWeaponType(): WeaponType_t = type?.weaponType ?: WeaponType_t.WEAPON_NONE
+
+    /** `Item::getAmmoType` (src/items/item.hpp:342). */
+    fun getAmmoType(): Ammo_t = type?.ammoType ?: Ammo_t.AMMO_NONE
+
+    /** `Item::getShootRange` (src/items/item.hpp:345). */
+    fun getShootRange(): Int {
+        if (hasAttribute(ItemAttribute.SHOOTRANGE)) {
+            return intAttribute(ItemAttribute.SHOOTRANGE).toInt() and 0xFF
+        }
+        return type?.shootRange ?: 1
+    }
+
+    /** `Item::getAttack` (src/items/item.hpp:400). */
+    fun getAttack(): Int =
+        if (hasAttribute(ItemAttribute.ATTACK)) {
+            intAttribute(ItemAttribute.ATTACK).toInt()
+        } else {
+            type?.attack ?: 0
+        }
+
+    /** `Item::getArmor` (src/items/item.hpp:406). */
+    fun getArmor(): Int =
+        if (hasAttribute(ItemAttribute.ARMOR)) {
+            intAttribute(ItemAttribute.ARMOR).toInt()
+        } else {
+            type?.armor ?: 0
+        }
+
+    /** `Item::getDefense` (src/items/item.hpp:412). */
+    fun getDefense(): Int =
+        if (hasAttribute(ItemAttribute.DEFENSE)) {
+            intAttribute(ItemAttribute.DEFENSE).toInt()
+        } else {
+            type?.defense ?: 0
+        }
+
+    /** `Item::getExtraDefense` (src/items/item.hpp:418). */
+    fun getExtraDefense(): Int =
+        if (hasAttribute(ItemAttribute.EXTRADEFENSE)) {
+            intAttribute(ItemAttribute.EXTRADEFENSE).toInt()
+        } else {
+            type?.extraDefense ?: 0
+        }
+
+    /** `Item::getMantra` (src/items/item.hpp:472). */
+    fun getMantra(): Int =
+        if (hasAttribute(ItemAttribute.MANTRA)) {
+            intAttribute(ItemAttribute.MANTRA).toInt()
+        } else {
+            type?.mantra ?: 0
+        }
+
+    /** `Item::getHitChance` (src/items/item.hpp:456). */
+    fun getHitChance(): Int =
+        if (hasAttribute(ItemAttribute.HITCHANCE)) {
+            intAttribute(ItemAttribute.HITCHANCE).toByte().toInt()
+        } else {
+            type?.hitChance ?: 0
+        }
+
+    /** `Item::getImbuementSlot` (src/items/item.hpp:447). */
+    fun getImbuementSlot(): Int =
+        if (hasAttribute(ItemAttribute.IMBUEMENT_SLOT)) {
+            intAttribute(ItemAttribute.IMBUEMENT_SLOT).toInt() and 0xFF
+        } else {
+            type?.imbuementSlot ?: 0
+        }
+
+    /** `Item::getSlotPosition` (src/items/item.hpp:453). */
+    fun getSlotPosition(): Int = type?.slotPosition ?: SLOTP_HAND
+
+    /** `Item::getStackSize` (src/items/item.hpp:595). */
+    fun getStackSize(): Int = if (type?.isStackable == true) type.stackSize else 1
+
+    /** `Item::getBaseWeight` (src/items/item.hpp:353), in hundredths of an ounce like the C++ type. */
+    fun getBaseWeight(): Int {
+        if (hasAttribute(ItemAttribute.WEIGHT)) {
+            return (intAttribute(ItemAttribute.WEIGHT) and 0xFFFFFFFFL).toInt()
+        }
+        return Math.round((type?.weight ?: 0.0) * 100.0).toInt()
+    }
+
+    /** `Item::getTier` (src/items/item.cpp:605). */
+    fun getTier(maxItemTier: Int = FORGE_MAX_ITEM_TIER_DEFAULT): Int {
+        if (!hasAttribute(ItemAttribute.TIER)) {
+            return 0
+        }
+
+        val tier = intAttribute(ItemAttribute.TIER).toInt() and 0xFF
+        if (tier > maxItemTier) {
+            logger.error { "getTier - Item ${getName()} have a wrong tier $tier" }
+            return 0
+        }
+
+        return tier
+    }
+
+    /** `Item::setTier` (src/items/item.cpp:619). */
+    fun setTier(tier: Int, maxItemTier: Int = FORGE_MAX_ITEM_TIER_DEFAULT) {
+        if (tier > maxItemTier) {
+            logger.error { "setTier - It is not possible to set a tier higher than $maxItemTier" }
+            return
+        }
+
+        if ((type?.upgradeClassification ?: 0) != 0) {
+            setAttribute(ItemAttribute.TIER, tier.toLong())
+        }
+    }
+
+    /** `Item::getDodgeChance` (src/items/item.cpp:545); the coefficients default to `RUSE_CHANCE_FORMULA_*`. */
+    fun getDodgeChance(
+        a: Double = RUSE_CHANCE_FORMULA_A,
+        b: Double = RUSE_CHANCE_FORMULA_B,
+        c: Double = RUSE_CHANCE_FORMULA_C
+    ): Double = tierChance(a, b, c)
+
+    /** `Item::getFatalChance` (src/items/item.cpp:557); the coefficients default to `ONSLAUGHT_CHANCE_FORMULA_*`. */
+    fun getFatalChance(
+        a: Double = ONSLAUGHT_CHANCE_FORMULA_A,
+        b: Double = ONSLAUGHT_CHANCE_FORMULA_B,
+        c: Double = ONSLAUGHT_CHANCE_FORMULA_C
+    ): Double = tierChance(a, b, c)
+
+    /** `Item::getMomentumChance` (src/items/item.cpp:569); the coefficients default to `MOMENTUM_CHANCE_FORMULA_*`. */
+    fun getMomentumChance(
+        a: Double = MOMENTUM_CHANCE_FORMULA_A,
+        b: Double = MOMENTUM_CHANCE_FORMULA_B,
+        c: Double = MOMENTUM_CHANCE_FORMULA_C
+    ): Double = tierChance(a, b, c)
+
+    /** `Item::getTranscendenceChance` (src/items/item.cpp:581); the coefficients default to `TRANSCENDENCE_CHANCE_FORMULA_*`. */
+    fun getTranscendenceChance(
+        a: Double = TRANSCENDENCE_CHANCE_FORMULA_A,
+        b: Double = TRANSCENDENCE_CHANCE_FORMULA_B,
+        c: Double = TRANSCENDENCE_CHANCE_FORMULA_C
+    ): Double = tierChance(a, b, c)
+
+    /** `Item::getAmplificationChance` (src/items/item.cpp:593); the coefficients default to `AMPLIFICATION_CHANCE_FORMULA_*`. */
+    fun getAmplificationChance(
+        a: Double = AMPLIFICATION_CHANCE_FORMULA_A,
+        b: Double = AMPLIFICATION_CHANCE_FORMULA_B,
+        c: Double = AMPLIFICATION_CHANCE_FORMULA_C
+    ): Double = tierChance(a, b, c)
+
+    /** `Item::getWorth` (src/items/item.cpp:3456), in gold. */
+    fun getWorth(): Long = when (id) {
+        ITEM_GOLD_COIN -> count.toLong()
+        ITEM_PLATINUM_COIN -> count.toLong() * 100
+        ITEM_CRYSTAL_COIN -> count.toLong() * 10000
+        else -> 0L
+    }
+
+    /** `Item::getForgeSlivers` (src/items/item.cpp:3472). */
+    fun getForgeSlivers(): Long = if (id == ITEM_FORGE_SLIVER) count.toLong() else 0L
+
+    /** `Item::getForgeCores` (src/items/item.cpp:3480). */
+    fun getForgeCores(): Long = if (id == ITEM_FORGE_CORE) count.toLong() else 0L
+
+    /** `Item::getLightInfo` (src/items/item.cpp:3488). */
+    fun getLightInfo(): LightInfo =
+        LightInfo(level = type?.lightLevel ?: 0, color = type?.lightColor ?: 0)
+
+    /** `Item::hasProperty` (src/items/item.cpp:1585). */
+    fun hasProperty(prop: ItemProperty): Boolean {
+        val itemType = type ?: return false
+        return when (prop) {
+            ItemProperty.CONST_PROP_BLOCKSOLID -> itemType.blockSolid
+            ItemProperty.CONST_PROP_MOVABLE -> canBeMoved()
+            ItemProperty.CONST_PROP_HASHEIGHT -> itemType.hasHeight
+            ItemProperty.CONST_PROP_BLOCKPROJECTILE -> itemType.blockProjectile
+            ItemProperty.CONST_PROP_BLOCKPATH -> itemType.blockPathFind
+            ItemProperty.CONST_PROP_ISVERTICAL -> itemType.isVertical
+            ItemProperty.CONST_PROP_ISHORIZONTAL -> itemType.isHorizontal
+            ItemProperty.CONST_PROP_IMMOVABLEBLOCKSOLID -> itemType.blockSolid && !canBeMoved()
+            ItemProperty.CONST_PROP_IMMOVABLEBLOCKPATH -> itemType.blockPathFind && !canBeMoved()
+            ItemProperty.CONST_PROP_IMMOVABLENOFIELDBLOCKPATH ->
+                itemType.type != ItemTypes_t.ITEM_TYPE_MAGICFIELD && itemType.blockPathFind && !canBeMoved()
+
+            ItemProperty.CONST_PROP_NOFIELDBLOCKPATH ->
+                itemType.type != ItemTypes_t.ITEM_TYPE_MAGICFIELD && itemType.blockPathFind
+
+            ItemProperty.CONST_PROP_SUPPORTHANGABLE -> itemType.isHorizontal || itemType.isVertical
+        }
+    }
+
+    /** `Item::canBeMoved` (src/items/item.cpp:1617). */
+    fun canBeMoved(): Boolean {
+        if (hasAttribute(ItemAttribute.UNIQUEID)) {
+            return false
+        }
+        if (hasAttribute(ItemAttribute.ACTIONID) &&
+            intAttribute(ItemAttribute.ACTIONID) and 0xFFFFL == IMMOVABLE_ACTION_ID.toLong()
+        ) {
+            return false
+        }
+        return type?.isMovable == true
+    }
+
+    /** `Item::setOwner(uint32_t owner)` (src/items/item.hpp:273). */
+    fun setOwner(owner: Long) {
+        setAttribute(ItemAttribute.OWNER, owner and 0xFFFFFFFFL)
+    }
+
+    /**
+     * `Item::getOwnerId` (src/items/item.cpp:1563).
+     */
+    fun getOwnerId(): Long = intAttribute(ItemAttribute.OWNER) and 0xFFFFFFFFL
+
+    /**
+     * `Item::isOwner(uint32_t ownerId)` (src/items/item.cpp:818). The
+     * player-id/GUID lookups need `g_game()` and return the direct equality
+     * result only (PARITY GAP).
+     */
+    fun isOwner(ownerId: Long): Boolean = getOwnerId() == ownerId
+
+    /** `Item::hasOwner` (src/items/item.hpp:287). */
+    fun hasOwner(): Boolean = getOwnerId() != 0L
+
+    /** `Item::canBeMovedToStore` (src/items/item.hpp:291). */
+    fun canBeMovedToStore(): Boolean = isStoreItem() || hasOwner()
+
+    /** `Item::getName` (src/items/item.hpp:576). */
+    fun getName(): String =
+        if (hasAttribute(ItemAttribute.NAME)) stringAttribute(ItemAttribute.NAME) else type?.name ?: ""
+
+    /** `Item::getPluralName` (src/items/item.hpp:582). */
+    fun getPluralName(): String =
+        if (hasAttribute(ItemAttribute.PLURALNAME)) {
+            stringAttribute(ItemAttribute.PLURALNAME)
+        } else {
+            type?.getPluralName() ?: ""
+        }
+
+    /** `Item::getArticle` (src/items/item.hpp:588). */
+    fun getArticle(): String =
+        if (hasAttribute(ItemAttribute.ARTICLE)) stringAttribute(ItemAttribute.ARTICLE) else type?.article ?: ""
+
+    /** `Item::getNameDescription` (src/items/item.cpp:3388). */
+    fun getNameDescription(): String = getNameDescription(type ?: ItemType(id, ""), this)
+
+    /** `Item::getWeightDescription(uint32_t weight)` (src/items/item.cpp:3415). */
+    fun getWeightDescription(weight: Int): String =
+        getWeightDescription(type ?: ItemType(id, ""), weight, count)
+
+    /** `Item::getWeightDescription()` (src/items/item.cpp:3420). */
+    fun getWeightDescription(): String {
+        val hundredths = Math.round(weight * 100.0).toInt()
+        if (hundredths == 0) {
+            return ""
+        }
+        return getWeightDescription(hundredths)
+    }
+
+    /** `Item::clone` (src/items/item.cpp:716). */
+    open fun clone(): Item {
+        val copy = createLike(type, id, count)
+        copy.attributes.putAll(attributes)
+        return copy
+    }
+
+    /** `Item::equals` (src/items/item.cpp:730). */
+    fun equals(compareItem: Item?): Boolean {
+        if (compareItem == null) {
+            return false
+        }
+
+        if (id != compareItem.id) {
+            return false
+        }
+
+        if (isStoreItem() != compareItem.isStoreItem()) {
+            return false
+        }
+
+        if (getOwnerId() != compareItem.getOwnerId()) {
+            return false
+        }
+
+        for ((attribute, value) in attributes) {
+            if (attribute == ItemAttribute.STORE) {
+                continue
+            }
+
+            for ((compareAttribute, compareValue) in compareItem.attributes) {
+                if (attribute != compareAttribute) {
+                    continue
+                }
+
+                if (ItemAttribute.isAttributeInteger(attribute) &&
+                    (value as? Number)?.toLong() != (compareValue as? Number)?.toLong()
+                ) {
+                    return false
+                }
+
+                if (ItemAttribute.isAttributeString(attribute) && value != compareValue) {
+                    return false
+                }
+            }
+        }
+
+        return true
+    }
+
+    /**
+     * `Item::hasMarketAttributes` (src/items/item.cpp:3539). `hasImbuements`
+     * needs the custom attribute store owned by the imbuement engine and is not
+     * modeled on [Item] yet (PARITY GAP); every other clause is exact.
+     */
+    fun hasMarketAttributes(): Boolean {
+        if (attributes.isEmpty()) {
+            return true
+        }
+
+        for ((attribute, value) in attributes) {
+            when (attribute) {
+                ItemAttribute.CHARGES -> {
+                    if ((value as? Number)?.toInt() != (type?.charges ?: 0)) {
+                        return false
+                    }
+                }
+
+                ItemAttribute.DURATION -> {
+                    if ((value as? Number)?.toLong() != getDefaultDuration().toLong()) {
+                        return false
+                    }
+                }
+
+                ItemAttribute.TIER -> {
+                    if ((value as? Number)?.toInt() != getTier()) {
+                        return false
+                    }
+                }
+
+                else -> {}
+            }
+        }
+
+        return !isStoreItem() && !hasOwner()
+    }
+
+    /** `Item::isStowable` (src/items/item.hpp:491). */
+    fun isStowable(): Boolean {
+        val itemType = type ?: return false
+        val wareId = itemType.wareId
+        return hasMarketAttributes() &&
+            getTier() == 0 &&
+            wareId > 0 &&
+            !itemType.isContainer &&
+            wareId == itemType.id
+    }
+
+    /** `Item::isItemStorable` (src/items/item.cpp:891). */
+    fun isItemStorable(): Boolean {
+        if (isStoreItem() || hasOwner() || canDecay()) {
+            return false
+        }
+
+        val container = getContainer()
+        val containerHasItems = container != null && container.items.isNotEmpty()
+        return isStowable() || containerHasItems
+    }
+
+    private fun tierChance(a: Double, b: Double, c: Double): Double {
+        if (getTier() == 0) {
+            return 0.0
+        }
+        val tier = getTier().toDouble()
+        return a * tier * tier + b * tier + c
+    }
 
     fun hasAttribute(attribute: ItemAttribute): Boolean = attributes.containsKey(attribute)
 
@@ -448,7 +1107,7 @@ open class Item(
 
         if (attributes.containsKey(ItemAttribute.TIER)) {
             propWriteStream.writeU8(ATTR_TIER)
-            propWriteStream.writeU8(intAttribute(ItemAttribute.TIER).toInt())
+            propWriteStream.writeU8(getTier())
         }
 
         if (attributes.containsKey(ItemAttribute.AMOUNT)) {
@@ -715,13 +1374,132 @@ open class Item(
 
     companion object {
         /** `Item::CreateItem` (src/items/item.cpp:393-472), including the derived item types. */
-        fun create(id: Int, count: Int = 1, registry: ItemTypeRegistry? = null): Item {
-            val type = registry?.get(id)
-            return when {
-                type?.isBed == true -> BedItem(id, type = type)
-                type?.isContainer == true -> Container(id, capacity = type.capacity, type = type)
-                type?.isDoor == true -> Door(id, type = type)
-                else -> Item(id, count = count, type = type)
+        fun create(id: Int, count: Int = 1, registry: ItemTypeRegistry? = null): Item =
+            createLike(registry?.get(id), id, count)
+
+        private fun createLike(itemType: ItemType?, id: Int, count: Int): Item = when {
+            itemType?.isBed == true -> BedItem(id, type = itemType)
+            itemType?.isContainer == true -> Container(id, capacity = itemType.capacity, type = itemType)
+            itemType?.isDoor == true -> Door(id, type = itemType)
+            else -> Item(id, count = count, type = itemType)
+        }
+
+        /** `Item::getNameDescription` (src/items/item.cpp:3357). */
+        fun getNameDescription(
+            it: ItemType,
+            item: Item? = null,
+            subType: Int = -1,
+            addArticle: Boolean = true
+        ): String {
+            var effectiveSubType = subType
+            if (item != null) {
+                effectiveSubType = item.getSubType()
+            }
+
+            val name = item?.getName() ?: it.name
+            if (name.isEmpty()) {
+                return "an item of type ${it.id}"
+            }
+
+            val description = StringBuilder()
+            if (it.isStackable && effectiveSubType > 1) {
+                if (it.showCount) {
+                    description.append(effectiveSubType).append(' ')
+                }
+                description.append(item?.getPluralName() ?: it.getPluralName())
+            } else {
+                if (addArticle) {
+                    val article = item?.getArticle() ?: it.article
+                    if (article.isNotEmpty()) {
+                        description.append(article).append(' ')
+                    }
+                }
+                description.append(name)
+            }
+            return description.toString()
+        }
+
+        /** `Item::getWeightDescription` (src/items/item.cpp:3393), [weight] in hundredths of an ounce. */
+        fun getWeightDescription(it: ItemType, weight: Int, count: Int = 1): String {
+            val description = StringBuilder()
+            if (it.isStackable && count > 1 && it.showCount) {
+                description.append("They weigh ")
+            } else {
+                description.append("It weighs ")
+            }
+
+            appendWeight(description, weight)
+            description.append(" oz.")
+            return description.toString()
+        }
+
+        /** `Item::parseShowDurationSpeed` (src/items/item.cpp:2441); the C++ `begin` out-parameter is threaded through the pair. */
+        fun parseShowDurationSpeed(speed: Int, begin: Boolean): Pair<String, Boolean> {
+            val prefix = if (begin) " (speed " else ", speed "
+            val signed = if (speed >= 0) "+$speed" else speed.toString()
+            return prefix + signed to false
+        }
+
+        /** `Item::parseShowDuration` (src/items/item.cpp:2454). */
+        fun parseShowDuration(item: Item?): String {
+            if (item == null) {
+                return ""
+            }
+
+            val description = StringBuilder()
+            val duration = item.getDuration() / 1000
+            if (item.hasAttribute(ItemAttribute.DURATION) && duration > 0) {
+                description.append(" that will expire in ")
+                when {
+                    duration >= 86400 -> {
+                        val days = duration / 86400
+                        val hours = (duration % 86400) / 3600
+                        description.append(days).append(" day").append(if (days != 1) "s" else "")
+                        if (hours > 0) {
+                            description.append(" and ").append(hours).append(" hour")
+                                .append(if (hours != 1) "s" else "")
+                        }
+                    }
+
+                    duration >= 3600 -> {
+                        val hours = duration / 3600
+                        val minutes = (duration % 3600) / 60
+                        description.append(hours).append(" hour").append(if (hours != 1) "s" else "")
+                        if (minutes > 0) {
+                            description.append(" and ").append(minutes).append(" minute")
+                                .append(if (minutes != 1) "s" else "")
+                        }
+                    }
+
+                    duration >= 60 -> {
+                        val minutes = duration / 60
+                        val seconds = duration % 60
+                        description.append(minutes).append(" minute").append(if (minutes != 1) "s" else "")
+                        if (seconds > 0) {
+                            description.append(" and ").append(seconds).append(" second")
+                                .append(if (seconds != 1) "s" else "")
+                        }
+                    }
+
+                    else -> description.append(duration).append(" second").append(if (duration != 1) "s" else "")
+                }
+            } else {
+                description.append(" that is brand-new")
+            }
+
+            return description.toString()
+        }
+
+        private fun appendWeight(description: StringBuilder, weight: Int) {
+            when {
+                weight < 10 -> description.append("0.0").append(weight)
+                weight < 100 -> description.append("0.").append(weight)
+                else -> {
+                    val weightString = weight.toString()
+                    description.append(weightString, 0, weightString.length - 2)
+                    description.append('.')
+                    description.append(weightString, weightString.length - 2, weightString.length)
+                }
             }
         }
     }
@@ -759,6 +1537,9 @@ class Container(
     override fun internalAddThing(item: Item) {
         _items.add(item)
     }
+
+    /** Disambiguates `Item::isRemoved` from the `Cylinder` default; `Item`'s implementation is used. */
+    override fun isRemoved(): Boolean = super<Item>.isRemoved()
 
     override fun getContainer(): Container = this
 
