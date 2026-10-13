@@ -18,18 +18,6 @@ import java.util.Random
 import kotlin.math.abs
 import kotlin.math.max
 
-/** `enum RaceType_t` (src/creatures/creatures_definitions.hpp:504-514). */
-enum class RaceType(val value: Int) {
-    RACE_NONE(0),
-    RACE_VENOM(1),
-    RACE_BLOOD(2),
-    RACE_UNDEAD(3),
-    RACE_FIRE(4),
-    RACE_ENERGY(5),
-    RACE_INK(6),
-    RACE_CHOCOLATE(7),
-    RACE_CANDY(8),
-}
 
 /**
  * `BaseSpell::castSpell(caster, target)` (src/creatures/combat/spells.hpp:91).
