@@ -5,6 +5,7 @@ import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
+import org.opentibia.canary.items.ItemTypeRegistry
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import java.util.IdentityHashMap
 
@@ -22,9 +23,10 @@ import java.util.IdentityHashMap
  *  - [getItemsClassifications]: `Game::getItemsClassifications()` (game.hpp:591)
  *    through [itemClassifications]. The Lua-authored classification price tables
  *    (`data/scripts/systems/item_tiers.lua`) populate that store through
- *    `Game.createItemClassification`; until `ItemType::upgradeClassification` is
- *    ported, [itemClassificationOf] defaults every item to the registry's
- *    classification 0.
+ *    `Game.createItemClassification`; the [itemClassificationOf] default resolves
+ *    each item's classification from the injected `itemRegistry`
+ *    (`Item::getClassification`, src/items/item.hpp:753), falling back to
+ *    classification 0 for unknown types.
  *  - [getForgeSliversAndCores] / [hasItemCountById]: `Player::getForgeSliversAndCores`
  *    (player.cpp:1561) and `Player::hasItemCountById` (player.cpp:5335) over the
  *    inventory counts plus the injected stash seams (`Player::getStashItems()`).
@@ -51,7 +53,9 @@ import java.util.IdentityHashMap
 class PlayerForgeAdapter(
     private val player: Player,
     private val itemClassifications: ItemClassifications = ItemClassifications(),
-    private val itemClassificationOf: (Int) -> Int = { 0 },
+    itemRegistry: ItemTypeRegistry? = null,
+    private val itemClassificationOf: (Int) -> Int =
+        { itemId -> itemRegistry?.get(itemId)?.upgradeClassification ?: 0 },
     private val stashSlivers: () -> Long = { 0L },
     private val stashCores: () -> Long = { 0L },
     private val money: () -> Long = { 0L },

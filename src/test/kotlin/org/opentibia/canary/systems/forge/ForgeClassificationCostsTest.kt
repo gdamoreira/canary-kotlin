@@ -3,8 +3,10 @@ package org.opentibia.canary.systems.forge
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.io.xml.XmlItemLoader
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
+import org.opentibia.canary.items.ItemTypeRegistry
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.network.protocol.forge.ForgeEnterCommand
 
@@ -92,6 +94,51 @@ class ForgeClassificationCostsTest {
             player = player,
             itemClassifications = registry(),
             itemClassificationOf = { if (it == 100) 4 else 0 },
+            money = wallet::get,
+            moneyRemover = wallet::remove,
+        )
+        val forge = Forge()
+        forge.setForgeDusts(200)
+
+        val result = application().apply(forge, adapter, fusionCommand(tier = 1))
+
+        assertThat(result).isEqualTo(
+            ForgeApplyResult.Fusion(
+                success = true,
+                convergence = false,
+                bonus = 0,
+                coreCount = 0,
+                resultTier = 2,
+                secondItemTier = null,
+                dustCost = 100,
+                coresCost = 0,
+                goldCost = 20_000_000,
+            ),
+        )
+        assertThat(wallet.amount).isEqualTo(180_000_000)
+    }
+
+    @Test
+    fun `fusion resolves the gold cost from the XML-loaded item type classification`() {
+        val itemTypes = ItemTypeRegistry()
+        XmlItemLoader.load(
+            """
+            <items>
+                <item id="100" name="Sabre">
+                    <attribute key="upgradeclassification" value="4"/>
+                </item>
+            </items>
+            """.trimIndent(),
+            itemTypes,
+        )
+        val player = hero()
+        player.addItem(tieredItem(100, 1))
+        player.addItem(tieredItem(100, 1))
+        val wallet = Wallet(200_000_000)
+        val adapter = PlayerForgeAdapter(
+            player = player,
+            itemClassifications = registry(),
+            itemRegistry = itemTypes,
             money = wallet::get,
             moneyRemover = wallet::remove,
         )

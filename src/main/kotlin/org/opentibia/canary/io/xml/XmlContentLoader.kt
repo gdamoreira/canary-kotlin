@@ -20,6 +20,7 @@ object XmlItemLoader {
             val name = itemElem.getAttribute("name")
 
             var weight = 0.0
+            var upgradeClassification = 0
 
             val attributes = itemElem.getElementsByTagName("attribute")
             for (j in 0 until attributes.length) {
@@ -29,6 +30,7 @@ object XmlItemLoader {
 
                 when (key.lowercase()) {
                     "weight" -> weight = value.toDoubleOrNull() ?: 0.0
+                    "upgradeclassification" -> upgradeClassification = value.toIntOrNull() ?: 0
                 }
             }
 
@@ -37,7 +39,12 @@ object XmlItemLoader {
                 id = id,
                 name = if (name.isNotEmpty()) name else (existing?.name ?: "Item $id"),
                 isStackable = existing?.isStackable ?: false,
-                weight = if (weight > 0.0) weight else (existing?.weight ?: 0.0)
+                weight = if (weight > 0.0) weight else (existing?.weight ?: 0.0),
+                upgradeClassification = if (upgradeClassification > 0) {
+                    upgradeClassification
+                } else {
+                    existing?.upgradeClassification ?: 0
+                }
             )
             registry.register(updated)
         }

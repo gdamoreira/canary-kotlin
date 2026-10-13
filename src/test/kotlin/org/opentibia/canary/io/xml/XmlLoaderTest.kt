@@ -31,6 +31,34 @@ class XmlLoaderTest {
     }
 
     @Test
+    fun `parses the upgradeclassification attribute into the registered item type`() {
+        val registry = ItemTypeRegistry()
+        registry.register(ItemType(id = 2400, name = "Magic Sword"))
+
+        val xml = """
+            <items>
+                <item id="2400" name="Magic Sword">
+                    <attribute key="upgradeclassification" value="4"/>
+                </item>
+            </items>
+        """.trimIndent()
+
+        XmlItemLoader.load(xml, registry)
+
+        assertThat(registry.get(2400)?.upgradeClassification).isEqualTo(4)
+    }
+
+    @Test
+    fun `keeps an existing upgrade classification when the XML omits the attribute`() {
+        val registry = ItemTypeRegistry()
+        registry.register(ItemType(id = 2400, name = "Magic Sword", upgradeClassification = 2))
+
+        XmlItemLoader.load("""<items><item id="2400" name="Magic Sword"/></items>""", registry)
+
+        assertThat(registry.get(2400)?.upgradeClassification).isEqualTo(2)
+    }
+
+    @Test
     fun `parses vocations XML with stat progression per level`() {
         val xml = """
             <vocations>
