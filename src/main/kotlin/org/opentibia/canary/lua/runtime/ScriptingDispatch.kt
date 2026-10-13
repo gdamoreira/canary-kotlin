@@ -167,6 +167,31 @@ class ScriptingDispatch(
             )
         }
 
+    /**
+     * Mirrors the `CREATURE_EVENT_MODALWINDOW` loop of `Game::playerAnswerModalWindow`
+     * (src/game/game.cpp:11171-11175): submits every registered `onModalWindow` creature
+     * event, in registration order, to the WorldCommit lane so the callbacks run confined.
+     * Returns whether at least one modal-window event was registered.
+     *
+     * Canary only fires the events attached to the player through
+     * `Creature::registerCreatureEvent`; this port has no per-creature attachment registry
+     * yet, so every registered modal-window event fires (recorded in PARITY GAPS). The
+     * `uint32_t` window id is narrowed to the Lua `Int` argument of
+     * [LuaEventDispatcher.creatureEventOnModalWindow]; the hardcoded offline-training id
+     * never reaches this path (game.cpp:11157).
+     */
+    fun playerAnswerModalWindow(
+        player: Player,
+        modalWindowId: Long,
+        button: Int,
+        choice: Int,
+    ): Boolean =
+        submitCreatureEvents(MODALWINDOW_EVENT_TYPE) { name ->
+            LuaEventDispatcher.creatureEventOnModalWindow(
+                environment, name, player, modalWindowId.toInt(), button, choice,
+            )
+        }
+
     fun creatureEventOnTextEdit(name: String, player: Player, item: Item?, text: String): Boolean =
         submitCreature(name) { LuaEventDispatcher.creatureEventOnTextEdit(environment, name, player, item, text) }
 
@@ -314,6 +339,7 @@ class ScriptingDispatch(
         const val RECORD_EVENT_TYPE = "record"
         const val STEP_IN_EVENT_TYPE = "stepin"
         const val STEP_OUT_EVENT_TYPE = "stepout"
+        const val MODALWINDOW_EVENT_TYPE = "modalwindow"
         const val EQUIP_EVENT_TYPE = "equip"
         const val DE_EQUIP_EVENT_TYPE = "deequip"
         const val ADD_ITEM_EVENT_TYPE = "additem"

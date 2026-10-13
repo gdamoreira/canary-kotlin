@@ -6,6 +6,7 @@ import org.opentibia.canary.lua.runtime.ScriptingDispatch
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Tile
+import org.opentibia.canary.game.movement.getDirectionTo as positionGetDirectionTo
 
 enum class Direction(val byteValue: Byte, val dx: Int, val dy: Int) {
     North(0, 0, -1),
@@ -17,39 +18,19 @@ enum class Direction(val byteValue: Byte, val dx: Int, val dy: Int) {
     NorthWest(6, -1, -1),
     NorthEast(7, 1, -1);
 
-    fun offset(pos: Position): Position {
-        return Position(pos.x + dx, pos.y + dy, pos.z)
-    }
+    /** `getNextPosition` (src/utils/tools.cpp:581) for this direction. */
+    fun offset(pos: Position): Position = getNextPosition(this, pos)
 }
 
 object MovementEngine {
 
-    fun getDirectionTo(from: Position, to: Position, exactDiagonal: Boolean = true): Direction? {
-        val dx = to.x - from.x
-        val dy = to.y - from.y
-
-        if (dx == 0 && dy == 0) return null
-
-        return if (exactDiagonal) {
-            when {
-                dx < 0 && dy < 0 -> Direction.NorthWest
-                dx > 0 && dy < 0 -> Direction.NorthEast
-                dx < 0 && dy > 0 -> Direction.SouthWest
-                dx > 0 && dy > 0 -> Direction.SouthEast
-                dx < 0 -> Direction.West
-                dx > 0 -> Direction.East
-                dy < 0 -> Direction.North
-                dy > 0 -> Direction.South
-                else -> null
-            }
-        } else {
-            if (kotlin.math.abs(dx) > kotlin.math.abs(dy)) {
-                if (dx > 0) Direction.East else Direction.West
-            } else {
-                if (dy > 0) Direction.South else Direction.North
-            }
-        }
-    }
+    /**
+     * Delegates to the canonical `getDirectionTo` (src/utils/tools.cpp:626-690) in
+     * Position.kt so every call site shares the exact Canary algorithm, including
+     * the exact-diagonal bias for non-equal offsets. `DIRECTION_NONE` maps to `null`.
+     */
+    fun getDirectionTo(from: Position, to: Position, exactDiagonal: Boolean = true): Direction? =
+        positionGetDirectionTo(from, to, exactDiagonal)
 
     fun calculateStepDuration(creatureSpeed: Int, groundSpeed: Int = 100): Long {
         if (creatureSpeed <= 0) return Long.MAX_VALUE

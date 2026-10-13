@@ -24,8 +24,12 @@ class PositionFunctionsTranscriptTest {
         assertThat(MovementEngine.getDirectionTo(Position(32011, 2197, 1), Position(32135, 2321, 13))).isEqualTo(Direction.SouthEast)
         assertThat(MovementEngine.getDirectionTo(Position(13121, 5213, 5), Position(5213, 13121, 5))).isEqualTo(Direction.SouthWest)
 
-        // Non-diagonal bias (exactDiagonal = false)
-        assertThat(MovementEngine.getDirectionTo(Position(123, 122, 0), Position(0, 0, 0), exactDiagonal = false)).isEqualTo(Direction.West)
-        assertThat(MovementEngine.getDirectionTo(Position(122, 123, 0), Position(0, 0, 0), exactDiagonal = false)).isEqualTo(Direction.North)
+        // Non-exact diagonal bias, exactly as Canary's position_functions_test
+        // (tests/unit/utils/position_functions_test.cpp:46-47): the un-biased
+        // quadrant result comes back only with exactDiagonal = false.
+        assertThat(MovementEngine.getDirectionTo(Position(123, 122, 0), Position(0, 0, 0), exactDiagonal = false)).isEqualTo(Direction.NorthWest)
+        assertThat(MovementEngine.getDirectionTo(Position(122, 123, 0), Position(0, 0, 0), exactDiagonal = false)).isEqualTo(Direction.NorthWest)
+        assertThat(MovementEngine.getDirectionTo(Position(123, 122, 0), Position(0, 0, 0))).isEqualTo(Direction.West)
+        assertThat(MovementEngine.getDirectionTo(Position(122, 123, 0), Position(0, 0, 0))).isEqualTo(Direction.North)
     }
 }
