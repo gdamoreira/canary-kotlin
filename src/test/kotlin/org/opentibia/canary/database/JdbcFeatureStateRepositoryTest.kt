@@ -15,7 +15,7 @@ class JdbcFeatureStateRepositoryTest {
     fun setUp() {
         dataSource = DatabaseConnectionFactory.createInMemoryDataSource("canary_feature_${System.nanoTime()}")
         val applied = DatabaseConnectionFactory.migrate(dataSource)
-        assertThat(applied).isGreaterThanOrEqualTo(3)
+        assertThat(applied).isGreaterThanOrEqualTo(4)
         repository = JdbcFeatureStateRepository(dataSource)
     }
 
@@ -133,6 +133,107 @@ class JdbcFeatureStateRepositoryTest {
     }
 
     @Test
+    fun `round-trips bestiary charm assignments`() {
+        val assignments = mapOf(
+            0 to CharmAssignmentState(raceId = 31, tier = 2),
+            5 to CharmAssignmentState(raceId = 47, tier = 1),
+            24 to CharmAssignmentState(raceId = 220, tier = 3),
+        )
+        val state = PlayerFeatureState(
+            playerId = 1,
+            charmAssignments = assignments,
+        )
+
+        repository.save(state)
+        val loaded = repository.load(1)
+
+        assertThat(loaded).isNotNull
+        assertThat(loaded!!.charmAssignments).isEqualTo(assignments)
+    }
+
+    @Test
+    fun `round-trips weapon proficiency perks`() {
+        val perks = listOf(
+            WeaponProficiencyPerkState(
+                level = 1,
+                index = 0,
+                value = 0.1,
+                type = 0,
+            ),
+            WeaponProficiencyPerkState(
+                level = 2,
+                index = 3,
+                value = 0.05,
+                spellId = 42,
+                range = 6,
+                bestiaryId = 31,
+                bestiaryName = "Demon",
+                augmentType = 1,
+                skillId = 5,
+                element = 2,
+                type = 5,
+            ),
+        )
+        val state = PlayerFeatureState(
+            playerId = 1,
+            weaponProficiencies = mapOf(
+                3275 to WeaponProficiencyState(experience = 125000, mastered = false, perks = perks),
+                7406 to WeaponProficiencyState(experience = 30000000, mastered = true),
+            ),
+        )
+
+        repository.save(state)
+        val loaded = repository.load(1)
+
+        assertThat(loaded).isNotNull
+        assertThat(loaded!!.weaponProficiencies[3275]?.perks).isEqualTo(perks)
+        assertThat(loaded.weaponProficiencies[7406]?.perks).isEmpty()
+    }
+
+    @Test
+    fun `round-trips wheel revealed gems active gems and grades`() {
+        val gems = listOf(
+            WheelGemState(
+                locked = false,
+                affinity = 0,
+                quality = 1,
+                basicModifier1 = 3,
+                basicModifier2 = 9,
+                supremeModifier = null,
+            ),
+            WheelGemState(
+                locked = true,
+                affinity = 3,
+                quality = 2,
+                basicModifier1 = 31,
+                basicModifier2 = null,
+                supremeModifier = 7,
+            ),
+        )
+        val grades = listOf(
+            WheelGemGradeState(fragmentType = 0, position = 4, grade = 3),
+            WheelGemGradeState(fragmentType = 1, position = 12, grade = 1),
+        )
+        val state = PlayerFeatureState(
+            playerId = 1,
+            wheelGems = gems,
+            activeWheelGems = mapOf(0 to 0, 3 to 1),
+            wheelGemGrades = grades,
+        )
+
+        repository.save(state)
+        val loaded = repository.load(1)
+
+        assertThat(loaded).isNotNull
+        assertThat(loaded!!.wheelGems).isEqualTo(gems)
+        assertThat(loaded.activeWheelGems).isEqualTo(mapOf(0 to 0, 3 to 1))
+        assertThat(loaded.wheelGemGrades).containsExactlyInAnyOrder(
+            WheelGemGradeState(fragmentType = 0, position = 4, grade = 3),
+            WheelGemGradeState(fragmentType = 1, position = 12, grade = 1),
+        )
+    }
+
+    @Test
     fun `returns null for a player without persisted feature state`() {
         assertThat(repository.load(2)).isNull()
     }
@@ -144,9 +245,19 @@ class JdbcFeatureStateRepositoryTest {
                 playerId = 1,
                 wheelPoints = mapOf(2 to 50),
                 bestiaryKillCounts = mapOf(31 to 1),
+                charmAssignments = mapOf(0 to CharmAssignmentState(raceId = 31, tier = 1)),
                 mounts = setOf(1),
                 familiars = setOf(1963),
-                weaponProficiencies = mapOf(3275 to WeaponProficiencyState(1, false)),
+                wheelGems = listOf(WheelGemState(locked = false, affinity = 0, quality = 0, basicModifier1 = 0)),
+                activeWheelGems = mapOf(0 to 0),
+                wheelGemGrades = listOf(WheelGemGradeState(fragmentType = 0, position = 1, grade = 1)),
+                weaponProficiencies = mapOf(
+                    3275 to WeaponProficiencyState(
+                        1,
+                        false,
+                        listOf(WeaponProficiencyPerkState(level = 1, type = 0)),
+                    ),
+                ),
             ),
         )
 
@@ -155,9 +266,19 @@ class JdbcFeatureStateRepositoryTest {
                 playerId = 1,
                 wheelPoints = mapOf(4 to 25),
                 bestiaryKillCounts = mapOf(47 to 9),
+                charmAssignments = mapOf(5 to CharmAssignmentState(raceId = 47, tier = 2)),
                 mounts = setOf(5),
                 familiars = setOf(1970),
-                weaponProficiencies = mapOf(7406 to WeaponProficiencyState(2, true)),
+                wheelGems = listOf(WheelGemState(locked = true, affinity = 3, quality = 2, basicModifier1 = 31)),
+                activeWheelGems = mapOf(3 to 0),
+                wheelGemGrades = listOf(WheelGemGradeState(fragmentType = 1, position = 2, grade = 2)),
+                weaponProficiencies = mapOf(
+                    7406 to WeaponProficiencyState(
+                        2,
+                        true,
+                        listOf(WeaponProficiencyPerkState(level = 2, type = 5)),
+                    ),
+                ),
             ),
         )
 
@@ -165,8 +286,16 @@ class JdbcFeatureStateRepositoryTest {
         assertThat(loaded).isNotNull
         assertThat(loaded!!.wheelPoints).isEqualTo(mapOf(4 to 25))
         assertThat(loaded.bestiaryKillCounts).isEqualTo(mapOf(47 to 9))
+        assertThat(loaded.charmAssignments).isEqualTo(mapOf(5 to CharmAssignmentState(raceId = 47, tier = 2)))
         assertThat(loaded.mounts).containsExactly(5)
         assertThat(loaded.familiars).containsExactly(1970)
-        assertThat(loaded.weaponProficiencies).isEqualTo(mapOf(7406 to WeaponProficiencyState(2, true)))
+        assertThat(loaded.wheelGems).isEqualTo(
+            listOf(WheelGemState(locked = true, affinity = 3, quality = 2, basicModifier1 = 31)),
+        )
+        assertThat(loaded.activeWheelGems).isEqualTo(mapOf(3 to 0))
+        assertThat(loaded.wheelGemGrades).isEqualTo(listOf(WheelGemGradeState(fragmentType = 1, position = 2, grade = 2)))
+        assertThat(loaded.weaponProficiencies).isEqualTo(
+            mapOf(7406 to WeaponProficiencyState(2, true, listOf(WeaponProficiencyPerkState(level = 2, type = 5)))),
+        )
     }
 }
