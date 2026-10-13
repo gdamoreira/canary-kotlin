@@ -44,6 +44,18 @@ data class PlayerSellOnShopCommand(
 }
 
 /**
+ * Look-at-item-in-shop request (client opcode `0x79`), mirroring
+ * `ProtocolGame::parseLookInShop` (protocolgame.cpp:2806-2810): the `uint16_t`
+ * item id and the byte count handed to `Game::playerLookInShop`.
+ */
+data class PlayerLookInShopCommand(
+    val itemId: Int,
+    val count: Int,
+) : NpcShopCommand {
+    override val opcode: Int get() = NpcShopPacketHandler.OPCODE_LOOK_IN_SHOP
+}
+
+/**
  * Close request (client opcode `0x7C`). Canary reads no payload and calls
  * `Game::playerCloseShop` (protocolgame.cpp:1806-1808, game.cpp:6319), which
  * closes the shop window through `Player::closeShopWindow`.
@@ -56,21 +68,35 @@ object PlayerCloseShopCommand : NpcShopCommand {
  * Decoder for the NPC shop client opcodes. Multi-byte fields are Little-Endian,
  * matching `NetworkMessage::get<T>()` on the native wire order.
  *
+ *  - `0x79` `ProtocolGame::parseLookInShop`       (protocolgame.cpp:2806)
  *  - `0x7A` `ProtocolGame::parsePlayerBuyOnShop`  (protocolgame.cpp:2812)
  *  - `0x7B` `ProtocolGame::parsePlayerSellOnShop` (protocolgame.cpp:2821)
  *  - `0x7C` `Game::playerCloseShop`               (protocolgame.cpp:1806)
  */
 object NpcShopPacketHandler {
 
+    const val OPCODE_LOOK_IN_SHOP: Int = 0x79
     const val OPCODE_PLAYER_BUY_ON_SHOP: Int = 0x7A
     const val OPCODE_PLAYER_SELL_ON_SHOP: Int = 0x7B
     const val OPCODE_PLAYER_CLOSE_SHOP: Int = 0x7C
 
     fun parse(opcode: Int, buffer: ByteBuf, oldProtocol: Boolean = false): NpcShopCommand? = when (opcode) {
+        OPCODE_LOOK_IN_SHOP -> parseLookInShop(buffer)
         OPCODE_PLAYER_BUY_ON_SHOP -> parsePlayerBuyOnShop(buffer, oldProtocol)
         OPCODE_PLAYER_SELL_ON_SHOP -> parsePlayerSellOnShop(buffer, oldProtocol)
         OPCODE_PLAYER_CLOSE_SHOP -> parsePlayerCloseShop()
         else -> null
+    }
+
+    /**
+     * 0x79: reads the `uint16_t` item id and the byte count.
+     *
+     * @return the decoded command, or `null` when the payload is truncated.
+     */
+    fun parseLookInShop(buffer: ByteBuf): PlayerLookInShopCommand? {
+        val itemId = readShort(buffer) ?: return null
+        val count = readByte(buffer) ?: return null
+        return PlayerLookInShopCommand(itemId = itemId, count = count)
     }
 
     /**

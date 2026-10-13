@@ -429,6 +429,160 @@ object GamePacketRouter {
                     }
                 }
 
+                // Wave 35 batch B1
+                0x1D -> {
+                    KeepaliveHandler.handlePingBack()
+                }
+                CyclopediaTrackerPacketHandler.OPCODE_CYCLOPEDIA_MONSTER_TRACKER -> {
+                    val command = CyclopediaTrackerPacketHandler.parse(buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::parseCyclopediaMonsterTracker resolves the race id
+                            // through the bosstiary/bestiary monster registries, which this
+                            // context does not provide; the resolver seams default to no
+                            // monster (PARITY GAP).
+                            CyclopediaTrackerPacketHandler.apply(player, command)
+                        }
+                        true
+                    }
+                }
+                PartyAnalyzerPacketHandler.OPCODE_PARTY_ANALYZER_ACTION -> {
+                    val command = PartyAnalyzerPacketHandler.parse(buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Party::resetAnalyzer/switchAnalyzerPriceType/reloadPrices and
+                            // Player::setItemCustomPrice are not ported, so the decoded
+                            // command (including the item prices) is only the confinement
+                            // boundary (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+                TeamFinderPacketHandler.OPCODE_LEADER_FINDER_WINDOW,
+                TeamFinderPacketHandler.OPCODE_MEMBER_FINDER_WINDOW -> {
+                    val command = TeamFinderPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // The shared assembler map cannot resolve online players by
+                            // guid from this context, so member status changes and join
+                            // requests against online members stay inert (PARITY GAP).
+                            TeamFinderPacketHandler.apply(player, command)
+                        }
+                        true
+                    }
+                }
+                ClientOptionsPacketHandler.OPCODE_SET_CLIENT_OPTIONS,
+                ClientOptionsPacketHandler.OPCODE_CLIENT_CHECK -> {
+                    val command = ClientOptionsPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Both Canary parsers only consume and discard their payload
+                            // (protocolgame.cpp:3221-3248); no state to apply.
+                        }
+                        true
+                    }
+                }
+                ExtendedOpcodePacketHandler.OPCODE_EXTENDED_OPCODE -> {
+                    ExtendedOpcodePacketHandler.handle(player, buffer, context.dispatcher, context.luaEnvironment)
+                }
+                PlayerTypingPacketHandler.OPCODE_PLAYER_TYPING -> {
+                    val command = PlayerTypingPacketHandler.parse(buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerSetTyping broadcasts ProtocolGame::sendPlayerTyping
+                            // to the spectators; that sender is not ported (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+                InventoryImbuementsPacketHandler.OPCODE_INVENTORY_IMBUEMENTS -> {
+                    val command = InventoryImbuementsPacketHandler.parse(buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerRequestInventoryImbuements needs the unported
+                            // Player::imbuementTrackerWindowOpen flag and the
+                            // sendInventoryImbuements sender (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+                CharacterTradeConfigurationPacketHandler.OPCODE_CHARACTER_TRADE_CONFIGURATION -> {
+                    val command = CharacterTradeConfigurationPacketHandler.parse(
+                        buffer,
+                        itemTypeHasSubtype = { itemId ->
+                            // ItemType::hasSubType also covers fluid containers, splashes
+                            // and charged items, which the port's ItemType does not model
+                            // (PARITY GAP); isStackable is the subset it carries.
+                            context.itemTypes?.get(itemId)?.isStackable == true
+                        },
+                    )
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Canary only reads and discards this configuration
+                            // (protocolgame.cpp:3270-3297); no state to apply.
+                        }
+                        true
+                    }
+                }
+                HotkeyEquipPacketHandler.OPCODE_HOTKEY_EQUIP -> {
+                    val command = HotkeyEquipPacketHandler.parse(
+                        buffer,
+                        upgradeClassification = { itemId ->
+                            context.itemTypes?.get(itemId)?.upgradeClassification ?: 0
+                        },
+                    )
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerEquipItem (game.cpp:4159) is not ported; the
+                            // decoded command only marks the confinement boundary
+                            // (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+                NpcShopPacketHandler.OPCODE_LOOK_IN_SHOP -> {
+                    val command = NpcShopPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerLookInShop resolves the interacted merchant; the
+                            // shop window and dialogue stay Lua (AGENTS.md 1.4) and the
+                            // merchant interaction is not ported (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+                FriendSystemPacketHandler.OPCODE_FRIEND_SYSTEM_ACTION -> {
+                    val command = FriendSystemPacketHandler.parse(buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerFriendSystemAction's title branch needs
+                            // Player::title() and the cyclopedia senders; neither is
+                            // reachable from this context (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
                 else -> false
             }
 

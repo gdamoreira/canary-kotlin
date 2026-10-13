@@ -14,6 +14,17 @@ object KeepaliveHandler {
         return out
     }
 
+    /**
+     * Handles the ping-back request (client opcode `0x1D`), mirroring
+     * `Game::playerReceivePingBack` (game.cpp:4463-4470), which calls
+     * `Player::sendPingBack` (player.cpp:2341-2345).
+     *
+     * PARITY GAP: `sendPingBack` is a pure protocol send (`client->sendPingBack()`)
+     * and the outbound frame is not ported, so the packet only marks the
+     * confinement/handled boundary.
+     */
+    fun handlePingBack(): Boolean = true
+
     fun canLogout(player: Player): Boolean {
         return !player.inCombat
     }
