@@ -50,6 +50,22 @@ class ScriptingDispatch(
     fun creatureEventOnLogin(name: String, player: Player): Boolean =
         submitCreature(name) { LuaEventDispatcher.creatureEventOnLogin(environment, name, player) }
 
+    /**
+     * Mirrors `CreatureEvents::playerLogin` (src/lua/creature/creatureevent.cpp:63): submits
+     * every registered creature event whose type is `login`, in registration order, to the
+     * WorldCommit lane so the `onLogin` callbacks run confined. Returns whether at least one
+     * login event was registered.
+     */
+    fun playerLogin(player: Player): Boolean {
+        val loginEvents = environment.creatureEvents.names()
+            .mapNotNull { environment.creatureEvents.get(it) }
+            .filter { it.eventType == LOGIN_EVENT_TYPE }
+        return submit(loginEvents.isNotEmpty()) {
+            loginEvents.forEach { LuaEventDispatcher.creatureEventOnLogin(environment, it.name, player) }
+            true
+        }
+    }
+
     fun creatureEventOnLogout(name: String, player: Player): Boolean =
         submitCreature(name) { LuaEventDispatcher.creatureEventOnLogout(environment, name, player) }
 
@@ -215,6 +231,7 @@ class ScriptingDispatch(
         submit(environment.moveEvents.getByItemId(itemId).any { it.eventType == eventType }, invoke)
 
     private companion object {
+        const val LOGIN_EVENT_TYPE = "login"
         const val STEP_IN_EVENT_TYPE = "stepin"
         const val STEP_OUT_EVENT_TYPE = "stepout"
         const val EQUIP_EVENT_TYPE = "equip"

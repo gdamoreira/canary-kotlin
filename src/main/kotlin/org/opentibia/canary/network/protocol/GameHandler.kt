@@ -9,6 +9,7 @@ import org.opentibia.canary.account.AccountRepository
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.lua.runtime.LuaEnvironment
+import org.opentibia.canary.lua.runtime.ScriptingDispatch
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.network.codec.TibiaMessageEncoder
@@ -17,6 +18,7 @@ import org.opentibia.canary.network.crypto.RsaCipher
 import org.opentibia.canary.network.crypto.XteaCipher
 import org.opentibia.canary.network.message.readTibiaString
 import org.opentibia.canary.network.message.writeTibiaString
+import org.opentibia.canary.persistence.PlayerPersistenceService
 
 private val logger = KotlinLogging.logger {}
 
@@ -28,11 +30,13 @@ class GameHandler(
     private val accountRepository: AccountRepository,
     private val gameMap: GameMap,
     private val dispatcher: GameDispatcher,
-    private val luaEnvironment: LuaEnvironment = LuaEnvironment().apply { initState() }
+    private val luaEnvironment: LuaEnvironment = LuaEnvironment().apply { initState() },
+    private val persistenceService: PlayerPersistenceService? = null,
 ) : SimpleChannelInboundHandler<ByteBuf>() {
 
     private var player: Player? = null
     private var xteaCipher: XteaCipher? = null
+    private val scriptingDispatch = ScriptingDispatch(luaEnvironment, dispatcher)
 
     companion object {
         const val PACKET_SELF_APPEAR = 0x0A
@@ -126,6 +130,12 @@ class GameHandler(
             position = spawnPos
         )
         this.player = activePlayer
+
+        // Canary restores the persisted player systems during login
+        // (IOLoginData::loadPlayer) before firing the login creature events
+        // (Player::onPlacedCreature -> CreatureEvents::playerLogin).
+        persistenceService?.load(activePlayer)
+        scriptingDispatch.playerLogin(activePlayer)
 
         logger.info { "Player '${activePlayer.name}' logged into game world" }
         sendLoginSuccess(ctx, activePlayer)
