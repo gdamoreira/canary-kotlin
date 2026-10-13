@@ -175,6 +175,39 @@ class WebhookTest {
     }
 
     @Test
+    fun `non embed titled message falls back to the message body`() = runBlocking<Unit> {
+        val sender = RecordingSender()
+        val webhook = webhook(sender)
+
+        webhook.sendMessage("Server started", "World is ready", 0, embed = false)
+        webhook.sendWebhook()
+
+        val root = mapper.readTree(sender.calls.single().second)
+        assertThat(root.path("content").asText()).isEqualTo("World is ready")
+        assertThat(root.has("embeds")).isFalse()
+    }
+
+    @Test
+    fun `run dispatches the queued payload immediately and re-arms the loop`() {
+        val sender = RecordingSender()
+        val dispatcher = GameDispatcher()
+        dispatcher.start()
+        try {
+            val webhook = webhook(sender, delayMs = 60_000, dispatcher = dispatcher)
+            webhook.sendPayload("payload", DEFAULT_URL)
+            webhook.run()
+
+            val deadline = System.currentTimeMillis() + 2_000
+            while (sender.calls.isEmpty() && System.currentTimeMillis() < deadline) {
+                Thread.sleep(10)
+            }
+            assertThat(sender.calls).hasSize(1)
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    @Test
     fun `run flushes queued payload on maintenance lane`() {
         val sender = RecordingSender()
         val dispatcher = GameDispatcher()

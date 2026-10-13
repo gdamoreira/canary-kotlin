@@ -62,4 +62,91 @@ class SignalsTest {
 
         signals.uninstall()
     }
+
+    @Test
+    fun `sigint and sigterm request a single shutdown`() {
+        var drains = 0
+        val signals = Signals(onShutdown = { drains++ }, registerHook = { }, removeHook = { })
+
+        signals.dispatchSignalHandler(Signal.Sigint)
+        signals.dispatchSignalHandler(Signal.Sigterm)
+
+        assertThat(drains).isEqualTo(1)
+        assertThat(signals.isShuttingDown).isTrue()
+    }
+
+    @Test
+    fun `sigbreak shuts down like the windows console signal`() {
+        var drains = 0
+        val signals = Signals(onShutdown = { drains++ }, registerHook = { }, removeHook = { })
+
+        signals.dispatchSignalHandler(Signal.Sigbreak)
+
+        assertThat(drains).isEqualTo(1)
+    }
+
+    @Test
+    fun `sighup reloads and sigusr1 saves without shutting down`() {
+        var drains = 0
+        var reloads = 0
+        var saves = 0
+        val signals = Signals(
+            onShutdown = { drains++ },
+            onReload = { reloads++ },
+            onSave = { saves++ },
+            registerHook = { },
+            removeHook = { }
+        )
+
+        signals.dispatchSignalHandler(Signal.Sighup)
+        signals.dispatchSignalHandler(Signal.Sigusr1)
+
+        assertThat(reloads).isEqualTo(1)
+        assertThat(saves).isEqualTo(1)
+        assertThat(drains).isEqualTo(0)
+        assertThat(signals.isShuttingDown).isFalse()
+    }
+
+    @Test
+    fun `signals are drained after shutdown starts`() {
+        var drains = 0
+        var reloads = 0
+        var saves = 0
+        val signals = Signals(
+            onShutdown = { drains++ },
+            onReload = { reloads++ },
+            onSave = { saves++ },
+            registerHook = { },
+            removeHook = { }
+        )
+
+        signals.dispatchSignalHandler(Signal.Sigint)
+        signals.dispatchSignalHandler(Signal.Sigterm)
+        signals.dispatchSignalHandler(Signal.Sighup)
+        signals.dispatchSignalHandler(Signal.Sigusr1)
+        signals.dispatchSignalHandler(Signal.Sigbreak)
+
+        assertThat(drains).isEqualTo(1)
+        assertThat(reloads).isEqualTo(0)
+        assertThat(saves).isEqualTo(0)
+    }
+
+    @Test
+    fun `requestShutdown drains later signal dispatches`() {
+        var drains = 0
+        var reloads = 0
+        val signals = Signals(
+            onShutdown = { drains++ },
+            onReload = { reloads++ },
+            registerHook = { },
+            removeHook = { }
+        )
+
+        signals.requestShutdown()
+        signals.dispatchSignalHandler(Signal.Sighup)
+
+        assertThat(drains).isEqualTo(1)
+        assertThat(reloads).isEqualTo(0)
+        assertThat(signals.isShuttingDown).isTrue()
+    }
 }

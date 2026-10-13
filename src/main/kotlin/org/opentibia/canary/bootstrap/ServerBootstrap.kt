@@ -117,6 +117,7 @@ class ServerBootstrap(
     private val shutdownLatch = CountDownLatch(1)
     private val drain = ShutdownDrain(
         stopListeners = { listener?.stop() },
+        closeConnections = { listener?.closeConnections() },
         shutdownDispatcher = { dispatcher.shutdown() },
         flushSaveManager = { saveManager?.shutdown() },
         closeDatabase = { dataSource?.let(databaseBoot::close) }

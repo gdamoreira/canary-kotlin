@@ -6,9 +6,12 @@ import io.netty.channel.ChannelFuture
 import io.netty.channel.ChannelInitializer
 import io.netty.channel.ChannelOption
 import io.netty.channel.EventLoopGroup
+import io.netty.channel.group.ChannelGroup
+import io.netty.channel.group.DefaultChannelGroup
 import io.netty.channel.nio.NioEventLoopGroup
 import io.netty.channel.socket.SocketChannel
 import io.netty.channel.socket.nio.NioServerSocketChannel
+import io.netty.util.concurrent.GlobalEventExecutor
 import org.opentibia.canary.account.AccountRepository
 import org.opentibia.canary.account.InMemoryAccountRepository
 import org.opentibia.canary.game.scheduling.GameDispatcher
@@ -32,6 +35,12 @@ private val logger = KotlinLogging.logger {}
 interface ListenerBoot {
     fun start()
     fun stop()
+
+    /**
+     * `ConnectionManager::closeAll` equivalent (src/game/game.cpp:9510): shutdown every
+     * live client connection before the dispatcher and persistence are drained.
+     */
+    fun closeConnections() {}
 }
 
 /**
@@ -62,6 +71,9 @@ class CanaryServer(
     private var gameChannelFuture: ChannelFuture? = null
     private val stopped = AtomicBoolean(false)
 
+    /** Live client connections; `ConnectionManager` registry equivalent for `closeAll`. */
+    private val connectionChannels: ChannelGroup = DefaultChannelGroup("canary-connections", GlobalEventExecutor.INSTANCE)
+
     override fun start() {
         bossGroup = NioEventLoopGroup(1)
         workerGroup = NioEventLoopGroup()
@@ -74,6 +86,7 @@ class CanaryServer(
             .childOption(ChannelOption.SO_KEEPALIVE, true)
             .childHandler(object : ChannelInitializer<SocketChannel>() {
                 override fun initChannel(ch: SocketChannel) {
+                    connectionChannels.add(ch)
                     val pipeline = ch.pipeline()
                     pipeline.addLast("rateLimiter", RateLimiterHandler(maxPacketsPerSecond = 50))
                     pipeline.addLast("frameDecoder", TibiaFrameDecoder())
@@ -94,6 +107,7 @@ class CanaryServer(
             .childOption(ChannelOption.SO_KEEPALIVE, true)
             .childHandler(object : ChannelInitializer<SocketChannel>() {
                 override fun initChannel(ch: SocketChannel) {
+                    connectionChannels.add(ch)
                     val pipeline = ch.pipeline()
                     pipeline.addLast("rateLimiter", RateLimiterHandler(maxPacketsPerSecond = 100))
                     pipeline.addLast("frameDecoder", TibiaFrameDecoder())
@@ -154,6 +168,11 @@ class CanaryServer(
             record = playersRecord.get()
         }
         return false
+    }
+
+    override fun closeConnections() {
+        connectionChannels.close().sync()
+        logger.info { "Canary Kotlin live connections closed" }
     }
 
     override fun stop() {

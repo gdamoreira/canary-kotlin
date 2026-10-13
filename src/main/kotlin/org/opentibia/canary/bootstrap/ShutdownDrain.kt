@@ -8,7 +8,10 @@ private val logger = KotlinLogging.logger {}
 /**
  * Ordered, idempotent shutdown drain for the server bootstrap. Producers and consumers
  * are stopped before retained global ownership is released (AGENTS.md Static Ownership
- * Lifetime Safety): listeners -> dispatcher -> SaveManager flush -> database close.
+ * Lifetime Safety): listeners -> live connections -> dispatcher -> SaveManager flush ->
+ * database close, mirroring `Game::shutdown` (src/game/game.cpp:9497-9513) which stops
+ * the service manager and then `ConnectionManager::closeAll()` before the dispatcher and
+ * persistence are released.
  *
  * The first request runs every step exactly once; repeated SIGINT/SIGTERM notifications
  * or an uncaught-exception drain become no-ops. A failing step is logged and the drain
@@ -16,6 +19,7 @@ private val logger = KotlinLogging.logger {}
  */
 class ShutdownDrain(
     private val stopListeners: () -> Unit,
+    private val closeConnections: () -> Unit = {},
     private val shutdownDispatcher: () -> Unit,
     private val flushSaveManager: () -> Unit,
     private val closeDatabase: () -> Unit
@@ -27,8 +31,9 @@ class ShutdownDrain(
     fun drain() {
         if (!drained.compareAndSet(false, true)) return
 
-        logger.info { "Shutdown drain started: listeners -> dispatcher -> save manager -> database" }
+        logger.info { "Shutdown drain started: listeners -> connections -> dispatcher -> save manager -> database" }
         runStep("listeners", stopListeners)
+        runStep("connections", closeConnections)
         runStep("dispatcher", shutdownDispatcher)
         runStep("save manager", flushSaveManager)
         runStep("database", closeDatabase)
