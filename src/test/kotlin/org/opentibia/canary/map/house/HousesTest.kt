@@ -197,4 +197,50 @@ class HousesTest {
         assertThat(house.owner).isEqualTo(11L)
         assertThat(house.getAccessList(GUEST_LIST)).isEmpty()
     }
+
+    @Test
+    fun `getAllHousesByPlayerId returns every house owned by the player`() {
+        val houses = Houses(ownerInfoLookup = { HouseOwnerInfo("Knight Hero", 12L) })
+        val first = houses.addHouse(1)
+        val second = houses.addHouse(2)
+        houses.addHouse(3)
+        first.setOwner(77)
+        second.setOwner(77)
+
+        assertThat(houses.getAllHousesByPlayerId(77)).containsExactly(first, second)
+        assertThat(houses.getAllHousesByPlayerId(78)).isEmpty()
+    }
+
+    @Test
+    fun `getHouseByBidderName finds the house with the matching bidder`() {
+        val houses = Houses()
+        val bid = houses.addHouse(1).apply { bidderName = "Bidder" }
+        houses.addHouse(2).apply { bidderName = "Other" }
+
+        assertThat(houses.getHouseByBidderName("Bidder")).isSameAs(bid)
+        assertThat(houses.getHouseByBidderName("Nobody")).isNull()
+    }
+
+    @Test
+    fun `getHouseCountByAccount counts the houses owned by an account`() {
+        val houses = Houses()
+        houses.addHouse(1).apply { ownerAccountId = 123 }
+        houses.addHouse(2).apply { ownerAccountId = 123 }
+        houses.addHouse(3).apply { ownerAccountId = 456 }
+
+        assertThat(houses.getHouseCountByAccount(123)).isEqualTo(2)
+        assertThat(houses.getHouseCountByAccount(456)).isEqualTo(1)
+        assertThat(houses.getHouseCountByAccount(789)).isEqualTo(0)
+    }
+
+    @Test
+    fun `hasNewOwnership is set by setNewOwnership`() {
+        val house = House(id = 1)
+
+        assertThat(house.hasNewOwnership()).isFalse()
+
+        house.setNewOwnership()
+
+        assertThat(house.hasNewOwnership()).isTrue()
+    }
 }

@@ -25,10 +25,10 @@ class HouseTest {
         val subOwner = Player(30, "Alice", 100, 100, position = Position(100, 100, 7))
         val stranger = Player(40, "Eve", 100, 100, position = Position(100, 100, 7))
 
-        assertThat(house.canEnter(owner)).isTrue()
-        assertThat(house.canEnter(guest)).isTrue()
-        assertThat(house.canEnter(subOwner)).isTrue()
-        assertThat(house.canEnter(stranger)).isFalse()
+        assertThat(house.isInvited(owner)).isTrue()
+        assertThat(house.isInvited(guest)).isTrue()
+        assertThat(house.isInvited(subOwner)).isTrue()
+        assertThat(house.isInvited(stranger)).isFalse()
     }
 
     @Test
