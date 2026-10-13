@@ -1,5 +1,7 @@
 package org.opentibia.canary.combat.condition
 
+import org.opentibia.canary.map.Position
+
 /**
  * Base `Condition` (`src/creatures/combat/condition.cpp:144-557`,
  * `condition.hpp:24-80`).
@@ -157,6 +159,9 @@ abstract class Condition(
         else -> false
     }
 
+    /** `Condition::setPositionParam` (`condition.cpp:185-187`) — default rejects. */
+    open fun setPositionParam(param: ConditionParam, pos: Position): Boolean = false
+
     /** `Condition::getIcons` (`condition.cpp:514-521`). */
     open fun getIcons(): Set<PlayerIcon> {
         val icons = mutableSetOf<PlayerIcon>()
@@ -238,8 +243,8 @@ abstract class Condition(
         /**
          * `Condition::createCondition` (`condition.cpp:343-412`).
          *
-         * Factory parity for the ported subset; types whose C++ class has not
-         * been ported yet return null (recorded in the port's PARITY GAPS).
+         * Factory parity for the ported subset; `CONDITION_AGONY` has no Canary
+         * class and keeps the C++ `default: return nullptr` behaviour.
          */
         fun createCondition(
             id: ConditionId,
@@ -251,6 +256,7 @@ abstract class Condition(
             isPersistent: Boolean = false,
             now: () -> Long = { System.currentTimeMillis() },
             random: kotlin.random.Random = kotlin.random.Random.Default,
+            walkable: (Position) -> Boolean = { false },
             rateSpellCooldown: Double = 1.0,
             warnUnsafeScripts: Boolean = false,
             isLookTypeRegistered: (Int) -> Boolean = { false },
@@ -316,10 +322,8 @@ abstract class Condition(
                 ConditionType.CONDITION_SERENE ->
                     ConditionSerene(id, type, ticks, buff, subId, now)
 
-                // `CONDITION_FEARED` is ported in `org.opentibia.canary.systems.soulwar`
-                // (different engine hierarchy), so it is not returned here.
-                // `CONDITION_AGONY` has no Canary condition class either; both keep
-                // the C++ `default: return nullptr` behaviour (PARITY GAP).
+                ConditionType.CONDITION_FEARED ->
+                    ConditionFeared(id, type, ticks, buff, subId, now, walkable, random)
 
                 ConditionType.CONDITION_ROOTED,
                 ConditionType.CONDITION_INFIGHT,
@@ -332,9 +336,17 @@ abstract class Condition(
                 ConditionType.CONDITION_YELLTICKS,
                 ConditionType.CONDITION_POWERLESS,
                 ConditionType.CONDITION_PACIFIED,
-                ConditionType.CONDITION_BAKRAGORE,
-                ConditionType.CONDITION_GOSHNARTAINT,
-                -> ConditionGeneric(id, type, ticks, buff, subId, isPersistent, now)
+                // condition.cpp:390-401 does not forward isPersistent here.
+                -> ConditionGeneric(id, type, ticks, buff, subId, false, now)
+
+                // condition.cpp:403-404 forwards isPersistent for the
+                // BAKRAGORE world-change condition only.
+                ConditionType.CONDITION_BAKRAGORE ->
+                    ConditionGeneric(id, type, ticks, buff, subId, isPersistent, now)
+
+                // condition.cpp:406-407 leaves GOSHNARTAINT non-persistent.
+                ConditionType.CONDITION_GOSHNARTAINT ->
+                    ConditionGeneric(id, type, ticks, buff, subId, false, now)
 
                 else -> null
             }

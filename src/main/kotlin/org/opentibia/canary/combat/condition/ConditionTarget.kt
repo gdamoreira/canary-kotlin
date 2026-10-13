@@ -1,5 +1,7 @@
 package org.opentibia.canary.combat.condition
 
+import org.opentibia.canary.map.Position
+
 /**
  * Injected view of the affected [Creature] used by the condition engine.
  *
@@ -16,6 +18,9 @@ interface ConditionTarget {
      * regeneration, attributes, speed and the daily-reward zone gate.
      */
     val player: ConditionPlayer?
+
+    /** `Creature::getPosition()` (`condition.cpp:2224`, `2404`). */
+    fun getPosition(): Position
 
     /** `Creature::getHealth()` (`condition.cpp:1505`, `1511`). */
     fun getHealth(): Int
@@ -175,4 +180,10 @@ interface ConditionPlayer {
 
     /** `Player::sendSpellGroupCooldown(groupId, time)` (`condition.cpp:2930`, `2951`). */
     fun sendSpellGroupCooldown(groupId: SpellGroup, time: Int)
+
+    /**
+     * `Player::setImmuneFear(immuneTime = 10000)` (`condition.cpp:2436`,
+     * `player.hpp:1931`). Called by `ConditionFeared::endCondition`.
+     */
+    fun setImmuneFear(immuneTime: Long = 10000L)
 }

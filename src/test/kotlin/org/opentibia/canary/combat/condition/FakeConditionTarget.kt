@@ -1,5 +1,7 @@
 package org.opentibia.canary.combat.condition
 
+import org.opentibia.canary.map.Position
+
 /**
  * Test double for the injected [ConditionTarget]/[ConditionPlayer] seams.
  *
@@ -15,6 +17,7 @@ class FakeConditionTarget(
     baseSpeed: Int = 220,
     var zone: ZoneType = ZoneType.ZONE_NORMAL,
     var isPlayer: Boolean = true,
+    var positionValue: Position = Position(100, 100, 7),
 ) : ConditionTarget, ConditionPlayer {
 
     var healthValue: Int = health
@@ -115,6 +118,14 @@ class FakeConditionTarget(
     override fun isSuppress(type: ConditionType, attackerIsPlayer: Boolean): Boolean = suppress
 
     override fun isAttackable(): Boolean = attackable
+
+    override fun getPosition(): Position = positionValue
+
+    var immuneFearTime: Long? = null
+
+    override fun setImmuneFear(immuneTime: Long) {
+        immuneFearTime = immuneTime
+    }
 
     override fun getBuff(buff: Buff): Int = buffValues[buff] ?: 0
 
