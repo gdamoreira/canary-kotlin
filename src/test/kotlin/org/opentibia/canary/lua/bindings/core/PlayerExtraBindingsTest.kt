@@ -7,9 +7,11 @@ import org.opentibia.canary.lua.runtime.LuaEnvironment
 
 /**
  * Transcript-style tests for the batch 4 Canary `Player` binding surface. Each test
- * installs [PlayerFunctionsExtra] with a fake [PlayerExtraOperations] seam and drives it
- * through real Lua chunks using the exact Canary method names from
- * src/lua/functions/creatures/player/player_functions.cpp.
+ * installs [PlayerFunctions] and [PlayerFunctionsExtra] against the same fake seam (as
+ * `WorldLuaOperations.install` does) and drives the exact Canary method names from
+ * src/lua/functions/creatures/player/player_functions.cpp through real Lua chunks. The
+ * names that batch 3 and batch 4 both ported are registered once, by [PlayerFunctions];
+ * the [batch3Adapter] below feeds the batch 4 fake into those surviving registrations.
  */
 class PlayerExtraBindingsTest {
 
@@ -498,8 +500,112 @@ class PlayerExtraBindingsTest {
 
     private fun env(): LuaEnvironment = LuaEnvironment().apply { initState() }
 
+    /**
+     * Bridges the surviving batch 3 registrations for the names batch 4 also ported onto
+     * the batch 4 fake seam, so a removed duplicate is still asserted through the
+     * registration that [WorldLuaOperations.install] actually leaves in place.
+     */
+    private fun batch3Adapter(fake: FakeExtraOps): PlayerBatch3Operations =
+        object : PlayerBatch3Operations by WorldPlayerBatch3Operations() {
+            override fun achievementIdByName(name: String): Int = fake.achievementIdByName(name)
+
+            override fun getIdleTime(player: Any): Long? = fake.getIdleTime(player)
+
+            override fun getFreeBackpackSlots(player: Any): Int? = fake.getFreeBackpackSlots(player)
+
+            override fun isOffline(player: Any): Boolean? = fake.isOffline(player)
+
+            override fun getFaction(player: Any): Int? = fake.getFaction(player)
+
+            override fun setFaction(player: Any, factionId: Int): Boolean? = fake.setFaction(player, factionId)
+
+            override fun getMapShader(player: Any): String? = fake.getMapShader(player)
+
+            override fun setMapShader(player: Any, shaderName: String): Boolean? = fake.setMapShader(player, shaderName)
+
+            override fun changeName(player: Any, newName: String): Boolean? = fake.changeName(player, newName)
+
+            override fun getStoreInbox(player: Any): Any? = fake.getStoreInbox(player)
+
+            override fun isVip(player: Any): Boolean? = fake.isVip(player)
+
+            override fun getVipDays(player: Any): Int? = fake.getVipDays(player)
+
+            override fun getVipTime(player: Any): Long? = fake.getVipTime(player)
+
+            override fun kv(player: Any): Any? = fake.getKv(player)
+
+            override fun getAchievementPoints(player: Any): Int? = fake.getAchievementPoints(player)
+
+            override fun addAchievementPoints(player: Any, amount: Int): Boolean? =
+                fake.addAchievementPoints(player, amount)
+
+            override fun removeAchievementPoints(player: Any, amount: Int): Boolean? =
+                fake.removeAchievementPoints(player, amount)
+
+            override fun hasAchievement(player: Any, achievementId: Int): Boolean? =
+                fake.hasAchievement(player, achievementId)
+
+            override fun addAchievement(player: Any, achievementId: Int, sendMessage: Boolean): Boolean? =
+                fake.addAchievement(player, achievementId, sendMessage)
+
+            override fun removeAchievement(player: Any, achievementId: Int): Boolean? =
+                fake.removeAchievement(player, achievementId)
+
+            override fun clearSpellCooldowns(
+                player: Any,
+                spenders: Boolean,
+                builders: Boolean,
+                ticks: Int,
+            ): Boolean? = fake.clearSpellCooldowns(player, spenders, builders, ticks)
+
+            override fun getWheelInstantSkill(player: Any, name: String): Boolean? =
+                fake.instantSkillWOD(player, name, null)
+
+            override fun setWheelInstantSkill(player: Any, name: String, value: Boolean): Boolean? =
+                fake.instantSkillWOD(player, name, value)
+
+            override fun resetWheelUpgradedSpells(player: Any): Boolean? =
+                fake.upgradeSpellsWOD(player, null, null) as? Boolean
+
+            override fun getWheelSpellUpgrade(player: Any, name: String): Int? =
+                fake.upgradeSpellsWOD(player, name, null) as? Int
+
+            override fun setWheelSpellUpgrade(player: Any, name: String, add: Boolean): Boolean? =
+                fake.upgradeSpellsWOD(player, name, add) as? Boolean
+
+            override fun getWheelSpellStage(player: Any, name: String): Int? =
+                fake.revelationStageWOD(player, name, null) as? Int
+
+            override fun setWheelSpellStage(player: Any, name: String, value: Int): Boolean? =
+                fake.revelationStageWOD(player, name, value) as? Boolean
+
+            override fun getWheelAvatarTimer(player: Any): Long? = fake.avatarTimer(player, null) as? Long
+
+            override fun setWheelAvatarTimer(player: Any, value: Long): Boolean? =
+                fake.avatarTimer(player, value) as? Boolean
+
+            override fun onThinkWheelOfDestiny(player: Any, force: Boolean): Boolean? =
+                fake.onThinkWheelOfDestiny(player, force)
+
+            override fun spellExistsByName(name: String): Boolean = name == "Death Strike"
+
+            override fun getWheelSpellAdditionalArea(player: Any, spellName: String): Boolean? =
+                fake.getWheelSpellAdditionalArea(player, spellName)
+
+            override fun getWheelSpellAdditionalTarget(player: Any, spellName: String): Int? =
+                fake.getWheelSpellAdditionalTarget(player, spellName).toInt()
+
+            override fun getWheelSpellAdditionalDuration(player: Any, spellName: String): Int? =
+                fake.getWheelSpellAdditionalDuration(player, spellName).toInt()
+
+            override fun wheelUnlockScroll(player: Any, scrollName: String): Boolean? =
+                fake.wheelUnlockScroll(player, scrollName)
+        }
+
     private fun installed(fake: FakeExtraOps = FakeExtraOps()): Pair<LuaEnvironment, FakeExtraOps> {
         val environment = env()
+        PlayerFunctions.install(environment, batch3 = batch3Adapter(fake))
         PlayerFunctionsExtra.install(environment, fake)
         environment.globals.set("p", environment.userdata.wrap("Player", FakePlayer()))
         return environment to fake

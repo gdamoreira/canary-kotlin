@@ -2,7 +2,6 @@ package org.opentibia.canary.lua.bindings.core
 
 import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
-import org.luaj.vm2.Varargs
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.creatures.Virtue_t
@@ -421,113 +420,14 @@ object PlayerFunctionsExtra {
             PlayerFunctions.PLAYER_TYPES.forEach { registry.registerMethod(it, name, fn) }
         }
 
-        register("getIdleTime", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            operations.getIdleTime(player)?.let { LuaValue.valueOf(it.toDouble()) } ?: LuaValue.NIL
-        })
-
-        register("getFreeBackpackSlots", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            operations.getFreeBackpackSlots(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
-        })
-
-        register("isOffline", luaFunction { args ->
-            val player = retrieveUserdata(args, 1)
-            if (player == null) LuaValue.TRUE else LuaValue.valueOf(operations.isOffline(player))
-        })
-
         register("openMarket", luaFunction { args ->
             val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             operations.openMarket(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
         })
 
-        register("instantSkillWOD", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            val name = args.arg(2).checkjstring()
-            val value = if (args.narg() == 2) null else args.arg(3).toboolean()
-            operations.instantSkillWOD(player, name, value)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
-        })
-
-        register("upgradeSpellsWOD", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            val result = when (args.narg()) {
-                1 -> operations.upgradeSpellsWOD(player, null, null)
-                2 -> operations.upgradeSpellsWOD(player, args.arg(2).checkjstring(), null)
-                else -> operations.upgradeSpellsWOD(player, args.arg(2).checkjstring(), args.arg(3).toboolean())
-            }
-            attributeValueToLua(result)
-        })
-
-        register("revelationStageWOD", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            val result = when (args.narg()) {
-                1 -> operations.revelationStageWOD(player, null, null)
-                2 -> operations.revelationStageWOD(player, args.arg(2).checkjstring(), null)
-                else -> operations.revelationStageWOD(player, args.arg(2).checkjstring(), args.arg(3).toint())
-            }
-            attributeValueToLua(result)
-        })
-
         register("reloadData", luaFunction { args ->
             val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             operations.reloadData(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
-        })
-
-        register("onThinkWheelOfDestiny", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            operations.onThinkWheelOfDestiny(player, args.arg(2).optboolean(false))?.let {
-                LuaValue.valueOf(it)
-            } ?: LuaValue.NIL
-        })
-
-        register("avatarTimer", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            val result = if (args.narg() == 1) {
-                operations.avatarTimer(player, null)
-            } else {
-                operations.avatarTimer(player, args.arg(2).tolong())
-            }
-            attributeValueToLua(result)
-        })
-
-        register("getWheelSpellAdditionalArea", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            val spellName = args.arg(2).checkjstring()
-            if (spellName.isEmpty()) {
-                return@luaFunction LuaValue.valueOf(false)
-            }
-            operations.getWheelSpellAdditionalArea(player, spellName)?.let { LuaValue.valueOf(it) }
-                ?: LuaValue.valueOf(false)
-        })
-
-        register("getWheelSpellAdditionalTarget", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            val spellName = args.arg(2).checkjstring()
-            if (spellName.isEmpty()) {
-                return@luaFunction LuaValue.valueOf(false)
-            }
-            operations.getWheelSpellAdditionalTarget(player, spellName)?.let { LuaValue.valueOf(it.toDouble()) }
-                ?: LuaValue.valueOf(false)
-        })
-
-        register("getWheelSpellAdditionalDuration", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            val spellName = args.arg(2).checkjstring()
-            if (spellName.isEmpty()) {
-                return@luaFunction LuaValue.valueOf(false)
-            }
-            operations.getWheelSpellAdditionalDuration(player, spellName)?.let { LuaValue.valueOf(it.toDouble()) }
-                ?: LuaValue.valueOf(false)
-        })
-
-        register("wheelUnlockScroll", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            val scrollName = args.arg(2).checkjstring()
-            if (scrollName.isEmpty()) {
-                return@luaFunction LuaValue.valueOf(false)
-            }
-            operations.wheelUnlockScroll(player, scrollName)?.let { LuaValue.valueOf(it) }
-                ?: LuaValue.valueOf(false)
         })
 
         register("openForge", luaFunction { args ->
@@ -585,16 +485,6 @@ object PlayerFunctionsExtra {
         register("getForgeCores", luaFunction { args ->
             val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             operations.getForgeCores(player)?.let { LuaValue.valueOf(it.toDouble()) } ?: LuaValue.NIL
-        })
-
-        register("setFaction", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            operations.setFaction(player, args.arg(2).toint())?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
-        })
-
-        register("getFaction", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            operations.getFaction(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
         })
 
         register("isUIExhausted", luaFunction { args ->
@@ -685,12 +575,6 @@ object PlayerFunctionsExtra {
                 ?: LuaValue.NIL
         })
 
-        register("changeName", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            operations.changeName(player, args.arg(2).checkjstring())?.let { LuaValue.valueOf(it) }
-                ?: LuaValue.NIL
-        })
-
         register("hasGroupFlag", luaFunction { args ->
             val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             operations.hasGroupFlag(player, args.arg(2).toint())?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
@@ -755,79 +639,6 @@ object PlayerFunctionsExtra {
             val itemId = args.arg(2).toint()
             val timeLeft = args.arg(3).tolong()
             operations.updateFood(player, itemId, timeLeft)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
-        })
-
-        register("clearSpellCooldowns", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            val spenders = args.arg(2).optboolean(false)
-            val builders = args.arg(3).optboolean(false)
-            val ticks = args.arg(4).optint(0)
-            operations.clearSpellCooldowns(player, spenders, builders, ticks)?.let { LuaValue.valueOf(it) }
-                ?: LuaValue.NIL
-        })
-
-        register("isVip", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.valueOf(false)
-            operations.isVip(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.valueOf(false)
-        })
-
-        register("getVipDays", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.valueOf(false)
-            operations.getVipDays(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.valueOf(false)
-        })
-
-        register("getVipTime", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.valueOf(false)
-            operations.getVipTime(player)?.let { LuaValue.valueOf(it.toDouble()) } ?: LuaValue.valueOf(false)
-        })
-
-        register("kv", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.valueOf(false)
-            operations.getKv(player)?.let { registry.wrap("KV", it) } ?: LuaValue.NIL
-        })
-
-        register("getStoreInbox", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            operations.getStoreInbox(player)?.let { wrapItemUserdata(env, it) } ?: LuaValue.valueOf(false)
-        })
-
-        register("hasAchievement", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            operations.hasAchievement(player, resolveAchievementId(args, operations))?.let {
-                LuaValue.valueOf(it)
-            } ?: LuaValue.NIL
-        })
-
-        register("addAchievement", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            val achievementId = resolveAchievementId(args, operations)
-            val sendMessage = args.arg(3).optboolean(true)
-            operations.addAchievement(player, achievementId, sendMessage)?.let { LuaValue.valueOf(it) }
-                ?: LuaValue.NIL
-        })
-
-        register("removeAchievement", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            operations.removeAchievement(player, resolveAchievementId(args, operations))?.let {
-                LuaValue.valueOf(it)
-            } ?: LuaValue.NIL
-        })
-
-        register("getAchievementPoints", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            operations.getAchievementPoints(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
-        })
-
-        register("addAchievementPoints", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            operations.addAchievementPoints(player, args.arg(2).toint())?.let { LuaValue.valueOf(it) }
-                ?: LuaValue.NIL
-        })
-
-        register("removeAchievementPoints", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            operations.removeAchievementPoints(player, args.arg(2).toint())?.let { LuaValue.valueOf(it) }
-                ?: LuaValue.NIL
         })
 
         register("addBadge", luaFunction { args ->
@@ -1037,17 +848,6 @@ object PlayerFunctionsExtra {
             operations.isLivestreamViewer(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.valueOf(false)
         })
 
-        register("getMapShader", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            operations.getMapShader(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
-        })
-
-        register("setMapShader", luaFunction { args ->
-            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            operations.setMapShader(player, args.arg(2).checkjstring())?.let { LuaValue.valueOf(it) }
-                ?: LuaValue.NIL
-        })
-
         register("addCustomOutfit", luaFunction { args ->
             val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             val type = args.arg(2).checkjstring()
@@ -1062,10 +862,6 @@ object PlayerFunctionsExtra {
             operations.removeCustomOutfit(player, type, idOrName)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
         })
     }
-
-    /** Mirrors `Lua::getNumber<uint16_t>(L, 2)` mirrored by `isNumber` name fallback. */
-    private fun resolveAchievementId(args: Varargs, operations: PlayerExtraOperations): Int =
-        if (args.arg(2).isnumber()) args.arg(2).toint() else operations.achievementIdByName(args.arg(2).checkjstring())
 
     /** Mirrors `pushStringList` (player_functions.cpp:106): a 1-indexed string table. */
     private fun pushStringList(values: List<String>): LuaTable = LuaTable().also { table ->
