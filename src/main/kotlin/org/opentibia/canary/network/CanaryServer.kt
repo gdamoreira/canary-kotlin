@@ -14,6 +14,7 @@ import io.netty.channel.socket.nio.NioServerSocketChannel
 import io.netty.util.concurrent.GlobalEventExecutor
 import org.opentibia.canary.account.AccountRepository
 import org.opentibia.canary.account.InMemoryAccountRepository
+import org.opentibia.canary.game.Game
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.ScriptingDispatch
@@ -53,7 +54,9 @@ class CanaryServer(
     private val gameMap: GameMap = GameMap(),
     private val dispatcher: GameDispatcher = GameDispatcher(),
     private val rsaCipher: RsaCipher = RsaCipher(),
-    private val luaEnvironment: LuaEnvironment = LuaEnvironment().apply { initState() }
+    private val luaEnvironment: LuaEnvironment = LuaEnvironment().apply { initState() },
+    /** `g_game()` equivalent shared by every game connection served by this listener. */
+    val game: Game = Game(gameMap, dispatcher),
 ) : ListenerBoot {
     val scriptingEnvironment: LuaEnvironment get() = luaEnvironment
 
@@ -134,6 +137,7 @@ class CanaryServer(
         luaEnvironment,
         onPlayerAppear = { onPlayerAppear() },
         onPlayerDisappear = { onPlayerDisappear() },
+        game = game,
     )
 
     /**

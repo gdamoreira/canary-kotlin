@@ -7,6 +7,8 @@ import io.netty.channel.ChannelHandlerContext
 import io.netty.channel.SimpleChannelInboundHandler
 import org.opentibia.canary.account.AccountRepository
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.game.Game
+import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.ScriptingDispatch
@@ -34,6 +36,12 @@ class GameHandler(
     private val persistenceService: PlayerPersistenceService? = null,
     private val onPlayerAppear: () -> Unit = {},
     private val onPlayerDisappear: () -> Unit = {},
+    /**
+     * `g_game()` seam shared by every game connection. [CanaryServer] injects its
+     * single instance; a directly constructed handler falls back to a private
+     * instance over the same map/dispatcher.
+     */
+    val game: Game = Game(gameMap, dispatcher),
 ) : SimpleChannelInboundHandler<ByteBuf>() {
 
     private var player: Player? = null
@@ -137,6 +145,15 @@ class GameHandler(
         // (IOLoginData::loadPlayer) before firing the login creature events
         // (Player::onPlacedCreature -> CreatureEvents::playerLogin).
         persistenceService?.load(activePlayer)
+
+        // Canary registers the player while placing the creature:
+        // `Game::placeCreature` -> `Player::addList` -> `Game::addPlayer`
+        // (src/creatures/players/player.cpp:4519, src/game/game.cpp:11624),
+        // before `Player::onPlacedCreature` fires the login creature events.
+        dispatcher.dispatch(DispatcherLane.WorldCommit) {
+            game.addPlayer(activePlayer)
+        }
+
         scriptingDispatch.playerLogin(activePlayer)
 
         // Canary checks the players record from `Player::onCreatureAppear`
@@ -149,7 +166,14 @@ class GameHandler(
     }
 
     override fun channelInactive(ctx: ChannelHandlerContext) {
-        if (player != null) {
+        val activePlayer = player
+        if (activePlayer != null) {
+            // Canary unregisters the player on logout (`Player::removeList`,
+            // src/creatures/players/player.cpp:4519 -> `Game::removePlayer`,
+            // src/game/game.cpp:11631).
+            dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                game.removePlayer(activePlayer)
+            }
             onPlayerDisappear()
         }
         super.channelInactive(ctx)
@@ -173,12 +197,25 @@ class GameHandler(
             }
         }
 
+        // The WorldCommit lane outlives this channelRead; retain the frame so the
+        // handler's auto-release does not free it before the routed task reads it
+        // (AGENTS.md 1.3). The task releases it after the router is done.
+        val frame = msg.retain()
         dispatcher.dispatch {
-            GamePacketRouter.route(
-                activePlayer,
-                msg,
-                GamePacketContext(map = gameMap, dispatcher = dispatcher, luaEnvironment = luaEnvironment)
-            )
+            try {
+                GamePacketRouter.route(
+                    activePlayer,
+                    frame,
+                    GamePacketContext(
+                        map = gameMap,
+                        dispatcher = dispatcher,
+                        luaEnvironment = luaEnvironment,
+                        game = game,
+                    )
+                )
+            } finally {
+                frame.release()
+            }
         }
     }
 
