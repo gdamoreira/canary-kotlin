@@ -1,5 +1,8 @@
 package org.opentibia.canary.creatures
 
+import org.opentibia.canary.account.Account
+import org.opentibia.canary.account.getTimeNow
+import org.opentibia.canary.creatures.grouping.Group
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.creatures.vocations.Vocation
@@ -87,14 +90,24 @@ class Player(
      */
     var vocations: Vocations? = null
 
-    /** `Player::account->getPremiumRemainingDays() > 0` (player.cpp:7532). */
+    /** Port's `PlayerFlags_t::IsAlwaysPremium` seam; see [isPremium] (player.cpp:7533). */
     var premium: Boolean = false
+
+    /** `Player::account` (player.hpp:1756); premium time is derived from it. */
+    var account: Account? = null
+
+    /** `g_configManager().getBoolean(FREE_PREMIUM)` (configmanager.cpp:103). */
+    var freePremium: Boolean = false
+
+    /** `std::shared_ptr<Group> group` (player.hpp:1759); `Player::isAccessPlayer()` reads `group->access`. */
+    var group: Group? = null
 
     val features: PlayerFeatures = PlayerFeatures(
         playerId = id,
         levelProvider = { level },
         vocationIdProvider = { vocationId },
-        isPremiumProvider = { premium },
+        isPremiumProvider = { isPremium() },
+        hasAccessProvider = { isAccessPlayer() },
         vocationRequirementsProvider = {
             vocations?.getVocation(vocationId)
                 ?.let { VocationRequirementsAdapter(it) }
@@ -121,8 +134,22 @@ class Player(
         }
     }
 
-    /** `Player::isPremium()` (player.cpp:7532). */
-    fun isPremium(): Boolean = premium
+    /**
+     * `Player::isPremium()` (player.cpp:7532). Mirrors Canary: the FREE_PREMIUM
+     * config and the always-premium flag short-circuit true, otherwise the
+     * account's premium time decides. [premium] is the port's
+     * `PlayerFlags_t::IsAlwaysPremium` seam.
+     */
+    fun isPremium(now: Long = getTimeNow()): Boolean {
+        if (freePremium || premium) {
+            return true
+        }
+        val account = account ?: return false
+        return account.getPremiumRemainingDays(now) > 0 || account.getPremiumLastDay() > now
+    }
+
+    /** `Player::isAccessPlayer()` (player.cpp:7524). */
+    fun isAccessPlayer(): Boolean = group?.access ?: false
 
     /** `Player::inventory[CONST_SLOT_LAST + 1]` (player.hpp:1763). */
     private val inventory = arrayOfNulls<Item>(Slots_t.LAST + 1)
