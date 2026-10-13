@@ -32,3 +32,7 @@
 ## Post-wave (§6)
 
 Flip the `kv`/`lib`/`utils`/`protobuf`/`server` rows and update `src/lua/` + `game.cpp` rows; update §1–§3, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+
+## Completion
+
+Completed: kv, lib, utils, protobuf (kv.proto), server edge, lua remainder (player 305/305, modules, enums), and the game.cpp remainder (trade/shop/party/guild/VIP/reports/highscores/checkCreatures). All sections are now IMPLEMENTED except 3 documented PARTIAL rows (game.cpp remainder, protocolgame application, luascript/script_environment).

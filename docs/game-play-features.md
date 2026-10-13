@@ -84,7 +84,7 @@ This document establishes the master inventory of all gameplay features from Can
 
 - **Implemented & Verified Gameplay Systems**: **56 / 56** ($100\%$)
 - **Advanced Gameplay Systems**: **15 / 15** implemented (engine scope); residual parity gaps per feature above.
-- **Automated Test Coverage**: 456 test suites / 4792 tests passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered).
+- **Automated Test Coverage**: 483 test suites / 5152 tests passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered).
 - **Combat stack**: `combat/CombatDamage` + `Combat` (damage/armor/mitigation/crit), `combat/condition/*` (Condition engine core + outfit/light/invisible/cooldown/serene).
 - **Combat consumers**: bestiary charm procs, weapon-proficiency combat application, and hazard `CombatDamage` bridge.
 - **Lua engine**: bindings installed at `LuaEnvironment.initState()`; core primitive bindings (Game/Player/Creature/Item/Container/Position) + Spell/CreatureEvent/GlobalEvent/MoveEvent registries; `LuaEventDispatcher`/`ScriptingDispatch`; best-effort `data/libs` load.
@@ -101,8 +101,8 @@ This document establishes the master inventory of all gameplay features from Can
 | `src/map/` | 6 | 6 | **100%** | map core/caches/spectators/houses/A*/towns (wave 38) |
 | `src/game/` | 10 | 9 | **95%** | core `Game` class + scheduler/events/compute/reload/movement/modal (wave 35) |
 | `src/server/` | 5 | 0 | **30%** | opcodes/senders |
-| `src/lua/` | 12 | 10 | **88%** | ~1,100/1,246 method bindings (waves 39–40) |
+| `src/lua/` | 12 | 11 | **96%** | 1,246/1,246 method bindings (waves 39–41) |
 | `src/utils/` | 3 | 0 | **17%** | `tools.cpp` |
 | `src/lib/` | 5 | 0 | **10%** | DI/logger/metrics |
 | `src/kv/` | 1 | 0 | **0%** | KV engine |
-| **Overall** | **116** | **98** | **86%** (rows 84%) | full-parity estimate **~70–75%** |
+| **Overall** | **116** | **113** | **99%** (rows 97%) | full-parity estimate **~75–80%** |
