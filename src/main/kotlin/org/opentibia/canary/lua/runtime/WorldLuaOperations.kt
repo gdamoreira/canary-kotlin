@@ -47,6 +47,21 @@ import org.opentibia.canary.lua.bindings.core.PositionFunctions
 import org.opentibia.canary.lua.bindings.core.PositionOperations
 import org.opentibia.canary.lua.bindings.core.TileFunctions
 import org.opentibia.canary.lua.bindings.core.TileOperations
+import org.opentibia.canary.lua.bindings.library.BankFunctions
+import org.opentibia.canary.lua.bindings.library.BatchUpdateFunctions
+import org.opentibia.canary.lua.bindings.library.ConfigFunctions
+import org.opentibia.canary.lua.bindings.library.DbFunctions
+import org.opentibia.canary.lua.bindings.library.GlobalFunctions
+import org.opentibia.canary.lua.bindings.library.KvFunctions
+import org.opentibia.canary.lua.bindings.library.LoggerFunctions
+import org.opentibia.canary.lua.bindings.library.LuaEnums
+import org.opentibia.canary.lua.bindings.library.LuaScriptResults
+import org.opentibia.canary.lua.bindings.library.MetricsFunctions
+import org.opentibia.canary.lua.bindings.library.ModalWindowFunctions
+import org.opentibia.canary.lua.bindings.library.NetworkMessageFunctions
+import org.opentibia.canary.lua.bindings.library.ResultFunctions
+import org.opentibia.canary.lua.bindings.library.WebhookFunctions
+import org.opentibia.canary.lua.bindings.library.ZoneFunctions
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Tile
@@ -149,6 +164,23 @@ class WorldLuaOperations(
         MonsterFunctions.install(env, monster)
         MonsterTypeFunctions.install(env, monsterType)
         LootFunctions.install(env, loot)
+
+        // Wave 40 lua-libraries
+        val luaResults = LuaScriptResults()
+        DbFunctions.install(env, results = luaResults)
+        KvFunctions.install(env)
+        LoggerFunctions.install(env)
+        MetricsFunctions.install(env)
+        ResultFunctions.install(env, luaResults)
+        NetworkMessageFunctions.install(env)
+        WebhookFunctions.install(env)
+        BankFunctions.install(env)
+        BatchUpdateFunctions.install(env)
+        ConfigFunctions.install(env)
+        GlobalFunctions.install(env)
+        ModalWindowFunctions.install(env)
+        ZoneFunctions.install(env)
+        LuaEnums.install(env)
     }
 
     companion object {
