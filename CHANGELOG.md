@@ -241,10 +241,16 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Prey + Task Hunting** — `PreyEngine` (slots, reroll, bonuses, time-left) + `TaskHuntingEngine` (tasks, points, kills, rewards), 60 tests.
 - **Inbound opcodes** — party `0xA3–0xA8`, imbuements `0xB2`/`0xD5–0xD7`, depot/stash `0x28/0x29/0x92–0x94`, quick loot `0x8F–0x91`, modal `0xF9`, quest `0xF0/F1` decoded and routed.
 
+### Phase 20: Monster Runtime, Monster Lua Bindings, Senders 3, Depot/Spells Persistence (07:00 – 07:30)
+- **Monster targeting + loot** — `MonsterTargeting` (search/isTarget/isFriend/rank) + `MonsterLoot` (basis-point rolls, unique, corpse owner), 59 tests.
+- **Monster Lua bindings** — `MonsterFunctions`/`MonsterTypeFunctions`/`LootFunctions` (61 Canary methods), 37 tests.
+- **Outbound senders 3** — prey, task hunting, bosstiary, imbuement window, cyclopedia (30 tests).
+- **Depot/spells persistence** — Flyway `V6__player_depot_spells.sql` + depot/inbox/spells repositories (shared attribute codec), 14 tests.
+
 ---
 
 ### Current Status
-- **Automated Tests**: **200 test suites / 1652 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **213 test suites / 1792 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.

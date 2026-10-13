@@ -40,3 +40,7 @@ Close more high-impact gaps: the monster targeting/loot runtime, monster Lua bin
 ## Post-wave (AGENTS.md §6)
 
 Update `docs/missing-features.md`, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/Done/`; commit the docs separately and push to `origin`.
+
+## Completion
+
+Completed. Monster targeting + loot engine, monster Lua bindings, outbound senders batch 3, and depot/inbox/spells persistence (Flyway V6) implemented and merged; full suite green.
