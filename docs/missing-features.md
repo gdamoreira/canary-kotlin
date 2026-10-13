@@ -17,14 +17,14 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | Dimension | Canary | Kotlin | Coverage | Notes |
 |---|---|---|---|---|
 | Tracked gameplay features (56) | 56 | 56 | **100%** engine scope | `docs/game-play-features.md`; residual parity gaps per feature |
-| Inbound `ProtocolGame` opcodes | 141 active (148 cases − 7 commented-out) | 76 decoded | **~54%** | 38/141 (**~27%**) fully applied; 38 decode-only (state machine unapplied); 65 genuinely missing |
-| Outbound `ProtocolGame` senders | 190 `ProtocolGame::send*` | 57 `fun send*` | **~30%** | window serializers cover some UI flows |
+| Inbound `ProtocolGame` opcodes | 141 active (148 cases − 7 commented-out) | 141 decoded | **100%** | ~46/141 (**~33%**) fully applied; the rest decode + WorldCommit confinement boundary (engine state machine unapplied) |
+| Outbound `ProtocolGame` senders | 190 `ProtocolGame::send*` | 58 `fun send*` | **~31%** | trade/market/shop/channel/house/VIP/store/cyclopedia/inspection writers added in wave 35 |
 | Lua bindings (`src/lua/functions/*`) | 1,961 registrations (1,246 methods + 34 meta + 673 enums + 8 classes) | 167 `registerMethod` | **~13%** methods | 0 enum/class registrations in Kotlin |
 | `Player` methods (`player.cpp`) | 821 `Player::` methods | ~409 functions in `creatures/players/**` | **~50%** raw count | not a strict 1:1 mapping; components included |
 | Monster engine (`monster.cpp`, 4,014 lines) | — | 57 functions + `MonsterAi` + `MonsterPathfinder` | **~20%** | A* + spawn engines + targeting/loot/intention/relevance |
 | Map engine (`map.cpp`) | — | — | **~35%** | OTBM load + sectors + tiles + A*; no sight/`canWalkTo`/houses save |
 | Persistence (`iologindata*`, `iomapserialize`) | — | — | **~30%** | vitals/level/pos + feature state (V3/V4) + inventory (V5) + depot/spells (V6); no VIP/houses |
-| **Estimated full-parity completion** | — | — | **~45–50%** | weighted across the above |
+| **Estimated full-parity completion** | — | — | **~50–55%** | weighted across the above |
 
 ### 1.2 Module completion (by inventory rows in §2)
 
@@ -38,7 +38,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | `src/security/` | 1 | 1 | 0 | 0 | **100%** | 100% |
 | `src/creatures/` | 30 | 30 | 0 | 0 | **100%** | 100% |
 | `src/protobuf/` | 2 | 1 | 0 | 1 | **50%** | 50% |
-| `src/game/` | 10 | 0 | 6 | 4 | 0% | **30%** |
+| `src/game/` | 10 | 9 | 1 | 0 | **90%** | **95%** |
 | `src/io/` | 9 | 0 | 8 | 1 | 0% | **44%** |
 | `src/items/` | 10 | 0 | 7 | 3 | 0% | **35%** |
 | `src/map/` | 6 | 0 | 4 | 2 | 0% | **33%** |
@@ -47,7 +47,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | `src/utils/` | 3 | 0 | 1 | 2 | 0% | **17%** |
 | `src/lib/` | 5 | 0 | 1 | 4 | 0% | **10%** |
 | `src/kv/` | 1 | 0 | 0 | 1 | 0% | **0%** |
-| **All modules** | **116** | **54** | **35** | **27** | **47%** | **62%** |
+| **All modules** | **116** | **63** | **26** | **27** | **54%** | **66%** |
 
 ---
 
@@ -132,16 +132,16 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 ### `src/game/`
 | C++ | Status | Missing |
 |---|---|---|
-| `game.cpp` (13,141, ~352 methods) | PARTIAL (no `Game` class) | creature placement/removal, internal add/remove/move item, trade, shop, party/guild ops, channels, houses/auctions, VIP, highscores, cyclopedia, reports, feature dispatch, auto-walk, world lights/sounds, broadcast, game loop, reload |
-| `functions/game_reload.cpp` | MISSING | runtime reload |
-| `modal_window/*` | PARTIAL | answer routing, per-player modal tracking |
-| `movement/position.cpp` | PARTIAL | direction/offset math, range rectangles parity |
-| `movement/teleport.cpp` | PARTIAL | teleport effects, destination rules |
-| `scheduling/dispatcher*.cpp` | PARTIAL | WDRR fairness, budgets, telemetry, task contexts |
-| `scheduling/events_scheduler.cpp` | MISSING | calendar/timed events + Lua API |
-| `scheduling/monster_compute_service.cpp` | MISSING | off-thread monster compute |
-| `scheduling/save_manager.cpp` | PARTIAL | global save-all, shutdown flush |
-| `zones/zone.cpp` | MISSING | entire Zone engine |
+| `game.cpp` (13,141, ~352 methods) | PARTIAL | core `Game` class ported (placement/removal, internal item add/remove/move, broadcast, lights/sounds, `playerStopAutoWalk`); remaining: trade/shop/party/guild Game methods, channels, houses/auctions, VIP, highscores, cyclopedia, reports, game loop |
+| `functions/game_reload.cpp` | **IMPLEMENTED** | `game/reload/GameReload.kt` (generation-checked reload, `Reload_t`) |
+| `modal_window/*` | **IMPLEMENTED** | `game/modal/ModalWindow.kt` (per-player tracking + answer routing) |
+| `movement/position.cpp` | **IMPLEMENTED** | `game/movement/Position.kt` (offsets/distances/rectangles/directions) |
+| `movement/teleport.cpp` | **IMPLEMENTED** | `game/movement/Teleport.kt` (dest rules, loop check, effects) |
+| `scheduling/dispatcher*.cpp` | **IMPLEMENTED** | WDRR/budgets/telemetry/policy + lane-aware passes |
+| `scheduling/events_scheduler.cpp` | **IMPLEMENTED** | `game/scheduling/EventsScheduler.kt` (calendar, rate compounding) |
+| `scheduling/monster_compute_service.cpp` | **IMPLEMENTED** | `game/scheduling/MonsterComputeService.kt` |
+| `scheduling/save_manager.cpp` | **IMPLEMENTED** | save-all phases + idempotent shutdown flush |
+| `zones/zone.cpp` | **IMPLEMENTED** | `game/zones/` (Zone engine, wave 23) |
 
 ### `src/io/`
 | C++ | Status | Missing |
@@ -242,15 +242,15 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 ## 3. Highest-Impact Gaps (ranked, verified)
 
-1. **Inbound protocol opcodes** — 65 genuinely missing + 38 decoded-but-unapplied (of 141 active); see §4 for the exact list.
-2. **Outbound serialization** — 133 of 190 `ProtocolGame::send*` methods have no Kotlin counterpart (trade, market, shop, houses, VIP, channels, cyclopedia, forge, prey, task, bosstiary, stash, store).
-3. **Lua bindings** — 167 of 1,246 method registrations (**~13%**); 0 of 673 enum and 8 class registrations.
-4. **`Player` domain model** — ~409 Kotlin functions vs 821 `Player::` methods (~50% raw); many C++ methods still unported.
+1. **Outbound serialization** — 132 of 190 `ProtocolGame::send*` methods have no Kotlin counterpart (house/auction senders, store, cyclopedia computation frames, remaining creature/map senders).
+2. **Lua bindings** — 167 of 1,246 method registrations (**~13%**); 0 of 673 enum and 8 class registrations.
+3. **`Player` domain model** — ~409 Kotlin functions vs 821 `Player::` methods (~50% raw); many C++ methods still unported.
+4. **Inbound opcode *application*** — all 141 active opcodes decode, but ~95 still stop at the WorldCommit confinement boundary because their engine (trade session, shop, houses, channels, VIP composition, inspection, cyclopedia frames) is unapplied.
 5. **`src/io/` persistence depth** — `iologindata` item/depot depth, `iomapserialize` houses, `iomarket`, `ioprey`, `iobosstiary`, `iobestiary`, `ioguild`.
 6. **`src/items/` fundamentals** — `cylinder`, `bed`, `trashholder`, decay engine, full `Tile`/`Container` behaviors.
 7. **Map engine** — `mapcache`, navigation snapshots, `canWalkTo`/sight/path, house/spawn/zone loading.
-8. **`src/game/` depth** — `game.cpp` methods, `events_scheduler`, `monster_compute_service`, `game_reload`, `save_manager`, dispatcher WDRR/budgets/telemetry.
-9. **`src/server/`** — opcode/sender completeness (see 1–2), webhook, protocol profiles, session hints, transport variants.
+8. **`game.cpp` remainder** — trade/shop/party/guild Game methods, houses/auctions, VIP, highscores, reports, game loop.
+9. **`src/server/`** — webhook, protocol profiles, session hints, transport variants.
 10. **`src/lib/`** — DI container, logger depth, messaging, metrics, thread pool.
 11. **`src/kv/`** — SQL-backed KV engine replaced only by ad-hoc maps.
 12. **`src/utils/`** — `tools.cpp` (2,326 lines) vs 28 Kotlin lines.
@@ -260,14 +260,13 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 ## 4. Protocol Opcode Coverage
 
-**Handled inbound (76):** `0x14`, `0x1E`, `0x28`, `0x29`, `0x61`, `0x62`, `0x64–0x68`, `0x6A–0x72`, `0x74`, `0x75`, `0x78`, `0x7A–0x7D`…`0x80`, `0x82`, `0x83`, `0x87`, `0x88`, `0x8C`, `0x8D`, `0x8F–0x91`, `0x92–0x95`, `0x96`, `0x9C`, `0xA0–0xA8`, `0xB2`, `0xBF`, `0xD3`, `0xD4`, `0xD5–0xD7`, `0xE1–0xE4`, `0xE7`, `0xF0`, `0xF1`, `0xF4–0xF8`, `0xF9`, `0xFF` — of which **38 fully applied**, 38 decode-only.
+**Handled inbound (141 / 141 active):** all opcodes dispatched by Canary's `parsePacketFromDispatcher` switch (148 cases − 7 commented-out) now have a Kotlin decode handler wired in `GamePacketRouter`. Wave 35 added the final 64: `0x1D`, `0x2A–0x2E`, `0x32`, `0x38`, `0x60`, `0x63`, `0x69`, `0x76`, `0x77`, `0x79`, `0x81`, `0x84–0x8B`, `0x8E`, `0x97–0x9A`, `0x9D–0x9F`, `0xAA–0xB1`, `0xB3`, `0xBA`, `0xBE`, `0xC0–0xC2`, `0xC8–0xCF`, `0xD2`, `0xDB–0xDF`, `0xE5`, `0xE6`, `0xE8`, `0xEB–0xEE`, `0xF3`.
 
-**Missing inbound (65, with Canary parse function):**
-`0x1D` playerReceivePingBack · `0x2A` parseCyclopediaMonsterTracker · `0x2B` parsePartyAnalyzerAction · `0x2C` parseLeaderFinderWindow · `0x2D` parseMemberFinderWindow · `0x2E` parseSetClientOptions · `0x32` parseExtendedOpcode · `0x38` parsePlayerTyping · `0x60` parseInventoryImbuements · `0x63` parseClientCheck · `0x69` playerStopAutoWalk · `0x76` parseCharacterTradeConfigurationAction · `0x77` parseHotkeyEquip · `0x79` parseLookInShop · `0x81` parseFriendSystemAction · `0x84` parseUseWithCreature · `0x85` parseRotateItem · `0x86` parseConfigureShowOffSocket · `0x89` parseTextWindow · `0x8A` parseHouseWindow · `0x8B` parseWrapableItem · `0x8E` parseJoinAggression · `0x97` playerRequestChannels · `0x98` parseOpenChannel · `0x99` parseCloseChannel · `0x9A` parseOpenPrivateChannel · `0x9D` parseGetTextForReport · `0x9E` playerCloseNpcChannel · `0x9F` parseSetMonsterPodium · `0xAA` playerCreatePrivateChannel · `0xAB` parseChannelInvite · `0xAC` parseChannelExclude · `0xAD` parseCyclopediaHouseAuction · `0xAE` parseSendBosstiary · `0xAF` parseSendBosstiarySlots · `0xB0` parseBosstiarySlot · `0xB1` parseHighscores · `0xB3` parseWeaponProficiency · `0xBA` parseTaskHuntingAction · `0xBE` playerCancelAttackAndFollow · `0xC0` parseForgeBrowseHistory · `0xC1` parseClientDetails · `0xC2` parseBossDifficultySelection · `0xC8` parseAimAtTarget · `0xC9` parseGetTransactionDetails · `0xCA` resendLivestreamViewerContainer · `0xCB` parseBrowseField · `0xCC` parseSeekInContainer · `0xCD` parseInspectionObject · `0xCE` parseInspectPlayer · `0xCF` sendBlessingWindow · `0xD2` playerRequestOutfit · `0xDB` parseCyclopediaMapAction · `0xDC` parseAddVip · `0xDD` parseRemoveVip · `0xDE` parseEditVip · `0xDF` parseVipGroupActions · `0xE5` parseCyclopediaCharacterInfo · `0xE6` parseBugReport · `0xE8` parseOfferDescription · `0xEB` parsePreyAction · `0xEC` parseSetHirelingName · `0xED` parseSendResourceBalance · `0xEE` parseGreet · `0xF3` parseGetObjectInfo.
+**Application status:** ~46 of the 141 fully apply their Canary state change on the WorldCommit lane; the remainder decode faithfully and stop at the confinement boundary with the Canary call documented inline (PARITY GAP) until the corresponding engine is composed.
 
-**Intentionally unhandled in Canary (commented out, not counted):** `0xEF`, `0xF2`, `0xFA–0xFE` (store/coin-transfer/rule-violation).
+**Intentionally unhandled in Canary (commented out):** `0xEF`, `0xF2`, `0xFA–0xFE` (store/coin-transfer/rule-violation).
 
-**Outbound handled:** 57 `fun send*` (login/disconnect, self-appear `0x0A`, map description `0x64`, stats/skills/inventory/container/creature/text, wheel/forge/bestiary/market/NPC-shop/party/guild/prey/task/bosstiary/imbuement/cyclopedia window serializers) vs 190 C++ senders.
+**Outbound handled:** 58 `fun send*` (login/disconnect, self-appear `0x0A`, map description `0x64`, stats/skills/inventory/container/creature/text, wheel/forge/bestiary/market/NPC-shop/party/guild/prey/task/bosstiary/imbuement/cyclopedia window serializers, plus wave-35 trade/channel/house/VIP/store/inspection/blessing writers) vs 190 C++ senders.
 
 ---
 

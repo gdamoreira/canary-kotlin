@@ -84,7 +84,7 @@ This document establishes the master inventory of all gameplay features from Can
 
 - **Implemented & Verified Gameplay Systems**: **56 / 56** ($100\%$)
 - **Advanced Gameplay Systems**: **15 / 15** implemented (engine scope); residual parity gaps per feature above.
-- **Automated Test Coverage**: 304 test suites / 3102 tests passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered).
+- **Automated Test Coverage**: 355 test suites / 3568 tests passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered).
 - **Combat stack**: `combat/CombatDamage` + `Combat` (damage/armor/mitigation/crit), `combat/condition/*` (Condition engine core + outfit/light/invisible/cooldown/serene).
 - **Combat consumers**: bestiary charm procs, weapon-proficiency combat application, and hazard `CombatDamage` bridge.
 - **Lua engine**: bindings installed at `LuaEnvironment.initState()`; core primitive bindings (Game/Player/Creature/Item/Container/Position) + Spell/CreatureEvent/GlobalEvent/MoveEvent registries; `LuaEventDispatcher`/`ScriptingDispatch`; best-effort `data/libs` load.
@@ -99,10 +99,10 @@ This document establishes the master inventory of all gameplay features from Can
 | `src/io/` | 9 | 0 | **44%** | persistence depth |
 | `src/items/` | 10 | 0 | **35%** | cylinder/bed/decay/Tile |
 | `src/map/` | 6 | 0 | **33%** | sight/canWalkTo/houses |
-| `src/game/` | 10 | 0 | **30%** | game.cpp depth, scheduler, compute service |
+| `src/game/` | 10 | 9 | **95%** | core `Game` class + scheduler/events/compute/reload/movement/modal (wave 35) |
 | `src/server/` | 5 | 0 | **30%** | opcodes/senders |
 | `src/lua/` | 12 | 0 | **21%** | 167/1,246 method bindings |
 | `src/utils/` | 3 | 0 | **17%** | `tools.cpp` |
 | `src/lib/` | 5 | 0 | **10%** | DI/logger/metrics |
 | `src/kv/` | 1 | 0 | **0%** | KV engine |
-| **Overall** | **116** | **54** | **62%** (rows 47%) | full-parity estimate **~45–50%** |
+| **Overall** | **116** | **63** | **66%** (rows 54%) | full-parity estimate **~50–55%** |

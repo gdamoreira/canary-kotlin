@@ -322,8 +322,20 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 33: `src/game/` Section + Protocol Opcode Completion (13:00 – 14:30)
+- **Game core** — `Game` class core (creature placement/removal, internal item add/remove/move, broadcast, lights/sounds, `playerStopAutoWalk`). 20 tests.
+- **Movement & modal** — `Position` (offsets/distances/rectangles), `Teleport` (dest rules/effects), `ModalWindow` manager. 31 tests.
+- **Scheduling** — WDRR fairness/budgets/telemetry, `EventsScheduler`, `MonsterComputeService`, `SaveManager` save-all/shutdown. 77 tests.
+- **Game reload** — `GameReload` generation-checked runtime reload. 20 tests.
+- **Inbound opcodes complete** — all **141/141 active** opcodes now decode; wave 35 added the final 64 across 4 batches (party analyzer/team finder, client options, extended opcode, channels, item interaction, text/house windows, bosstiary, highscores, weapon proficiency, task hunting, forge history, container browse/seek, inspection, VIP, cyclopedia, prey, hireling, resource balance, greet, object info). ~180 new tests.
+- **Outbound senders** — trade/channel/house/VIP/store/inspection/blessing/stash/cyclopedia writers added. 63 tests.
+- Verified per-module coverage percentages added to `docs/missing-features.md` §1.
+- **355 suites / 3568 tests, all green.**
+
+---
+
 ### Current Status
-- **Automated Tests**: **304 test suites / 3102 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **355 test suites / 3568 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.

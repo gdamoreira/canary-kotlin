@@ -63,3 +63,7 @@ VIP, cyclopedia, forge browse/history, prey, task hunting, bosstiary, stash, sto
 ## Post-wave (AGENTS.md §6)
 
 Flip the `src/game/` rows and update §1/§3/§4 in `docs/missing-features.md`; update `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/Done/`; commit the docs separately and push to `origin`.
+
+## Completion
+
+Completed: Group A (`src/game/` — Game core, movement/modal, scheduling, reload), Group B (all 64 remaining inbound opcodes), Group C (outbound trade/channel/house/VIP/store/inspection/blessing writers). All merged; `src/game/` section is now 9/10 IMPLEMENTED (game.cpp remainder documented).
