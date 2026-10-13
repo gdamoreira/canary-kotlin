@@ -25,3 +25,7 @@ Core daily progression for offline players.
 - **Lua Source Files (stay Lua)**: `data/scripts/creaturescripts/player/offline_training.lua`
 - **Canary Repository Root**: `/Users/damoreira/.projects/canary`
 - **Key Methods / Opcodes**: `parseStartOfflineTraining` (0x74), `Game::sendOfflineTrainingDialog`, `Player::addOfflineTrainingTries`
+
+## 7. Implementation Status
+
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/game-play-features.md`.

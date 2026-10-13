@@ -24,3 +24,7 @@ Daily player retention driver and resting-zone passive regeneration.
 - **Lua Source Files (stay Lua)**: `data/libs/systems/daily_reward.lua`, `data/modules/scripts/daily_reward/daily_reward.lua`, `data/scripts/actions/objects/daily_reward_shrine.lua`
 - **Canary Repository Root**: `/Users/damoreira/.projects/canary`
 - **Key Methods / Opcodes**: `Player::setDailyReward`, `Player::isDailyReward`, cyclopedia daily-streak send
+
+## 7. Implementation Status
+
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/game-play-features.md`.

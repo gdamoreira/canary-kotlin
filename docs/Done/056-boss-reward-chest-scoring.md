@@ -25,3 +25,7 @@ Eliminates loot theft and griefing in large boss encounters.
 - **Lua Source Files (stay Lua)**: `data/scripts/systems/reward_chest.lua`, `data/libs/systems/reward_boss.lua`
 - **Canary Repository Root**: `/Users/damoreira/.projects/canary`
 - **Key Methods / Opcodes**: `Game::collectRewardChestItems`, `Player::addReward`, `parseRewardChestCollect` (0xFF)
+
+## 7. Implementation Status
+
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/game-play-features.md`.

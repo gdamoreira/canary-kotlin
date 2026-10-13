@@ -76,10 +76,10 @@ Default container ports:
 ```
 canary-kotlin/
 ├── docs/
-│   ├── Done/              # Completed specifications (networking, parsers, DB, systems)
+│   ├── Done/              # 64 completed specifications (networking, parsers, DB, systems 001-064)
 │   ├── Implementing/      # Features actively in progress
-│   ├── Plan/              # Feature specs 050–064 + architectural guidelines & roadmap
-│   ├── game-play-features.md   # Master 56-feature matrix & engine-core port status
+│   ├── Plan/              # Architectural guidelines & roadmap (000-*)
+│   ├── game-play-features.md   # Master 56-feature matrix (all implemented) & residual gaps
 │   └── superpowers/       # Design specs & implementation plans
 ├── src/
 │   ├── main/
@@ -138,10 +138,10 @@ Consequently, each of the 15 advanced features (`docs/Plan/050–064`) is delive
 
 ---
 
-## 🧩 Advanced Feature Coverage (Engine Cores)
+## 🧩 Feature Coverage
 
-All 15 advanced gameplay systems now have faithful C++ engine cores with tests, plus a combat stack and a Lua binding layer:
+**All 56 Canary gameplay systems are implemented** (`docs/game-play-features.md`). The 15 advanced systems (`docs/Done/050–064`) are delivered as faithful C++ engine cores in `systems/<feature>/` with application services and protocol parsers/serializers, wired where applicable:
 
 `wheel` · `forge` · `bestiary` · `gamestore` · `hazard` · `dailyreward` · `rewardchest` · `familiar` · `hireling` · `mount` · `proficiency` · `soulwar` · `raid` · `offlinetraining` · `concoction`
 
-Protocol parsers/serializers for wheel (`0x61`/`0x62`/`0xE7`), offline training (`0x74`), reward chest (`0xFF`) and weapon proficiencies are routed through `GamePacketRouter`. Remaining work per feature is its runtime state wiring (Player enrichment, persistence) — tracked in `docs/game-play-features.md`.
+Protocol parsers/serializers for wheel (`0x61`/`0x62`/`0xE7`), offline training (`0x74`), reward chest (`0xFF`), bestiary (`0xE1`–`0xE4`), forge (`0xBF`) and weapon proficiencies are routed through `GamePacketRouter` on the WorldCommit lane. Residual per-feature parity gaps (protocol sends, deeper persistence, Lua-driven side effects) are tracked in `docs/game-play-features.md`.

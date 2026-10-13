@@ -24,3 +24,7 @@ Long-term weapon mastery progression in protocol versions >= 13.30.
 - **Lua Source Files (stay Lua)**: `data/scripts/lib/proficiency_helper.lua`, `data/scripts/talkactions/god/weapon_proficiency.lua`, `data/items/proficiencies.json`
 - **Canary Repository Root**: `/Users/damoreira/.projects/canary`
 - **Key Methods / Opcodes**: `WeaponProficiency::loadFromJson`, `addWeaponExperience`/`addWeaponProficiencyExperience`, `OfficialWeaponProficiencyPayload`
+
+## 7. Implementation Status
+
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/game-play-features.md`.

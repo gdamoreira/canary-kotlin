@@ -25,3 +25,7 @@ Endgame character customization and power progression for level 50..1000+ charac
 - **Lua Source Files (stay Lua)**: `data/scripts/actions/items/wheel_scrolls.lua`
 - **Canary Repository Root**: `/Users/damoreira/.projects/canary`
 - **Key Methods / Opcodes**: `IOWheel::loadFromJson`, `PlayerWheel::getWheelPoints`/`getUnusedPoints`/`addPromotionPoints`, `parseOpenWheel` (0x61), `parseSaveWheel` (0x62), `parseWheelGemAction` (0xE7)
+
+## 7. Implementation Status
+
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/game-play-features.md`.

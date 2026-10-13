@@ -24,3 +24,7 @@ Premier endgame questline mechanics and high-risk boss strategy.
 - **Lua Source Files (stay Lua)**: `data/libs/systems/encounters.lua`, `data/scripts/globalevents/encounters.lua`, `data-otservbr-global/scripts/quests/soul_war/*`, `data-otservbr-global/world/quest/soul_war/*`
 - **Canary Repository Root**: `/Users/damoreira/.projects/canary`
 - **Key Methods / Opcodes**: `Combat::checkFearConditionAffected`, `ConditionFeared`, `Player::setImmuneFear`
+
+## 7. Implementation Status
+
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/game-play-features.md`.

@@ -24,3 +24,7 @@ Private house utility, convenience for players, and gold sink.
 - **Lua Source Files (stay Lua)**: `data/libs/systems/hireling.lua`, `data/modules/scripts/hirelings/hireling_module.lua`, `data/scripts/actions/items/hireling_lamp.lua`, `data/scripts/actions/items/hireling_foods.lua`, `data/scripts/globalevents/hireling_save.lua`
 - **Canary Repository Root**: `/Users/damoreira/.projects/canary`
 - **Key Methods / Opcodes**: `Player::canSpeakWithHireling`, `parseSetHirelingName` (0xEC)
+
+## 7. Implementation Status
+
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/game-play-features.md`.

@@ -194,10 +194,19 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Config consumption** — offline rate, proficiency multiplier/limits, hazard multipliers, forge costs, and wheel points-per-level consume `FeatureFlags`.
 - **Lua event dispatch** — `LuaEventDispatcher`/`ScriptingDispatch`; `ItemPacketHandler` routes `onUse` through the dispatcher.
 
+### Phase 12: Command Application & Login Flow (03:15 – 03:45)
+- **Bestiary application** — `BestiaryApplication` (races/creatures/monster-data/buy-charm-rune: charm-point costs, rune-slot limits 2/6/25, removal fee, reset-all, minor-echo formula); `0xE1–0xE4` routed and applied to `player.features.bestiary`.
+- **Forge application** — `ForgeApplication` (fusion/transfer/resource-conversion with exact costs/success rolls/tier promotion); `0xBF` routed.
+- **Login flow** — `GameHandler` loads feature state via `PlayerPersistenceService` and dispatches the Lua `creatureEvent` `onLogin` on the WorldCommit lane.
+
+### Phase 13: Documentation Finalization (03:45 – 04:00)
+- Moved feature specs `050–064` from `docs/Plan/` to `docs/Done/` (engine scope implemented + tested); `docs/Plan/` now holds only the architectural `000-*` docs.
+- Updated `docs/game-play-features.md` to **56 / 56 implemented** with per-feature residual gaps; refreshed README/CHANGELOG metrics.
+
 ---
 
 ### Current Status
 - **Automated Tests**: **140 test suites / 859 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
-- **Advanced Features**: all 15 (`docs/Plan/050–064`) have faithful **C++ engine cores** ported with TDD; Lua-authored portions remain Lua.
-- **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer, and protocol parsers/serializers in place.
-- **Remaining**: runtime state wiring (Player enrichment, persistence), config gates, and Lua seam implementations — tracked in `docs/game-play-features.md`.
+- **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
+- **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
+- **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.

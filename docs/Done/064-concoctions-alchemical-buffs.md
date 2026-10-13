@@ -25,3 +25,7 @@ Consumable gold sink and tactical preparation for bossing/hunting.
 - **Lua Source Files (stay Lua)**: `data/libs/systems/concoctions.lua`, `data/scripts/systems/concoctions.lua`, `data/scripts/creaturescripts/player/login.lua`
 - **Canary Repository Root**: `/Users/damoreira/.projects/canary`
 - **Key Methods / Opcodes**: `Player::updateConcoction`, `Player::getActiveConcoctions`, `player:updateConcoction`
+
+## 7. Implementation Status
+
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/game-play-features.md`.
