@@ -6,14 +6,10 @@ import org.opentibia.canary.items.Item
 import org.opentibia.canary.network.message.writeTibiaString
 
 /**
- * `VipStatus_t` (`src/creatures/creatures_definitions.hpp:783-788`).
+ * `VipStatus_t` (`src/creatures/creatures_definitions.hpp:783-788`); the enum
+ * lives with the VIP component and is re-exported here for the protocol API.
  */
-enum class VipStatus(val value: Int) {
-    Offline(0),
-    Online(1),
-    Pending(2),
-    Training(3),
-}
+typealias VipStatus = org.opentibia.canary.creatures.players.vip.VipStatus
 
 /**
  * Outbound social/window frames for the Canary `ProtocolProfileId::Current`
