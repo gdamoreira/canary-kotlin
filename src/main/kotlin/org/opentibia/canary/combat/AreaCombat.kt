@@ -312,7 +312,6 @@ class AreaCombat {
                 MatrixOperation.MATRIXOPERATION_ROTATE90 -> 90
                 MatrixOperation.MATRIXOPERATION_ROTATE180 -> 180
                 MatrixOperation.MATRIXOPERATION_ROTATE270 -> 270
-                else -> 0
             }
 
             val angleRad = Math.PI * angle / 180.0

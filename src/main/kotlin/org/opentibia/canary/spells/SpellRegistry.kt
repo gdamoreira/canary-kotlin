@@ -248,7 +248,7 @@ class Spells {
                 continue
             }
 
-            if (result == null || spellLen > result!!.words.length) {
+            if (result == null || spellLen > result.words.length) {
                 result = instant
                 if (words.length == spellLen) {
                     break
