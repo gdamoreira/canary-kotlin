@@ -209,12 +209,15 @@ object GamePacketRouter {
                                 // resets Player::depotSearchOnItem.
                                 is CloseDepotSearchCommand -> context.game?.playerRequestCloseDepotSearch(player.id)
 
+                                // Game::playerRequestDepotItems / playerRequestDepotSearchItem
+                                // (game.cpp:6920, 6945) set Player::depotSearchOnItem.
+                                OpenDepotSearchCommand,
+                                is DepotSearchItemRequestCommand -> DepotAndStashPacketHandler.apply(player, command)
+
                                 // Game::playerStowItem / playerStashWithdraw /
-                                // playerRequestDepotItems / playerRequestDepotSearchItem /
                                 // playerRequestDepotSearchRetrieve (game.cpp:5665-6975)
-                                // need the depot-locker tree, the stash item delivery and
-                                // the depot-search senders, which are not ported
-                                // (PARITY GAP).
+                                // need the stash item delivery and depot-search item
+                                // transfer engines, which are not ported (PARITY GAP).
                                 else -> Unit
                             }
                         }
@@ -256,14 +259,14 @@ object GamePacketRouter {
 
                                 // Game::playerSetManagedContainer /
                                 // playerClearManagedContainer / playerOpenManagedContainer
-                                // (game.cpp:6822-6897) need Player::refreshManagedContainer
-                                // and the managed-container map, which are not ported
-                                // (PARITY GAP).
+                                // (game.cpp:6822-6897) register/clear/re-send the
+                                // Player managed containers.
                                 is SetManagedContainerCommand,
                                 is ClearManagedContainerCommand,
                                 is OpenManagedContainerCommand,
-                                is UnknownLootContainerActionCommand,
-                                -> Unit
+                                -> QuickLootPacketHandler.apply(player, command)
+
+                                is UnknownLootContainerActionCommand -> Unit
 
                                 // Game::playerSetQuickLootFallback (game.cpp:6898)
                                 // and Game::playerQuickLootBlackWhitelist (game.cpp:6907)
@@ -403,8 +406,11 @@ object GamePacketRouter {
                                 // PlayerMountState; its speed/outfit-window side effects
                                 // are not wired yet.
                                 is ToggleMountCommand -> player.features.mounts.toggleMount(command.mount)
-                                // Player::changeOutfit / playerSetShowOffSocket are not ported.
-                                is SetOutfitCommand -> Unit
+                                // Game::playerChangeOutfit (game.cpp:7300): the
+                                // outfit/mount core is applied; the Outfits/mount
+                                // registries and the attached-effects block are
+                                // injected seams / PARITY GAPs (see the handler).
+                                is SetOutfitCommand -> OutfitPacketHandler.apply(player, command)
                             }
                         }
                         true
@@ -425,12 +431,17 @@ object GamePacketRouter {
                                 // clears Player::imbuingItem.
                                 is CloseImbuementWindowCommand -> context.game?.playerCloseImbuementWindow(player.id)
 
+                                // 0xB2 PickItem resolves the tile item and stores it
+                                // through Player::setImbuingItem (game.cpp:1170,
+                                // protocolgame.cpp:10193).
+                                is ImbuementActionCommand -> ImbuementPacketHandler.apply(player, command, context.map)
+
                                 // Game::playerApplyImbuement / playerClearImbuement
                                 // (game.cpp:7116, 7153) drive ImbuementEngine over the
                                 // `ImbuementItem` seam; the real Item custom-attribute
                                 // store does not model the per-slot imbuement keys
-                                // (`ITEM_IMBUEMENT_SLOT + slot`), and 0xB2's
-                                // `STACKPOS_FIND_THING` resolution is not ported
+                                // (`ITEM_IMBUEMENT_SLOT + slot`) and `Player` exposes no
+                                // `imbuingItem` accessor, so 0xD5/0xD6 stay decode-only
                                 // (PARITY GAP).
                                 else -> Unit
                             }

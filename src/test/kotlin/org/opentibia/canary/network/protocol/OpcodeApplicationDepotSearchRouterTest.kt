@@ -16,8 +16,10 @@ import java.util.concurrent.TimeUnit
 /**
  * Router application tests for the depot-search state opcodes: `0x93`
  * (`Game::playerRequestCloseDepotSearch`) resets `Player::depotSearchOnItem`
- * through the engine. `0x92`/`0x94`/`0x95` stay decode-only until the depot
- * locker scan and its senders are ported.
+ * through the engine, `0x92` (`Game::playerRequestDepotItems`) opens the
+ * search and `0x94` (`Game::playerRequestDepotSearchItem`) records the
+ * requested item. `0x29`/`0x95` stay decode-only until the item transfer and
+ * depot-search container openers are ported.
  */
 class OpcodeApplicationDepotSearchRouterTest {
 
@@ -86,6 +88,81 @@ class OpcodeApplicationDepotSearchRouterTest {
 
             assertThat(route(frame, player)).isEqualTo(1)
             assertThat(player.isDepotSearchOpen()).isFalse()
+        } finally {
+            stop()
+        }
+    }
+
+    @Test
+    fun `open depot search opcode 0x92 sets the open state when the menu is available`() {
+        start()
+        try {
+            val player = hero()
+            player.depotSearch = true
+            player.setLastDepotId(1)
+
+            val frame = Unpooled.buffer()
+            frame.writeByte(DepotAndStashPacketHandler.OPCODE_OPEN_DEPOT_SEARCH)
+
+            assertThat(route(frame, player)).isEqualTo(1)
+            assertThat(player.isDepotSearchOpen()).isTrue()
+        } finally {
+            stop()
+        }
+    }
+
+    @Test
+    fun `open depot search opcode 0x92 is inert when the menu is unavailable`() {
+        start()
+        try {
+            val player = hero()
+            player.depotSearch = false
+            player.setLastDepotId(1)
+
+            val frame = Unpooled.buffer()
+            frame.writeByte(DepotAndStashPacketHandler.OPCODE_OPEN_DEPOT_SEARCH)
+
+            assertThat(route(frame, player)).isEqualTo(1)
+            assertThat(player.isDepotSearchOpen()).isFalse()
+        } finally {
+            stop()
+        }
+    }
+
+    @Test
+    fun `depot search item request opcode 0x94 records the requested item when open`() {
+        start()
+        try {
+            val player = hero()
+            player.depotSearch = true
+            player.setLastDepotId(1)
+            player.setDepotSearchIsOpen(1, 0)
+
+            val frame = Unpooled.buffer()
+            frame.writeByte(DepotAndStashPacketHandler.OPCODE_DEPOT_SEARCH_ITEM_REQUEST)
+            frame.writeShortLE(3031)
+
+            assertThat(route(frame, player)).isEqualTo(1)
+            assertThat(player.isDepotSearchOpenOnItem(3031)).isTrue()
+        } finally {
+            stop()
+        }
+    }
+
+    @Test
+    fun `depot search item request opcode 0x94 is inert when no search is open`() {
+        start()
+        try {
+            val player = hero()
+            player.depotSearch = true
+            player.setLastDepotId(1)
+
+            val frame = Unpooled.buffer()
+            frame.writeByte(DepotAndStashPacketHandler.OPCODE_DEPOT_SEARCH_ITEM_REQUEST)
+            frame.writeShortLE(3031)
+
+            assertThat(route(frame, player)).isEqualTo(1)
+            assertThat(player.isDepotSearchOpenOnItem(3031)).isFalse()
         } finally {
             stop()
         }

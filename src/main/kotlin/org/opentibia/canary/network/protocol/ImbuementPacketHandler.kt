@@ -1,6 +1,11 @@
 package org.opentibia.canary.network.protocol
 
 import io.netty.buffer.ByteBuf
+import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.game.zones.TileFlags
+import org.opentibia.canary.items.Item
+import org.opentibia.canary.items.ItemProperty
+import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 
 /**
@@ -140,6 +145,70 @@ object ImbuementPacketHandler {
     fun parseClearImbuement(buffer: ByteBuf): ClearImbuementCommand? {
         val slot = readByte(buffer) ?: return null
         return ClearImbuementCommand(slot = slot)
+    }
+
+    /**
+     * Applies `ProtocolGame::parseImbuementAction`'s state change
+     * (protocolgame.cpp:3065-3098) for the current payload: a `PickItem`
+     * resolves the target through `Game::internalGetThing(..., STACKPOS_FIND_THING)`
+     * (game.cpp:1170-1184), rejects a mismatched item id or an item without
+     * imbuement slots, and then `ProtocolGame::openImbuementWindow`
+     * (protocolgame.cpp:10193) stores the item through `Player::setImbuingItem`.
+     * Every other action only opens or refreshes the window in Canary and
+     * mutates no state.
+     *
+     * PARITY GAPS: the `sendImbuementResult("This item is not imbuable.")` reply
+     * has no protocol sink in this context, and the `openImbuementWindow`
+     * `ImbuementWindow` protocol-feature gate (protocolgame.cpp:10163) is not
+     * modelled.
+     */
+    fun apply(player: Player, command: ImbuementCommand, map: GameMap) {
+        val action = command as? ImbuementActionCommand ?: return
+        if (action.action != IMBUEMENT_ACTION_PICK_ITEM) {
+            return
+        }
+
+        val position = action.position ?: return
+        val itemId = action.itemId ?: return
+        val stackPosition = action.stackPosition ?: return
+
+        val item = findThing(player, map, position, stackPosition) ?: return
+        if (item.id != itemId) {
+            return
+        }
+
+        if (item.getImbuementSlot() <= 0) {
+            return
+        }
+
+        player.setImbuingItem(item)
+    }
+
+    /**
+     * `Game::internalGetThing` `STACKPOS_FIND_THING` branch (game.cpp:1170-1184)
+     * plus the support-hangable veto (game.cpp:1191-1203): the use item first,
+     * then the door item, then the top-down item.
+     */
+    private fun findThing(player: Player, map: GameMap, position: Position, index: Int): Item? {
+        val tile = map.getTile(position) ?: return null
+        var item = tile.getUseItem(index)?.getItem()
+        if (item == null) {
+            item = tile.getDoorItem()
+        }
+        if (item == null) {
+            item = tile.getTopDownItem()
+        }
+
+        if (item != null && tile.hasFlag(TileFlags.TILESTATE_SUPPORTS_HANGABLE.value)) {
+            if (tile.hasProperty(ItemProperty.CONST_PROP_ISVERTICAL)) {
+                if (player.position.x + 1 == position.x && item.isHangable()) {
+                    return null
+                }
+            } else if (player.position.y + 1 == position.y && item.isHangable()) {
+                return null
+            }
+        }
+        return item
     }
 
     private fun readByte(buffer: ByteBuf): Int? =
