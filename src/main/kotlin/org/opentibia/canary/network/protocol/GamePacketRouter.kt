@@ -15,6 +15,8 @@ import org.opentibia.canary.network.protocol.wheel.OpenWheelCommand
 import org.opentibia.canary.network.protocol.wheel.SaveWheelCommand
 import org.opentibia.canary.network.protocol.wheel.WheelGemActionCommand
 import org.opentibia.canary.network.protocol.wheel.WheelPacketParser
+import org.opentibia.canary.systems.forge.ForgeApplication
+import org.opentibia.canary.systems.forge.PlayerForgeAdapter
 import org.opentibia.canary.systems.offlinetraining.OfflineTrainingApplication
 import org.opentibia.canary.systems.rewardchest.PlayerRewardChestOwner
 import org.opentibia.canary.systems.rewardchest.RewardChestApplication
@@ -33,6 +35,7 @@ object GamePacketRouter {
 
     private val wheelApplication = WheelApplication()
     private val bestiaryApplication = org.opentibia.canary.systems.bestiary.BestiaryApplication()
+    private val forgeApplication = ForgeApplication()
 
     fun route(player: Player, buffer: ByteBuf, context: GamePacketContext): Int {
         var packetsHandled = 0
@@ -155,8 +158,9 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // Forge actions mutate player.features.forge; the forge
-                            // window is sent by the serializer. Confinement boundary.
+                            val adapter = PlayerForgeAdapter(player)
+                            forgeApplication.apply(player.features.forge, adapter, command)
+                            adapter.syncItemTiers()
                         }
                         true
                     }
