@@ -4,6 +4,15 @@ import io.netty.buffer.ByteBuf
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 
+/**
+ * Legacy login-path map description stub. It only serializes one floor and
+ * omits creatures, the multi-floor z-stack and the per-tile stack-position
+ * rules. The faithful `ProtocolGame::sendMapDescription` /
+ * `GetMapDescription` / `GetFloorDescription` / `GetTileDescription` port lives
+ * in [org.opentibia.canary.network.protocol.map.MapDescriptionWriter]; this
+ * object stays only until the login call site can supply the session's
+ * creature-appearance resolver (`ProtocolGame::checkCreatureAsKnown`).
+ */
 object MapPacketWriter {
 
     const val PACKET_MAP_DESCRIPTION: Byte = 0x64

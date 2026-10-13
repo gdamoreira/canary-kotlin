@@ -924,7 +924,14 @@ object GameWindowWriter {
         }
     }
 
-    private fun writeCreature(out: ByteBuf, appearance: CreatureAppearanceFrame) {
+    /**
+     * `AddCreature(NetworkMessage&, creature, known, remove)` current-profile
+     * layout (protocolgame.cpp:9662-9780) without the 0x6A frame prefix. The
+     * session-owned `checkCreatureAsKnown` result and the player-derived fields
+     * arrive through [appearance]; `GetTileDescription` and `sendUpdateTileCreature`
+     * call this directly.
+     */
+    fun writeCreature(out: ByteBuf, appearance: CreatureAppearanceFrame) {
         var creatureType = appearance.creatureType
 
         if (appearance.known) {
