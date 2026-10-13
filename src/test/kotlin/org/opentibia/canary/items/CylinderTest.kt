@@ -17,10 +17,11 @@ class CylinderTest {
 
     @Test
     fun `cylinder link values follow the canary declaration order`() {
-        assertThat(CylinderLink.entries.map { it.ordinal }).containsExactly(0, 1, 2)
+        assertThat(CylinderLink.entries.map { it.ordinal }).containsExactly(0, 1, 2, 3)
         assertThat(CylinderLink.LINK_OWNER).isEqualTo(CylinderLink.entries[0])
         assertThat(CylinderLink.LINK_PARENT).isEqualTo(CylinderLink.entries[1])
-        assertThat(CylinderLink.LINK_NEAR).isEqualTo(CylinderLink.entries[2])
+        assertThat(CylinderLink.LINK_TOPPARENT).isEqualTo(CylinderLink.entries[2])
+        assertThat(CylinderLink.LINK_NEAR).isEqualTo(CylinderLink.entries[3])
     }
 
     @Test

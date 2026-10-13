@@ -10,8 +10,12 @@ const val INDEX_WHEREEVER: Int = -1
 enum class CylinderLink {
     LINK_OWNER,
     LINK_PARENT,
+    LINK_TOPPARENT,
     LINK_NEAR,
 }
+
+/** C++ spelling of [CylinderLink] (`CylinderLink_t`, items_definitions.hpp:500). */
+typealias CylinderLink_t = CylinderLink
 
 /**
  * Kotlin carrier for the `uint32_t &maxQueryCount` out parameter of

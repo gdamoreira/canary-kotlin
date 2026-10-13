@@ -134,6 +134,8 @@ data class ItemType(
     val spellbook: Boolean = false,
     /** `ItemType::wareId` (src/items/items.hpp:314). */
     val wareId: Int = 0,
+    /** `ItemType::m_primaryType` (src/items/items.hpp:272), the store-inbox category source. */
+    val primaryType: String = "",
     val blockSolid: Boolean = false,
     val blockProjectile: Boolean = false,
     val blockPathFind: Boolean = false,
@@ -577,6 +579,19 @@ open class Item(
         return !isRemoved()
     }
 
+    /** `Item::canRemove` (src/items/item.hpp:644). */
+    open fun canRemove(): Boolean = true
+
+    /** `Item::onRemoved` (src/items/item.cpp:785-791); game side effects are a PARITY GAP. */
+    open fun onRemoved() {
+        // ScriptEnvironment/unique-item bookkeeping needs g_game (PARITY GAP).
+    }
+
+    /** `Item::stopDecaying` (src/items/item.cpp:3497-3499); the decay engine is wired by its owner. */
+    open fun stopDecaying() {
+        // g_decay().stopDecay(item) needs the decay scheduler (PARITY GAP).
+    }
+
     /** `ItemProperties::isStoreItem` (src/items/item.hpp:113). */
     fun isStoreItem(): Boolean = intAttribute(ItemAttribute.STORE) > 0
 
@@ -598,6 +613,15 @@ open class Item(
 
     /** `Item::getWeaponType` (src/items/item.hpp:339). */
     fun getWeaponType(): WeaponType_t = type?.weaponType ?: WeaponType_t.WEAPON_NONE
+
+    /** `Item::isCorpse` (src/items/item.hpp:511). */
+    fun isCorpse(): Boolean = type?.isCorpse == true
+
+    /** `Item::isQuiver` (src/items/item.hpp:544). */
+    fun isQuiver(): Boolean = type?.isQuiver() == true
+
+    /** `ItemProperties::getItemAmount` (src/items/item.hpp). */
+    fun getItemAmount(): Long = count.toLong()
 
     /** `Item::getAmmoType` (src/items/item.hpp:342). */
     fun getAmmoType(): Ammo_t = type?.ammoType ?: Ammo_t.AMMO_NONE
@@ -804,7 +828,7 @@ open class Item(
     /**
      * `Item::getOwnerId` (src/items/item.cpp:1563).
      */
-    fun getOwnerId(): Long = intAttribute(ItemAttribute.OWNER) and 0xFFFFFFFFL
+    open fun getOwnerId(): Long = intAttribute(ItemAttribute.OWNER) and 0xFFFFFFFFL
 
     /**
      * `Item::isOwner(uint32_t ownerId)` (src/items/item.cpp:818). The
@@ -1635,108 +1659,6 @@ open class Item(
                 return item.getItemCount()
             }
             return 0
-        }
-    }
-}
-
-class Container(
-    id: Int,
-    val capacity: Int,
-    type: ItemType? = null
-) : Item(id, count = 1, type = type), Cylinder {
-    private val _items = mutableListOf<Item>()
-    val items: List<Item> get() = _items
-
-    /** `Container::serializationCount` (src/items/containers/container.hpp:341). */
-    var serializationCount: Int = 0
-
-    val totalWeight: Double
-        get() = (type?.weight ?: 0.0) + _items.sumOf { it.weight }
-
-    fun addItem(item: Item): Boolean {
-        if (_items.size >= capacity) return false
-        _items.add(item)
-        item.setParent(this)
-        return true
-    }
-
-    /** `Container::empty` (src/items/containers/container.hpp:216-218). */
-    fun isEmpty(): Boolean = _items.isEmpty()
-
-    fun size(): Int = _items.size
-
-    /** `Container::getReversedItems` (src/items/containers/container.hpp:227-232). */
-    fun getReversedItems(): List<Item> = _items.asReversed()
-
-    /** `Container::internalAddThing` (src/items/containers/container.cpp:1068-1087). */
-    override fun internalAddThing(thing: Thing?) {
-        val item = thing?.getItem() ?: return
-        item.setParent(this)
-        _items.add(0, item)
-    }
-
-    /** Disambiguates `Item::isRemoved` from the `Cylinder` default; `Item`'s implementation is used. */
-    override fun isRemoved(): Boolean = super<Item>.isRemoved()
-
-    /** `Container::getCylinder` (src/items/containers/container.hpp:178-180). */
-    override fun getCylinder(): Cylinder = this
-
-    override fun getContainer(): Container = this
-
-    /**
-     * `Container`'s `Cylinder` query/mutation contract is part of the container
-     * port (PARITY GAP): only [internalAddThing] and the direct [addItem] seam
-     * are modelled today, so the queries reject by default.
-     */
-    override fun queryAdd(index: Int, thing: Thing?, count: Int, flags: Int, actor: Creature?): ReturnValue =
-        ReturnValue.NOTPOSSIBLE
-
-    override fun queryMaxCount(
-        index: Int,
-        thing: Thing?,
-        count: Int,
-        maxQueryCount: Int,
-        flags: Int,
-    ): QueryMaxCountResult = QueryMaxCountResult(ReturnValue.NOTPOSSIBLE, maxQueryCount)
-
-    override fun queryRemove(thing: Thing?, count: Int, flags: Int, actor: Creature?): ReturnValue =
-        ReturnValue.NOTPOSSIBLE
-
-    override fun queryDestination(index: Int, thing: Thing?, destItem: Item?, flags: Int): QueryDestinationResult =
-        QueryDestinationResult(null, index, destItem, flags)
-
-    override fun addThing(thing: Thing?) {
-        internalAddThing(thing)
-    }
-
-    override fun addThing(index: Int, thing: Thing?) {
-        internalAddThing(thing)
-    }
-
-    override fun updateThing(thing: Thing?, itemId: Int, count: Int) {}
-
-    override fun replaceThing(index: Int, thing: Thing?) {}
-
-    override fun removeThing(thing: Thing?, count: Int) {}
-
-    override fun postAddNotification(thing: Thing?, oldParent: Cylinder?, index: Int, link: CylinderLink) {}
-
-    override fun postRemoveNotification(thing: Thing?, newParent: Cylinder?, index: Int, link: CylinderLink) {}
-
-    /** `Container::readAttr` (src/items/containers/container.cpp:171-181). */
-    override fun readAttr(attr: Int, propStream: PropStream): AttrReadValue {
-        if (attr == ATTR_CONTAINER_ITEMS) {
-            val count = propStream.readU32() ?: return AttrReadValue.ATTR_READ_ERROR
-            serializationCount = count.toInt()
-            return AttrReadValue.ATTR_READ_END
-        }
-        return super.readAttr(attr, propStream)
-    }
-
-    companion object {
-        fun create(id: Int, capacity: Int, registry: ItemTypeRegistry? = null): Container {
-            val type = registry?.get(id)
-            return Container(id, capacity = capacity, type = type)
         }
     }
 }

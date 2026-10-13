@@ -2121,7 +2121,7 @@ class Player(
     private fun inventoryWeight(): Double =
         (Slots_t.FIRST..Slots_t.LAST).sumOf { slot -> inventory[slot]?.let { itemWeight(it) } ?: 0.0 }
 
-    private fun itemWeight(item: Item): Double = if (item is Container) item.totalWeight else item.weight
+    private fun itemWeight(item: Item): Double = item.weight
 
     private fun countByType(item: Item, subType: Int): Long {
         if (subType >= 0 && item.count != subType) {
