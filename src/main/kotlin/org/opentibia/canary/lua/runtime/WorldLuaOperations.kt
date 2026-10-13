@@ -750,7 +750,11 @@ class WorldContainerOperations(
     override fun addItem(container: Any, itemId: Int, count: Int, index: Int, flags: Long): Any? {
         val target = container as? Container ?: return null
         val item = Item.create(itemId, count.coerceAtLeast(1), itemTypes)
-        return if (target.addItem(item)) item else null
+        if (target.queryAdd(index, item, count.coerceAtLeast(1), flags.toInt()) != ReturnValue.NOERROR) {
+            return null
+        }
+        target.addItem(item)
+        return item
     }
 
     override fun addItemEx(container: Any, item: Any, index: Int, flags: Long): Int {
@@ -759,7 +763,11 @@ class WorldContainerOperations(
         if (target.items.any { it === candidate }) {
             return ReturnValue.NOTPOSSIBLE.ordinal
         }
-        return if (target.addItem(candidate)) ReturnValue.NOERROR.ordinal else ReturnValue.CONTAINERISFULL.ordinal
+        if (target.queryAdd(index, candidate, candidate.getItemCount(), flags.toInt()) != ReturnValue.NOERROR) {
+            return ReturnValue.CONTAINERISFULL.ordinal
+        }
+        target.addItem(candidate)
+        return ReturnValue.NOERROR.ordinal
     }
 
     /** Mirrors `Item::getCorpseOwner` (the `CORPSEOWNER` attribute). */

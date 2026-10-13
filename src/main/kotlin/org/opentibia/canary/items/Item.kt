@@ -1,8 +1,13 @@
 package org.opentibia.canary.items
 
+import org.opentibia.canary.creatures.Creature
+import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.io.PropStream
 import org.opentibia.canary.io.PropWriteStream
+import org.opentibia.canary.map.Tile
 import org.opentibia.canary.map.house.Door
+import java.util.Collections
+import java.util.IdentityHashMap
 
 data class ItemType(
     val id: Int,
@@ -42,6 +47,18 @@ data class ItemType(
     val isGroundTile: Boolean = false,
     /** `ItemType::charges` (src/items/items.hpp:290), used by `getSubType`/`setSubType`. */
     val charges: Int = 0,
+    /** `ItemType::stackSize` (src/items/items.hpp:335); Canary defaults it to 100. */
+    val stackSize: Int = 100,
+    /** `ItemType::isCorpse` (src/items/items.hpp:378), read by `Item::isCorpse`. */
+    val isCorpse: Boolean = false,
+    /** `ItemType::weaponType` (src/items/items.hpp:296); `WEAPON_NONE` (0) by default. */
+    val weaponType: Int = 0,
+    /** `ItemType::m_primaryType` (src/items/items.hpp:272), the store-inbox category source. */
+    val primaryType: String = "",
+    /** `ItemType::isStoreItem()` (src/items/items.hpp), compared by `Item::equals`. */
+    val isStoreItem: Boolean = false,
+    /** `ItemType::isQuiver()` (src/items/items.hpp:410), checked by `Container::queryAdd`. */
+    val isQuiver: Boolean = false,
 )
 
 class ItemTypeRegistry {
@@ -181,7 +198,7 @@ internal const val ATTR_OBTAINCONTAINER = 44
 internal const val ATTR_MANTRA = 45
 
 open class Item(
-    val id: Int,
+    var id: Int,
     var count: Int = 1,
     val type: ItemType? = null
 ) {
@@ -189,6 +206,176 @@ open class Item(
 
     open val weight: Double
         get() = (type?.weight ?: 0.0) * if (type?.isStackable == true) count else 1
+
+    // --- Thing/Cylinder identity (src/items/item.hpp:236-243, 681-694) --------
+
+    private var m_parent: Cylinder? = null
+
+    /** `Item::getParent` (src/items/item.hpp:681). */
+    open fun getParent(): Cylinder? = m_parent
+
+    /** `Item::setParent` (src/items/item.hpp:684). */
+    open fun setParent(cylinder: Cylinder?) {
+        m_parent = cylinder
+    }
+
+    /** `Item::resetParent` (src/items/item.hpp:687). */
+    fun resetParent() {
+        m_parent = null
+    }
+
+    /**
+     * `Item::getTopParent` (src/items/item.cpp:832-849). The C++ initial
+     * `prevaux` is a `dynamic_pointer_cast<Cylinder>` of the item itself, so a
+     * plain [Item] starts with `null` while a [Container] starts with itself.
+     * A visited set bounds a corrupted self/cyclic parent chain (the C++ loop
+     * would spin forever).
+     */
+    fun getTopParent(): Cylinder? {
+        val firstParent = getParent()
+        val initial: Cylinder? = if (this is Cylinder) this else null
+        if (firstParent == null) {
+            return initial
+        }
+
+        val visited = Collections.newSetFromMap(IdentityHashMap<Cylinder, Boolean>())
+        var previous: Cylinder? = initial
+        var current: Cylinder = firstParent
+        while (visited.add(current)) {
+            val parent = current.getParent() ?: return previous ?: current
+            previous = current
+            current = parent
+        }
+        return previous ?: initial
+    }
+
+    /** `Item::getTile` (src/items/item.cpp:851-857). */
+    fun getTile(): Tile? {
+        var cylinder: Cylinder? = getTopParent()
+        if (cylinder?.getParent() != null) {
+            cylinder = cylinder.getParent()
+        }
+        return cylinder as? Tile
+    }
+
+    /** `Item::isRemoved` (src/items/item.cpp:859-864). */
+    open fun isRemoved(): Boolean {
+        val parent = getParent() ?: return true
+        return parent.isRemoved()
+    }
+
+    /** `Item::canRemove` (src/items/item.hpp:644). */
+    open fun canRemove(): Boolean = true
+
+    /** `Item::onRemoved` (src/items/item.cpp:785-791); game side effects are a PARITY GAP. */
+    open fun onRemoved() {
+        // ScriptEnvironment/unique-item bookkeeping needs g_game (PARITY GAP).
+    }
+
+    /** `Item::stopDecaying` (src/items/item.cpp:3497-3499); decay engine is a PARITY GAP. */
+    open fun stopDecaying() {
+        // g_decay().stopDecay(item) needs the decay scheduler (PARITY GAP).
+    }
+
+    // --- item type predicates (src/items/item.hpp:488-620) ---------------------
+
+    /** `Item::isStackable` (src/items/item.hpp:488). */
+    fun isStackable(): Boolean = type?.isStackable == true
+
+    /** `Item::isPickupable` (src/items/item.hpp:514). */
+    fun isPickupable(): Boolean = type?.isPickupable ?: true
+
+    /** `Item::isMovable` (`ItemType::movable`, src/items/item.hpp:501). */
+    fun isMovable(): Boolean = type?.isMovable == true
+
+    /** `Item::isCorpse` (src/items/item.hpp:511). */
+    fun isCorpse(): Boolean = type?.isCorpse == true
+
+    /** `Item::isQuiver` (src/items/item.hpp:544). */
+    fun isQuiver(): Boolean = type?.isQuiver == true
+
+    /** `Item::getWeaponType` (src/items/item.hpp:339). */
+    fun getWeaponType(): Int = type?.weaponType ?: 0
+
+    /** `Item::getStackSize` (src/items/item.hpp:595). */
+    fun getStackSize(): Int {
+        if (isStackable()) {
+            return type?.stackSize ?: 100
+        }
+        return 1
+    }
+
+    /** `Item::getItemCount` (src/items/item.hpp:603). */
+    fun getItemCount(): Int = count
+
+    /** `Item::setItemCount` (src/items/item.hpp:610). */
+    fun setItemCount(n: Int) {
+        count = n
+    }
+
+    /** `Item::getItemAmount` (src/items/item.hpp:607). */
+    fun getItemAmount(): Long = count.toLong()
+
+    /** `Item::isStoreItem` (src/items/item.hpp:290). */
+    fun isStoreItem(): Boolean = type?.isStoreItem == true
+
+    // --- ownership (src/items/item.hpp:279-292, item.cpp:818-830, 1549-1560) ---
+
+    /** `Item::getOwnerId` (src/items/item.cpp:809-815); [Container] falls back to its children. */
+    open fun getOwnerId(): Long = ((attributes[ItemAttribute.OWNER] as? Number)?.toLong() ?: 0L) and 0xFFFFFFFFL
+
+    /** `Item::hasOwner` (src/items/item.hpp:287). */
+    fun hasOwner(): Boolean = getOwnerId() != 0L
+
+    /**
+     * `Item::isOwner(uint32_t)` (src/items/item.cpp:818-830). The
+     * `Player::getFirstID`/`getPlayerByID`/`getPlayerByGUID` game fallbacks
+     * need `g_game` and are a PARITY GAP.
+     */
+    fun isOwner(ownerId: Long): Boolean = getOwnerId() == ownerId
+
+    /** `Item::isOwner(creature)` (src/items/item.cpp:1549-1560). */
+    fun isOwner(owner: Creature?): Boolean {
+        if (owner == null) {
+            return false
+        }
+        if (isOwner(owner.id)) {
+            return true
+        }
+        val player = owner as? Player
+        return player != null && isOwner(player.getGUID())
+    }
+
+    /** `Item::equals` (src/items/item.cpp:730-766). */
+    fun equals(compareItem: Item?): Boolean {
+        if (compareItem == null) {
+            return false
+        }
+        if (id != compareItem.id) {
+            return false
+        }
+        if (isStoreItem() != compareItem.isStoreItem()) {
+            return false
+        }
+        if (getOwnerId() != compareItem.getOwnerId()) {
+            return false
+        }
+        for ((attribute, value) in attributes) {
+            if (attribute == ItemAttribute.STORE) {
+                continue
+            }
+            val compareValue = compareItem.attributes[attribute] ?: continue
+            if (ItemAttribute.isAttributeInteger(attribute) &&
+                (value as? Number)?.toLong() != (compareValue as? Number)?.toLong()
+            ) {
+                return false
+            }
+            if (ItemAttribute.isAttributeString(attribute) && value != compareValue) {
+                return false
+            }
+        }
+        return true
+    }
 
     /** Mirrors `Item::getClassification` (src/items/item.hpp:753). */
     fun getClassification(): Int = type?.upgradeClassification ?: 0
@@ -719,63 +906,21 @@ open class Item(
             val type = registry?.get(id)
             return when {
                 type?.isBed == true -> BedItem(id, type = type)
-                type?.isContainer == true -> Container(id, capacity = type.capacity, type = type)
+                type?.isContainer == true -> Container.create(id, registry)
                 type?.isDoor == true -> Door(id, type = type)
                 else -> Item(id, count = count, type = type)
             }
         }
-    }
-}
 
-class Container(
-    id: Int,
-    val capacity: Int,
-    type: ItemType? = null
-) : Item(id, count = 1, type = type), Cylinder {
-    private val _items = mutableListOf<Item>()
-    val items: List<Item> get() = _items
-
-    /** `Container::serializationCount` (src/items/containers/container.hpp:341). */
-    var serializationCount: Int = 0
-
-    val totalWeight: Double
-        get() = (type?.weight ?: 0.0) + _items.sumOf { it.weight }
-
-    fun addItem(item: Item): Boolean {
-        if (_items.size >= capacity) return false
-        _items.add(item)
-        return true
-    }
-
-    /** `Container::empty` (src/items/containers/container.hpp:216-218). */
-    fun isEmpty(): Boolean = _items.isEmpty()
-
-    fun size(): Int = _items.size
-
-    /** `Container::getReversedItems` (src/items/containers/container.hpp:227-232). */
-    fun getReversedItems(): List<Item> = _items.asReversed()
-
-    /** `Container::internalAddThing` (`src/items/containers/container.hpp`). */
-    override fun internalAddThing(item: Item) {
-        _items.add(item)
-    }
-
-    override fun getContainer(): Container = this
-
-    /** `Container::readAttr` (src/items/containers/container.cpp:171-181). */
-    override fun readAttr(attr: Int, propStream: PropStream): AttrReadValue {
-        if (attr == ATTR_CONTAINER_ITEMS) {
-            val count = propStream.readU32() ?: return AttrReadValue.ATTR_READ_ERROR
-            serializationCount = count.toInt()
-            return AttrReadValue.ATTR_READ_END
-        }
-        return super.readAttr(attr, propStream)
-    }
-
-    companion object {
-        fun create(id: Int, capacity: Int, registry: ItemTypeRegistry? = null): Container {
-            val type = registry?.get(id)
-            return Container(id, capacity = capacity, type = type)
+        /** `Item::countByType` (src/items/item.hpp:616-623). */
+        fun countByType(item: Item?, subType: Int): Int {
+            if (item == null) {
+                return 0
+            }
+            if (subType == -1 || subType == item.getSubType()) {
+                return item.getItemCount()
+            }
+            return 0
         }
     }
 }
