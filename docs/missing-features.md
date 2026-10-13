@@ -22,7 +22,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | Monster engine (`monster.cpp`, 4k lines) | **~5%** | A* pathfinder + spawn engines ported; no targeting/loot runtime |
 | Map engine (`map.cpp`) | **~35%** | OTBM load + sectors + tiles + A*; no sight/canWalkTo/houses save |
 | Persistence (`iologindata*`, `iomapserialize`) | **~18%** | vitals/level/pos + feature state (V3/V4); no inventory/depot/spells/VIP/houses |
-| **Estimated full-parity completion** | **~27–32%** | weighted across the above; the 56 tracked features are engine-complete but the full Canary surface is far larger |
+| **Estimated full-parity completion** | **~30–35%** | weighted across the above; the 56 tracked features are engine-complete but the full Canary surface is far larger |
 
 ---
 

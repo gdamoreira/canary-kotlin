@@ -222,10 +222,16 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Lua player bindings** — +19 Canary primitives (guid/speed/capacity/mana/magic level/skills/sex/town/premium days/fight modes) backed by `WorldPlayerOperations`.
 - **Missing-features tracker** updated with new coverage numbers.
 
+### Phase 17: Player Model, Game Facade, More Senders & Lua Bindings (05:30 – 06:00)
+- **Player model** — conditions attach/tick/expire (`addCondition`/`executeConditions`/`onThink`), skull/party/flags, magic level, weapon id.
+- **Game facade** — `game/Game.kt`: `internalAddItem`/`internalRemoveItem`/`internalMoveItem`, `internalPlaceCreature`/`removeCreature`, `getPlayers`/`getPlayerByName`.
+- **More outbound senders** — `CreatureWindowWriter` (health/outfit/speed/light/icons/magic-effect/…), `SocialWindowWriter` (trade/channels/VIP/houses/modal), `HighscoresWindowSerializer`.
+- **Lua bindings** — +11 `Game.*` and +23 `item:*` Canary methods with real domain delegation.
+
 ---
 
 ### Current Status
-- **Automated Tests**: **167 test suites / 1140 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **178 test suites / 1247 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.
