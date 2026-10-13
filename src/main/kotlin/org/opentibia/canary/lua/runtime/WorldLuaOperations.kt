@@ -1,5 +1,6 @@
 package org.opentibia.canary.lua.runtime
 
+import org.opentibia.canary.combat.condition.CombatType
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionId
 import org.opentibia.canary.combat.condition.ConditionType
@@ -8,6 +9,8 @@ import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.Slots_t
+import org.opentibia.canary.creatures.monsters.RespawnType
+import org.opentibia.canary.creatures.monsters.MonsterType as FullMonsterType
 import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.creatures.spawns.MonsterType
 import org.opentibia.canary.game.movement.Direction
@@ -20,14 +23,24 @@ import org.opentibia.canary.items.ItemType
 import org.opentibia.canary.items.ItemTypeRegistry
 import org.opentibia.canary.items.ItemTypes_t
 import org.opentibia.canary.io.PropWriteStream
+import org.opentibia.canary.lua.bindings.CharmFunctions
 import org.opentibia.canary.lua.bindings.LootData
 import org.opentibia.canary.lua.bindings.LootFunctions
 import org.opentibia.canary.lua.bindings.LootOperations
 import org.opentibia.canary.lua.bindings.MonsterAttackInfo
 import org.opentibia.canary.lua.bindings.MonsterFunctions
 import org.opentibia.canary.lua.bindings.MonsterOperations
+import org.opentibia.canary.lua.bindings.MonsterSpellFunctions
 import org.opentibia.canary.lua.bindings.MonsterTypeFunctions
 import org.opentibia.canary.lua.bindings.MonsterTypeOperations
+import org.opentibia.canary.lua.bindings.NpcFunctions
+import org.opentibia.canary.lua.bindings.NpcOperations
+import org.opentibia.canary.lua.bindings.NpcTypeFunctions
+import org.opentibia.canary.lua.bindings.NpcTypeOperations
+import org.opentibia.canary.lua.bindings.ShopFunctions
+import org.opentibia.canary.lua.bindings.WorldNpcOperations
+import org.opentibia.canary.lua.bindings.WorldNpcTypeOperations
+import org.opentibia.canary.lua.bindings.WorldShopOperations
 import org.opentibia.canary.lua.bindings.core.ContainerFunctions
 import org.opentibia.canary.lua.bindings.core.ContainerOperations
 import org.opentibia.canary.lua.bindings.core.CreatureFunctions
@@ -96,17 +109,20 @@ import kotlin.random.Random
  *   `g_monsters().getMonsterType(name)` for `MonsterType(name)` and `monster:getType`.
  * @param monsterTypesByRaceId optional `race id -> MonsterType` catalog mirroring
  *   `g_monsters().getMonsterTypeByRaceId(id)`.
+ * @param npcTypesByName optional `npc name -> NpcType` catalog mirroring
+ *   `g_npcs().getNpcType(name, true)` for `NpcType(name)`.
  * @param gameMap optional spatial grid backing `Tile(...)` and `Position:getTile`; when
  *   absent those primitives return `nil` like Canary's `g_game().map.getTile` miss.
  * @param itemClassifications optional forge classification catalog backing
  *   `Game.createItemClassification`.
  */
 class WorldLuaOperations(
-    itemTypes: ItemTypeRegistry? = null,
-    itemIdsByName: Map<String, Int> = emptyMap(),
+    private val itemTypes: ItemTypeRegistry? = null,
+    private val itemIdsByName: Map<String, Int> = emptyMap(),
     itemAttributeIdsByName: Map<String, Int> = emptyMap(),
     monsterTypesByName: Map<String, Any> = emptyMap(),
     monsterTypesByRaceId: Map<Int, Any> = emptyMap(),
+    npcTypesByName: Map<String, Any> = emptyMap(),
     gameMap: GameMap? = null,
     itemClassifications: ItemClassifications? = null,
 ) {
@@ -127,11 +143,15 @@ class WorldLuaOperations(
 
     val position: PositionOperations = WorldPositionOperations(gameMap)
 
-    val monster: MonsterOperations = WorldMonsterOperations(monsterTypesByName)
+    val monster: MonsterOperations = WorldMonsterOperations(monsterTypesByName, monsterTypesByRaceId)
 
     val monsterType: MonsterTypeOperations = WorldMonsterTypeOperations(monsterTypesByName, monsterTypesByRaceId)
 
     val loot: LootOperations = WorldLootOperations(itemIdsByName)
+
+    val npc: NpcOperations = WorldNpcOperations(itemTypes)
+
+    val npcType: NpcTypeOperations = WorldNpcTypeOperations(npcTypesByName, itemTypes)
 
     /**
      * Registers every real seam on [env], replacing the inert `NO_OP_*` placeholders
@@ -151,6 +171,13 @@ class WorldLuaOperations(
         MonsterFunctions.install(env, monster)
         MonsterTypeFunctions.install(env, monsterType)
         LootFunctions.install(env, loot)
+
+        // Wave 40 lua-monster-npc
+        NpcFunctions.install(env, npc)
+        NpcTypeFunctions.install(env, npcType)
+        MonsterSpellFunctions.install(env)
+        CharmFunctions.install(env)
+        ShopFunctions.install(env, WorldShopOperations(itemIdsByName))
     }
 
     companion object {
@@ -1389,6 +1416,7 @@ class WorldPositionOperations(
  */
 class WorldMonsterOperations(
     private val monsterTypesByName: Map<String, Any> = emptyMap(),
+    private val monsterTypesByRaceId: Map<Int, Any> = emptyMap(),
 ) : MonsterOperations {
     private val idleStatus = mutableMapOf<Long, Boolean>()
     private val friendList = mutableMapOf<Long, MutableList<Any>>()
@@ -1396,17 +1424,48 @@ class WorldMonsterOperations(
     private val attackedTargets = mutableMapOf<Long, Any>()
     private val masters = mutableMapOf<Long, Any>()
     private val challenged = mutableMapOf<Long, Boolean>()
+    private val typeOverrides = mutableMapOf<Long, Any>()
+    private val nameOverrides = mutableMapOf<Long, String>()
+    private val nameDescriptions = mutableMapOf<Long, String>()
+    private val targetDistances = mutableMapOf<Long, Pair<Int, Int>>()
+    private val searchTypes = mutableMapOf<Long, Int>()
+    private val spawnPositions = mutableMapOf<Long, Position>()
+    private val fiendishTimes = mutableMapOf<Long, Long>()
+    private val forgeClassifications = mutableMapOf<Long, Int>()
+    private val forgeStacks = mutableMapOf<Long, Int>()
+    private val hazardFlags = mutableMapOf<Long, MutableMap<String, Boolean>>()
+    private val reflectElements = mutableMapOf<Long, MutableMap<Int, Int>>()
+    private val extraDefenses = mutableMapOf<Long, Int>()
+    private val immunities = mutableMapOf<Long, Boolean>()
+    private val criticalChances = mutableMapOf<Long, Int>()
+    private val criticalDamages = mutableMapOf<Long, Int>()
+    private val attackSpellLists = mutableMapOf<Long, MutableList<Any>>()
+    private val defenseSpellLists = mutableMapOf<Long, MutableList<Any>>()
 
     private fun creatureKey(value: Any): Long? = (value as? Creature)?.id
+
+    /** Resolves the monster's type: `setType` override first, then the name catalog. */
+    private fun resolvedType(monster: Monster): Any? =
+        typeOverrides[monster.id] ?: monsterTypesByName[monster.name]
+
+    private fun flagKey(monster: Monster, name: String): Boolean =
+        hazardFlags[monster.id]?.get(name) ?: false
+
+    private fun setFlag(monster: Monster, name: String, value: Boolean) {
+        hazardFlags.getOrPut(monster.id) { mutableMapOf() }[name] = value
+    }
 
     override fun isMonster(monster: Any): Boolean = monster is Monster
 
     override fun getType(monster: Any): Any? {
         val target = monster as? Monster ?: return null
-        return monsterTypesByName[target.name]
+        return resolvedType(target)
     }
 
-    override fun getName(monster: Any): String? = (monster as? Creature)?.name
+    override fun getName(monster: Any): String? {
+        val target = monster as? Creature ?: return null
+        return nameOverrides[target.id] ?: target.name
+    }
 
     override fun getSpawnPosition(monster: Any): Position? = (monster as? Creature)?.position
 
@@ -1557,6 +1616,309 @@ class WorldMonsterOperations(
         }
         masters[id] = master
         return true
+    }
+
+    // --- batch 2: constructor, forge/fiendish, hazard, defense, immunity ----------
+
+    /** No live monster registry is wired; `Game::getMonsterByID` is a PARITY GAP. */
+    override fun getMonsterById(id: Long): Any? = null
+
+    override fun setType(monster: Any, nameOrRaceId: Any, restoreHealth: Boolean): Boolean? {
+        val target = monster as? Monster ?: return null
+        val type = when (nameOrRaceId) {
+            is Number -> monsterTypesByRaceId[nameOrRaceId.toInt()]
+            is String -> monsterTypesByName[nameOrRaceId]
+            else -> null
+        }
+        if (type != null) {
+            typeOverrides[target.id] = type
+            if (restoreHealth && type is FullMonsterType) {
+                target.maxHealth = type.info.healthMax
+                target.health = type.info.health
+            }
+        }
+        return true
+    }
+
+    /**
+     * Mirrors `Monster::changeTargetDistance`'s reward-boss gate when the type is
+     * resolvable; the summon check and `Game::updateCreatureIcon` are not modeled.
+     */
+    override fun changeTargetDistance(monster: Any, distance: Int, duration: Int): Boolean? {
+        val target = monster as? Monster ?: return null
+        val type = resolvedType(target) as? FullMonsterType
+        if (type?.info?.isRewardBoss == true) {
+            return false
+        }
+        targetDistances[target.id] = distance to duration
+        return true
+    }
+
+    /** No target-search engine is wired; the request is recorded (PARITY GAP). */
+    override fun searchTarget(monster: Any, searchType: Int): Boolean? {
+        val target = monster as? Monster ?: return null
+        searchTypes[target.id] = searchType
+        return true
+    }
+
+    /** Records the current position as the spawn anchor; the spawn engine is a gap. */
+    override fun setSpawnPosition(monster: Any, interval: Int): Boolean? {
+        val target = monster as? Monster ?: return null
+        spawnPositions[target.id] = target.position
+        return true
+    }
+
+    /** Reads the resolved type's `RespawnType`; the default matches a value-initialized one. */
+    override fun getRespawnType(monster: Any): RespawnType? {
+        val target = monster as? Monster ?: return null
+        return (resolvedType(target) as? FullMonsterType)?.info?.respawnType ?: RespawnType()
+    }
+
+    override fun getTimeToChangeFiendish(monster: Any): Long? {
+        val id = creatureKey(monster) ?: return null
+        return fiendishTimes[id] ?: 0L
+    }
+
+    override fun setTimeToChangeFiendish(monster: Any, endTime: Long): Boolean? {
+        val id = creatureKey(monster) ?: return null
+        fiendishTimes[id] = endTime
+        return true
+    }
+
+    override fun getMonsterForgeClassification(monster: Any): Int? {
+        val id = creatureKey(monster) ?: return null
+        return forgeClassifications[id] ?: FORGE_NORMAL_MONSTER
+    }
+
+    override fun setMonsterForgeClassification(monster: Any, classification: Int): Boolean? {
+        val id = creatureKey(monster) ?: return null
+        forgeClassifications[id] = classification
+        return true
+    }
+
+    override fun getForgeStack(monster: Any): Int? {
+        val id = creatureKey(monster) ?: return null
+        return forgeStacks[id] ?: 0
+    }
+
+    override fun setForgeStack(monster: Any, stack: Int): Boolean? {
+        val id = creatureKey(monster) ?: return null
+        forgeStacks[id] = stack
+        return true
+    }
+
+    /**
+     * Mirrors `Monster::configureForgeSystem`'s classification/stack assignment; the
+     * forge icon update and the `ForgeSystemMonster` creature event registration are
+     * not ported (PARITY GAP).
+     */
+    override fun configureForgeSystem(monster: Any, stack: Int): Boolean? {
+        val target = monster as? Monster ?: return null
+        if (isForgeable(target) != true) {
+            return true
+        }
+        when (forgeClassifications[target.id] ?: FORGE_NORMAL_MONSTER) {
+            FORGE_FIENDISH_MONSTER -> forgeStacks[target.id] = FIENDISH_STACK
+            FORGE_INFLUENCED_MONSTER -> {
+                forgeStacks[target.id] = if (stack == 0) Random.nextInt(1, INFLUENCED_MAX_STACK + 1) else stack
+            }
+
+            else -> Unit
+        }
+        return true
+    }
+
+    /** Clears the fiendish/forge bookkeeping; the health restore and icon are gaps. */
+    override fun clearFiendishStatus(monster: Any): Boolean? {
+        val target = monster as? Monster ?: return null
+        fiendishTimes.remove(target.id)
+        forgeStacks.remove(target.id)
+        forgeClassifications[target.id] = FORGE_NORMAL_MONSTER
+        return true
+    }
+
+    /**
+     * Approximates `Monster::canBeForgeMonster` (`getForgeStack() == 0 &&
+     * !isSummon() && !isRewardBoss() && canDropLoot() && isForgeCreature() &&
+     * getRaceId() > 0`); the summon/reward-boss predicates need type state the Kotlin
+     * [Monster] does not carry.
+     */
+    override fun isForgeable(monster: Any): Boolean? {
+        val target = monster as? Monster ?: return null
+        val type = resolvedType(target) as? FullMonsterType ?: return false
+        return (forgeStacks[target.id] ?: 0) == 0 &&
+            type.info.isForgeCreature &&
+            type.info.lootItems.isNotEmpty() &&
+            type.info.raceid > 0
+    }
+
+    override fun setName(monster: Any, name: String, nameDescription: String?): Boolean? {
+        val target = monster as? Creature ?: return null
+        nameOverrides[target.id] = name
+        if (nameDescription != null) {
+            nameDescriptions[target.id] = nameDescription
+        }
+        return true
+    }
+
+    override fun getHazard(monster: Any): Boolean? =
+        (monster as? Monster)?.let { flagKey(it, "hazard") }
+
+    override fun setHazard(monster: Any, value: Boolean): Boolean? {
+        val target = monster as? Monster ?: return null
+        setFlag(target, "hazard", value)
+        return true
+    }
+
+    override fun getHazardCrit(monster: Any): Boolean? =
+        (monster as? Monster)?.let { flagKey(it, "hazardCrit") }
+
+    override fun setHazardCrit(monster: Any, value: Boolean): Boolean? {
+        val target = monster as? Monster ?: return null
+        setFlag(target, "hazardCrit", value)
+        return true
+    }
+
+    override fun getHazardDodge(monster: Any): Boolean? =
+        (monster as? Monster)?.let { flagKey(it, "hazardDodge") }
+
+    override fun setHazardDodge(monster: Any, value: Boolean): Boolean? {
+        val target = monster as? Monster ?: return null
+        setFlag(target, "hazardDodge", value)
+        return true
+    }
+
+    override fun getHazardDamageBoost(monster: Any): Boolean? =
+        (monster as? Monster)?.let { flagKey(it, "hazardDamageBoost") }
+
+    override fun setHazardDamageBoost(monster: Any, value: Boolean): Boolean? {
+        val target = monster as? Monster ?: return null
+        setFlag(target, "hazardDamageBoost", value)
+        return true
+    }
+
+    override fun getHazardDefenseBoost(monster: Any): Boolean? =
+        (monster as? Monster)?.let { flagKey(it, "hazardDefenseBoost") }
+
+    override fun setHazardDefenseBoost(monster: Any, value: Boolean): Boolean? {
+        val target = monster as? Monster ?: return null
+        setFlag(target, "hazardDefenseBoost", value)
+        return true
+    }
+
+    override fun getSoulPit(monster: Any): Boolean? =
+        (monster as? Monster)?.let { flagKey(it, "soulPit") }
+
+    override fun setSoulPit(monster: Any, value: Boolean): Boolean? {
+        val target = monster as? Monster ?: return null
+        setFlag(target, "soulPit", value)
+        return true
+    }
+
+    /**
+     * Mirrors `Monster::addReflectElement`'s accumulation; the type's `reflectMap` is
+     * updated when the type resolves, otherwise the value stays per-monster.
+     */
+    override fun addReflectElement(monster: Any, element: Int, percent: Int): Boolean? {
+        val target = monster as? Monster ?: return null
+        val map = reflectElements.getOrPut(target.id) { mutableMapOf() }
+        map[element] = (map[element] ?: 0) + percent
+        val type = resolvedType(target) as? FullMonsterType
+        val combatType = CombatType.entries.firstOrNull { it.value == element }
+        if (type != null && combatType != null) {
+            type.info.reflectMap[combatType] = (type.info.reflectMap[combatType] ?: 0) + percent
+        }
+        return true
+    }
+
+    override fun addDefense(monster: Any, defense: Int): Boolean? {
+        val target = monster as? Monster ?: return null
+        extraDefenses[target.id] = (extraDefenses[target.id] ?: 0) + defense
+        return true
+    }
+
+    /** Mirrors `Monster::getDefense` (`type.info.defense + m_defense`); the multiplier is a gap. */
+    override fun getDefense(monster: Any): Int? {
+        val target = monster as? Monster ?: return null
+        val typeDefense = ((resolvedType(target) as? FullMonsterType)?.info?.defense) ?: 0
+        return typeDefense + (extraDefenses[target.id] ?: 0)
+    }
+
+    /** Mirrors `Creature::isDead` (`getHealth() <= 0`). */
+    override fun isDead(monster: Any): Boolean? {
+        val target = monster as? Creature ?: return null
+        return target.health <= 0
+    }
+
+    override fun isImmune(monster: Any): Boolean? {
+        val id = creatureKey(monster) ?: return null
+        return immunities[id] ?: false
+    }
+
+    override fun setImmune(monster: Any, immune: Boolean): Boolean? {
+        val id = creatureKey(monster) ?: return null
+        immunities[id] = immune
+        return true
+    }
+
+    override fun getCriticalChance(monster: Any): Int? {
+        val id = creatureKey(monster) ?: return null
+        return criticalChances[id] ?: 0
+    }
+
+    override fun setCriticalChance(monster: Any, chance: Int): Boolean? {
+        val id = creatureKey(monster) ?: return null
+        criticalChances[id] = chance
+        return true
+    }
+
+    override fun getCriticalDamage(monster: Any): Int? {
+        val id = creatureKey(monster) ?: return null
+        return criticalDamages[id] ?: 0
+    }
+
+    override fun setCriticalDamage(monster: Any, damage: Int): Boolean? {
+        val id = creatureKey(monster) ?: return null
+        criticalDamages[id] = damage
+        return true
+    }
+
+    /**
+     * Records the spell block; `Monsters::deserializeSpell` and the attack-spell list
+     * on the type are not modeled (PARITY GAP).
+     */
+    override fun addAttackSpell(monster: Any, spell: Any?): Boolean? {
+        val id = creatureKey(monster) ?: return null
+        if (spell != null) {
+            attackSpellLists.getOrPut(id) { mutableListOf() } += spell
+        }
+        return true
+    }
+
+    /** Records the spell block; `Monsters::deserializeSpell` is not modeled (PARITY GAP). */
+    override fun addDefenseSpell(monster: Any, spell: Any?): Boolean? {
+        val id = creatureKey(monster) ?: return null
+        if (spell != null) {
+            defenseSpellLists.getOrPut(id) { mutableListOf() } += spell
+        }
+        return true
+    }
+
+    private companion object {
+        /** `FORGE_NORMAL_MONSTER` (creatures_definitions.hpp:597). */
+        const val FORGE_NORMAL_MONSTER = 0
+
+        /** `FORGE_INFLUENCED_MONSTER` (creatures_definitions.hpp:598). */
+        const val FORGE_INFLUENCED_MONSTER = 1
+
+        /** `FORGE_FIENDISH_MONSTER` (creatures_definitions.hpp:599). */
+        const val FORGE_FIENDISH_MONSTER = 2
+
+        /** `setForgeStack(15)` for a fiendish monster (`monster.cpp:3872`). */
+        const val FIENDISH_STACK = 15
+
+        /** `normal_random(1, 5)` upper bound used by `configureForgeSystem`. */
+        const val INFLUENCED_MAX_STACK = 5
     }
 }
 
