@@ -15,6 +15,8 @@ class FakeImbuementPlayer(
     var removeMoneyResult: Boolean = true,
     var internalRemoveItemResult: Boolean = true,
     var removeItemOfTypeResult: Boolean = true,
+    var removeItemCountByIdResult: Boolean = true,
+    var internalAddItemResult: Boolean = true,
     var inProtectionZone: Boolean = false,
     var inFight: Boolean = true
 ) : ImbuementPlayer {
@@ -37,6 +39,9 @@ class FakeImbuementPlayer(
     val removedItemTypes: MutableList<Pair<Int, Int>> = mutableListOf()
     val withdrawnItems: MutableList<Pair<Int, Int>> = mutableListOf()
     val internalRemovedItems: MutableList<Pair<ImbuementItem, Int>> = mutableListOf()
+    val countByIdCalls: MutableList<Triple<Int, Int, Boolean>> = mutableListOf()
+    val addedItems: MutableList<Pair<ImbuementItem, Int>> = mutableListOf()
+    val openedWindows: MutableList<Pair<ImbuementAction, ImbuementItem?>> = mutableListOf()
 
     override fun getCapacity(): Int = capacity
 
@@ -110,6 +115,50 @@ class FakeImbuementPlayer(
         }
         internalRemovedItems += item to count
         return true
+    }
+
+    /** `Player::removeItemCountById` (player.cpp:5361): inventory first, then stash. */
+    override fun removeItemCountById(itemId: Int, itemAmount: Int, removeFromStash: Boolean): Boolean {
+        countByIdCalls += Triple(itemId, itemAmount, removeFromStash)
+        if (!removeItemCountByIdResult) {
+            return false
+        }
+
+        var remaining = itemAmount
+        val inventoryItemCount = itemCounts[itemId] ?: 0
+        val fromInventory = minOf(inventoryItemCount, remaining)
+        if (fromInventory > 0) {
+            itemCounts[itemId] = inventoryItemCount - fromInventory
+            remaining -= fromInventory
+        }
+
+        if (remaining == 0) {
+            return true
+        }
+        if (!removeFromStash) {
+            return false
+        }
+
+        val stashItemCount = stashCounts[itemId] ?: 0
+        if (stashItemCount < remaining) {
+            return false
+        }
+        stashCounts[itemId] = stashItemCount - remaining
+        return true
+    }
+
+    override fun internalAddItem(item: ImbuementItem, count: Int): Boolean {
+        if (!internalAddItemResult) {
+            return false
+        }
+        addedItems += item to count
+        return true
+    }
+
+    /** `Player::openImbuementWindow` (player.cpp:2833): updates the tracker then sends. */
+    override fun openImbuementWindow(action: ImbuementAction, item: ImbuementItem?) {
+        openedWindows += action to item
+        updateImbuementTrackerStats()
     }
 
     override fun updateImbuementTrackerStats() {

@@ -8,6 +8,19 @@ import java.util.IdentityHashMap
 
 private val logger = KotlinLogging.logger {}
 
+/** `ITEM_EMPTY_IMBUEMENT_SCROLL = 51442` (src/utils/utils_definitions.hpp:713). */
+const val ITEM_EMPTY_IMBUEMENT_SCROLL: Int = 51442
+
+/**
+ * Mirror of `enum class ImbuementAction` (src/enums/imbuement.hpp:16), used by
+ * `Player::openImbuementWindow` (player.cpp:2833).
+ */
+enum class ImbuementAction(val value: Int) {
+    OPEN(0),
+    PICK_ITEM(1),
+    SCROLL(2),
+}
+
 /**
  * Injected view of the `Player` fields `Player::addItemImbuementStats` /
  * `removeItemImbuementStats` mutate (src/creatures/players/player.cpp:3289,3328):
@@ -46,6 +59,12 @@ interface ImbuementStatsTarget {
  *    (player.cpp:2613-2656, 2734-2780).
  *  - [getItemTypeName]: `Item::items[id].name` (`ItemType` lookup, player.cpp:2654).
  *  - [internalRemoveItem]: `g_game().internalRemoveItem` (player.cpp:2589).
+ *  - [removeItemCountById]: `Player::removeItemCountById` (player.cpp:5361),
+ *    used by `createScrollImbuement` (player.cpp:2659).
+ *  - [internalAddItem]: `g_game().internalAddItem` (player.cpp:2666).
+ *  - [openImbuementWindow]: `Player::openImbuementWindow` (player.cpp:2833):
+ *    refreshes `updateImbuementTrackerStats()` and opens the window; the
+ *    no-client early return is the caller's concern.
  *  - [updateImbuementTrackerStats]: `Player::updateImbuementTrackerStats`
  *    (player.cpp:3367).
  *  - [isInProtectionZone] / [hasConditionInFight]: `player->getTile()->hasFlag(TILESTATE_PROTECTIONZONE)`
@@ -71,6 +90,12 @@ interface ImbuementPlayer : ImbuementStatsTarget {
     fun withdrawItem(itemId: Int, amount: Int)
 
     fun internalRemoveItem(item: ImbuementItem, count: Int): Boolean
+
+    fun removeItemCountById(itemId: Int, itemAmount: Int, removeFromStash: Boolean): Boolean
+
+    fun internalAddItem(item: ImbuementItem, count: Int): Boolean
+
+    fun openImbuementWindow(action: ImbuementAction, item: ImbuementItem?)
 
     fun updateImbuementTrackerStats()
 
@@ -103,6 +128,12 @@ interface ImbuementPlayer : ImbuementStatsTarget {
             override fun withdrawItem(itemId: Int, amount: Int) = Unit
 
             override fun internalRemoveItem(item: ImbuementItem, count: Int): Boolean = true
+
+            override fun removeItemCountById(itemId: Int, itemAmount: Int, removeFromStash: Boolean): Boolean = true
+
+            override fun internalAddItem(item: ImbuementItem, count: Int): Boolean = true
+
+            override fun openImbuementWindow(action: ImbuementAction, item: ImbuementItem?) = Unit
 
             override fun updateImbuementTrackerStats() = Unit
 
@@ -531,6 +562,78 @@ class ImbuementEngine(
         }
     }
 
+    /**
+     * `Player::createScrollImbuement` (player.cpp:2602): the shrine scroll
+     * crafting path. Requires every crafting material (inventory or stash), an
+     * empty imbuement scroll ([ITEM_EMPTY_IMBUEMENT_SCROLL]) and the base price;
+     * consumes the materials and the empty scroll, then delivers
+     * `Imbuement::getScrollItemID()` and reopens the scroll window.
+     *
+     * The `g_metrics().addCounter("balance_decrease", ...)` call has no metrics
+     * seam in this port (see PARITY GAPS).
+     */
+    fun createScrollImbuement(imbuement: Imbuement, player: ImbuementPlayer) {
+        val baseImbuement = imbuements.getBaseByID(imbuement.baseId) ?: return
+
+        val items = imbuement.items
+        for ((itemId, amount) in items) {
+            if (player.getItemTypeCount(itemId) + player.getStashItemCount(itemId) < amount) {
+                player.sendImbuementResult("You don't have all necessary items.")
+                return
+            }
+        }
+
+        val emptyScrollsCount =
+            player.getItemTypeCount(ITEM_EMPTY_IMBUEMENT_SCROLL) +
+                player.getStashItemCount(ITEM_EMPTY_IMBUEMENT_SCROLL)
+        if (emptyScrollsCount == 0) {
+            player.sendImbuementResult("You don't have all necessary items.")
+            return
+        }
+
+        val price = baseImbuement.price
+        if (!player.removeMoney(price.toLong())) {
+            logger.error { "Player do not have money to create imbuement scroll" }
+            player.sendImbuementResult("You don't have $price gold coins.")
+            return
+        }
+
+        for ((itemId, amount) in items) {
+            val inventoryItemCount = player.getItemTypeCount(itemId)
+            if (inventoryItemCount >= amount) {
+                if (!player.removeItemOfType(itemId, amount, -1, true)) {
+                    logger.error { "Failed to remove ${amount}x item $itemId" }
+                }
+                continue
+            }
+
+            var stashItemCount = amount
+            if (inventoryItemCount > 0 && player.removeItemOfType(itemId, inventoryItemCount, -1, false)) {
+                stashItemCount -= inventoryItemCount
+            }
+
+            player.withdrawItem(itemId, stashItemCount)
+            player.sendTextMessage(
+                "Using ${stashItemCount}x ${player.getItemTypeName(itemId)} from your stash."
+            )
+        }
+
+        if (!player.removeItemCountById(ITEM_EMPTY_IMBUEMENT_SCROLL, 1, true)) {
+            logger.error { "Failed to remove empty imbuement scroll" }
+            return
+        }
+
+        val imbuementScrollId = imbuement.getScrollItemID()
+        val imbuementScroll = ImbuementItem(id = imbuementScrollId)
+        if (!player.internalAddItem(imbuementScroll, 1)) {
+            logger.error { "Failed to add imbuement scroll id '$imbuementScrollId'" }
+            player.sendImbuementResult("Failed to add imbuement scroll. Please contact administration.")
+            return
+        }
+
+        player.openImbuementWindow(ImbuementAction.SCROLL, null)
+    }
+
     /** `Player::onApplyImbuement` (player.cpp:2711). */
     fun onApplyImbuement(imbuement: Imbuement, item: ImbuementItem, slot: Int, player: ImbuementPlayer) {
         if (!canAddImbuement(item, slot, imbuement, player)) {
@@ -592,7 +695,7 @@ class ImbuementEngine(
         item.setImbuement(slot, imbuement.id, baseImbuement.duration)
         decay.startImbuementDecay(item)
 
-        player.updateImbuementTrackerStats()
+        player.openImbuementWindow(ImbuementAction.PICK_ITEM, item)
     }
 
     /** `Player::onClearImbuement` (player.cpp:2798). */
@@ -610,7 +713,7 @@ class ImbuementEngine(
         if (!player.removeMoney(removeCost.toLong())) {
             logger.error { "Player do not have money to clear imbuement" }
             player.sendImbuementResult("You don't have $removeCost gold coins.")
-            player.updateImbuementTrackerStats()
+            player.openImbuementWindow(ImbuementAction.PICK_ITEM, item)
             return
         }
 
@@ -619,7 +722,7 @@ class ImbuementEngine(
         }
 
         item.clearImbuement(slot, imbuementInfo.imbuement.id)
-        player.updateImbuementTrackerStats()
+        player.openImbuementWindow(ImbuementAction.PICK_ITEM, item)
     }
 
     /** `Player::clearAllImbuements` (player.cpp:2676). */
