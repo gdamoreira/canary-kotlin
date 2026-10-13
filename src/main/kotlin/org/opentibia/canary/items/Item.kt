@@ -7,6 +7,8 @@ data class ItemType(
     val isContainer: Boolean = false,
     val capacity: Int = 0,
     val weight: Double = 0.0,
+    /** Mirrors `ItemType::upgradeClassification` (src/items/items.hpp:329). */
+    val upgradeClassification: Int = 0,
     val isPickupable: Boolean = true
 )
 
@@ -106,6 +108,9 @@ open class Item(
 
     open val weight: Double
         get() = (type?.weight ?: 0.0) * if (type?.isStackable == true) count else 1
+
+    /** Mirrors `Item::getClassification` (src/items/item.hpp:753). */
+    fun getClassification(): Int = type?.upgradeClassification ?: 0
 
     fun hasAttribute(attribute: ItemAttribute): Boolean = attributes.containsKey(attribute)
 

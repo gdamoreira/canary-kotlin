@@ -26,6 +26,15 @@ class ItemModelTest {
     }
 
     @Test
+    fun `item classification mirrors the item type upgrade classification`() {
+        val registry = ItemTypeRegistry()
+        registry.register(ItemType(id = 2400, name = "Magic Sword", upgradeClassification = 4))
+
+        assertThat(Item.create(2400, registry = registry).getClassification()).isEqualTo(4)
+        assertThat(Item.create(9999, registry = registry).getClassification()).isEqualTo(0)
+    }
+
+    @Test
     fun `container manages child items up to capacity`() {
         val registry = ItemTypeRegistry()
         val backpackType = ItemType(
