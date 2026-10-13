@@ -49,14 +49,14 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 ### `src/creatures/`
 | C++ | Status | Missing |
 |---|---|---|
-| `creature.cpp` (2,239 lines) | PARTIAL | conditions, outfit/light/speed, walk/step, onThink/onAttacked/onTarget/onDeath, skull/party shields, master/summon, spectators, icons |
+| `creature.cpp` (2,239 lines) | **IMPLEMENTED** | conditions, outfit/light/speed, onThink/onAttacked/onTarget/onDeath, master/summon, spectator `canSee`, creature icons |
 | `combat/combat.cpp` | PARTIAL | full `getCombatDamage` matrix, callbacks, target validation, areas |
 | `combat/condition.cpp` (2,955) | PARTIAL | drunk/muted/pacified/rooted, full attribute params, Player suppression, hex/taint |
 | `combat/spells.cpp` (1,654) | PARTIAL | runes, groups/cooldowns, areas/effects, learn/forget, Lua callbacks |
-| `appearance/outfit/outfit.cpp` | MISSING | outfit registry/XML, addons, colors |
+| `appearance/outfit/outfit.cpp` | **IMPLEMENTED** | `Outfits`/`Outfit`/`PlayerOutfits` (XML registry, addons, `getOutfitByLookType`) |
 | `appearance/mounts/mounts.cpp` | PARTIAL | outfit protocol, persistence, tame runtime |
-| `appearance/attached_effects.cpp` | MISSING | auras/wings/shader registry |
-| `interactions/chat.cpp` | PARTIAL | channel registry/invites, NPC/private channels, muted checks |
+| `appearance/attached_effects.cpp` | **IMPLEMENTED** | `AttachedEffects` (aura/wing/shader/effect XML registry + lookup) |
+| `interactions/chat.cpp` | **IMPLEMENTED** | channel registry/invites/users, private/guild/party channels, muted checks, yell rules |
 | `monsters/monster.cpp` (4,014) | PARTIAL | 150+ methods: targets, spells, dropLoot, death/corpse, defense, walk-back, despawn, forge/hazard/charm |
 | `monsters/monster_pathfinding.cpp` | MISSING | A* follow path, stuck detection |
 | `monsters/monster_combat_intention.cpp` | MISSING | combat intention scheduling |

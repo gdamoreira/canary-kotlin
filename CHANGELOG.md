@@ -270,10 +270,17 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Typed ConfigManager** — `getBoolean`/`getNumber`/`getFloat`/`getString`, `reload`, OTC feature lists, injected source + precedence. 14 tests.
 - `docs/missing-features.md`: `src/config/` rows flipped to **IMPLEMENTED**.
 
+### Phase 25: `src/creatures/` Part 1 — Creature Core, Outfits, Attached Effects, Chat (09:30 – 10:00)
+- **Creature core** — outfit/light/speed, `onAttacked`/`onTarget`/`onDeath` hooks, master/summon, spectator `canSee`, creature icons. 29 tests.
+- **Outfit registry** — `Outfits`/`Outfit`/`PlayerOutfits` from `outfits.xml` (addons, look-type lookup). 23 tests.
+- **Attached effects** — `AttachedEffects` (aura/wing/shader/effect XML registry). 8 tests.
+- **Chat channels** — `ChatChannel`/`PrivateChatChannel` registry, invites/users, muted checks, yell rules. 40 tests.
+- `docs/missing-features.md`: the four rows flipped to **IMPLEMENTED**.
+
 ---
 
 ### Current Status
-- **Automated Tests**: **244 test suites / 2135 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **248 test suites / 2233 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.
