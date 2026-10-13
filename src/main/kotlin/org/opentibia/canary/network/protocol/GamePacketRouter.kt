@@ -21,6 +21,8 @@ import org.opentibia.canary.network.protocol.wheel.WheelGemActionCommand
 import org.opentibia.canary.network.protocol.wheel.WheelPacketParser
 import org.opentibia.canary.systems.forge.ForgeApplication
 import org.opentibia.canary.systems.forge.PlayerForgeAdapter
+import org.opentibia.canary.systems.prey.PreyAction
+import org.opentibia.canary.systems.prey.PreyOption
 import org.opentibia.canary.systems.offlinetraining.OfflineTrainingApplication
 import org.opentibia.canary.systems.rewardchest.PlayerRewardChestOwner
 import org.opentibia.canary.systems.rewardchest.RewardChestApplication
