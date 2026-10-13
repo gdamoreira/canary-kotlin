@@ -9,6 +9,15 @@ fun interface WheelRandom {
 }
 
 /**
+ * Mirror of Canary's `normal_random` (src/utils/tools.hpp:91): the distribution
+ * is centred on the range midpoint, so rolls cluster there rather than being
+ * uniform.
+ */
+fun interface WheelNormalRandom {
+    fun normalRandom(minNumber: Int, maxNumber: Int): Int
+}
+
+/**
  * Mirror of `enum Vocation_t` (src/creatures/creatures_definitions.hpp:790),
  * the internal vocation ids used by the wheel gem value tables.
  */
