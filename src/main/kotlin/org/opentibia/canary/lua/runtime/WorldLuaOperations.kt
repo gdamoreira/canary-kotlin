@@ -1,5 +1,7 @@
 package org.opentibia.canary.lua.runtime
 
+import org.luaj.vm2.LuaValue
+import org.opentibia.canary.combat.AreaCombat
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionId
 import org.opentibia.canary.combat.condition.ConditionType
@@ -9,6 +11,7 @@ import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.skills_t
+import org.opentibia.canary.creatures.vocations.Vocation
 import org.opentibia.canary.creatures.spawns.MonsterType
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.items.Container
@@ -19,15 +22,25 @@ import org.opentibia.canary.items.ItemProperty
 import org.opentibia.canary.items.ItemType
 import org.opentibia.canary.items.ItemTypeRegistry
 import org.opentibia.canary.items.ItemTypes_t
+import org.opentibia.canary.items.weapons.Weapon
+import org.opentibia.canary.items.weapons.Weapons
 import org.opentibia.canary.io.PropWriteStream
+import org.opentibia.canary.lua.bindings.CombatFunctions
+import org.opentibia.canary.lua.bindings.CombatOperations
 import org.opentibia.canary.lua.bindings.LootData
 import org.opentibia.canary.lua.bindings.LootFunctions
 import org.opentibia.canary.lua.bindings.LootOperations
+import org.opentibia.canary.lua.bindings.LuaCombat
 import org.opentibia.canary.lua.bindings.MonsterAttackInfo
 import org.opentibia.canary.lua.bindings.MonsterFunctions
 import org.opentibia.canary.lua.bindings.MonsterOperations
 import org.opentibia.canary.lua.bindings.MonsterTypeFunctions
 import org.opentibia.canary.lua.bindings.MonsterTypeOperations
+import org.opentibia.canary.lua.bindings.SpellBindings
+import org.opentibia.canary.lua.bindings.SpellOperations
+import org.opentibia.canary.lua.bindings.VariantOperations
+import org.opentibia.canary.lua.bindings.WeaponFunctions
+import org.opentibia.canary.lua.bindings.WeaponOperations
 import org.opentibia.canary.lua.bindings.core.ContainerFunctions
 import org.opentibia.canary.lua.bindings.core.ContainerOperations
 import org.opentibia.canary.lua.bindings.core.CreatureFunctions
@@ -132,6 +145,14 @@ class WorldLuaOperations(
 
     val loot: LootOperations = WorldLootOperations(itemIdsByName)
 
+    val weapon: WeaponOperations = WorldWeaponOperations(itemTypes)
+
+    val spell: SpellOperations = WorldSpellOperations(itemTypes)
+
+    val combat: CombatOperations = WorldCombatOperations()
+
+    val variant: VariantOperations = WorldVariantOperations()
+
     /**
      * Registers every real seam on [env], replacing the inert `NO_OP_*` placeholders
      * installed by `LuaEnvironment.initState()`. Safe to call after `initState()`.
@@ -149,6 +170,13 @@ class WorldLuaOperations(
         MonsterFunctions.install(env, monster)
         MonsterTypeFunctions.install(env, monsterType)
         LootFunctions.install(env, loot)
+
+        // Wave 40 lua-weapon-spell
+        // SpellBindings is the canonical `Spell` owner: it creates the registry that
+        // `LuaEventDispatcher` reads, and delegates the binding surface to SpellFunctions.
+        env.installSpells(SpellBindings.install(env, spell))
+        WeaponFunctions.install(env, weapon)
+        CombatFunctions.install(env, combat, variant)
     }
 
     companion object {
@@ -1719,4 +1747,86 @@ class WorldLootOperations(
     private val itemIdsByName: Map<String, Int> = emptyMap(),
 ) : LootOperations {
     override fun itemIdByName(name: String): Int = itemIdsByName[name] ?: 0
+}
+
+/**
+ * `Weapon` seam backed by the item-type catalog and the [Weapons] registry.
+ *
+ * PARITY GAPS: the Lua `onUseWeapon` callback is captured by the binding but its
+ * execution lives in the script bridge (`Weapon::executeUseWeapon`); the vocation
+ * catalog is not wired into this operations object, so `weapon:vocation` inherits
+ * the `-1` not-found sentinel the domain `addVocWeaponMap` rejects.
+ */
+class WorldWeaponOperations(
+    private val itemTypes: ItemTypeRegistry? = null,
+) : WeaponOperations {
+    private val weapons = Weapons()
+    private val localItemTypes = linkedMapOf<Int, ItemType>()
+
+    /** `Item::items.getItemType(id)`; the C++ `operator[]` auto-creates missing ids. */
+    override fun getItemType(id: Int): ItemType {
+        val registry = itemTypes ?: return localItemTypes.getOrPut(id) { ItemType(id, "") }
+        registry.get(id)?.let { return it }
+        return ItemType(id = id, name = "").also { registry.register(it) }
+    }
+
+    /** `Weapons::registerLuaEvent(weapon)`. */
+    override fun registerLuaEvent(weapon: Weapon, callback: LuaValue): Boolean =
+        weapons.registerLuaEvent(weapon)
+
+    /** `g_vocations().getVocationId(name)`; no vocation catalog is wired (PARITY GAP). */
+    override fun vocationIdByName(name: String): Int = -1
+}
+
+/**
+ * `Spell` seam backed by the item-type catalog.
+ *
+ * PARITY GAPS: no `Vocations` catalog is wired into this operations object, so
+ * `spell:vocation` resolves every name to `VOCATION_NONE` (0, exactly what
+ * `g_vocations().getVocationId` returns for an unknown name) and the vocation
+ * getter cannot name the stored ids.
+ */
+class WorldSpellOperations(
+    private val itemTypes: ItemTypeRegistry? = null,
+) : SpellOperations {
+    private val localItemTypes = linkedMapOf<Int, ItemType>()
+
+    /** `Item::items.getItemType(rune->getRuneItemId())`; auto-creates like the C++ map. */
+    override fun getItemType(id: Int): ItemType {
+        val registry = itemTypes ?: return localItemTypes.getOrPut(id) { ItemType(id, "") }
+        registry.get(id)?.let { return it }
+        return ItemType(id = id, name = "").also { registry.register(it) }
+    }
+
+    /** `g_vocations().getVocationId(name)`; unknown names yield `VOCATION_NONE` (0). */
+    override fun vocationIdByName(name: String): Int = Vocation.VOCATION_NONE
+
+    /** `g_vocations().getVocation(id)->getVocName()`; no catalog is wired (PARITY GAP). */
+    override fun vocationName(vocationId: Int): String? = null
+}
+
+/**
+ * `Combat` seam. The Kotlin `Combat` port is a stateless damage core, so the
+ * world-backed `execute` dispatch is not wired yet.
+ *
+ * PARITY GAPS: `g_luaEnvironment().getAreaObject(id)` is owned by the (not yet
+ * ported) area registry and returns null; `execute` does not run
+ * `Combat::doCombat` over the map; the script-id gate returns
+ * `EVENT_ID_LOADING`, so `combat:setArea` follows the loading path.
+ */
+class WorldCombatOperations : CombatOperations {
+    override fun getScriptId(): Int = CombatFunctions.EVENT_ID_LOADING
+
+    override fun getAreaObject(id: Int): AreaCombat? = null
+
+    override fun execute(combat: LuaCombat, creature: Any, variant: LuaVariant): Boolean = false
+}
+
+/** `Variant` seam resolving `Lua::getThing(thing)->getPosition()` for creatures and tiles. */
+class WorldVariantOperations : VariantOperations {
+    override fun thingPosition(value: Any): Position? = when (value) {
+        is Creature -> value.position
+        is Tile -> value.position
+        else -> null
+    }
 }
