@@ -46,6 +46,14 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | `configmanager.*` | **IMPLEMENTED** | typed getters (`getBoolean`/`getNumber`/`getFloat`/`getString`), `reload`, OTC feature lists |
 | `config_enums.hpp` | **IMPLEMENTED** | `config/ConfigKeys.kt` — 360 keys with exact names/types/defaults |
 
+### `src/database/`
+| C++ | Status | Missing |
+|---|---|---|
+| `database.cpp/.hpp` (`Database`) | PARTIAL | transactions, escaping, retry, recoverable errors, query size limits |
+| `databasemanager.cpp` | PARTIAL | pool lifecycle/reconnect, `executeQuery`/`storeQuery` parity |
+| `databasemanager.cpp`/`databasetasks` | **IMPLEMENTED** | `DatabaseTasks` (FIFO async queue, flush, shutdown) |
+| `database_definitions.hpp` | PARTIAL | protocol/result enums |
+
 ### `src/creatures/`
 | C++ | Status | Missing |
 |---|---|---|
