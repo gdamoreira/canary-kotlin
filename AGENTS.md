@@ -102,3 +102,19 @@ Each document must follow this layout:
 - Before writing a feature document, locate the corresponding files in the Canary repository using `glob` or `grep`.
 - Never invent or assume file paths. Record the exact relative path from the Canary root.
 - If the feature has C++ tests in Canary (`tests/unit/` or `tests/integration/`), record them in the document and create the corresponding Kotlin transcript test.
+
+---
+
+## 6. Mandatory Wave Documentation & Publication Gate (MUST)
+
+After **each wave** (a batch of parallel-agent implementations merged into `main`), the following is a **MUST** and is not complete until every step has run:
+
+1. **Update every affected document.**
+   - `docs/game-play-features.md` — status, implemented components, residual gaps, and the current test-suite/test-count metrics.
+   - `docs/Plan/`, `docs/Implementing/`, `docs/Done/` — move specs that are now implemented to `Done/`, update any `Implementing/` entries, and refresh their Implementation Status sections.
+   - `README.md` — feature coverage, project structure, and test metrics.
+   - `CHANGELOG.md` — add the new phase entry and refresh the Current Status metrics.
+2. **Commit the documentation update in a separate commit** (never fold it into the code/merge commits).
+3. **Push to `origin`** (`git push origin main`).
+
+A wave is **not finished** until the documentation commit is pushed. Do not start the next wave before this gate passes. Keep the documented metrics truthful: run `./gradlew test` and record the real suite/test counts and any new residual gaps.
