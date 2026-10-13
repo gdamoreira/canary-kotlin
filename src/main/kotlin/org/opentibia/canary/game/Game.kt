@@ -7,7 +7,9 @@ import org.opentibia.canary.chat.NoopChatClient
 import org.opentibia.canary.chat.SpeakClasses
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.LightInfo
+import org.opentibia.canary.creatures.ChaseMode
 import org.opentibia.canary.creatures.Creature
+import org.opentibia.canary.creatures.FightMode
 import org.opentibia.canary.creatures.Npc
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerFlags_t
@@ -23,9 +25,12 @@ import org.opentibia.canary.creatures.vocations.Vocation
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.database.Database
 import org.opentibia.canary.database.PlayerLoginRepository
+import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.game.movement.areInRange
+import org.opentibia.canary.game.movement.getDirectionTo
 import org.opentibia.canary.game.movement.getDistanceX
 import org.opentibia.canary.game.movement.getDistanceY
+import org.opentibia.canary.game.movement.getNextPosition
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.zones.TileFlags
@@ -36,6 +41,7 @@ import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.Items
+import org.opentibia.canary.items.Thing
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Tile
@@ -82,6 +88,14 @@ enum class TradeState_t {
     TRADE_ACCEPT,
     TRADE_ACKNOWLEDGE,
     TRADE_TRANSFER,
+}
+
+/** `PvpMode_t` (`src/creatures/creatures_definitions.hpp:818-823`): the expert-PvP stance of `Game::playerSetFightModes`. */
+enum class PvpMode_t(val value: Int) {
+    PVP_MODE_DOVE(0),
+    PVP_MODE_WHITE_HAND(1),
+    PVP_MODE_YELLOW_HAND(2),
+    PVP_MODE_RED_FIST(3),
 }
 
 /**
@@ -223,6 +237,12 @@ class Game(
     private val vocations: Vocations? = null,
     /** `IOLoginData::loadPlayerById` (game.cpp:1436, 12378) seam. */
     private val loadPlayerById: (Long) -> Player? = { null },
+    /**
+     * `OTSYS_TIME()` (src/utils/tools.hpp): monotonic millisecond clock used by
+     * the `InternalGame` teleport guard (game.cpp:220-405). Injectable so tests
+     * can drive the rate-limit windows.
+     */
+    private val otsysTimeMs: () -> Long = { System.currentTimeMillis() },
 ) {
     private val players = mutableMapOf<Long, Player>()
 
@@ -281,6 +301,34 @@ class Game(
 
     /** `Item::getParent()` (src/items/item.hpp): the tile each item added through this facade lives on. */
     private val itemParents = IdentityHashMap<Item, Tile>()
+
+    /**
+     * `InternalGame::teleportStack()` (game.cpp:230): the thread-confined
+     * recursion stack of [internalTeleport]. Canary keys the stack by raw
+     * pointer; the port keeps identity semantics with an identity map.
+     */
+    private val teleportStack = java.util.Collections.newSetFromMap(IdentityHashMap<Thing, Boolean>())
+
+    /**
+     * `InternalGame::teleportGuards` (game.cpp:274): per-thing teleport
+     * rate-limit state. Confined to the single-threaded dispatcher, so the C++
+     * `teleportGuardsMutex` is not needed (AGENTS.md 1.2).
+     */
+    private val teleportGuards = IdentityHashMap<Thing, TeleportGuardState>()
+
+    /** `InternalGame::TeleportGuardState` (game.cpp:254-266). */
+    private class TeleportGuardState {
+        var blockedEvents: Int = 0
+        var suppressedLogs: Int = 0
+        var nextLogMs: Long = 0
+        var logDelayMs: Long = TELEPORT_LOG_INITIAL_DELAY_MS
+        var windowStartMs: Long = 0
+        var windowCount: Int = 0
+        var sustainedWindowStartMs: Long = 0
+        var sustainedWindowCount: Int = 0
+        var blockedUntilMs: Long = 0
+        var lastSeenMs: Long = 0
+    }
 
     /**
      * `Game::checkCreatureLists` (`src/game/game.cpp:78`),
@@ -392,7 +440,9 @@ class Game(
 
     /**
      * `Map::canThrowObjectTo` with `SightLine_CheckSightLineAndFloor`
-     * (game.cpp:5816, 6001) as an overridable seam.
+     * (game.cpp:5816, 6001) as an overridable seam. The trade handlers invoke
+     * this property explicitly (`this.canThrowObjectTo.invoke(...)`) because the
+     * `Game::canThrowObjectTo` method below shares the name.
      */
     var canThrowObjectTo: (Position, Position) -> Boolean = { from, to ->
         map.canThrowObjectTo(from, to, GameMap.SightLine_CheckSightLineAndFloor)
@@ -462,6 +512,89 @@ class Game(
         Int,
         Long,
     ) -> Unit = { _, _, _, _, _, _, _ -> }
+
+    // --- movement/combat/targeting seams (game.cpp:1622-7790) -----------------
+
+    /** `Player::sendCreatureTurn(creature)` (player.cpp:12092) protocol seam used by [internalCreatureTurn]. */
+    var sendCreatureTurn: (Player, Creature) -> Unit = { _, _ -> }
+
+    /** `Player::sendChangeSpeed(creature, stepSpeed)` protocol seam used by the speed helpers. */
+    var sendChangeSpeed: (Player, Creature, Int) -> Unit = { _, _, _ -> }
+
+    /** `Player::resetLoginProtection()` (player.cpp) seam used by the walk/target handlers. */
+    var resetLoginProtection: (Player) -> Unit = { _ -> }
+
+    /** `Player::resetIdleTime()` (player.cpp) seam used by the walk/turn handlers. */
+    var resetIdleTime: (Player) -> Unit = { _ -> }
+
+    /**
+     * `Player::setNextWalkTask(task)` (player.cpp) seam. The handlers pass
+     * `null` to clear the queued walk task, mirroring the C++ `nullptr` call.
+     */
+    var setNextWalkTask: (Player, Any?) -> Unit = { _, _ -> }
+
+    /**
+     * `Player::setNextWalkActionTask(task)` (player.cpp) seam. The handlers pass
+     * `null` to clear the queued walk action, mirroring the C++ `nullptr` call.
+     */
+    var setNextWalkActionTask: (Player, Any?) -> Unit = { _, _ -> }
+
+    /** `Player::cancelPush()` (player.cpp:7230) seam used by the move/turn handlers. */
+    var cancelPush: (Player) -> Unit = { _ -> }
+
+    /**
+     * `Player::startAutoWalk(listDir, force, startPolicy)` (creature.cpp:449)
+     * seam. [force] is the C++ `force` flag; the port's walk queue owns the
+     * start policy.
+     */
+    var startAutoWalk: (Player, List<Direction>, Boolean) -> Unit = { _, _, _ -> }
+
+    /** `Player::updateCreatureWalk()` (player.cpp:10662) seam used by the target handlers. */
+    var updateCreatureWalk: (Player) -> Unit = { _ -> }
+
+    /** `Player::receivePing()` (player.cpp:6310) protocol seam. */
+    var receivePing: (Player) -> Unit = { _ -> }
+
+    /** `Player::sendPingBack()` (player.cpp) protocol seam. */
+    var sendPingBack: (Player) -> Unit = { _ -> }
+
+    /** `Player::setPvpMode(mode)` (player.cpp:6226) seam gated by [expertPvpEnabled]. */
+    var setPvpMode: (Player, PvpMode_t) -> Unit = { _, _ -> }
+
+    /**
+     * `Combat::canTargetCreature(player, target)` (combat.cpp:321-374) seam used
+     * by [playerSetAttackedCreature]. The default allows the target because the
+     * Kotlin `Player`/`Creature` do not adapt to `CombatPlayer`/`CombatActor`
+     * yet (PARITY GAP); hosts inject the ported validation.
+     */
+    var canTargetCreature: (Player, Creature) -> ReturnValue = { _, _ -> ReturnValue.NOERROR }
+
+    /**
+     * `Creature::isDirectionLocked()` (creature.hpp) seam used by
+     * [internalCreatureTurn]; the Kotlin `Creature` does not model the flag yet.
+     */
+    var isDirectionLocked: (Creature) -> Boolean = { false }
+
+    /** `g_events().eventPlayerOnTurn` veto seam (game.cpp:7193). */
+    var eventPlayerOnTurn: (Player, Direction) -> Boolean = { _, _ -> true }
+
+    /** `g_callbacks().checkCallback(playerOnTurn, ...)` veto seam (game.cpp:7197). */
+    var callbackPlayerOnTurn: (Player, Direction) -> Boolean = { _, _ -> true }
+
+    /** `g_events().eventPlayerOnLook` dispatch seam (game.cpp:6385). */
+    var eventPlayerOnLook: (Player, Position, Thing, Int, Int) -> Unit = { _, _, _, _, _ -> }
+
+    /** `g_callbacks().executeCallback(playerOnLook, ...)` seam (game.cpp:6386). */
+    var callbackPlayerOnLook: (Player, Thing, Position, Int) -> Unit = { _, _, _, _ -> }
+
+    /** `g_events().eventPlayerOnLookInBattleList` dispatch seam (game.cpp:6422). */
+    var eventPlayerOnLookInBattleList: (Player, Creature, Int) -> Unit = { _, _, _ -> }
+
+    /** `g_callbacks().executeCallback(playerOnLookInBattleList, ...)` seam (game.cpp:6423). */
+    var callbackPlayerOnLookInBattleList: (Player, Creature, Int) -> Unit = { _, _, _ -> }
+
+    /** `ExpertPvp::isEnabled()` gate of [playerSetFightModes] (game.cpp:7052). */
+    var expertPvpEnabled: Boolean = false
 
     /** `Game::transferHouseItemsToPlayer` (game.hpp:905): house id -> owner GUID. */
     private val transferHouseItemsToPlayer = sortedMapOf<Int, Long>()
@@ -1222,6 +1355,509 @@ class Game(
         player.stopWalk()
     }
 
+    /** `Game::canThrowObjectTo` (src/game/game.cpp:7591): direct `Map::canThrowObjectTo` delegate. */
+    fun canThrowObjectTo(
+        fromPos: Position,
+        toPos: Position,
+        lineOfSight: Int = GameMap.SightLine_CheckSightLine,
+        rangex: Int = GameMap.MAP_MAX_CLIENT_VIEW_PORT_X,
+        rangey: Int = GameMap.MAP_MAX_CLIENT_VIEW_PORT_Y,
+    ): Boolean = map.canThrowObjectTo(fromPos, toPos, lineOfSight, rangex, rangey)
+
+    /** `Game::isSightClear` (src/game/game.cpp:7595): direct `Map::isSightClear` delegate. */
+    fun isSightClear(fromPos: Position, toPos: Position, floorCheck: Boolean): Boolean =
+        map.isSightClear(fromPos, toPos, floorCheck)
+
+    /**
+     * `Game::internalCreatureTurn` (src/game/game.cpp:7599): equal directions are
+     * a no-op, a player source cancels its push, the direction is only written
+     * when not locked, and every player spectator receives `sendCreatureTurn`.
+     */
+    fun internalCreatureTurn(creature: Creature, dir: Direction): Boolean {
+        if (creature.direction == dir) {
+            return false
+        }
+
+        val player = creature as? Player
+        if (player != null) {
+            cancelPush(player)
+        }
+
+        if (!isDirectionLocked(creature)) {
+            creature.direction = dir
+        }
+
+        for (spectator in spectatorsOf(creature.position, multifloor = true)) {
+            val spectatorPlayer = spectator as? Player ?: continue
+            sendCreatureTurn(spectatorPlayer, creature)
+        }
+        return true
+    }
+
+    /**
+     * `Game::playerTurn` (src/game/game.cpp:7187): the event and callback vetoes
+     * run before the login-protection/idle resets and the turn itself.
+     */
+    fun playerTurn(playerId: Long, dir: Direction) {
+        val player = getPlayerByID(playerId) ?: return
+        if (!eventPlayerOnTurn(player, dir)) {
+            return
+        }
+
+        if (!callbackPlayerOnTurn(player, dir)) {
+            return
+        }
+
+        resetLoginProtection(player)
+        resetIdleTime(player)
+        internalCreatureTurn(player, dir)
+    }
+
+    /**
+     * `Game::internalMoveCreature(creature, direction)` (src/game/game.cpp:1909).
+     * A creature without base speed is `NOTMOVABLE`, the last position is
+     * recorded before the move and players additionally try the z-level
+     * up/down steps (`TILESTATE_HASHEIGHT`, `TILESTATE_BLOCKSOLID`,
+     * `TILESTATE_FLOORCHANGE`).
+     */
+    fun internalMoveCreature(creature: Creature?, direction: Direction, flags: Int = 0): ReturnValue {
+        if (creature == null) {
+            return ReturnValue.NOTPOSSIBLE
+        }
+
+        if (creature.getBaseSpeed() == 0) {
+            return ReturnValue.NOTMOVABLE
+        }
+
+        creature.setLastPosition(creature.position)
+        val currentPos = creature.position
+        var destPos = getNextPosition(direction, currentPos)
+        val player = creature as? Player
+
+        // `DIRECTION_DIAGONAL_MASK` (src/enums/creature_definitions.hpp).
+        val diagonalMovement = direction.dx != 0 && direction.dy != 0
+        var moveFlags = flags
+        if (player != null && !diagonalMovement) {
+            // try go up
+            val tile = creature.getTile()
+            if (currentPos.z != 8 && tile != null && tile.hasHeight(3)) {
+                var tmpTile = map.getTile(Position(currentPos.x, currentPos.y, currentPos.z - 1))
+                if (tmpTile == null || (tmpTile.ground == null && !tmpTile.hasFlag(TileFlags.TILESTATE_BLOCKSOLID.value))) {
+                    tmpTile = map.getTile(Position(destPos.x, destPos.y, destPos.z - 1))
+                    if (tmpTile != null && tmpTile.ground != null && !tmpTile.hasFlag(TileFlags.TILESTATE_BLOCKSOLID.value)) {
+                        moveFlags = moveFlags or CylinderFlags.FLAG_IGNOREBLOCKITEM or CylinderFlags.FLAG_IGNOREBLOCKCREATURE
+
+                        if (!tmpTile.hasFlag(TileFlags.TILESTATE_FLOORCHANGE.value)) {
+                            player.direction = direction
+                            destPos = Position(destPos.x, destPos.y, destPos.z - 1)
+                        }
+                    }
+                }
+            }
+
+            // try go down
+            if (currentPos.z != 7 && currentPos.z == destPos.z) {
+                var tmpTile = map.getTile(Position(destPos.x, destPos.y, destPos.z))
+                if (tmpTile == null || (tmpTile.ground == null && !tmpTile.hasFlag(TileFlags.TILESTATE_BLOCKSOLID.value))) {
+                    tmpTile = map.getTile(Position(destPos.x, destPos.y, destPos.z + 1))
+                    if (tmpTile != null && tmpTile.hasHeight(3)) {
+                        moveFlags = moveFlags or CylinderFlags.FLAG_IGNOREBLOCKITEM or CylinderFlags.FLAG_IGNOREBLOCKCREATURE
+                        player.direction = direction
+                        destPos = Position(destPos.x, destPos.y, destPos.z + 1)
+                    }
+                }
+            }
+        }
+
+        val toTile = map.getTile(destPos) ?: return ReturnValue.NOTPOSSIBLE
+        return internalMoveCreature(creature, toTile, moveFlags)
+    }
+
+    /**
+     * `Game::internalMoveCreature(creature, toTile)` (src/game/game.cpp:1963):
+     * rooted creatures are rejected, the tile `queryAdd` and the feared
+     * magic-field gate run before `Map::moveCreature`, and the
+     * `queryDestination` chain follows floor changes. The facade's
+     * [placedCreatures] index is refreshed in place of the unported map-sector
+     * creature lists (PARITY GAP).
+     */
+    fun internalMoveCreature(creature: Creature, toTile: Tile, flags: Int = 0): ReturnValue {
+        if (creature.hasCondition(ConditionType.CONDITION_ROOTED)) {
+            return ReturnValue.NOTPOSSIBLE
+        }
+
+        // check if we can move the creature to the destination
+        var ret = toTile.queryAdd(0, creature, 1, flags, null)
+        if (ret != ReturnValue.NOERROR) {
+            return ret
+        }
+
+        if (creature.hasCondition(ConditionType.CONDITION_FEARED)) {
+            val field = toTile.getFieldItem()
+            if (field != null && !field.isBlocking() && field.getDamage() != 0) {
+                return ReturnValue.NOTPOSSIBLE
+            }
+        }
+
+        map.moveCreature(creature, toTile)
+        placedCreatures[creature] = toTile
+        if (creature.getParent() !== toTile) {
+            return ReturnValue.NOERROR
+        }
+
+        var index = 0
+        var toItem: Item? = null
+        var toCylinder = toTile
+        var fromCylinder: Tile? = null
+        var n = 0
+        var moveFlags = flags
+
+        while (true) {
+            val result = toCylinder.queryDestination(index, creature, toItem, moveFlags)
+            val subCylinder = result.cylinder?.getTile() ?: break
+            if (subCylinder === toCylinder) {
+                break
+            }
+
+            map.moveCreature(creature, subCylinder)
+            placedCreatures[creature] = subCylinder
+
+            if (creature.getParent() !== subCylinder) {
+                // could happen if a script move the creature
+                fromCylinder = null
+                break
+            }
+
+            fromCylinder = toCylinder
+            toCylinder = subCylinder
+            toItem = result.destItem
+            moveFlags = 0
+
+            // to prevent infinite loop
+            if (++n >= MAP_MAX_LAYERS) {
+                break
+            }
+        }
+
+        if (fromCylinder != null) {
+            val fromPosition = fromCylinder.position
+            val toPosition = toCylinder.position
+            if (fromPosition.z != toPosition.z && (fromPosition.x != toPosition.x || fromPosition.y != toPosition.y)) {
+                val dir = getDirectionTo(fromPosition, toPosition)
+                if (dir != null && !(dir.dx != 0 && dir.dy != 0)) {
+                    internalCreatureTurn(creature, dir)
+                }
+            }
+        }
+
+        return ReturnValue.NOERROR
+    }
+
+    /**
+     * `Game::playerMove` (src/game/game.cpp:4282): reset the walk state and
+     * admit a single-step non-forced immediate walk.
+     */
+    fun playerMove(playerId: Long, direction: Direction) {
+        val player = getPlayerByID(playerId) ?: return
+
+        resetLoginProtection(player)
+        resetIdleTime(player)
+        setNextWalkActionTask(player, null)
+        cancelPush(player)
+
+        startAutoWalk(player, listOf(direction), false)
+    }
+
+    /** `Game::forcePlayerMove` (src/game/game.cpp:4296): as [playerMove] with the forced walk flag. */
+    fun forcePlayerMove(playerId: Long, direction: Direction) {
+        val player = getPlayerByID(playerId) ?: return
+
+        resetLoginProtection(player)
+        resetIdleTime(player)
+        setNextWalkActionTask(player, null)
+        cancelPush(player)
+
+        startAutoWalk(player, listOf(direction), true)
+    }
+
+    /**
+     * `Game::playerTeleport` (src/game/game.cpp:1622): only players with
+     * `CanMapClickTeleport` may map-click teleport; a non-`NOERROR` result sends
+     * the cancel message.
+     */
+    fun playerTeleport(playerId: Long, newPosition: Position) {
+        val player = getPlayerByID(playerId) ?: return
+        if (!player.hasFlag(PlayerFlags_t.CanMapClickTeleport)) {
+            return
+        }
+
+        val returnValue = internalTeleport(player, newPosition, false)
+        if (returnValue != ReturnValue.NOERROR) {
+            sendCancelMessage(player, returnValue)
+        }
+    }
+
+    /**
+     * `Game::internalTeleport` (src/game/game.cpp:3540): recursion/rate guarded
+     * teleport of a creature (`Map::moveCreature`, `pushMove` inverted into
+     * `forceTeleport`) or an item (`internalMoveItem`). The guard state is
+     * confined to the single-threaded dispatcher (AGENTS.md 1.2), so the C++
+     * mutex around `InternalGame::teleportGuards` is not needed.
+     */
+    fun internalTeleport(thing: Thing?, newPos: Position, pushMove: Boolean = true, flags: Int = 0): ReturnValue {
+        if (thing == null) {
+            logger.error { "[internalTeleport] thing is nullptr" }
+            return ReturnValue.NOTPOSSIBLE
+        }
+
+        val now = otsysTimeMs()
+        if (!tryInsertTeleportStack(thing)) {
+            logTeleportGuardBlock(thing, "recursive", recordTeleportGuardBlock(thing, now))
+            return ReturnValue.NOTPOSSIBLE
+        }
+
+        try {
+            if (shouldBlockTeleportRate(thing, now)) {
+                logTeleportGuardBlock(thing, "rate-limited", recordTeleportGuardBlock(thing, now))
+                return ReturnValue.NOTPOSSIBLE
+            }
+
+            if (newPos == thing.position) {
+                return ReturnValue.CONTACTADMINISTRATOR
+            } else if (thing.isRemoved()) {
+                return ReturnValue.NOTPOSSIBLE
+            }
+
+            val toTile = map.getTile(newPos) ?: return ReturnValue.NOTPOSSIBLE
+
+            val creature = thing.getCreature()
+            if (creature != null) {
+                val ret = toTile.queryAdd(0, creature, 1, CylinderFlags.FLAG_NOLIMIT, null)
+                if (ret != ReturnValue.NOERROR) {
+                    return ret
+                }
+
+                map.moveCreature(creature, toTile, !pushMove)
+                placedCreatures[creature] = toTile
+
+                return ReturnValue.NOERROR
+            }
+
+            val item = thing.getItem()
+            if (item != null) {
+                return internalMoveItem(
+                    itemParents[item] ?: (item.getParent() as? Tile),
+                    toTile,
+                    INDEX_WHEREEVER,
+                    item,
+                    item.count,
+                    flags,
+                )
+            }
+            return ReturnValue.NOTPOSSIBLE
+        } finally {
+            teleportStack.remove(thing)
+        }
+    }
+
+    /**
+     * `Game::playerSetAttackedCreature` (src/game/game.cpp:7001): clearing the
+     * current target resets the login protection, an unknown id clears the
+     * target, a rejected target sends the combat return value and only an
+     * accepted target is stored and followed by `Player::updateCreatureWalk`.
+     */
+    fun playerSetAttackedCreature(playerId: Long, creatureId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+
+        if (player.getAttackedCreature() != null && creatureId == 0L) {
+            resetLoginProtection(player)
+            player.setAttackedCreature(null)
+            player.sendCancelTarget()
+            return
+        }
+
+        val attackCreature = getCreatureByID(creatureId)
+        if (attackCreature == null) {
+            player.setAttackedCreature(null)
+            player.sendCancelTarget()
+            return
+        }
+
+        val ret = canTargetCreature(player, attackCreature)
+        if (ret != ReturnValue.NOERROR) {
+            sendCancelMessage(player, ret)
+            player.sendCancelTarget()
+            player.setAttackedCreature(null)
+            return
+        }
+
+        player.setAttackedCreature(attackCreature)
+        updateCreatureWalk(player)
+    }
+
+    /**
+     * `Game::playerCancelAttackAndFollow` (src/game/game.cpp:6990): clears the
+     * attack target, then the follow target and stops the queued walk.
+     */
+    fun playerCancelAttackAndFollow(playerId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+
+        playerSetAttackedCreature(playerId, 0)
+        playerFollowCreature(playerId, 0)
+        player.stopWalk()
+    }
+
+    /**
+     * `Game::playerFollowCreature` (src/game/game.cpp:7033): the attack target
+     * is cleared, `Player::updateCreatureWalk` runs, then the follow target is
+     * stored.
+     */
+    fun playerFollowCreature(playerId: Long, creatureId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+
+        player.setAttackedCreature(null)
+        updateCreatureWalk(player)
+        player.setFollowCreature(getCreatureByID(creatureId))
+    }
+
+    /**
+     * `Game::playerSetFightModes` (src/game/game.cpp:7044): stores the fight,
+     * chase and secure modes; the PvP stance is only applied when expert PvP is
+     * enabled. PARITY GAP: the Kotlin `Player` stores the plain fields without
+     * `Player::setFightMode`'s client resend.
+     */
+    fun playerSetFightModes(
+        playerId: Long,
+        fightMode: FightMode,
+        chaseMode: Boolean,
+        secureMode: Boolean,
+        pvpMode: PvpMode_t = PvpMode_t.PVP_MODE_DOVE,
+    ) {
+        val player = getPlayerByID(playerId) ?: return
+
+        player.fightMode = fightMode
+        player.chaseMode = if (chaseMode) ChaseMode.Follow else ChaseMode.StandStill
+        player.secureMode = secureMode
+        if (expertPvpEnabled) {
+            setPvpMode(player, pvpMode)
+        }
+    }
+
+    /**
+     * `Game::playerLookAt` (src/game/game.cpp:6358): resolves the top visible
+     * thing of `STACKPOS_LOOK`, rejects unseen positions and dispatches the
+     * `playerOnLook` event/callback with the computed look distance.
+     */
+    fun playerLookAt(playerId: Long, itemId: Int, pos: Position, stackPos: Int) {
+        val player = getPlayerByID(playerId) ?: return
+
+        val thing = internalGetThingForLook(player, pos, stackPos, itemId)
+        if (thing == null) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        val thingPos = thing.position
+        if (!player.canSee(thingPos)) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        val playerPos = player.position
+        val lookDistance =
+            if (thing !== player) {
+                var distance = maxOf(getDistanceX(playerPos, thingPos), getDistanceY(playerPos, thingPos))
+                if (playerPos.z != thingPos.z) {
+                    distance += 15
+                }
+                distance
+            } else {
+                -1
+            }
+
+        eventPlayerOnLook(player, pos, thing, stackPos, lookDistance)
+        callbackPlayerOnLook(player, thing, pos, lookDistance)
+    }
+
+    /**
+     * `Game::playerLookInBattleList` (src/game/game.cpp:6393): the creature must
+     * be visible to the player and on a seen position; the same distance
+     * computation and event/callback dispatch as [playerLookAt] follow.
+     */
+    fun playerLookInBattleList(playerId: Long, creatureId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+
+        val creature = getCreatureByID(creatureId) ?: return
+        if (!player.canSeeCreature(creature)) {
+            return
+        }
+
+        val creaturePos = creature.position
+        if (!player.canSee(creaturePos)) {
+            return
+        }
+
+        val lookDistance =
+            if (creature !== player) {
+                val playerPos = player.position
+                var distance = maxOf(getDistanceX(playerPos, creaturePos), getDistanceY(playerPos, creaturePos))
+                if (playerPos.z != creaturePos.z) {
+                    distance += 15
+                }
+                distance
+            } else {
+                -1
+            }
+
+        eventPlayerOnLookInBattleList(player, creature, lookDistance)
+        callbackPlayerOnLookInBattleList(player, creature, lookDistance)
+    }
+
+    /**
+     * `Game::changeSpeed` (src/game/game.cpp:7747): adds [varSpeedDelta] to the
+     * current speed variance and notifies the same-floor player spectators.
+     */
+    fun changeSpeed(creature: Creature, varSpeedDelta: Int) {
+        var varSpeed = creature.getSpeed() - creature.getBaseSpeed()
+        varSpeed += varSpeedDelta
+
+        creature.setSpeed(varSpeed)
+
+        // Send to clients
+        for (spectator in spectatorsOf(creature.position, multifloor = false)) {
+            val spectatorPlayer = spectator as? Player ?: continue
+            sendChangeSpeed(spectatorPlayer, creature, creature.getStepSpeed())
+        }
+    }
+
+    /**
+     * `Game::setCreatureSpeed` (src/game/game.cpp:7759): replaces the base speed
+     * and notifies the same-floor player spectators.
+     */
+    fun setCreatureSpeed(creature: Creature, speed: Int) {
+        creature.setBaseSpeed(speed)
+
+        // Send creature speed to client
+        for (spectator in spectatorsOf(creature.position, multifloor = false)) {
+            val spectatorPlayer = spectator as? Player ?: continue
+            sendChangeSpeed(spectatorPlayer, creature, creature.getStepSpeed())
+        }
+    }
+
+    /** `Game::changePlayerSpeed` (src/game/game.cpp:7768): the player-only [changeSpeed] call site. */
+    fun changePlayerSpeed(player: Player, varSpeedDelta: Int) {
+        var varSpeed = player.getSpeed() - player.getBaseSpeed()
+        varSpeed += varSpeedDelta
+
+        player.setSpeed(varSpeed)
+
+        // Send new player speed to the spectators
+        for (spectator in spectatorsOf(player.position, multifloor = false)) {
+            val spectatorPlayer = spectator as? Player ?: continue
+            sendChangeSpeed(spectatorPlayer, player, player.getStepSpeed())
+        }
+    }
+
     /**
      * `Game::playerInviteToParty` (src/game/game.cpp:9657): inviting yourself
      * is discarded, the target must be online and not already inviting the
@@ -1378,7 +2014,7 @@ class Game(
             return
         }
 
-        if (!canThrowObjectTo(tradePartner.position, player.position)) {
+        if (!this.canThrowObjectTo.invoke(tradePartner.position, player.position)) {
             sendCancelMessage(player, ReturnValue.CREATUREISNOTREACHABLE)
             return
         }
@@ -1540,7 +2176,7 @@ class Game(
         }
 
         val tradePartner = getTradePartner(player) ?: return
-        if (!canThrowObjectTo(tradePartner.position, player.position)) {
+        if (!this.canThrowObjectTo.invoke(tradePartner.position, player.position)) {
             sendCancelMessage(player, ReturnValue.CREATUREISNOTREACHABLE)
             return
         }
@@ -1970,6 +2606,130 @@ class Game(
 
         val tile = map.getTile(pos) ?: return null
         return topDownItem(tile)
+    }
+
+    /**
+     * `Game::internalGetThing` `STACKPOS_LOOK` branch (game.cpp:1138-1141): the
+     * tile's top visible thing. PARITY GAPS: the container/inventory/depot-search
+     * branches (`pos.x == 0xFFFF`) and the supports-hangable post-check
+     * (game.cpp:1193-1208) are not modeled.
+     */
+    private fun internalGetThingForLook(player: Player, pos: Position, index: Int, itemId: Int): Thing? {
+        if (pos.x == 0xFFFF) {
+            return null
+        }
+
+        val tile = map.getTile(pos) ?: return null
+        return tile.getTopVisibleThing(player)
+    }
+
+    /** `InternalGame::tryInsertTeleportStack` (game.cpp:236). */
+    private fun tryInsertTeleportStack(thing: Thing): Boolean = teleportStack.add(thing)
+
+    /** `InternalGame::pruneTeleportGuardStates` (game.cpp:296). */
+    private fun pruneTeleportGuardStates(now: Long) {
+        if (teleportGuards.size <= TELEPORT_MAX_TRACKED_THINGS) {
+            return
+        }
+
+        val iterator = teleportGuards.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (entry.value.lastSeenMs + TELEPORT_GUARD_STATE_TTL_MS <= now) {
+                iterator.remove()
+            }
+        }
+
+        val excess = teleportGuards.entries.iterator()
+        while (teleportGuards.size > TELEPORT_MAX_TRACKED_THINGS && excess.hasNext()) {
+            excess.next()
+            excess.remove()
+        }
+    }
+
+    /** `InternalGame::shouldBlockTeleportRate` (game.cpp:313): burst and sustained rate windows. */
+    private fun shouldBlockTeleportRate(thing: Thing, now: Long): Boolean {
+        pruneTeleportGuardStates(now)
+
+        val state = teleportGuards.getOrPut(thing) { TeleportGuardState() }
+        state.lastSeenMs = now
+
+        if (state.blockedUntilMs > now) {
+            return true
+        }
+
+        var exceededBurstLimit = false
+        if (state.windowStartMs == 0L || state.windowStartMs + TELEPORT_SPAM_WINDOW_MS <= now) {
+            state.windowStartMs = now
+            state.windowCount = 1
+        } else {
+            state.windowCount++
+            exceededBurstLimit = state.windowCount > TELEPORT_SPAM_LIMIT
+        }
+
+        var exceededSustainedLimit = false
+        if (state.sustainedWindowStartMs == 0L || state.sustainedWindowStartMs + TELEPORT_SUSTAINED_WINDOW_MS <= now) {
+            state.sustainedWindowStartMs = now
+            state.sustainedWindowCount = 1
+        } else {
+            state.sustainedWindowCount++
+            exceededSustainedLimit = state.sustainedWindowCount > TELEPORT_SUSTAINED_LIMIT
+        }
+
+        if (exceededBurstLimit || exceededSustainedLimit) {
+            state.blockedUntilMs =
+                now + (if (exceededSustainedLimit) TELEPORT_SUSTAINED_BLOCK_MS else TELEPORT_SPAM_BLOCK_MS)
+            return true
+        }
+
+        return false
+    }
+
+    /**
+     * `InternalGame::recordTeleportGuardBlock` (game.cpp:350): counts the
+     * blocked event and returns the exponential-backoff log snapshot.
+     */
+    private fun recordTeleportGuardBlock(thing: Thing, now: Long): Pair<Long, Int>? {
+        pruneTeleportGuardStates(now)
+
+        val state = teleportGuards.getOrPut(thing) { TeleportGuardState() }
+        state.lastSeenMs = now
+        state.blockedEvents++
+
+        if (state.nextLogMs > now) {
+            state.suppressedLogs++
+            return null
+        }
+
+        val snapshot = state.blockedEvents.toLong() to state.suppressedLogs
+        state.suppressedLogs = 0
+        state.nextLogMs = now + state.logDelayMs
+        state.logDelayMs = minOf(state.logDelayMs * 2, TELEPORT_LOG_MAX_DELAY_MS)
+        return snapshot
+    }
+
+    /** `InternalGame::logTeleportGuardBlock` (game.cpp:385). */
+    private fun logTeleportGuardBlock(thing: Thing, reason: String, snapshot: Pair<Long, Int>?) {
+        if (snapshot == null) {
+            return
+        }
+
+        val creature = thing.getCreature()
+        if (creature != null) {
+            logger.error {
+                "[internalTeleport] Blocked $reason teleport for creature ${creature.name} at position " +
+                    "${creature.position} (blocked events: ${snapshot.first}, suppressed logs: ${snapshot.second})"
+            }
+            return
+        }
+
+        val item = thing.getItem()
+        if (item != null) {
+            logger.error {
+                "[internalTeleport] Blocked $reason teleport for item id ${item.id} at position " +
+                    "${item.position} (blocked events: ${snapshot.first}, suppressed logs: ${snapshot.second})"
+            }
+        }
     }
 
     /** `Player::isPartner` (player.cpp:7790-7796), transcribed for the party handlers. */
@@ -3245,17 +4005,6 @@ class Game(
         }
     }
 
-    /**
-     * `Game::playerFollowCreature` (src/game/game.cpp:7033). PARITY GAP:
-     * `Player::updateCreatureWalk` (the async follow path) is not ported, so the
-     * follow target is stored without scheduling a path.
-     */
-    fun playerFollowCreature(playerId: Long, creatureId: Long) {
-        val player = getPlayerByID(playerId) ?: return
-        player.setAttackedCreature(null)
-        player.setFollowCreature(getCreatureByID(creatureId))
-    }
-
     /** `Game::playerSetQuickLootFallback` (src/game/game.cpp:6898). */
     fun playerSetQuickLootFallback(playerId: Long, fallback: Boolean) {
         val player = getPlayerByID(playerId) ?: return
@@ -3341,6 +4090,36 @@ class Game(
 
         /** `Creature::EVENT_CREATURE_THINK_INTERVAL` (src/creatures/creature.hpp:47). */
         private const val EVENT_CREATURE_THINK_INTERVAL = 1000
+
+        /** `InternalGame::TELEPORT_SPAM_WINDOW_MS` (src/game/game.cpp:211). */
+        private const val TELEPORT_SPAM_WINDOW_MS = 1000L
+
+        /** `InternalGame::TELEPORT_SPAM_LIMIT` (src/game/game.cpp:212). */
+        private const val TELEPORT_SPAM_LIMIT = 10
+
+        /** `InternalGame::TELEPORT_SPAM_BLOCK_MS` (src/game/game.cpp:213). */
+        private const val TELEPORT_SPAM_BLOCK_MS = 1000L
+
+        /** `InternalGame::TELEPORT_SUSTAINED_WINDOW_MS` (src/game/game.cpp:214). */
+        private const val TELEPORT_SUSTAINED_WINDOW_MS = 10000L
+
+        /** `InternalGame::TELEPORT_SUSTAINED_LIMIT` (src/game/game.cpp:215). */
+        private const val TELEPORT_SUSTAINED_LIMIT = 30
+
+        /** `InternalGame::TELEPORT_SUSTAINED_BLOCK_MS` (src/game/game.cpp:216). */
+        private const val TELEPORT_SUSTAINED_BLOCK_MS = 5000L
+
+        /** `InternalGame::TELEPORT_GUARD_STATE_TTL_MS` (src/game/game.cpp:218). */
+        private const val TELEPORT_GUARD_STATE_TTL_MS = 60000L
+
+        /** `InternalGame::TELEPORT_LOG_INITIAL_DELAY_MS` (src/game/game.cpp:219). */
+        private const val TELEPORT_LOG_INITIAL_DELAY_MS = 1000L
+
+        /** `InternalGame::TELEPORT_LOG_MAX_DELAY_MS` (src/game/game.cpp:220). */
+        private const val TELEPORT_LOG_MAX_DELAY_MS = 60000L
+
+        /** `InternalGame::TELEPORT_MAX_TRACKED_THINGS` (src/game/game.cpp:221). */
+        private const val TELEPORT_MAX_TRACKED_THINGS = 4096
 
         /** `MAP_MAX_LAYERS` (src/map/map_const.hpp:17). */
         private const val MAP_MAX_LAYERS = 16
