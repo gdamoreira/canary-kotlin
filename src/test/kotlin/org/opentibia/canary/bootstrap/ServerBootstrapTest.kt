@@ -46,6 +46,10 @@ class ServerBootstrapTest {
         override fun stop() {
             events += "listeners.stop"
         }
+
+        override fun closeConnections() {
+            events += "listeners.closeConnections"
+        }
     }
 
     private fun bootstrap(
@@ -116,9 +120,27 @@ class ServerBootstrapTest {
         bootstrap.shutdown()
 
         assertThat(events.count { it == "listeners.stop" }).isEqualTo(1)
+        assertThat(events.count { it == "listeners.closeConnections" }).isEqualTo(1)
         assertThat(events.count { it == "database.close" }).isEqualTo(1)
         assertThat(bootstrap.isShutdown).isTrue()
         assertThat(dispatcher.isRunning).isFalse()
+    }
+
+    @Test
+    fun `shutdown closes live connections after stopping listeners`() {
+        val events = mutableListOf<String>()
+        val dataSource = DatabaseConnectionFactory.createInMemoryDataSource("bootstrap_connections")
+        val bootstrap = bootstrap(events, dataSource, GameDispatcher())
+        bootstrap.run()
+
+        bootstrap.shutdown()
+
+        val stopIndex = events.indexOf("listeners.stop")
+        val closeIndex = events.indexOf("listeners.closeConnections")
+        val databaseIndex = events.indexOf("database.close")
+        assertThat(stopIndex).isGreaterThanOrEqualTo(0)
+        assertThat(closeIndex).isGreaterThan(stopIndex)
+        assertThat(databaseIndex).isGreaterThan(closeIndex)
     }
 
     @Test

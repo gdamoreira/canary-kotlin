@@ -160,11 +160,17 @@ class Webhook(
         }
     }
 
-    /** Schedules [sendWebhook] on the Maintenance lane and re-arms itself. */
+    /**
+     * `Webhook::run` (webhook.cpp:39-44): detach the current send and re-arm the
+     * maintenance loop after the configured delay. The dispatcher replaces the C++
+     * thread-pool detach.
+     */
     fun run() {
         val scheduler = dispatcher ?: return
-        scheduler.schedule(delayMs, DispatcherLane.Maintenance) {
+        scheduler.dispatch(DispatcherLane.Maintenance) {
             sendWebhook()
+        }
+        scheduler.schedule(delayMs, DispatcherLane.Maintenance) {
             run()
         }
     }

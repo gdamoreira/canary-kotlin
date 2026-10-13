@@ -58,4 +58,21 @@ class ShutdownDrainTest {
         assertThat(events).containsExactly("listeners", "dispatcher", "saveManager", "database")
         assertThat(drain.isDrained).isTrue()
     }
+
+    @Test
+    fun `closes live connections after listeners and before the dispatcher`() {
+        val events = mutableListOf<String>()
+        val drain = ShutdownDrain(
+            stopListeners = { events += "listeners" },
+            closeConnections = { events += "connections" },
+            shutdownDispatcher = { events += "dispatcher" },
+            flushSaveManager = { events += "saveManager" },
+            closeDatabase = { events += "database" }
+        )
+
+        drain.drain()
+
+        assertThat(events).containsExactly("listeners", "connections", "dispatcher", "saveManager", "database")
+        assertThat(drain.isDrained).isTrue()
+    }
 }

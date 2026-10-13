@@ -24,4 +24,22 @@ object Adler32Checksum {
 
         return ((b shl 16) or a) and 0xFFFFFFFFL
     }
+
+    /**
+     * Computes the Adler-32 checksum over a byte array, mirroring Canary's
+     * `adlerChecksum(const uint8_t*, size_t)` (src/utils/tools.cpp) used by
+     * `Connection::parsePacket`.
+     */
+    fun compute(buffer: ByteArray, offset: Int, length: Int): Long {
+        var a = 1L
+        var b = 0L
+
+        for (i in offset until (offset + length)) {
+            val byteVal = buffer[i].toLong() and 0xFF
+            a = (a + byteVal) % MOD_ADLER
+            b = (b + a) % MOD_ADLER
+        }
+
+        return ((b shl 16) or a) and 0xFFFFFFFFL
+    }
 }
