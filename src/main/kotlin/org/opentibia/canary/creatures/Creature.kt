@@ -3,24 +3,29 @@ package org.opentibia.canary.creatures
 import org.opentibia.canary.account.Account
 import org.opentibia.canary.account.AccountType
 import org.opentibia.canary.account.getTimeNow
+import org.opentibia.canary.combat.condition.Buff
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionId
 import org.opentibia.canary.combat.condition.ConditionSuppression
 import org.opentibia.canary.combat.condition.ConditionTarget
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.LightInfo
+import org.opentibia.canary.combat.condition.MonkData
 import org.opentibia.canary.combat.condition.Outfit
 import org.opentibia.canary.combat.condition.SpellGroup
 import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.grouping.Group
 import org.opentibia.canary.creatures.grouping.Party
 import org.opentibia.canary.creatures.grouping.PartyShields_t
+import org.opentibia.canary.creatures.players.components.InMemoryKV
+import org.opentibia.canary.creatures.players.components.KV
 import org.opentibia.canary.creatures.players.components.PlayerSex_t
 import org.opentibia.canary.creatures.players.pvp.PlayerPvp
 import org.opentibia.canary.social.guild.Guild
 import org.opentibia.canary.social.guild.GuildRank
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
+import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.creatures.vocations.Vocation
 import org.opentibia.canary.creatures.vocations.VocationRequirementsAdapter
 import org.opentibia.canary.creatures.vocations.Vocations
@@ -28,7 +33,11 @@ import org.opentibia.canary.map.Position
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import org.opentibia.canary.spells.SpellBook
 import org.opentibia.canary.spells.Spells
+import java.util.Collections
+import java.util.IdentityHashMap
+import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.pow
 
 /** `Creature::FlagAsyncClass_t` (`src/creatures/creature.hpp:819-827`). */
 enum class FlagAsyncClass_t(val value: Int) {
@@ -334,6 +343,45 @@ abstract class Creature(
     open fun setNormalCreatureLight() {
         internalLight = LightInfo()
     }
+
+    // --- buffs (creature.hpp:309-323, 909) ---------------------------------------
+
+    /** `Creature::varBuffs` (creature.hpp:909), every entry seeded with 100. */
+    private val varBuffs = IntArray(Buff.LAST + 1) { 100 }
+
+    /** `Creature::getBuff(int32_t)` (creature.hpp:309-315). */
+    fun getBuff(buff: Int): Int = varBuffs[buff]
+
+    /** `Creature::setBuff(buffs_t, int32_t)` (creature.hpp:317-319). */
+    fun setBuff(buff: Buff, modifier: Int) {
+        varBuffs[buff.value] += modifier
+    }
+
+    /** `Creature::resetBuff(buffs_t)` (creature.hpp:321-323). */
+    fun resetBuff(buff: Buff) {
+        varBuffs[buff.value] = 100
+    }
+
+    // --- loot/skill-loss flags (creature.hpp:641-646, 932) ------------------------
+
+    /**
+     * `Creature::skillLoss` (creature.hpp:932, protected), default true. The
+     * setter is renamed at the JVM level so it does not clash with the
+     * Canary-parity [setSkillLoss] method.
+     */
+    @set:JvmName("setSkillLossValue")
+    protected var skillLoss: Boolean = true
+
+    /** `Creature::setSkillLoss` (creature.hpp:644-646). */
+    fun setSkillLoss(newSkillLoss: Boolean) {
+        skillLoss = newSkillLoss
+    }
+
+    /**
+     * `Creature::getLostExperience` (creature.hpp:960-962) — the base creature
+     * loses nothing; `Player` overrides it (player.hpp:1921-1923).
+     */
+    open fun getLostExperience(): Long = 0L
 
     /** `Creature::skull` (creature.hpp:925), default `SKULL_NONE`. */
     private var skull: Skulls_t = Skulls_t.SKULL_NONE
@@ -859,6 +907,32 @@ enum class ChaseMode {
     Follow
 }
 
+/** `Blessings` (`src/enums/player_blessings.hpp:16-25`). */
+enum class Blessings(val value: Int) {
+    TwistOfFate(1),
+    TheWisdomOfSolitude(2),
+    TheSparkOfThePhoenix(3),
+    TheFireOfTheSuns(4),
+    TheSpiritualShielding(5),
+    TheEmbraceOfTibia(6),
+    HearthOfTheMountain(7),
+    BloodOfTheMountain(8),
+}
+
+/** `Virtue_t` (`src/creatures/creatures_definitions.hpp:44-49`). */
+enum class Virtue_t(val value: Int) {
+    None(0),
+    Harmony(1),
+    Justice(2),
+    Sustain(3),
+}
+
+/** `OpenContainer` (`src/creatures/players/player.hpp:118-121`). */
+class OpenContainer(
+    var container: Container?,
+    var index: Int = 0,
+)
+
 class Player(
     id: Long,
     name: String,
@@ -881,8 +955,11 @@ class Player(
     /**
      * `Player::vocation` (player.hpp). Canary stores the internal [Vocations] id
      * (0..10); without a wired registry this Kotlin port historically held a CIP
-     * id directly, so [getPlayerVocationEnum] passes it through unchanged.
+     * id directly, so [getPlayerVocationEnum] passes it through unchanged. The
+     * getter is renamed at the JVM level so it does not clash with the
+     * Canary-parity [getVocationId] method.
      */
+    @get:JvmName("getVocationIdValue")
     var vocationId: Int = 0
 
     /**
@@ -935,6 +1012,21 @@ class Player(
             5, 15 -> Vocation.VOCATION_MONK_CIP
             else -> Vocation.VOCATION_NONE
         }
+    }
+
+    /** `Player::getVocationId()` (player.cpp:201-203): `vocation->getId()`. */
+    fun getVocationId(): Int = vocationId
+
+    /**
+     * `Player::isPromoted()` (player.cpp:7341-7344). A vocation is promoted when
+     * no other vocation promotes from it: the injected [Vocations] registry
+     * returns `VOCATION_NONE` for the promoted base vocations. Without a wired
+     * registry the lookup yields `VOCATION_NONE` exactly like an empty registry,
+     * so any non-`VOCATION_NONE` id reads as promoted.
+     */
+    fun isPromoted(): Boolean {
+        val promotedVocation = vocations?.getPromotedVocation(vocationId) ?: Vocation.VOCATION_NONE
+        return promotedVocation == Vocation.VOCATION_NONE && vocationId != promotedVocation
     }
 
     /**
@@ -1269,6 +1361,217 @@ class Player(
         addInFightTicks()
         pvpPlayer.sendOpenPvpSituations()
     }
+
+    // --- blessings (player.hpp:1818, player.cpp:2422-2440, 10544-10579, 12993) ----
+
+    /** `Player::kv()` (player.cpp:1398-1400); in-memory per AGENTS.md 1.1. */
+    var kv: KV = InMemoryKV()
+
+    /**
+     * `g_configManager().getNumber(DEATH_LOSE_PERCENT)` (configmanager.cpp:245),
+     * default -1 selects the level formula in [getLostPercent].
+     */
+    var deathLosePercent: Int = -1
+
+    /** `g_configManager().getNumber(ADVENTURERSBLESSING_LEVEL)` (configmanager.cpp:227). */
+    var adventurersBlessingLevel: Int = 21
+
+    /**
+     * `ExpertPvp::isRetroPvpWorldType()` (expert_pvp.cpp:369-371) reading the
+     * configured `WORLD_TYPE`; injected per AGENTS.md 1.1, defaults to the
+     * `configmanager.cpp:413` regular PvP behavior.
+     */
+    var isRetroPvpWorldType: Boolean = false
+
+    /** `Player::sendBlessStatus()` protocol seam. */
+    var sendBlessStatus: () -> Unit = {}
+
+    /** `Player::blessings` (player.hpp:1818): ten `uint8_t` slots, indexed 1..10. */
+    private val blessings = IntArray(10)
+
+    /**
+     * `Player::addBlessing` (`player.cpp:2422-2428`). Canary stores into a
+     * `uint8_t`, so the addition wraps; a slot already at 255 refuses the call.
+     * Out-of-range indices are UB in C++ and are ignored here (PARITY GAP).
+     */
+    fun addBlessing(index: Int, count: Int) {
+        if (index < 1 || index > blessings.size) {
+            return
+        }
+        if (blessings[index - 1] == UINT8_MAX) {
+            return
+        }
+        blessings[index - 1] = (blessings[index - 1] + (count and 0xFF)) and 0xFF
+    }
+
+    /** `Player::removeBlessing` (`player.cpp:2430-2436`); see [addBlessing]. */
+    fun removeBlessing(index: Int, count: Int) {
+        if (index < 1 || index > blessings.size) {
+            return
+        }
+        if (blessings[index - 1] == 0) {
+            return
+        }
+        blessings[index - 1] = (blessings[index - 1] - (count and 0xFF)) and 0xFF
+    }
+
+    /** `Player::hasBlessing` (`player.cpp:2438-2440`). */
+    fun hasBlessing(index: Int): Boolean {
+        if (index < 1 || index > blessings.size) {
+            return false
+        }
+        return blessings[index - 1] != 0
+    }
+
+    /**
+     * `Player::getBlessingCount` (`player.cpp:10544-10555`). The `storeCount`
+     * branch reads `kv()->scoped("summary")->scoped("blessings")->scoped(index)
+     * ->get("amount")` with the C++ `uint8_t` truncation.
+     */
+    fun getBlessingCount(index: Int, storeCount: Boolean = false): Int {
+        if (!storeCount) {
+            if (index > 0 && index <= blessings.size) {
+                return blessings[index - 1]
+            }
+            return 0
+        }
+        val amount = kv.scoped("summary").scoped("blessings").scoped("$index").get("amount") ?: return 0
+        return amount.toInt() and 0xFF
+    }
+
+    /**
+     * `Player::getBlessingsName` (`player.cpp:10557-10579`): the held blessing
+     * names in enum order, start-cased with spaces and joined by ", " and " and ".
+     */
+    fun getBlessingsName(): String {
+        val blessingNames = Blessings.entries
+            .filter { hasBlessing(it.value) }
+            .map { toStartCaseWithSpace(it.name) }
+
+        val output = StringBuilder()
+        if (blessingNames.isNotEmpty()) {
+            for (i in 0 until blessingNames.size - 1) {
+                output.append(blessingNames[i]).append(", ")
+            }
+            if (blessingNames.size > 1) {
+                output.append("and ")
+            }
+            output.append(blessingNames.last()).append(".")
+        }
+        return output.toString()
+    }
+
+    /** `toStartCaseWithSpace` (`tools.cpp:412-426`) over an enum name. */
+    private fun toStartCaseWithSpace(str: String): String {
+        val result = StringBuilder()
+        for ((i, ch) in str.withIndex()) {
+            if (i == 0 || ch.isUpperCase()) {
+                if (i > 0) {
+                    result.append(' ')
+                }
+                result.append(ch.uppercaseChar())
+            } else {
+                result.append(ch.lowercaseChar())
+            }
+        }
+        return result.toString()
+    }
+
+    /**
+     * `Player::checkAndShowBlessingMessage` (`player.cpp:12993-13018`). The
+     * `MESSAGE_EVENT_ADVANCE` type is folded into [sendTextMessage] like the
+     * other ported condition messages.
+     */
+    fun checkAndShowBlessingMessage() {
+        val willNotLoseBless = level < adventurersBlessingLevel && getVocationId() > Vocation.VOCATION_NONE
+        val bless = getBlessingsName()
+
+        val blessOutput: String
+        if (willNotLoseBless) {
+            var addedBless = false
+            for (i in 2..6) {
+                if (!hasBlessing(i)) {
+                    addBlessing(i, 1)
+                    addedBless = true
+                }
+            }
+            sendBlessStatus()
+            blessOutput = if (addedBless) {
+                "You have received adventurer's blessings for being level lower than $adventurersBlessingLevel!\n" +
+                    "You are still blessed with $bless"
+            } else {
+                ""
+            }
+        } else {
+            blessOutput = if (bless.isEmpty()) {
+                "You lost all your blessings."
+            } else {
+                "You are still blessed with $bless"
+            }
+        }
+
+        if (blessOutput.isNotEmpty()) {
+            sendTextMessage(blessOutput)
+        }
+    }
+
+    /**
+     * `Player::getLostPercent` (`player.cpp:7350-7393`). The configured
+     * `DEATH_LOSE_PERCENT` path subtracts 3 for a promoted vocation and one
+     * point per counted blessing; otherwise the level formula applies with 8%
+     * (6.31% on retro PvP worlds) reduction per blessing and a flat 30% for
+     * promoted players.
+     */
+    fun getLostPercent(): Double {
+        var blessingCount = 0
+        for (i in 2..MAX_BLESSING) {
+            if (hasBlessing(i)) {
+                blessingCount++
+            }
+        }
+
+        val configuredDeathLosePercent = deathLosePercent
+        if (configuredDeathLosePercent != -1) {
+            var losePercent = configuredDeathLosePercent
+            if (isPromoted()) {
+                losePercent -= 3
+            }
+            losePercent -= blessingCount
+            return maxOf(0, losePercent) / 100.0
+        }
+
+        val factor = if (isRetroPvpWorldType) 6.31 else 8.0
+        var percentReduction = blessingCount * factor / 100.0
+
+        val lossPercent: Double
+        if (level >= 24) {
+            val tmpLevel = level + (levelPercent / 100.0)
+            lossPercent = ((tmpLevel + 50) * 50 * ((tmpLevel * tmpLevel) - (5 * tmpLevel) + 8)) /
+                experience.toDouble()
+        } else {
+            percentReduction = if (percentReduction >= 0.40) 0.50 else percentReduction
+            lossPercent = 10.0
+        }
+
+        if (isPromoted()) {
+            percentReduction += 30 / 100.0
+        }
+
+        return (lossPercent * (1 - percentReduction)) / 100.0
+    }
+
+    /** `Player::getLostExperience` (`player.hpp:1921-1923`) over `Creature::skillLoss`. */
+    override fun getLostExperience(): Long =
+        if (skillLoss) (experience * getLostPercent()).toLong() else 0L
+
+    /**
+     * `Player::levelPercent` (player.hpp:1849) recomputed by
+     * `Player::addExperience` (`player.cpp:3737-3741`).
+     */
+    private var levelPercent: Int = 0
+
+    /** `Player::getLevelPercent` (player.hpp:580-582). */
+    fun getLevelPercent(): Int = levelPercent
 
     // --- learned spells (player.cpp:3122-3145) -------------------------------------
 
@@ -1684,9 +1987,185 @@ class Player(
         return count
     }
 
+    // --- open container registry (player.hpp:118-121, 502-510, 1671) -------------
+
+    /** `Player::openContainers` (player.hpp:1671) — a `std::map<uint8_t, ...>`. */
+    private val openContainers = sortedMapOf<Int, OpenContainer>()
+
+    /** `Player::getOpenContainers` (player.cpp:3199-3201). */
+    fun getOpenContainers(): Map<Int, OpenContainer> = openContainers
+
+    /** `Player::addContainer` (`player.cpp:1292-1312`); `cid` is a `uint8_t`. */
+    fun addContainer(cid: Int, container: Container?) {
+        val id = cid and 0xFF
+        if (id > 0xF) {
+            return
+        }
+        if (container == null) {
+            return
+        }
+
+        val existing = openContainers[id]
+        if (existing != null) {
+            existing.container = container
+            existing.index = 0
+        } else {
+            openContainers[id] = OpenContainer(container, 0)
+        }
+    }
+
+    /**
+     * `Player::closeContainer` (`player.cpp:1314-1327`). PARITY GAP: the
+     * `isAnyKindOfRewardContainer()` cleanup (`removeEmptyRewards`,
+     * `hasOtherRewardContainerOpen`) needs the reward-chest container tree.
+     */
+    fun closeContainer(cid: Int) {
+        openContainers.remove(cid and 0xFF)
+    }
+
+    /** `Player::setContainerIndex` (`player.cpp:1346-1352`). */
+    fun setContainerIndex(cid: Int, index: Int) {
+        openContainers[cid and 0xFF]?.index = index
+    }
+
+    /** `Player::getContainerByID` (`player.cpp:1354-1360`). */
+    fun getContainerByID(cid: Int): Container? = openContainers[cid and 0xFF]?.container
+
+    /** `Player::getContainerID` (`player.cpp:1362-1369`), -1 when not open. */
+    fun getContainerID(container: Container): Int {
+        for ((cid, info) in openContainers) {
+            if (info.container === container) {
+                return cid
+            }
+        }
+        return -1
+    }
+
+    /** `Player::getContainerIndex` (`player.cpp:1371-1377`). */
+    fun getContainerIndex(cid: Int): Int = openContainers[cid and 0xFF]?.index ?: 0
+
+    // --- inventory container queries (player.cpp:1086, 5714, 5861, 9631) ----------
+
+    /** `Player::getBackpack` (`player.cpp:9631-9639`). */
+    fun getBackpack(): Container? = getInventoryItem(Slots_t.CONST_SLOT_BACKPACK) as? Container
+
+    /** `Player::getAllSlotItems` (`player.cpp:1086-1098`). */
+    fun getAllSlotItems(): Map<Slots_t, Item> {
+        val itemMap = linkedMapOf<Slots_t, Item>()
+        for (slot in Slots_t.entries) {
+            if (slot.value < Slots_t.FIRST || slot.value > Slots_t.LAST) {
+                continue
+            }
+            inventory[slot.value]?.let { itemMap[slot] = it }
+        }
+        return itemMap
+    }
+
+    /** `Player::getInventoryItemsFromId` (`player.cpp:5714-5737`). */
+    fun getInventoryItemsFromId(itemId: Int, ignore: Boolean = true): List<Item> {
+        val itemVector = mutableListOf<Item>()
+        for (slot in Slots_t.FIRST..Slots_t.LAST) {
+            val item = inventory[slot] ?: continue
+
+            if (!ignore && item.id == itemId) {
+                itemVector.add(item)
+            }
+
+            if (item is Container) {
+                for (containerItem in containerItems(item)) {
+                    if (containerItem.id == itemId) {
+                        itemVector.add(containerItem)
+                    }
+                }
+            }
+        }
+        return itemVector
+    }
+
+    /** `Player::getAllInventoryItems` (`player.cpp:5861-5890`). */
+    fun getAllInventoryItems(ignoreEquiped: Boolean = false, ignoreItemWithTier: Boolean = false): List<Item> {
+        val itemVector = mutableListOf<Item>()
+        for (slot in Slots_t.FIRST..Slots_t.LAST) {
+            val item = inventory[slot] ?: continue
+
+            if (!ignoreEquiped) {
+                itemVector.add(item)
+            }
+
+            if (item is Container) {
+                for (containedItem in containerItems(item)) {
+                    if (ignoreItemWithTier &&
+                        ((containedItem.getAttribute(ItemAttribute.TIER) as? Long ?: 0L) > 0L)
+                    ) {
+                        continue
+                    }
+                    itemVector.add(containedItem)
+                }
+            }
+        }
+        return itemVector
+    }
+
+    /**
+     * Depth-first `ContainerIterator` (`container.cpp:1222-1298`): every item
+     * once, container entries yielded before their contents, with the
+     * `MAX_CONTAINER_DEPTH` cap and cycle detection of the C++ iterator.
+     */
+    private fun containerItems(root: Container, maxDepth: Int = MAX_CONTAINER_DEPTH): List<Item> {
+        val result = mutableListOf<Item>()
+        val visited = Collections.newSetFromMap(IdentityHashMap<Container, Boolean>())
+        val containers = ArrayDeque<Container>()
+        val indices = ArrayDeque<Int>()
+        val depths = ArrayDeque<Int>()
+
+        containers.addLast(root)
+        indices.addLast(0)
+        depths.addLast(1)
+        visited.add(root)
+
+        while (containers.isNotEmpty()) {
+            val index = indices.last()
+            val items = containers.last().items
+            if (index >= items.size) {
+                containers.removeLast()
+                indices.removeLast()
+                depths.removeLast()
+                continue
+            }
+
+            indices[indices.size - 1] = index + 1
+            val current = items[index]
+            result.add(current)
+
+            if (current is Container && current.items.isNotEmpty()) {
+                val newDepth = depths.last() + 1
+                if (newDepth <= maxDepth && visited.add(current)) {
+                    containers.addLast(current)
+                    indices.addLast(0)
+                    depths.addLast(newDepth)
+                }
+            }
+        }
+        return result
+    }
+
+    /**
+     * `Player::addExperience` (player.cpp:3613-3742). The rate/message/stat
+     * machinery is a PARITY GAP (see [onGainSharedExperience]); the port keeps
+     * the experience gain, the level-up loop and the `levelPercent`
+     * bookkeeping [getLostPercent] reads.
+     */
     fun addExperience(exp: Long) {
         experience += exp
         updateLevel()
+
+        val currLevelExp = getExpForLevel(level)
+        val nextLevelExp = getExpForLevel(level + 1)
+        levelPercent = if (nextLevelExp > currLevelExp) {
+            getPercentLevel(experience - currLevelExp, nextLevelExp - currLevelExp).toInt()
+        } else {
+            0
+        }
     }
 
     /**
@@ -1714,6 +2193,281 @@ class Player(
         }
     }
 
+    // --- harmony / virtue / serenity (player.hpp:1703-1704, player.cpp:13244-13403) --
+
+    /** `Player::sendMonkData` (`player.cpp:9249-9253`) protocol seam. */
+    var sendMonkData: (MonkData, Int) -> Unit = { _, _ -> }
+
+    /** `Player::sendSkills()` protocol seam used by virtue/serenity changes. */
+    var sendSkills: () -> Unit = {}
+
+    /**
+     * `Combat::harmonyHeal(caster, target, charges)` (`combat.cpp:761-792`)
+     * seam; the heal combat plumbing lives with the combat subsystem.
+     */
+    var harmonyHeal: (Player, Int) -> Unit = { _, _ -> }
+
+    /**
+     * `m_wheelPlayer.getStage(WheelStage_t::ASCETIC)` (`player.cpp:13340`); the
+     * wheel stage state belongs to the wheel subsystem, injected per AGENTS.md 1.1.
+     */
+    var wheelStageAsceticProvider: () -> Int = { 0 }
+
+    /**
+     * `Spectators().find<Creature>(player.getPosition(), false, 1, 1, 1, 1)`
+     * (`player.cpp:8584`) used by `hasTooManyCreaturesNearby`; the spatial grid
+     * belongs to the map subsystem, injected per AGENTS.md 1.1.
+     */
+    var nearbyCreaturesProvider: (Position) -> List<Creature> = { emptyList() }
+
+    /** `Player::harmony` (player.hpp:1703), a `uint8_t` charge counter. */
+    private var harmony = 0
+
+    /** `Player::virtue` (player.hpp:1704), default `None`. */
+    private var virtue: Virtue_t = Virtue_t.None
+
+    /** `Player::getVirtue` (`player.cpp:13244-13246`). */
+    fun getVirtue(): Virtue_t = virtue
+
+    /** `Player::setVirtue` (`player.cpp:13248-13259`). */
+    fun setVirtue(newVirtue: Virtue_t, notifyClient: Boolean = true) {
+        if (virtue == newVirtue) {
+            return
+        }
+
+        virtue = newVirtue
+
+        if (notifyClient) {
+            sendSkills()
+            sendMonkData(MonkData.Virtue, newVirtue.value)
+        }
+    }
+
+    /**
+     * `Player::setSerene` (`player.cpp:13261-13280`): a still-running
+     * `CONDITION_SERENE` (`ticks > 0`) refuses the new value; otherwise the
+     * condition is removed and, when `b`, re-created with `ticks`.
+     */
+    fun setSerene(b: Boolean, ticks: Int = -1) {
+        val condition = getCondition(ConditionType.CONDITION_SERENE)
+        if (condition != null && condition.ticks > 0) {
+            return
+        }
+
+        if (condition != null) {
+            removeCondition(condition)
+        }
+
+        if (b) {
+            addCondition(
+                Condition.createCondition(
+                    ConditionId.CONDITIONID_DEFAULT,
+                    ConditionType.CONDITION_SERENE,
+                    ticks,
+                    now = { now() },
+                ),
+            )
+        }
+
+        if (virtue == Virtue_t.Justice) {
+            sendSkills()
+        }
+    }
+
+    /** `Player::emptyHarmony` (`player.cpp:13282-13285`). */
+    fun emptyHarmony() {
+        harmony = 0
+        sendMonkData(MonkData.Harmony, harmony)
+    }
+
+    /** `Player::fillHarmony` (`player.cpp:13287-13290`). */
+    fun fillHarmony() {
+        buildHarmony(MAX_HARMONY)
+        sendMonkData(MonkData.Harmony, harmony)
+    }
+
+    /** `Player::buildHarmony` (`player.cpp:13292-13307`). */
+    fun buildHarmony(charges: Int = 1) {
+        if (harmony == MAX_HARMONY) {
+            return
+        }
+
+        val appliedCharges = minOf(charges, MAX_HARMONY - harmony)
+        if (appliedCharges == 0) {
+            return
+        }
+
+        healFromHarmony(appliedCharges)
+        harmony += appliedCharges
+        sendMonkData(MonkData.Harmony, harmony)
+    }
+
+    /** `Player::spendHarmony` (`player.cpp:13309-13319`). */
+    fun spendHarmony() {
+        healFromHarmony(harmony)
+
+        harmony = 0
+
+        if (virtue == Virtue_t.Harmony) {
+            buildHarmony()
+        }
+
+        sendMonkData(MonkData.Harmony, harmony)
+    }
+
+    /** `Player::getHarmony` (`player.cpp:13321-13323`). */
+    fun getHarmony(): Int = harmony
+
+    /** `Player::setHarmony` (`player.cpp:13325-13327`), a `uint8_t`. */
+    fun setHarmony(newHarmony: Int) {
+        harmony = newHarmony and 0xFF
+    }
+
+    /** `Player::getHarmonyDamage` (`player.cpp:13356-13359`). */
+    fun getHarmonyDamage(min: Double, max: Double): Pair<Long, Long> {
+        val harmonyBonus = getHarmonyBonus()
+        return (min * harmonyBonus).toLong() to (max * harmonyBonus).toLong()
+    }
+
+    /**
+     * `Player::getHarmonyBonus` (`player.cpp:13329-13354`): an 8% base per
+     * charge that doubles per charge, plus the virtue/serenity bonus, the
+     * ascetic wheel stage and the harmony buff modifier.
+     */
+    private fun getHarmonyBonus(): Double {
+        if (harmony == 0) {
+            return 1.0
+        }
+
+        var harmonyBaseBonus = 8.0
+
+        if (virtue == Virtue_t.Harmony) {
+            harmonyBaseBonus += if (hasCondition(ConditionType.CONDITION_SERENE)) 8.0 else 4.0
+        }
+
+        harmonyBaseBonus += wheelStageAsceticProvider()
+
+        val rawHarmonyBuff = getBuff(Buff.BUFF_HARMONYBONUS.value)
+        if (rawHarmonyBuff != 0) {
+            harmonyBaseBonus += rawHarmonyBuff - 100
+        }
+
+        if (harmonyBaseBonus <= 0) {
+            return 1.0
+        }
+
+        val bonusPercent = harmonyBaseBonus * 2.0.pow(harmony - 1) / 100.0
+        return 1 + bonusPercent
+    }
+
+    /**
+     * `Player::healFromHarmony` (`player.cpp:13373-13403`): the most injured
+     * live party member inside the client view, otherwise the player itself.
+     */
+    private fun healFromHarmony(charges: Int = 1) {
+        var targetPlayer: Player = this
+
+        val party = getParty()
+        if (party != null) {
+            for (partyMember in party.getPlayers()) {
+                if (partyMember.isRemoved() || partyMember.isDead) {
+                    continue
+                }
+
+                if (this === partyMember) {
+                    continue
+                }
+
+                // `Position::areInRange<MAP_MAX_CLIENT_VIEW_PORT_X, MAP_MAX_CLIENT_VIEW_PORT_Y, 0>`
+                // (player.cpp:13390).
+                if (!position.isWithinRange(
+                        partyMember.position,
+                        Creature.MAP_MAX_CLIENT_VIEW_PORT_X,
+                        Creature.MAP_MAX_CLIENT_VIEW_PORT_Y,
+                    )
+                ) {
+                    continue
+                }
+
+                if (partyMember.health < targetPlayer.health) {
+                    targetPlayer = partyMember
+                }
+            }
+        }
+
+        harmonyHeal(targetPlayer, charges)
+    }
+
+    /**
+     * `Player::onThink` (`player.cpp:8618-8720`). PARITY GAPS: message buffer,
+     * ping, idle logout, transcendence/momentum and the login/logout checks
+     * belong to their owning subsystems; the port keeps the condition tick from
+     * [Creature.onThink] and the serenity refresh (`player.cpp:8629`).
+     */
+    override fun onThink(interval: Int) {
+        super.onThink(interval)
+        updateSerenityState()
+    }
+
+    /** `updateSerenityState` (`player.cpp:8603-8616`) — private in Canary. */
+    private fun updateSerenityState() {
+        if (getPlayerVocationEnum() != Vocation.VOCATION_MONK_CIP) {
+            return
+        }
+
+        val isSerene = hasCondition(ConditionType.CONDITION_SERENE)
+        val visiblePartyMember = hasVisiblePartyMember(this)
+        val tooManyCreaturesNearby = visiblePartyMember && hasTooManyCreaturesNearby(this)
+        val checkSerenity = !(visiblePartyMember && tooManyCreaturesNearby)
+
+        if (isSerene != checkSerenity) {
+            setSerene(!isSerene)
+        }
+    }
+
+    /** File-local `hasVisiblePartyMember` (`player.cpp:8557-8580`). */
+    private fun hasVisiblePartyMember(player: Player): Boolean {
+        val party = player.getParty() ?: return false
+        val playerPosition = player.position
+
+        for (member in party.getPlayers()) {
+            if (member === player) {
+                continue
+            }
+
+            val memberPosition = member.position
+            if (abs(playerPosition.z - memberPosition.z) > 0) {
+                continue
+            }
+
+            val offsetX = abs(playerPosition.x - memberPosition.x)
+            val offsetY = abs(playerPosition.y - memberPosition.y)
+            if (offsetX <= Creature.MAP_MAX_CLIENT_VIEW_PORT_X &&
+                offsetY <= Creature.MAP_MAX_CLIENT_VIEW_PORT_Y
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /** File-local `hasTooManyCreaturesNearby` (`player.cpp:8582-8600`). */
+    private fun hasTooManyCreaturesNearby(player: Player): Boolean {
+        var count = 0
+        for (creature in nearbyCreaturesProvider(player.position)) {
+            if (creature === player) {
+                continue
+            }
+            if (creature is Npc) {
+                continue
+            }
+            if (++count >= 6) {
+                return true
+            }
+        }
+        return false
+    }
+
     companion object {
         /** `PLAYER_MAX_STAFF_SPEED` (`src/creatures/players/player.hpp:126`). */
         const val PLAYER_MAX_STAFF_SPEED = 65535
@@ -1724,6 +2478,18 @@ class Player(
         /** `std::numeric_limits<uint16_t>::max()` (player.cpp:13406). */
         const val UINT16_MAX = 65535
 
+        /** `std::numeric_limits<uint8_t>::max()` (player.cpp:2423). */
+        const val UINT8_MAX = 255
+
+        /** `maxBlessing` (player.cpp:7352) of `Player::getLostPercent`. */
+        const val MAX_BLESSING = 8
+
+        /** `MAX_CONTAINER_DEPTH` (configmanager.cpp:309) used by `Container::iterator`. */
+        const val MAX_CONTAINER_DEPTH = 200
+
+        /** `Player` harmony bar maximum (`player.cpp:13293`). */
+        private const val MAX_HARMONY = 5
+
         /**
          * Matches Canary / OpenTibia formula:
          * (50 * n^3 - 300 * n^2 + 850 * n - 600) / 3
@@ -1732,6 +2498,15 @@ class Player(
             if (n <= 1) return 0L
             val l = n.toLong()
             return (50L * l * l * l - 300L * l * l + 850L * l - 600L) / 3L
+        }
+
+        /** `Player::getPercentLevel` (`player.cpp:3831-3840`). */
+        fun getPercentLevel(count: Long, nextLevelCount: Long): Double {
+            if (nextLevelCount == 0L) {
+                return 0.0
+            }
+            val result = Math.round((count * 100.0 / nextLevelCount) * 100.0) / 100.0
+            return if (result > 100) 0.0 else result
         }
     }
 }
