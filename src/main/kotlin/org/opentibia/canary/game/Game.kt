@@ -1,13 +1,17 @@
 package org.opentibia.canary.game
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.LightInfo
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Npc
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.grouping.Party
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.game.zones.Zone
+import org.opentibia.canary.game.zones.ZoneType
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
@@ -665,6 +669,148 @@ class Game(
         val player = getPlayerByID(playerId) ?: return
         player.stopWalk()
     }
+
+    /**
+     * `Game::playerInviteToParty` (src/game/game.cpp:9657): inviting yourself
+     * is discarded, the target must be online and not already inviting the
+     * player, a target already in a party receives the
+     * `MESSAGE_PARTY_MANAGEMENT` notice and a non-leader cannot invite.
+     * Creating the party mirrors `Party::create` (party.cpp:22-33) through the
+     * [Party] constructor.
+     */
+    fun playerInviteToParty(playerId: Long, invitedId: Long) {
+        // Prevent crafted packets from inviting yourself to a party (using OTClient).
+        if (playerId == invitedId) {
+            return
+        }
+
+        val player = getPlayerByID(playerId) ?: return
+        val invitedPlayer = getPlayerByID(invitedId) ?: return
+        if (invitedPlayer.isInviting(player)) {
+            return
+        }
+
+        if (invitedPlayer.getParty() != null) {
+            player.sendTextMessageTyped(MessageClass.MESSAGE_PARTY_MANAGEMENT, "${invitedPlayer.name} is already in a party.")
+            return
+        }
+
+        val party = player.getParty() ?: Party(player)
+        if (party.getLeader() !== player) {
+            return
+        }
+
+        party.invitePlayer(invitedPlayer)
+    }
+
+    /**
+     * `Game::playerJoinParty` (src/game/game.cpp:9701): the target must be a
+     * party leader currently inviting the player; a player already in a party
+     * receives the `MESSAGE_PARTY_MANAGEMENT` notice.
+     */
+    fun playerJoinParty(playerId: Long, leaderId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+        val leader = getPlayerByID(leaderId) ?: return
+        if (!leader.isInviting(player)) {
+            return
+        }
+
+        val party = leader.getParty() ?: return
+        if (party.getLeader() !== leader) {
+            return
+        }
+
+        if (player.getParty() != null) {
+            player.sendTextMessageTyped(MessageClass.MESSAGE_PARTY_MANAGEMENT, "You are already in a party.")
+            return
+        }
+
+        party.joinParty(player)
+    }
+
+    /** `Game::playerRevokePartyInvitation` (src/game/game.cpp:9725). */
+    fun playerRevokePartyInvitation(playerId: Long, invitedId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+        val party = player.getParty() ?: return
+        if (party.getLeader() !== player) {
+            return
+        }
+
+        val invitedPlayer = getPlayerByID(invitedId) ?: return
+        if (!player.isInviting(invitedPlayer)) {
+            return
+        }
+
+        party.revokeInvitation(invitedPlayer)
+    }
+
+    /**
+     * `Game::playerPassPartyLeadership` (src/game/game.cpp:9744). The
+     * `Player::isPartner` gate (player.cpp:7790-7796) is transcribed inline:
+     * the new leader shares the same party and is not the current player.
+     */
+    fun playerPassPartyLeadership(playerId: Long, newLeaderId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+        val party = player.getParty() ?: return
+        if (party.getLeader() !== player) {
+            return
+        }
+
+        val newLeader = getPlayerByID(newLeaderId) ?: return
+        if (!isPartner(player, newLeader)) {
+            return
+        }
+
+        party.passPartyLeadership(newLeader)
+    }
+
+    /**
+     * `Game::playerLeaveParty` (src/game/game.cpp:9763): a player with no party
+     * or in fight outside a protection zone receives the `MESSAGE_FAILURE`
+     * text. `Player::getZoneType` (creature.cpp:1856-1862) resolves from the
+     * placed tile via the facade's [placedCreatures] index.
+     */
+    fun playerLeaveParty(playerId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+        val party = player.getParty()
+        if (party == null || (player.hasCondition(ConditionType.CONDITION_INFIGHT) && zoneTypeOf(player) != ZoneType.ZONE_PROTECTION)) {
+            player.sendTextMessageTyped(MessageClass.MESSAGE_FAILURE, "You cannot leave party, contact the administrator.")
+            return
+        }
+
+        party.leaveParty(player)
+    }
+
+    /**
+     * `Game::playerEnableSharedPartyExperience` (src/game/game.cpp:9778): the
+     * toggle is dropped without a party or in fight outside a protection-zone
+     * tile (`Tile::hasFlag(TILESTATE_PROTECTIONZONE)`).
+     */
+    fun playerEnableSharedPartyExperience(playerId: Long, sharedExpActive: Boolean) {
+        val player = getPlayerByID(playerId) ?: return
+        val party = player.getParty() ?: return
+        val playerTile = placedCreatures[player]
+        if (player.hasCondition(ConditionType.CONDITION_INFIGHT) &&
+            playerTile != null &&
+            !playerTile.hasFlag(TileFlags.TILESTATE_PROTECTIONZONE.value)
+        ) {
+            return
+        }
+
+        party.setSharedExperience(player, sharedExpActive)
+    }
+
+    /** `Player::isPartner` (player.cpp:7790-7796), transcribed for the party handlers. */
+    private fun isPartner(player: Player, other: Player?): Boolean {
+        if (other == null || other === player) {
+            return false
+        }
+        val party = player.getParty() ?: return false
+        return party === other.getParty()
+    }
+
+    /** `Creature::getZoneType` (creature.cpp:1856-1862): placed tile, else `ZONE_NORMAL`. */
+    private fun zoneTypeOf(player: Player): ZoneType = placedCreatures[player]?.getZoneType() ?: ZoneType.ZONE_NORMAL
 
     /**
      * `Game::beforeCreatureZoneChange` (src/game/game.cpp:12417): the zone
