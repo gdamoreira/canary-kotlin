@@ -9,6 +9,7 @@ import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.grouping.Group
 import org.opentibia.canary.creatures.grouping.Party
+import org.opentibia.canary.creatures.grouping.PartyShields_t
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.creatures.vocations.Vocation
@@ -369,6 +370,95 @@ class Player(
     /** `Player::getParty` (player.cpp:1047-1049). */
     fun getParty(): Party? = mParty
 
+    /** `Player::invitePartyList` (player.hpp:1694); read-only view for inspecting systems. */
+    private val partyInvitations = mutableListOf<Party>()
+
+    /** Read-only view of the pending `Player::invitePartyList` entries. */
+    val invitePartyList: List<Party> get() = partyInvitations
+
+    /** `Player::addPartyInvitation` (player.cpp:7802-7810). */
+    fun addPartyInvitation(newParty: Party): Boolean {
+        if (partyInvitations.contains(newParty)) {
+            return false
+        }
+        partyInvitations.add(newParty)
+        return true
+    }
+
+    /** `Player::removePartyInvitation` (player.cpp:7812-7814). */
+    fun removePartyInvitation(remParty: Party) {
+        partyInvitations.remove(remParty)
+    }
+
+    /** `Player::isInviting` (player.cpp:7783-7788). */
+    fun isInviting(player: Player?): Boolean {
+        val party = mParty
+        if (player == null || party == null || party.getLeader() !== this) {
+            return false
+        }
+        return party.isPlayerInvited(player)
+    }
+
+    /**
+     * `Player::getPartyShield` (player.cpp:7729-7781): the party shield shown
+     * for [player], derived from the party shared-experience state and the
+     * pending invitations.
+     */
+    fun getPartyShield(player: Player?): PartyShields_t {
+        if (player == null) {
+            return PartyShields_t.SHIELD_NONE
+        }
+
+        val party = mParty
+        if (party != null) {
+            if (party.getLeader() === player) {
+                if (party.isSharedExperienceActive()) {
+                    if (party.isSharedExperienceEnabled()) {
+                        return PartyShields_t.SHIELD_YELLOW_SHAREDEXP
+                    }
+
+                    if (party.canUseSharedExperience(player)) {
+                        return PartyShields_t.SHIELD_YELLOW_NOSHAREDEXP
+                    }
+
+                    return PartyShields_t.SHIELD_YELLOW_NOSHAREDEXP_BLINK
+                }
+
+                return PartyShields_t.SHIELD_YELLOW
+            }
+
+            if (player.getParty() === party) {
+                if (party.isSharedExperienceActive()) {
+                    if (party.isSharedExperienceEnabled()) {
+                        return PartyShields_t.SHIELD_BLUE_SHAREDEXP
+                    }
+
+                    if (party.canUseSharedExperience(player)) {
+                        return PartyShields_t.SHIELD_BLUE_NOSHAREDEXP
+                    }
+
+                    return PartyShields_t.SHIELD_BLUE_NOSHAREDEXP_BLINK
+                }
+
+                return PartyShields_t.SHIELD_BLUE
+            }
+
+            if (isInviting(player)) {
+                return PartyShields_t.SHIELD_WHITEBLUE
+            }
+        }
+
+        if (player.isInviting(this)) {
+            return PartyShields_t.SHIELD_WHITEYELLOW
+        }
+
+        if (player.getParty() != null) {
+            return PartyShields_t.SHIELD_GRAY
+        }
+
+        return PartyShields_t.SHIELD_NONE
+    }
+
     /**
      * `Player::hasFlag` (player.cpp:7853-7855) — port of the group flag lookup.
      * Canary resolves flags from `Group::flags` (`groups.hpp:16`); the port's
@@ -592,6 +682,25 @@ class Player(
     fun addExperience(exp: Long) {
         experience += exp
         updateLevel()
+    }
+
+    /**
+     * `Player::staminaXpBoost` (player.hpp:1824, default 100);
+     * `Player::setStaminaXpBoost` (player.cpp:3252-3254) clamps to the uint16
+     * maximum and `getStaminaXpBoost` (player.cpp:3248-3250) reads it back.
+     */
+    var staminaXpBoost: Int = 100
+        set(value) {
+            field = minOf(65535, value)
+        }
+
+    /**
+     * `Player::onGainSharedExperience` (player.cpp:6724-6726) credits the shared
+     * party experience through `Player::gainExperience`; the port folds that into
+     * [addExperience] (rate/message/stat machinery is a PARITY GAP).
+     */
+    fun onGainSharedExperience(gainExp: Long, target: Creature? = null) {
+        addExperience(gainExp)
     }
 
     private fun updateLevel() {
