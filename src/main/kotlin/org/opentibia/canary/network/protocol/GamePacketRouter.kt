@@ -13,6 +13,7 @@ import org.opentibia.canary.network.protocol.bestiary.BestiaryPacketParser
 import org.opentibia.canary.network.protocol.forge.ForgePacketParser
 import org.opentibia.canary.network.protocol.guild.GuildPacketParser
 import org.opentibia.canary.network.protocol.market.MarketPacketParser
+import org.opentibia.canary.network.protocol.npcshop.NpcShopPacketHandler
 import org.opentibia.canary.network.protocol.wheel.OpenWheelCommand
 import org.opentibia.canary.network.protocol.wheel.SaveWheelCommand
 import org.opentibia.canary.network.protocol.wheel.WheelGemActionCommand
@@ -64,6 +65,22 @@ object GamePacketRouter {
                 0x78 -> {
                     ItemPacketHandler.handleThrow(player, buffer, context.map)
                 }
+
+                // NPC shop: 0x7A parsePlayerBuyOnShop / 0x7B parsePlayerSellOnShop /
+                // 0x7C playerCloseShop
+                in NpcShopPacketHandler.OPCODE_PLAYER_BUY_ON_SHOP..NpcShopPacketHandler.OPCODE_PLAYER_CLOSE_SHOP -> {
+                    val command = NpcShopPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // NPC trade buy/sell/close; the shop window and dialogue stay Lua
+                            // (AGENTS.md 1.4), so the decoded command only marks the confinement boundary.
+                        }
+                        true
+                    }
+                }
+
                 0x82 -> {
                     ItemPacketHandler.handleUse(player, buffer, context.map, context.dispatcher, context.luaEnvironment)
                 }
