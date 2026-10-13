@@ -127,6 +127,34 @@ object GamePacketRouter {
                     }
                 }
 
+                // Stash & depot search: 0x28 parseStashWithdraw / 0x29 parseRetrieveDepotSearch /
+                // 0x92 parseOpenDepotSearch / 0x93 parseCloseDepotSearch /
+                // 0x94 parseDepotSearchItemRequest (0x95 parseOpenParentContainer is decoded
+                // with the container opcodes above)
+                DepotAndStashPacketHandler.OPCODE_STASH_WITHDRAW,
+                DepotAndStashPacketHandler.OPCODE_RETRIEVE_DEPOT_SEARCH,
+                in DepotAndStashPacketHandler.OPCODE_OPEN_DEPOT_SEARCH..DepotAndStashPacketHandler.OPCODE_DEPOT_SEARCH_ITEM_REQUEST -> {
+                    val command = DepotAndStashPacketHandler.parse(
+                        opcode,
+                        buffer,
+                        upgradeClassification = { itemId ->
+                            context.itemTypes?.get(itemId)?.upgradeClassification ?: 0
+                        },
+                    )
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Player stash and depot-search state (Game::playerStowItem,
+                            // playerStashWithdraw, playerRequestDepotItems,
+                            // playerRequestDepotSearchItem, playerRequestDepotSearchRetrieve)
+                            // is not ported, so the decoded command only marks the
+                            // confinement boundary.
+                        }
+                        true
+                    }
+                }
+
                 0x82 -> {
                     ItemPacketHandler.handleUse(player, buffer, context.map, context.dispatcher, context.luaEnvironment)
                 }
@@ -139,6 +167,24 @@ object GamePacketRouter {
                 // Look At
                 0x8C, 0x8D -> {
                     LookPacketHandler.handleLook(player, buffer, context.map) != null
+                }
+
+                // Quick loot: 0x8F parseQuickLoot / 0x90 parseLootContainer /
+                // 0x91 parseQuickLootBlackWhitelist
+                in QuickLootPacketHandler.OPCODE_QUICK_LOOT..QuickLootPacketHandler.OPCODE_QUICK_LOOT_BLACK_WHITELIST -> {
+                    val command = QuickLootPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Player quick-loot state (Game::playerQuickLoot, playerLootNearby,
+                            // playerSetManagedContainer, playerClearManagedContainer,
+                            // playerOpenManagedContainer, playerSetQuickLootFallback,
+                            // playerQuickLootBlackWhitelist) is not ported, so the decoded
+                            // command only marks the confinement boundary.
+                        }
+                        true
+                    }
                 }
 
                 // Say / talkactions: 0x96 parseSay
@@ -164,6 +210,25 @@ object GamePacketRouter {
                             // Game::playerFollowCreature -> Player::setFollowCreature; the
                             // follow state machine is not yet ported, so the decoded
                             // command only marks the confinement boundary.
+                        }
+                        true
+                    }
+                }
+
+                // Party: 0xA3 parseInviteToParty / 0xA4 parseJoinParty /
+                // 0xA5 parseRevokePartyInvite / 0xA6 parsePassPartyLeadership /
+                // 0xA7 playerLeaveParty / 0xA8 parseEnableSharedPartyExperience
+                in PartyPacketHandler.OPCODE_INVITE_TO_PARTY..PartyPacketHandler.OPCODE_ENABLE_SHARED_PARTY_EXPERIENCE -> {
+                    val command = PartyPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerInviteToParty/playerJoinParty/playerRevokePartyInvitation/
+                            // playerPassPartyLeadership/playerLeaveParty/playerEnableSharedPartyExperience
+                            // resolve the target player by id through the global game registry,
+                            // which this context does not provide; the party state machine stays
+                            // unapplied (PARITY GAP).
                         }
                         true
                     }
@@ -247,6 +312,24 @@ object GamePacketRouter {
                     }
                 }
 
+                // Imbuements: 0xB2 parseImbuementAction / 0xD5 parseApplyImbuement /
+                // 0xD6 parseClearImbuement / 0xD7 parseCloseImbuementWindow
+                ImbuementPacketHandler.OPCODE_IMBUEMENT_ACTION,
+                in ImbuementPacketHandler.OPCODE_APPLY_IMBUEMENT..ImbuementPacketHandler.OPCODE_CLOSE_IMBUEMENT_WINDOW -> {
+                    val command = ImbuementPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerApplyImbuement, playerClearImbuement and
+                            // playerCloseImbuementWindow, and the imbuement window payload
+                            // itself, are not ported; the decoded command only marks the
+                            // confinement boundary.
+                        }
+                        true
+                    }
+                }
+
                 // Bestiary & charms: 0xE1 send races / 0xE2 send creatures /
                 // 0xE3 monster data / 0xE4 buy charm rune
                 in BestiaryPacketParser.OPCODE_SEND_RACES..BestiaryPacketParser.OPCODE_BUY_CHARM_RUNE -> {
@@ -299,6 +382,22 @@ object GamePacketRouter {
                     }
                 }
 
+                // Quest log: 0xF0 playerShowQuestLog / 0xF1 parseQuestLine
+                QuestLogPacketHandler.OPCODE_SHOW_QUEST_LOG,
+                QuestLogPacketHandler.OPCODE_QUEST_LINE -> {
+                    val command = QuestLogPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerShowQuestLog / playerShowQuestLine read quest state
+                            // from the Lua quest scripts (AGENTS.md 1.4); the quest window
+                            // senders are not wired here.
+                        }
+                        true
+                    }
+                }
+
                 // Market: 0xF4 leave / 0xF5 browse / 0xF6 create / 0xF7 cancel / 0xF8 accept
                 in MarketPacketParser.OPCODE_MARKET_LEAVE..MarketPacketParser.OPCODE_MARKET_ACCEPT_OFFER -> {
                     val command = MarketPacketParser.parse(opcode, buffer)
@@ -307,6 +406,24 @@ object GamePacketRouter {
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
                             // Market operations mutate the offer book; confinement boundary.
+                        }
+                        true
+                    }
+                }
+
+                // Modal window answer: 0xF9 parseModalWindowAnswer
+                ModalAnswerPacketHandler.OPCODE_MODAL_WINDOW_ANSWER -> {
+                    val command = ModalAnswerPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            context.modalManager.handleResponse(
+                                player,
+                                command.windowId.toInt(),
+                                command.button,
+                                command.choice,
+                            )
                         }
                         true
                     }
