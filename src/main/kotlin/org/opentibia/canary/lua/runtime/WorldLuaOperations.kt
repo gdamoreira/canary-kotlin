@@ -1,7 +1,9 @@
 package org.opentibia.canary.lua.runtime
 
+import org.opentibia.canary.creatures.ChaseMode
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
@@ -119,6 +121,15 @@ class WorldGameOperations(
  *   wraps as `Vocation` userdata.
  * - storage keys in Canary's reserved ranges are rejected by `setStorageValue`; only the
  *   `key == 0` rejection is reproduced here.
+ * - `getMagicLevel` inherits the seam's 0 no-op default; the domain models no magic-level
+ *   progression (Canary tracks a separate `Player::magLevel` field).
+ * - `getGuid` returns [Player.id], the identity this port persists and keys storage by,
+ *   which stands in for Canary's account-scoped `Player::getGUID`.
+ * - `getCapacity`/`getFreeCapacity` truncate the domain's `Double` capacity to whole
+ *   units, matching Canary's `uint32_t` return.
+ * - `getTown`/`setTown` inherit the seam's no-op defaults; the domain has no town state.
+ * - `getFightMode` maps the Kotlin [org.opentibia.canary.creatures.FightMode] ordinal to
+ *   Canary's 1-based `FightMode_t`.
  */
 class WorldPlayerOperations(
     private val itemIdsByName: Map<String, Int> = emptyMap(),
@@ -209,6 +220,66 @@ class WorldPlayerOperations(
     }
 
     override fun getVocation(player: Any): Any = Unit
+
+    override fun getGuid(player: Any): Long? = (player as? Player)?.id
+
+    override fun getSpeed(player: Any): Int? = (player as? Creature)?.speed
+
+    override fun setSpeed(player: Any, speed: Int): Boolean {
+        val target = player as? Creature ?: return false
+        target.speed = speed
+        return true
+    }
+
+    override fun getCapacity(player: Any): Long? = (player as? Player)?.capacity?.toLong()
+
+    override fun setCapacity(player: Any, capacity: Long): Boolean {
+        val target = player as? Player ?: return false
+        target.capacity = capacity.toDouble()
+        return true
+    }
+
+    override fun getFreeCapacity(player: Any): Long? = (player as? Player)?.getFreeCapacity()?.toLong()
+
+    override fun getMaxMana(player: Any): Int? = (player as? Player)?.maxMana
+
+    override fun setMaxMana(player: Any, maxMana: Int): Boolean {
+        val target = player as? Player ?: return false
+        target.maxMana = maxMana
+        if (target.mana > maxMana) {
+            target.mana = maxMana
+        }
+        return true
+    }
+
+    override fun getSkillLevel(player: Any, skillType: Int): Int? {
+        val target = player as? Player ?: return null
+        val skill = validSkill(skillType) ?: return null
+        return target.getSkillLevel(skill)
+    }
+
+    override fun getSkillTries(player: Any, skillType: Int): Long? {
+        val target = player as? Player ?: return null
+        val skill = validSkill(skillType) ?: return null
+        return target.getSkillTries(skill)
+    }
+
+    override fun getPremiumDays(player: Any): Int? {
+        val target = player as? Player ?: return null
+        val account = target.account ?: return null
+        return account.getPremiumRemainingDays()
+    }
+
+    override fun getFightMode(player: Any): Int? = (player as? Player)?.fightMode?.ordinal?.plus(1)
+
+    override fun hasChaseMode(player: Any): Boolean =
+        (player as? Player)?.chaseMode == ChaseMode.Follow
+
+    override fun hasSecureMode(player: Any): Boolean = (player as? Player)?.secureMode ?: false
+
+    /** Mirrors Canary's `skillType <= SKILL_LAST` guard, also rejecting the negative sentinel. */
+    private fun validSkill(skillType: Int): skills_t? =
+        skills_t.fromValue(skillType)?.takeIf { it.value in skills_t.FIRST..skills_t.LAST }
 }
 
 /**

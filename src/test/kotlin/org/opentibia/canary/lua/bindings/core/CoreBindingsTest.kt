@@ -125,6 +125,36 @@ class CoreBindingsTest {
         }
 
         override fun getVocation(player: Any): Any = vocation
+
+        override fun getGuid(player: Any): Long? = 1L
+
+        override fun getSpeed(player: Any): Int? = 220
+
+        override fun setSpeed(player: Any, speed: Int): Boolean = true
+
+        override fun getCapacity(player: Any): Long? = 400L
+
+        override fun setCapacity(player: Any, capacity: Long): Boolean = true
+
+        override fun getFreeCapacity(player: Any): Long? = 400L
+
+        override fun getMaxMana(player: Any): Int? = 0
+
+        override fun setMaxMana(player: Any, maxMana: Int): Boolean = true
+
+        override fun getMagicLevel(player: Any): Int = 0
+
+        override fun getSkillLevel(player: Any, skillType: Int): Int? = 10
+
+        override fun getSkillTries(player: Any, skillType: Int): Long? = 0L
+
+        override fun getPremiumDays(player: Any): Int? = 0
+
+        override fun getFightMode(player: Any): Int? = 1
+
+        override fun hasChaseMode(player: Any): Boolean = false
+
+        override fun hasSecureMode(player: Any): Boolean = true
     }
 
     private class FakeCreatureOps : CreatureOperations {
