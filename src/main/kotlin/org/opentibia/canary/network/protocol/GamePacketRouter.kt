@@ -3,16 +3,20 @@ package org.opentibia.canary.network.protocol
 import io.netty.buffer.ByteBuf
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.config.FeatureFlags
+import org.opentibia.canary.game.Game
+import org.opentibia.canary.game.QuickLootFilter_t
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.items.ItemTypeRegistry
 import org.opentibia.canary.lua.runtime.LuaEnvironment
+import org.opentibia.canary.lua.runtime.LuaEventDispatcher
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.network.protocol.offline.StartOfflineTrainingPacketParser
 import org.opentibia.canary.network.protocol.rewardchest.RewardChestCollectPacketParser
 import org.opentibia.canary.network.protocol.bestiary.BestiaryPacketParser
 import org.opentibia.canary.network.protocol.forge.ForgePacketParser
 import org.opentibia.canary.network.protocol.guild.GuildPacketParser
+import org.opentibia.canary.network.protocol.market.MarketLeaveCommand
 import org.opentibia.canary.network.protocol.market.MarketPacketParser
 import org.opentibia.canary.network.protocol.npcshop.NpcShopPacketHandler
 import org.opentibia.canary.network.protocol.wheel.OpenWheelCommand
@@ -40,7 +44,14 @@ data class GamePacketContext(
      * src/items/item.hpp:753). Optional so callers without a loaded registry
      * keep the classification-0 default.
      */
-    val itemTypes: ItemTypeRegistry? = null
+    val itemTypes: ItemTypeRegistry? = null,
+    /**
+     * `g_game()` seam for the handlers whose application lives in a
+     * `Game::player*` member (trade, containers, follow, quick loot, depot
+     * search, market, imbuements). Optional so callers without a composed
+     * world keep the decode-only confinement boundary.
+     */
+    val game: Game? = null
 )
 
 object GamePacketRouter {
@@ -89,9 +100,33 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // Open-container state belongs to Player::closeContainer,
-                            // Player::moveUpContainer and Game::playerRequestOpenContainerFromDepotSearch;
-                            // none are ported, and 0x75 reads and discards its operands.
+                            when (command) {
+                                // Canary's parseContainerAction reads and discards
+                                // its operands (protocolgame.cpp:3258-3268); no
+                                // Game call is made.
+                                is ContainerActionCommand -> Unit
+
+                                // Game::playerCloseContainer (game.cpp:5028) and
+                                // Game::playerMoveUpContainer (game.cpp:5038)
+                                // apply to the Player open-container registry.
+                                is CloseContainerCommand -> context.game?.playerCloseContainer(
+                                    player.id,
+                                    command.containerId,
+                                )
+
+                                is UpArrowContainerCommand -> context.game?.playerMoveUpContainer(
+                                    player.id,
+                                    command.containerId,
+                                )
+
+                                // Game::playerRequestOpenContainerFromDepotSearch
+                                // (game.cpp:6975) needs Player::openContainerFromDepotSearch
+                                // and the depot-locker tree, which are not ported
+                                // (PARITY GAP).
+                                is OpenParentContainerCommand -> Unit
+
+                                else -> Unit
+                            }
                         }
                         true
                     }
@@ -120,10 +155,32 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // The trade session state machine (Game::playerRequestTrade,
-                            // playerAcceptTrade, playerCloseTrade, playerLookInTrade) is
-                            // not yet ported, so the decoded command only marks the
-                            // confinement boundary.
+                            // Game::playerRequestTrade (game.cpp:5797),
+                            // Game::playerLookInTrade (game.cpp:6119),
+                            // Game::playerAcceptTrade (game.cpp:5986) and
+                            // Game::playerCloseTrade (game.cpp:6178) drive the
+                            // trade session state machine on the Player/facade.
+                            when (command) {
+                                is RequestTradeCommand -> context.game?.playerRequestTrade(
+                                    player.id,
+                                    command.position,
+                                    command.stackPosition,
+                                    command.partnerPlayerId,
+                                    command.itemId,
+                                )
+
+                                is LookInTradeCommand -> context.game?.playerLookInTrade(
+                                    player.id,
+                                    command.counterOffer,
+                                    command.index,
+                                )
+
+                                is AcceptTradeCommand -> context.game?.playerAcceptTrade(player.id)
+
+                                is CloseTradeCommand -> context.game?.playerCloseTrade(player.id)
+
+                                else -> Unit
+                            }
                         }
                         true
                     }
@@ -147,11 +204,19 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // Player stash and depot-search state (Game::playerStowItem,
-                            // playerStashWithdraw, playerRequestDepotItems,
-                            // playerRequestDepotSearchItem, playerRequestDepotSearchRetrieve)
-                            // is not ported, so the decoded command only marks the
-                            // confinement boundary.
+                            when (command) {
+                                // Game::playerRequestCloseDepotSearch (game.cpp:6933)
+                                // resets Player::depotSearchOnItem.
+                                is CloseDepotSearchCommand -> context.game?.playerRequestCloseDepotSearch(player.id)
+
+                                // Game::playerStowItem / playerStashWithdraw /
+                                // playerRequestDepotItems / playerRequestDepotSearchItem /
+                                // playerRequestDepotSearchRetrieve (game.cpp:5665-6975)
+                                // need the depot-locker tree, the stash item delivery and
+                                // the depot-search senders, which are not ported
+                                // (PARITY GAP).
+                                else -> Unit
+                            }
                         }
                         true
                     }
@@ -179,11 +244,41 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // Player quick-loot state (Game::playerQuickLoot, playerLootNearby,
-                            // playerSetManagedContainer, playerClearManagedContainer,
-                            // playerOpenManagedContainer, playerSetQuickLootFallback,
-                            // playerQuickLootBlackWhitelist) is not ported, so the decoded
-                            // command only marks the confinement boundary.
+                            when (command) {
+                                // Game::playerQuickLoot / playerLootNearby
+                                // (game.cpp:6428, 6766) need the corpse-loot engine,
+                                // capacity checks and the managed containers, which
+                                // are not ported (PARITY GAP).
+                                is QuickLootCorpseCommand,
+                                QuickLootNearbyCommand,
+                                is QuickLootUnsupportedVariantCommand,
+                                -> Unit
+
+                                // Game::playerSetManagedContainer /
+                                // playerClearManagedContainer / playerOpenManagedContainer
+                                // (game.cpp:6822-6897) need Player::refreshManagedContainer
+                                // and the managed-container map, which are not ported
+                                // (PARITY GAP).
+                                is SetManagedContainerCommand,
+                                is ClearManagedContainerCommand,
+                                is OpenManagedContainerCommand,
+                                is UnknownLootContainerActionCommand,
+                                -> Unit
+
+                                // Game::playerSetQuickLootFallback (game.cpp:6898)
+                                // and Game::playerQuickLootBlackWhitelist (game.cpp:6907)
+                                // apply to the Player quick-loot state.
+                                is SetQuickLootFallbackCommand -> context.game?.playerSetQuickLootFallback(
+                                    player.id,
+                                    command.useMainAsFallback,
+                                )
+
+                                is QuickLootBlackWhitelistCommand -> context.game?.playerQuickLootBlackWhitelist(
+                                    player.id,
+                                    QuickLootFilter_t.fromValue(command.filter),
+                                    command.itemIds,
+                                )
+                            }
                         }
                         true
                     }
@@ -209,9 +304,11 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // Game::playerFollowCreature -> Player::setFollowCreature; the
-                            // follow state machine is not yet ported, so the decoded
-                            // command only marks the confinement boundary.
+                            // Game::playerFollowCreature (game.cpp:7033) clears the
+                            // attack target and applies Player::setFollowCreature
+                            // (player.cpp:6127) over Creature::setFollowCreature
+                            // (creature.cpp:1132).
+                            context.game?.playerFollowCreature(player.id, command.creatureId)
                         }
                         true
                     }
@@ -323,10 +420,20 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // Game::playerApplyImbuement, playerClearImbuement and
-                            // playerCloseImbuementWindow, and the imbuement window payload
-                            // itself, are not ported; the decoded command only marks the
-                            // confinement boundary.
+                            when (command) {
+                                // Game::playerCloseImbuementWindow (game.cpp:7178)
+                                // clears Player::imbuingItem.
+                                is CloseImbuementWindowCommand -> context.game?.playerCloseImbuementWindow(player.id)
+
+                                // Game::playerApplyImbuement / playerClearImbuement
+                                // (game.cpp:7116, 7153) drive ImbuementEngine over the
+                                // `ImbuementItem` seam; the real Item custom-attribute
+                                // store does not model the per-slot imbuement keys
+                                // (`ITEM_IMBUEMENT_SLOT + slot`), and 0xB2's
+                                // `STACKPOS_FIND_THING` resolution is not ported
+                                // (PARITY GAP).
+                                else -> Unit
+                            }
                         }
                         true
                     }
@@ -378,7 +485,9 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // Guild message edit; confinement boundary.
+                            // ProtocolGame::parseEditGuildMessage reads the string and
+                            // discards it (protocolgame.cpp:3303-3305); Canary makes no
+                            // Game call, so there is no state to apply.
                         }
                         true
                     }
@@ -392,9 +501,23 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // Game::playerShowQuestLog / playerShowQuestLine read quest state
-                            // from the Lua quest scripts (AGENTS.md 1.4); the quest window
-                            // senders are not wired here.
+                            // Game::playerShowQuestLog / playerShowQuestLine
+                            // (game.cpp:7391, 7401) fire the registered
+                            // playerOnRequestQuestLog / playerOnRequestQuestLine
+                            // event callbacks; the quest data stays in the Lua
+                            // scripts (data/scripts/eventcallbacks/player/).
+                            when (command) {
+                                ShowQuestLogCommand -> LuaEventDispatcher.eventCallbackPlayerOnRequestQuestLog(
+                                    context.luaEnvironment,
+                                    player,
+                                )
+
+                                is ShowQuestLineCommand -> LuaEventDispatcher.eventCallbackPlayerOnRequestQuestLine(
+                                    context.luaEnvironment,
+                                    player,
+                                    command.questId,
+                                )
+                            }
                         }
                         true
                     }
@@ -407,7 +530,18 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // Market operations mutate the offer book; confinement boundary.
+                            when (command) {
+                                // Game::playerLeaveMarket (game.cpp:10273) clears
+                                // Player::inMarket.
+                                MarketLeaveCommand -> context.game?.playerLeaveMarket(player.id)
+
+                                // Game::playerBrowseMarket/playerCreateMarketOffer/
+                                // playerCancelMarketOffer/playerAcceptMarketOffer
+                                // (game.cpp:10282-10884) run the IOMarket transaction
+                                // engine, item escrow and market senders, which are not
+                                // composed in this context (PARITY GAP).
+                                else -> Unit
+                            }
                         }
                         true
                     }

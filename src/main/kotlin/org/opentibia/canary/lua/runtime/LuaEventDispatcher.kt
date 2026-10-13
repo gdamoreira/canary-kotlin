@@ -8,6 +8,7 @@ import org.opentibia.canary.creatures.Npc
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
+import org.opentibia.canary.lua.registry.EventCallbackType
 import org.opentibia.canary.map.Position
 
 /**
@@ -438,6 +439,43 @@ object LuaEventDispatcher {
             wrapPosition(env, pos),
         )
         events.forEach { invoke(it.callback, args) }
+        return true
+    }
+
+    // --- EventCallbacks (EventsCallbacks::executeCallback) ---------------------------
+
+    /**
+     * `g_callbacks().executeCallback(EventCallback_t::playerOnRequestQuestLog, player)`
+     * (src/game/game.cpp:7397): invokes every registered callback in
+     * registration order. Returns whether at least one callback was registered.
+     */
+    fun eventCallbackPlayerOnRequestQuestLog(env: LuaEnvironment, player: Player): Boolean =
+        executeEventCallbacks(env, EventCallbackType.playerOnRequestQuestLog, arrayOf(wrapCreature(env, player)))
+
+    /**
+     * `g_callbacks().executeCallback(EventCallback_t::playerOnRequestQuestLine, player, questId)`
+     * (src/game/game.cpp:7407).
+     */
+    fun eventCallbackPlayerOnRequestQuestLine(env: LuaEnvironment, player: Player, questId: Int): Boolean =
+        executeEventCallbacks(
+            env,
+            EventCallbackType.playerOnRequestQuestLine,
+            arrayOf(wrapCreature(env, player), LuaValue.valueOf(questId)),
+        )
+
+    /**
+     * `EventsCallbacks::executeCallback` (src/lua/callbacks/events_callbacks.hpp:88):
+     * runs every registered callback of [type] in registration order. PARITY GAP:
+     * Canary's per-callback `canExecute` script-id/enabled checks have no
+     * counterpart in the ported registry.
+     */
+    private fun executeEventCallbacks(env: LuaEnvironment, type: EventCallbackType, args: Array<LuaValue>): Boolean {
+        val entries = env.eventCallbacks.get(type)
+        if (entries.isEmpty()) {
+            return false
+        }
+
+        entries.forEach { invoke(it.callback, args) }
         return true
     }
 
