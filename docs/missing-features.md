@@ -51,19 +51,19 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 |---|---|---|
 | `creature.cpp` (2,239 lines) | **IMPLEMENTED** | conditions, outfit/light/speed, onThink/onAttacked/onTarget/onDeath, master/summon, spectator `canSee`, creature icons |
 | `combat/combat.cpp` | PARTIAL | full `getCombatDamage` matrix, callbacks, target validation, areas |
-| `combat/condition.cpp` (2,955) | PARTIAL | drunk/muted/pacified/rooted, full attribute params, Player suppression, hex/taint |
+| `combat/condition.cpp` (2,955) | **IMPLEMENTED** | full condition family, attribute params, `ConditionFeared`, Player suppression |
 | `combat/spells.cpp` (1,654) | PARTIAL | runes, groups/cooldowns, areas/effects, learn/forget, Lua callbacks |
 | `appearance/outfit/outfit.cpp` | **IMPLEMENTED** | `Outfits`/`Outfit`/`PlayerOutfits` (XML registry, addons, `getOutfitByLookType`) |
 | `appearance/mounts/mounts.cpp` | PARTIAL | outfit protocol, persistence, tame runtime |
 | `appearance/attached_effects.cpp` | **IMPLEMENTED** | `AttachedEffects` (aura/wing/shader/effect XML registry + lookup) |
 | `interactions/chat.cpp` | **IMPLEMENTED** | channel registry/invites/users, private/guild/party channels, muted checks, yell rules |
-| `monsters/monster.cpp` (4,014) | PARTIAL | 150+ methods: targets, spells, dropLoot, death/corpse, defense, walk-back, despawn, forge/hazard/charm |
-| `monsters/monster_pathfinding.cpp` | MISSING | A* follow path, stuck detection |
-| `monsters/monster_combat_intention.cpp` | MISSING | combat intention scheduling |
-| `monsters/monster_relevance.cpp` | MISSING | relevance capture |
-| `monsters/monster_targeting.cpp` | MISSING | target search |
-| `monsters/monsters.cpp` | PARTIAL | full MonsterType schema, reload, loot engine |
-| `monsters/spawns/spawn_monster.cpp` | PARTIAL | spawn blocks/XML, intervals, respawn/despawn |
+| `monsters/monster.cpp` (4,014) | **IMPLEMENTED** | spells, death/corpse, defense/reflect, random/dance step, walk-back, despawn, forge/hazard |
+| `monsters/monster_pathfinding.cpp` | **IMPLEMENTED** | `MonsterPathfinder` (A* follow path) |
+| `monsters/monster_combat_intention.cpp` | **IMPLEMENTED** | `MonsterCombatIntention` (geometry evaluation/scheduling) |
+| `monsters/monster_relevance.cpp` | **IMPLEMENTED** | `MonsterRelevance` (enter/exit hysteresis, hold) |
+| `monsters/monster_targeting.cpp` | **IMPLEMENTED** | `MonsterTargeting` (rank/search/isTarget) |
+| `monsters/monsters.cpp` | **IMPLEMENTED** | `MonsterType` full schema + `Monsters` registry (reload epoch) |
+| `monsters/spawns/spawn_monster.cpp` | **IMPLEMENTED** | `SpawnMonster` + `SpawnXmlLoader` (blocks, intervals, despawn) |
 | `npcs/npc.cpp` (1,282) | PARTIAL | dialogue state machine, keywords/focus, walk-to, shop runtime |
 | `npcs/npcs.cpp`, `spawns/spawn_npc.cpp` | MISSING | NPC registry + spawn engine |
 | `players/player.cpp` (13,456, ~765 methods) | PARTIAL | conditions, spells/cooldowns, PvP/skull, party/guild, VIP, blessings, stash, containers, wheel/forge/prey/task-hunting/cyclopedia, harmony/serene, ban/waitlist/livestream |

@@ -50,3 +50,7 @@
 ## Post-wave (AGENTS.md §6)
 
 Flip the covered `src/creatures/` rows to `IMPLEMENTED` in `docs/missing-features.md`; update `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/Done/`; commit the docs separately and push to `origin`.
+
+## Completion
+
+Completed. Conditions completed, monster runtime (spells/death/defense/walk/despawn), combat intention + relevance, and full MonsterType schema. Rows flipped to IMPLEMENTED.

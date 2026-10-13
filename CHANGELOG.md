@@ -277,10 +277,18 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Chat channels** — `ChatChannel`/`PrivateChatChannel` registry, invites/users, muted checks, yell rules. 40 tests.
 - `docs/missing-features.md`: the four rows flipped to **IMPLEMENTED**.
 
+### Phase 26: `src/creatures/` Part 2 — Conditions, Monster Runtime, MonsterType (10:00 – 10:30)
+- **Conditions** — full condition family, attribute params, `ConditionFeared`, Player suppression. 42 tests.
+- **Monster runtime** — spells, death/corpse, defense/reflect, random/dance step, walk-back, despawn (`MonsterBehavior`). 47 tests.
+- **Combat intention + relevance** — `MonsterCombatIntention` + `MonsterRelevance`. 11 tests.
+- **MonsterType schema** — full `MonsterType`/`MonsterInfo` (80 fields) + `Monsters` registry. 26 tests.
+- Rows flipped: `combat/condition.cpp`, `monster.cpp`, `monster_pathfinding.cpp`, `monster_combat_intention.cpp`, `monster_relevance.cpp`, `monster_targeting.cpp`, `monsters.cpp`, `spawn_monster.cpp`.
+- Fixed a post-merge `RaceType` redeclaration.
+
 ---
 
 ### Current Status
-- **Automated Tests**: **248 test suites / 2233 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **258 test suites / 2359 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.
