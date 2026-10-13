@@ -3,6 +3,8 @@ package org.opentibia.canary.spells
 import org.opentibia.canary.combat.condition.SpellGroup
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.systems.wheel.WheelSpellBoost
+import org.opentibia.canary.systems.wheel.WheelSpellGrade
 import java.util.TreeMap
 
 /**
@@ -108,8 +110,67 @@ abstract class Spell {
     /** `Spell::vocSpellMap` (`spells.hpp:270`). */
     val vocSpellMap: MutableMap<Int, Boolean> = mutableMapOf()
 
+    /**
+     * `Spell::whellOfDestinyUpgraded` (`spells.hpp:290`; the C++ field carries
+     * that typo). Set by the wheel spell-table registration
+     * (`IOWheel::initializeGlobalData`, io_wheel.cpp:98).
+     */
+    private var wheelOfDestinyUpgraded: Boolean = false
+
+    /** `Spell::wheelOfDestinyRegularBoost` (`spells.hpp:291`). */
+    private val wheelOfDestinyRegularBoost = IntArray(WheelSpellBoost.entries.size + 1)
+
+    /** `Spell::wheelOfDestinyUpgradedBoost` (`spells.hpp:292`). */
+    private val wheelOfDestinyUpgradedBoost = IntArray(WheelSpellBoost.entries.size + 1)
+
     /** `Spell::isInstant` (`spells.hpp:141`) — pure virtual in Canary. */
     abstract fun isInstant(): Boolean
+
+    /** `Spell::getWheelOfDestinyUpgraded` (`spells.cpp:731-733`). */
+    fun getWheelOfDestinyUpgraded(): Boolean = wheelOfDestinyUpgraded
+
+    /**
+     * `Spell::getWheelOfDestinyBoost` (`spells.cpp:735-748`): the regular boost
+     * applies from grade `REGULAR`, the upgraded boost from `UPGRADED`; the
+     * C++ `std::array::at` out-of-range guard yields 0 here.
+     */
+    fun getWheelOfDestinyBoost(boost: WheelSpellBoost, grade: WheelSpellGrade): Int {
+        val index = boost.value
+        if (index >= wheelOfDestinyRegularBoost.size) {
+            return 0
+        }
+
+        var value = 0
+        if (grade.value >= WheelSpellGrade.REGULAR.value) {
+            value += wheelOfDestinyRegularBoost[index]
+        }
+        if (grade.value >= WheelSpellGrade.UPGRADED.value) {
+            value += wheelOfDestinyUpgradedBoost[index]
+        }
+        return value
+    }
+
+    /** `Spell::setWheelOfDestinyUpgraded` (`spells.cpp:751-753`). */
+    fun setWheelOfDestinyUpgraded(value: Boolean) {
+        wheelOfDestinyUpgraded = value
+    }
+
+    /**
+     * `Spell::setWheelOfDestinyBoost` (`spells.cpp:755-765`): only the
+     * `REGULAR` and `UPGRADED` grades hold a value; their boosts are overwritten
+     * per call.
+     */
+    fun setWheelOfDestinyBoost(boost: WheelSpellBoost, grade: WheelSpellGrade, value: Int) {
+        val index = boost.value
+        if (index >= wheelOfDestinyRegularBoost.size) {
+            return
+        }
+        if (grade == WheelSpellGrade.REGULAR) {
+            wheelOfDestinyRegularBoost[index] = value
+        } else if (grade == WheelSpellGrade.UPGRADED) {
+            wheelOfDestinyUpgradedBoost[index] = value
+        }
+    }
 
     /** `Spell::isLearnable` (`spells.cpp:948-950`). */
     fun isLearnable(): Boolean = learnable
