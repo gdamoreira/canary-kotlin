@@ -143,10 +143,10 @@ object GuildFunctions {
  * `guilds` is the dependency-injected replacement for `g_game().getGuild(id)`;
  * without it every `Guild(id)` lookup misses and pushes `nil`. The lookup must
  * return the canonical guild instance for an id so the `__eq` identity comparison
- * keeps working, like the game's shared_ptr registry.
- *
- * PARITY GAP: `Guild::setBankBalance` in C++ also persists through the game; the
- * Kotlin `Guild` holds the balance in memory, exactly like the domain port.
+ * keeps working, like the game's shared_ptr registry. Bank balance and MOTD live
+ * on the in-memory [org.opentibia.canary.social.guild.Guild], exactly like
+ * `Guild::setBankBalance`/`Guild::setMotd` (guild.hpp:67-85); persistence stays
+ * with `IOGuild::saveGuild`.
  */
 class WorldGuildOperations(
     private val guilds: (Long) -> Guild? = { null },
