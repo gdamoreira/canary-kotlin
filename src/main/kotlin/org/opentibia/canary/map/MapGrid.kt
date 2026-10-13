@@ -1,6 +1,11 @@
 package org.opentibia.canary.map
 
+import org.opentibia.canary.creatures.spawns.SpawnsMonster
+import org.opentibia.canary.creatures.spawns.SpawnsNpc
+import org.opentibia.canary.game.zones.Zones
+import org.opentibia.canary.items.Cylinder
 import org.opentibia.canary.items.Item
+import org.opentibia.canary.map.house.Houses
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -15,14 +20,31 @@ data class Position(val x: Int, val y: Int, val z: Int) {
     }
 }
 
-class Tile(val position: Position) {
+class Tile(val position: Position) : Cylinder {
     var ground: Item? = null
     private val _items = mutableListOf<Item>()
     val items: List<Item> get() = _items
 
+    /** `HouseTile` marker; `0` for a plain tile. */
+    var houseId: Int = 0
+
+    /** `Tile::flags` (`TileFlags_t` bits, src/items/items_definitions.hpp:443-477). */
+    var flags: Int = 0
+
     fun addItem(item: Item) {
         _items.add(item)
     }
+
+    /** `Tile::internalAddThing` — insert bypassing the query checks. */
+    override fun internalAddThing(item: Item) {
+        _items.add(item)
+    }
+
+    /** `Tile::isHouse` (src/items/tile.hpp). */
+    fun isHouse(): Boolean = houseId != 0
+
+    /** `Tile::isEmpty` (src/items/tile.hpp) with the house check enabled. */
+    fun isEmpty(): Boolean = ground == null && _items.isEmpty() && !isHouse()
 
     fun removeItem(item: Item): Boolean {
         return _items.remove(item)
@@ -51,7 +73,31 @@ class MapSector(val sectorX: Int, val sectorY: Int, val sectorZ: Int) {
     fun getAllTiles(): List<Tile> = tiles.filterNotNull()
 }
 
-class GameMap {
+class GameMap(
+    val houses: Houses = Houses(),
+    val zones: Zones = Zones(),
+) {
+    /** `Map::spawnsMonster` (`src/map/map.hpp:178`), loaded by `IOMap::loadMonsters`. */
+    var spawnsMonster: SpawnsMonster = SpawnsMonster()
+
+    /** `Map::spawnsNpc` (`src/map/map.hpp:179`), loaded by `IOMap::loadNpcs`. */
+    var spawnsNpc: SpawnsNpc = SpawnsNpc()
+
+    /** `Map::monsterfile` (`src/map/map.hpp:158`), resolved by `IOMap::loadMonsters`. */
+    var monsterfile: String = ""
+
+    /** `Map::npcfile` (`src/map/map.hpp:159`), resolved by `IOMap::loadNpcs`. */
+    var npcfile: String = ""
+
+    /** `Map::housefile` (`src/map/map.hpp:160`), resolved by `IOMap::loadHouses`. */
+    var housefile: String = ""
+
+    /** `Map::zonesfile` (`src/map/map.hpp:161`), resolved by `IOMap::loadZones`. */
+    var zonesfile: String = ""
+
+    /** `Map::path` (`src/map/map.hpp:146`), the loaded OTBM file identifier. */
+    var path: String = ""
+
     // Sector key: (z.toLong() shl 32) or ((sectorX.toLong() and 0xFFFF) shl 16) or (sectorY.toLong() and 0xFFFF)
     private val sectors = mutableMapOf<Long, MapSector>()
 

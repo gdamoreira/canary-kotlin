@@ -12,13 +12,13 @@ class HouseTest {
         val house = House(
             id = 1,
             name = "Thais Central Flat 1",
-            ownerId = 10,
+            owner = 10,
             rent = 1500,
             townId = 1
         )
 
-        house.addGuest("Bob")
-        house.addSubOwner("Alice")
+        house.setAccessList(GUEST_LIST, "Bob")
+        house.setAccessList(SUBOWNER_LIST, "Alice")
 
         val owner = Player(10, "Owner", 100, 100, position = Position(100, 100, 7))
         val guest = Player(20, "Bob", 100, 100, position = Position(100, 100, 7))
@@ -33,7 +33,7 @@ class HouseTest {
 
     @Test
     fun `manages house tiles and evicts non-authorized players`() {
-        val house = House(id = 2, name = "Carlin Villa", ownerId = 5, rent = 5000, townId = 2)
+        val house = House(id = 2, name = "Carlin Villa", owner = 5, rent = 5000, townId = 2)
         val pos1 = Position(32000, 32000, 7)
         val pos2 = Position(32001, 32000, 7)
 
