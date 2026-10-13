@@ -247,10 +247,17 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Outbound senders 3** — prey, task hunting, bosstiary, imbuement window, cyclopedia (30 tests).
 - **Depot/spells persistence** — Flyway `V6__player_depot_spells.sql` + depot/inbox/spells repositories (shared attribute codec), 14 tests.
 
+### Phase 21: Lua Item/Tile Bindings, Zone Engine, Spell Engine, Server Edge (07:30 – 08:00)
+- **Lua item/tile bindings** — `ItemTypeFunctions`/`TileFunctions` + extended `ContainerFunctions`/`PositionFunctions` (all Canary names), 29 tests.
+- **Zone engine** — `Zone`/`Zones` (areas, flags, membership, refresh), 27 tests.
+- **Spell engine** — `SpellRegistry`/`SpellEngine`/`SpellBook` (runes, groups/cooldowns, learn/forget) + `AreaCombat`, 106 tests.
+- **Server edge** — `Webhook`, `ProtocolProfile`, `SessionHint`, 36 tests.
+- Zero-warning gate fixes (redundant `else`, unnecessary `!!`).
+
 ---
 
 ### Current Status
-- **Automated Tests**: **213 test suites / 1792 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **229 test suites / 1987 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.

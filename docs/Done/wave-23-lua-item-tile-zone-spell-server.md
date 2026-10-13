@@ -40,3 +40,7 @@ Close further high-impact gaps: item/tile/container Lua bindings, the Zone engin
 ## Post-wave (AGENTS.md §6)
 
 Update `docs/missing-features.md`, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/Done/`; commit the docs separately and push to `origin`.
+
+## Completion
+
+Completed. Lua item/tile/container/position bindings, Zone engine, spell engine (runes/groups/cooldowns/spell book), and server edge (webhook/protocol profile/session hint) implemented and merged; full suite green.
