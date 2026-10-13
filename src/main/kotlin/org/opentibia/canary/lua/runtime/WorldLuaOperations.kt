@@ -2,13 +2,23 @@ package org.opentibia.canary.lua.runtime
 
 import org.opentibia.canary.creatures.ChaseMode
 import org.opentibia.canary.creatures.Creature
+import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.skills_t
+import org.opentibia.canary.creatures.spawns.MonsterType
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.ItemTypeRegistry
+import org.opentibia.canary.lua.bindings.LootData
+import org.opentibia.canary.lua.bindings.LootFunctions
+import org.opentibia.canary.lua.bindings.LootOperations
+import org.opentibia.canary.lua.bindings.MonsterAttackInfo
+import org.opentibia.canary.lua.bindings.MonsterFunctions
+import org.opentibia.canary.lua.bindings.MonsterOperations
+import org.opentibia.canary.lua.bindings.MonsterTypeFunctions
+import org.opentibia.canary.lua.bindings.MonsterTypeOperations
 import org.opentibia.canary.lua.bindings.core.ContainerFunctions
 import org.opentibia.canary.lua.bindings.core.ContainerOperations
 import org.opentibia.canary.lua.bindings.core.CreatureFunctions
@@ -23,6 +33,7 @@ import org.opentibia.canary.lua.bindings.core.PlayerOperations
 import org.opentibia.canary.lua.bindings.core.PositionFunctions
 import org.opentibia.canary.lua.bindings.core.PositionOperations
 import org.opentibia.canary.map.Position
+import java.util.WeakHashMap
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -34,29 +45,39 @@ import kotlin.math.roundToInt
  *
  * Mirrors the C++ primitives registered by Canary's
  * `src/lua/functions/creatures/player/player_functions.cpp`,
- * `creatures/creature_functions.cpp`, `items/item_functions.cpp`,
+ * `creatures/creature_functions.cpp`,
+ * `creatures/monster/monster_functions.cpp`,
+ * `creatures/monster/monster_type_functions.cpp`,
+ * `creatures/monster/loot_functions.cpp`, `items/item_functions.cpp`,
  * `items/container_functions.cpp`, `map/position_functions.cpp` and
  * `core/game/game_functions.cpp`. Capabilities the Kotlin domain does not model yet
  * (inventories, vocations, item attributes/action ids, decay timers, magic-effect
  * broadcasts, name catalogs) degrade to a documented no-op rather than inventing state.
  *
- * The six operation groups are exposed as separate values because `CreatureOperations`
+ * The operation groups are exposed as separate values because `CreatureOperations`
  * and `ItemOperations` cannot be implemented by one class (their `getId` return types
- * differ, `Long` vs `Int`). [install] wires all six into a [LuaEnvironment] through the
- * existing `*Functions.install(env, ops)` overloads; it never mutates `LuaEnvironment`
- * itself.
+ * differ, `Long` vs `Int`). [install] wires all groups into a [LuaEnvironment] through
+ * the existing `*Functions.install(env, ops)` overloads; it never mutates
+ * `LuaEnvironment` itself.
  *
  * @param itemTypes optional item-type catalog used by `Game.createItem` to validate the
  *   id and build the right [Item]/[Container] subtype.
  * @param itemIdsByName optional `name -> id` catalog for the `itemId or name` argument
- *   shared by `Game.createItem`, `player:addItem`, `item:transform`, etc.
+ *   shared by `Game.createItem`, `player:addItem`, `item:transform`, loot
+ *   `setIdFromName`, etc.
  * @param itemAttributeIdsByName optional `attribute name -> id` catalog mirroring
  *   `ItemFunctions::luaItemGetAttribute`/`setAttribute`.
+ * @param monsterTypesByName optional `monster name -> MonsterType` catalog mirroring
+ *   `g_monsters().getMonsterType(name)` for `MonsterType(name)` and `monster:getType`.
+ * @param monsterTypesByRaceId optional `race id -> MonsterType` catalog mirroring
+ *   `g_monsters().getMonsterTypeByRaceId(id)`.
  */
 class WorldLuaOperations(
     itemTypes: ItemTypeRegistry? = null,
     itemIdsByName: Map<String, Int> = emptyMap(),
     itemAttributeIdsByName: Map<String, Int> = emptyMap(),
+    monsterTypesByName: Map<String, Any> = emptyMap(),
+    monsterTypesByRaceId: Map<Int, Any> = emptyMap(),
 ) {
     val game: GameOperations = WorldGameOperations(itemIdsByName, itemTypes)
 
@@ -70,6 +91,12 @@ class WorldLuaOperations(
 
     val position: PositionOperations = WorldPositionOperations()
 
+    val monster: MonsterOperations = WorldMonsterOperations(monsterTypesByName)
+
+    val monsterType: MonsterTypeOperations = WorldMonsterTypeOperations(monsterTypesByName, monsterTypesByRaceId)
+
+    val loot: LootOperations = WorldLootOperations(itemIdsByName)
+
     /**
      * Registers every real seam on [env], replacing the inert `NO_OP_*` placeholders
      * installed by `LuaEnvironment.initState()`. Safe to call after `initState()`.
@@ -81,6 +108,9 @@ class WorldLuaOperations(
         ItemFunctions.install(env, item)
         ContainerFunctions.install(env, container)
         PositionFunctions.install(env, position)
+        MonsterFunctions.install(env, monster)
+        MonsterTypeFunctions.install(env, monsterType)
+        LootFunctions.install(env, loot)
     }
 
     companion object {
@@ -555,4 +585,360 @@ class WorldPositionOperations : PositionOperations {
     override fun sendMagicEffect(position: Position, magicEffect: Int, spectator: Any?): Boolean = false
 
     override fun removeMagicEffect(position: Position, magicEffect: Int, spectator: Any?): Boolean = false
+}
+
+/**
+ * `Monster` metatable seam backed by the Kotlin [Monster] domain object plus per-monster
+ * state the domain does not model yet (idle flag, friend/target lists, attacked
+ * creature, master, challenge flag). The per-id state maps follow the existing
+ * [WorldPlayerOperations] storage convention and live as long as this operations object.
+ *
+ * Parity gaps, all documented approximations:
+ * - `getType` resolves the type from the name catalog because [Monster] carries no
+ *   `m_monsterType`; Canary keeps the type across `monster:setType`/`setName`.
+ * - `getSpawnPosition` returns the current position; Canary returns `Monster::masterPos`,
+ *   which the spawn engine sets. The port does not link monsters to `SpawnMonster` yet.
+ * - `isInSpawnRange` always returns true, matching Canary for a monster whose
+ *   `spawnMonster` weak pointer expired.
+ * - `isTarget` reproduces only the removed/self/z-level gates; Canary also checks
+ *   attackability, protection zones and `canSeeCreature` (Monster targeting subsystem).
+ * - `isOpponent`/`isFriend` approximate Canary's faction/master/party rules with the
+ *   friend list and shared-master relation.
+ * - `selectTarget` gates through `isTarget` and stores the attacked creature without
+ *   Canary's login-protection and target-list reordering.
+ */
+class WorldMonsterOperations(
+    private val monsterTypesByName: Map<String, Any> = emptyMap(),
+) : MonsterOperations {
+    private val idleStatus = mutableMapOf<Long, Boolean>()
+    private val friendList = mutableMapOf<Long, MutableList<Any>>()
+    private val targetList = mutableMapOf<Long, MutableList<Any>>()
+    private val attackedTargets = mutableMapOf<Long, Any>()
+    private val masters = mutableMapOf<Long, Any>()
+    private val challenged = mutableMapOf<Long, Boolean>()
+
+    private fun creatureKey(value: Any): Long? = (value as? Creature)?.id
+
+    override fun isMonster(monster: Any): Boolean = monster is Monster
+
+    override fun getType(monster: Any): Any? {
+        val target = monster as? Monster ?: return null
+        return monsterTypesByName[target.name]
+    }
+
+    override fun getName(monster: Any): String? = (monster as? Creature)?.name
+
+    override fun getSpawnPosition(monster: Any): Position? = (monster as? Creature)?.position
+
+    override fun isInSpawnRange(monster: Any, position: Position?): Boolean? {
+        if (monster !is Monster) {
+            return null
+        }
+        return true
+    }
+
+    override fun isIdle(monster: Any): Boolean? {
+        val id = creatureKey(monster) ?: return null
+        return idleStatus[id] ?: false
+    }
+
+    override fun setIdle(monster: Any, idle: Boolean): Boolean? {
+        val id = creatureKey(monster) ?: return null
+        idleStatus[id] = idle
+        return true
+    }
+
+    override fun isTarget(monster: Any, creature: Any?): Boolean? {
+        val target = monster as? Monster ?: return null
+        val candidate = creature as? Creature ?: return false
+        if (candidate === target || candidate.isRemoved()) {
+            return false
+        }
+        return candidate.position.z == target.position.z
+    }
+
+    override fun isOpponent(monster: Any, creature: Any?): Boolean? {
+        val target = monster as? Monster ?: return null
+        val candidate = creature as? Creature ?: return false
+        if (candidate === target) {
+            return false
+        }
+        return isFriend(target, candidate) != true
+    }
+
+    override fun isFriend(monster: Any, creature: Any?): Boolean? {
+        val target = monster as? Monster ?: return null
+        val candidate = creature ?: return false
+        if (friendList[target.id]?.any { it === candidate } == true) {
+            return true
+        }
+        val master = masters[target.id] ?: return false
+        val candidateId = creatureKey(candidate) ?: return false
+        return masters[candidateId] === master
+    }
+
+    override fun addFriend(monster: Any, creature: Any?): Boolean? {
+        val target = monster as? Monster ?: return null
+        val candidate = creature ?: return false
+        val friends = friendList.getOrPut(target.id) { mutableListOf() }
+        if (friends.none { it === candidate }) {
+            friends += candidate
+        }
+        return true
+    }
+
+    override fun removeFriend(monster: Any, creature: Any?): Boolean? {
+        val target = monster as? Monster ?: return null
+        val candidate = creature ?: return false
+        friendList[target.id]?.removeAll { it === candidate }
+        return true
+    }
+
+    override fun getFriendList(monster: Any): List<Any>? {
+        val target = monster as? Monster ?: return null
+        return friendList[target.id]?.toList() ?: emptyList()
+    }
+
+    override fun addTarget(monster: Any, creature: Any?, pushFront: Boolean): Boolean? {
+        val target = monster as? Monster ?: return null
+        val candidate = creature ?: return false
+        if (candidate === target) {
+            return false
+        }
+        val targets = targetList.getOrPut(target.id) { mutableListOf() }
+        if (targets.any { it === candidate }) {
+            return false
+        }
+        if (pushFront) {
+            targets.add(0, candidate)
+        } else {
+            targets += candidate
+        }
+        return true
+    }
+
+    override fun removeTarget(monster: Any, creature: Any?): Boolean? {
+        val target = monster as? Monster ?: return null
+        val candidate = creature ?: return false
+        val targets = targetList[target.id] ?: return false
+        return targets.removeAll { it === candidate }
+    }
+
+    override fun getTargetList(monster: Any): List<Any>? {
+        val target = monster as? Monster ?: return null
+        return targetList[target.id]?.toList() ?: emptyList()
+    }
+
+    override fun isChallenged(monster: Any): Boolean? {
+        val id = creatureKey(monster) ?: return null
+        return challenged[id] ?: false
+    }
+
+    override fun selectTarget(monster: Any, creature: Any?): Boolean? {
+        val target = monster as? Monster ?: return null
+        if (isTarget(target, creature) != true || creature == null) {
+            return false
+        }
+        attackedTargets[target.id] = creature
+        return true
+    }
+
+    override fun getTarget(monster: Any): Any? {
+        val id = creatureKey(monster) ?: return null
+        return attackedTargets[id]
+    }
+
+    override fun setTarget(monster: Any, target: Any?): Boolean? {
+        val id = creatureKey(monster) ?: return null
+        if (target == null) {
+            attackedTargets.remove(id)
+            return true
+        }
+        if (target === monster) {
+            return false
+        }
+        attackedTargets[id] = target
+        return true
+    }
+
+    override fun getMaster(monster: Any): Any? {
+        val id = creatureKey(monster) ?: return null
+        return masters[id]
+    }
+
+    override fun setMaster(monster: Any, master: Any?): Boolean? {
+        val id = creatureKey(monster) ?: return null
+        if (master == null) {
+            masters.remove(id)
+            return true
+        }
+        if (master === monster) {
+            return false
+        }
+        masters[id] = master
+        return true
+    }
+}
+
+/**
+ * `MonsterType` metatable seam backed by the spawn-engine [MonsterType] plus the
+ * mutable attribute bag Canary stores in `MonsterType::MonsterInfo`. The bag lives in a
+ * [WeakHashMap] keyed by the type identity, so script-created attributes are released
+ * with the type.
+ *
+ * Defaults mirror `MonsterInfo`'s C++ defaults (health/healthMax 100, baseSpeed 110,
+ * race `RACE_BLOOD`, attackable/hostile true, summonable/convinceable/blockable false),
+ * and `blockable` is seeded from the domain type's `isBlockable` flag. The domain's
+ * `canSpawn` callback is used for `canSpawn`.
+ */
+class WorldMonsterTypeOperations(
+    private val typesByName: Map<String, Any> = emptyMap(),
+    private val typesByRaceId: Map<Int, Any> = emptyMap(),
+) : MonsterTypeOperations {
+    private class Info {
+        var nameOverride: String? = null
+        var health = 100
+        var maxHealth = 100
+        var experience = 0L
+        var baseSpeed = 110
+        var race = RACE_BLOOD
+        var bestiaryClass = ""
+        var corpseId = 0
+        var attackable = true
+        var summonable = false
+        var convinceable = false
+        var hostile = true
+        var blockable = false
+        val loot = mutableListOf<LootData>()
+        val attacks = mutableListOf<MonsterAttackInfo>()
+    }
+
+    private val infos = WeakHashMap<Any, Info>()
+
+    override fun create(nameOrRaceId: Any): Any? = when (nameOrRaceId) {
+        is Number -> typesByRaceId[nameOrRaceId.toInt()]
+        is String -> typesByName[nameOrRaceId]
+        else -> null
+    }
+
+    override fun getName(monsterType: Any): String? {
+        val domain = monsterType as? MonsterType ?: return null
+        return info(domain).nameOverride ?: domain.name
+    }
+
+    override fun setName(monsterType: Any, name: String): Boolean? {
+        info(monsterType as? MonsterType ?: return null).nameOverride = name
+        return true
+    }
+
+    override fun getHealth(monsterType: Any): Int? = infoOrNull(monsterType)?.health
+
+    override fun setHealth(monsterType: Any, health: Int): Boolean? {
+        info(monsterType as? MonsterType ?: return null).health = health
+        return true
+    }
+
+    override fun getMaxHealth(monsterType: Any): Int? = infoOrNull(monsterType)?.maxHealth
+
+    override fun setMaxHealth(monsterType: Any, maxHealth: Int): Boolean? {
+        info(monsterType as? MonsterType ?: return null).maxHealth = maxHealth
+        return true
+    }
+
+    override fun getExperience(monsterType: Any): Long? = infoOrNull(monsterType)?.experience
+
+    override fun setExperience(monsterType: Any, experience: Long): Boolean? {
+        info(monsterType as? MonsterType ?: return null).experience = experience
+        return true
+    }
+
+    override fun getBaseSpeed(monsterType: Any): Int? = infoOrNull(monsterType)?.baseSpeed
+
+    override fun setBaseSpeed(monsterType: Any, speed: Int): Boolean? {
+        info(monsterType as? MonsterType ?: return null).baseSpeed = speed
+        return true
+    }
+
+    override fun getRace(monsterType: Any): Int? = infoOrNull(monsterType)?.race
+
+    override fun setRace(monsterType: Any, race: Int): Boolean? {
+        info(monsterType as? MonsterType ?: return null).race = race
+        return true
+    }
+
+    override fun getBestiaryClass(monsterType: Any): String? = infoOrNull(monsterType)?.bestiaryClass
+
+    override fun setBestiaryClass(monsterType: Any, bestiaryClass: String): Boolean? {
+        info(monsterType as? MonsterType ?: return null).bestiaryClass = bestiaryClass
+        return true
+    }
+
+    override fun getCorpseId(monsterType: Any): Int? = infoOrNull(monsterType)?.corpseId
+
+    override fun getTypeName(monsterType: Any): String? = (monsterType as? MonsterType)?.name
+
+    override fun isAttackable(monsterType: Any): Boolean? = infoOrNull(monsterType)?.attackable
+
+    override fun setAttackable(monsterType: Any, value: Boolean): Boolean? {
+        info(monsterType as? MonsterType ?: return null).attackable = value
+        return true
+    }
+
+    override fun isSummonable(monsterType: Any): Boolean? = infoOrNull(monsterType)?.summonable
+
+    override fun setSummonable(monsterType: Any, value: Boolean): Boolean? {
+        info(monsterType as? MonsterType ?: return null).summonable = value
+        return true
+    }
+
+    override fun isConvinceable(monsterType: Any): Boolean? = infoOrNull(monsterType)?.convinceable
+
+    override fun setConvinceable(monsterType: Any, value: Boolean): Boolean? {
+        info(monsterType as? MonsterType ?: return null).convinceable = value
+        return true
+    }
+
+    override fun isHostile(monsterType: Any): Boolean? = infoOrNull(monsterType)?.hostile
+
+    override fun setHostile(monsterType: Any, value: Boolean): Boolean? {
+        info(monsterType as? MonsterType ?: return null).hostile = value
+        return true
+    }
+
+    override fun isBlockable(monsterType: Any): Boolean? = infoOrNull(monsterType)?.blockable
+
+    override fun setBlockable(monsterType: Any, value: Boolean): Boolean? {
+        info(monsterType as? MonsterType ?: return null).blockable = value
+        return true
+    }
+
+    override fun canSpawn(monsterType: Any, position: Position): Boolean? =
+        (monsterType as? MonsterType)?.canSpawn(position)
+
+    override fun getLoot(monsterType: Any): List<LootData>? = infoOrNull(monsterType)?.loot?.toList()
+
+    override fun addLoot(monsterType: Any, loot: LootData): Boolean? {
+        val info = info(monsterType as? MonsterType ?: return null)
+        info.loot += loot.deepCopy()
+        return true
+    }
+
+    override fun getAttackList(monsterType: Any): List<MonsterAttackInfo>? = infoOrNull(monsterType)?.attacks?.toList()
+
+    private fun infoOrNull(monsterType: Any): Info? = (monsterType as? MonsterType)?.let(::info)
+
+    private fun info(monsterType: MonsterType): Info = infos.getOrPut(monsterType) {
+        Info().also { it.blockable = monsterType.isBlockable }
+    }
+
+    private companion object {
+        const val RACE_BLOOD = 2
+    }
+}
+
+/** `Loot` seam resolving `loot:setIdFromName` through the item-name catalog. */
+class WorldLootOperations(
+    private val itemIdsByName: Map<String, Int> = emptyMap(),
+) : LootOperations {
+    override fun itemIdByName(name: String): Int = itemIdsByName[name] ?: 0
 }
