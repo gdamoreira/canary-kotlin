@@ -5,6 +5,7 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.config.FeatureFlags
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.items.ItemTypeRegistry
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.network.protocol.offline.StartOfflineTrainingPacketParser
@@ -31,7 +32,13 @@ data class GamePacketContext(
     val luaEnvironment: LuaEnvironment,
     val featureFlags: FeatureFlags = FeatureFlags(),
     val tradeManager: TradeManager = TradeManager(),
-    val modalManager: ModalWindowManager = ModalWindowManager()
+    val modalManager: ModalWindowManager = ModalWindowManager(),
+    /**
+     * `ItemType::upgradeClassification` source (`Item::getClassification`,
+     * src/items/item.hpp:753). Optional so callers without a loaded registry
+     * keep the classification-0 default.
+     */
+    val itemTypes: ItemTypeRegistry? = null
 )
 
 object GamePacketRouter {
@@ -185,7 +192,17 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            val adapter = PlayerForgeAdapter(player)
+                            // Canary's forge handlers read `g_game().getItemsClassifications()`
+                            // (player.cpp:11297,11589), the store the Lua price table
+                            // (data/scripts/systems/item_tiers.lua) populates through
+                            // `Game.createItemClassification`, and each item's
+                            // `ItemType::upgradeClassification` (`Item::getClassification`,
+                            // src/items/item.hpp:753).
+                            val adapter = PlayerForgeAdapter(
+                                player,
+                                itemClassifications = context.luaEnvironment.itemClassifications,
+                                itemRegistry = context.itemTypes,
+                            )
                             forgeApplication.apply(player.features.forge, adapter, command)
                             adapter.syncItemTiers()
                         }
