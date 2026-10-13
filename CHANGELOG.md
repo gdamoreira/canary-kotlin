@@ -265,10 +265,15 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Account repository** — `JdbcAccountRepository` create/save, coin ledger + `coins_transactions`, ban/session tables, `loadBySession`; Flyway `V7__account_details.sql`. 14 tests.
 - `docs/missing-features.md`: `src/account/` rows flipped to **IMPLEMENTED**.
 
+### Phase 24: `src/config/` Section Complete (09:00 – 09:30)
+- **Config keys** — `config/ConfigKeys.kt`: 360 Canary keys with exact names, types, and defaults (double-entry verified against `configmanager.cpp`). 8 tests.
+- **Typed ConfigManager** — `getBoolean`/`getNumber`/`getFloat`/`getString`, `reload`, OTC feature lists, injected source + precedence. 14 tests.
+- `docs/missing-features.md`: `src/config/` rows flipped to **IMPLEMENTED**.
+
 ---
 
 ### Current Status
-- **Automated Tests**: **242 test suites / 2113 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **244 test suites / 2135 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.

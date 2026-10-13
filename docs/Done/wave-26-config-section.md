@@ -32,3 +32,7 @@
 ## Post-wave (AGENTS.md §6)
 
 Flip the `src/config/` rows to `IMPLEMENTED` in `docs/missing-features.md`; update `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/Done/`; commit the docs separately and push to `origin`.
+
+## Completion
+
+Completed. `src/config/` section implemented: `ConfigKeys` (360 keys, exact names/types/defaults) and typed `ConfigManager` getters + `reload` + OTC feature lists. Rows flipped to IMPLEMENTED.

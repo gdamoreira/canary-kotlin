@@ -43,8 +43,8 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 ### `src/config/`
 | C++ | Status | Missing |
 |---|---|---|
-| `configmanager.*` | PARTIAL | ~370 config keys vs 8; reload, Lua OTC lists, typed getters |
-| `config_enums.hpp` | PARTIAL | most keys absent from `FeatureFlags` |
+| `configmanager.*` | **IMPLEMENTED** | typed getters (`getBoolean`/`getNumber`/`getFloat`/`getString`), `reload`, OTC feature lists |
+| `config_enums.hpp` | **IMPLEMENTED** | `config/ConfigKeys.kt` — 360 keys with exact names/types/defaults |
 
 ### `src/creatures/`
 | C++ | Status | Missing |
