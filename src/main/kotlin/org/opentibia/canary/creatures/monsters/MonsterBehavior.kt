@@ -10,10 +10,13 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.spawns.SpawnsMonster
 import org.opentibia.canary.game.CylinderFlags
 import org.opentibia.canary.game.movement.Direction
+import org.opentibia.canary.game.movement.getOffsetX
+import org.opentibia.canary.game.movement.getOffsetY
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Tile
+import org.opentibia.canary.spells.SoundEffect
 import java.util.Random
 import kotlin.math.abs
 import kotlin.math.max
@@ -98,6 +101,30 @@ class MonsterBehaviorState {
 
     /** `Monster::targetDistance` (monster.hpp:441, seeded from the monster type). */
     var targetDistance: Int = 1
+
+    /** `Monster::targetChangeTicks` (monster.hpp:430). */
+    var targetChangeTicks: Int = 0
+
+    /** `Monster::m_targetChangeCooldown` (monster.hpp:437). */
+    var targetChangeCooldown: Int = 0
+
+    /** `Monster::challengeFocusDuration` (monster.hpp:439). */
+    var challengeFocusDuration: Int = 0
+
+    /** `Monster::fatalHoldDuration` (monster.hpp:438). */
+    var fatalHoldDuration: Int = 0
+
+    /** `Monster::challengeMeleeDuration` (monster.hpp:442). */
+    var challengeMeleeDuration: Int = 0
+
+    /** `Monster::stepDuration` (monster.hpp:440), the "target nearby" slowdown. */
+    var stepDuration: Int = 0
+
+    /** `Monster::yellTicks` (monster.hpp:433). */
+    var yellTicks: Int = 0
+
+    /** `Monster::soundTicks` (monster.hpp:434). */
+    var soundTicks: Int = 0
 }
 
 /**
@@ -194,6 +221,24 @@ class MonsterIdleRequest(
 )
 
 /**
+ * `Monster::doAttacking` inputs (src/creatures/monsters/monster.cpp:1754-1767).
+ * The C++ `getAttackedCreature()` is passed as [attackedCreature] and its
+ * `isLifeless`/player-login-protection checks are projected to flags.
+ * [requestCombatIntention] is `Monster::requestCombatIntention`, the async
+ * pipeline whose synchronous commit is [MonsterBehavior.commitCombatIntention].
+ */
+class MonsterAttackingRequest(
+    val state: MonsterBehaviorState,
+    val monsterId: Long,
+    val isSummon: Boolean,
+    val attackedCreature: Creature?,
+    val interval: Int,
+    val attackedIsLifeless: Boolean = false,
+    val attackedIsLoginProtected: Boolean = false,
+    val requestCombatIntention: (Int, Creature) -> Unit = { _, _ -> },
+)
+
+/**
  * Port of the remaining `Monster` runtime rules:
  * - spell selection/casting: `Monster::canUseAttack` (monster.cpp:2095-2107),
  *   `Monster::canUseSpell` (monster.cpp:2109-2139),
@@ -241,6 +286,15 @@ object MonsterBehavior {
 
     /** `CONST_ME_POFF` (src/utils/utils_definitions.hpp:63). */
     const val CONST_ME_POFF = 3
+
+    /** `CONST_ME_TELEPORT` (src/utils/utils_definitions.hpp:71). */
+    const val CONST_ME_TELEPORT = 11
+
+    /** `CONST_ME_MAGIC_BLUE` (src/utils/utils_definitions.hpp:73). */
+    const val CONST_ME_MAGIC_BLUE = 13
+
+    /** `CONST_ME_BLOCKHIT` (src/utils/utils_definitions.hpp:64). */
+    const val CONST_ME_BLOCKHIT = 4
 
     /**
      * `Monster::canUseAttack` (monster.cpp:2095-2107): a hostile monster needs a
@@ -392,12 +446,21 @@ object MonsterBehavior {
     }
 
     /**
-     * `Monster::onThinkDefense` defense-spell roll (monster.cpp:2202-2222):
-     * spells whose `speed` window elapsed and whose chance roll passes cast on
-     * the monster itself; the tick counter folds to zero when no spell held it.
+     * `Monster::onThinkDefense` (monster.cpp:2202-2272), defense spells and the
+     * summon roll in source order: spells whose `speed` window elapsed and whose
+     * chance roll passes cast on the monster itself; then, for a non-summon with
+     * `hasFollowPath` and room under [maxSummons], each [summonBlocks] entry
+     * whose speed window elapsed, once-per-round gate, per-name [SummonBlock.count]
+     * gate and chance roll pass creates a monster and places it. A successfully
+     * placed summon is bound to [monster] with `reloadCreature = true`, announced
+     * with the two magic effects and the summon sound, and counts toward the cap
+     * immediately: [setMaster] is `Creature::setMaster`, which emplaces the
+     * summon into the master's summon list (`creature.cpp:1344-1347`) that
+     * [summons] mirrors, so it must append there.
      *
-     * PARITY GAP: the summon roll (monster.cpp:2224-2267) belongs to the
-     * Lua-loaded monster type and `Game::placeCreature`.
+     * The tick counter folds to zero when no spell or summon block held it.
+     * [soulPit]/[forgeStack] feed `Monster::setSoulPitStack`; [nextRandom] is
+     * `uniform_random(1, 100)`.
      */
     fun onThinkDefense(
         state: MonsterBehaviorState,
@@ -405,6 +468,19 @@ object MonsterBehavior {
         defenseSpells: List<MonsterSpellBlock>,
         interval: Int,
         nextRandom: (Int, Int) -> Int = { min, _ -> min },
+        isSummon: Boolean = false,
+        summonBlocks: List<SummonBlock> = emptyList(),
+        maxSummons: Int = 0,
+        summons: MutableList<Monster> = mutableListOf(),
+        hasFollowPath: Boolean = false,
+        soulPit: Boolean = false,
+        forgeStack: Int = 0,
+        createMonster: (String) -> Monster? = { null },
+        placeCreature: (Monster, Position, Boolean, Boolean) -> Boolean = { _, _, _, _ -> false },
+        setMaster: (Monster, Monster, Boolean) -> Unit = { _, _, _ -> },
+        setSoulPitStack: (Monster, Int, Boolean) -> Unit = { _, _, _ -> },
+        addMagicEffect: (Position, Int) -> Unit = { _, _ -> },
+        sendSoundEffect: (Position, SoundEffect, Monster) -> Unit = { _, _, _ -> },
     ) {
         var resetTicks = true
         state.defenseTicks += interval
@@ -427,9 +503,147 @@ object MonsterBehavior {
             }
         }
 
+        if (!isSummon && summons.size < maxSummons && hasFollowPath) {
+            for (summonBlock in summonBlocks) {
+                if (summonBlock.speed > state.defenseTicks) {
+                    resetTicks = false
+                    continue
+                }
+
+                if (summons.size >= maxSummons) {
+                    continue
+                }
+
+                if (state.defenseTicks % summonBlock.speed >= interval) {
+                    // already used this spell for this round
+                    continue
+                }
+
+                var summonsCount = 0
+                for (summon in summons) {
+                    if (summon.name == summonBlock.name) {
+                        summonsCount++
+                    }
+                }
+                if (summonsCount >= summonBlock.count) {
+                    continue
+                }
+
+                if (summonBlock.chance < nextRandom(1, 100)) {
+                    continue
+                }
+
+                val summon = createMonster(summonBlock.name) ?: continue
+                if (!placeCreature(summon, monster.position, false, summonBlock.force)) {
+                    continue
+                }
+
+                if (soulPit) {
+                    setSoulPitStack(summon, forgeStack, true)
+                }
+                setMaster(summon, monster, true)
+                addMagicEffect(monster.position, CONST_ME_MAGIC_BLUE)
+                addMagicEffect(summon.position, CONST_ME_TELEPORT)
+                sendSoundEffect(summon.position, SoundEffect.MONSTER_SPELL_SUMMON, monster)
+            }
+        }
+
         if (resetTicks) {
             state.defenseTicks = 0
         }
+    }
+
+    /**
+     * `Monster::doAttacking` (monster.cpp:1754-1767): a live, non-login-protected
+     * attacked creature that is not the summon itself accumulates the interval
+     * into `attackTicks` and starts the combat-intention pipeline.
+     */
+    fun doAttacking(request: MonsterAttackingRequest) {
+        val attacked = request.attackedCreature ?: return
+        if (request.attackedIsLifeless) {
+            return
+        }
+        if (request.isSummon && attacked.id == request.monsterId) {
+            return
+        }
+        if (request.attackedIsLoginProtected) {
+            return
+        }
+
+        request.state.attackTicks += request.interval
+        request.requestCombatIntention(request.interval, attacked)
+    }
+
+    /** `Monster::hasExtraSwing` (monster.cpp:2091-2093). */
+    fun hasExtraSwing(state: MonsterBehaviorState): Boolean = state.extraMeleeAttack
+
+    /**
+     * `Monster::getCombatValues` (monster.cpp:3346-3355): `null` when both
+     * bounds are zero, else the stored `(min, max)` pair.
+     */
+    fun getCombatValues(state: MonsterBehaviorState): Pair<Int, Int>? =
+        if (state.minCombatValue == 0 && state.maxCombatValue == 0) {
+            null
+        } else {
+            state.minCombatValue to state.maxCombatValue
+        }
+
+    /**
+     * `Monster::updateLookDirection` (monster.cpp:3356-3413): faces the attacked
+     * creature on the dominant axis, breaking exact diagonals from the current
+     * facing (North turns East, West turns South on a full overlap). Returns
+     * `null` without a target; the caller applies the turn.
+     */
+    fun updateLookDirection(
+        currentDirection: Direction,
+        pos: Position,
+        attackedCreaturePos: Position?,
+    ): Direction? {
+        if (attackedCreaturePos == null) {
+            return null
+        }
+
+        var newDir = currentDirection
+        val offsetx = getOffsetX(attackedCreaturePos, pos)
+        val offsety = getOffsetY(attackedCreaturePos, pos)
+        val dx = abs(offsetx)
+        val dy = abs(offsety)
+
+        if (dx > dy) {
+            // look EAST/WEST
+            newDir = if (offsetx < 0) Direction.West else Direction.East
+        } else if (dx < dy) {
+            // look NORTH/SOUTH
+            newDir = if (offsety < 0) Direction.North else Direction.South
+        } else {
+            if (offsetx < 0 && offsety < 0) {
+                if (currentDirection == Direction.South) {
+                    newDir = Direction.West
+                } else if (currentDirection == Direction.East) {
+                    newDir = Direction.North
+                }
+            } else if (offsetx < 0 && offsety > 0) {
+                if (currentDirection == Direction.North) {
+                    newDir = Direction.West
+                } else if (currentDirection == Direction.East) {
+                    newDir = Direction.South
+                }
+            } else if (offsetx > 0 && offsety < 0) {
+                if (currentDirection == Direction.South) {
+                    newDir = Direction.East
+                } else if (currentDirection == Direction.West) {
+                    newDir = Direction.North
+                }
+            } else {
+                if (currentDirection == Direction.North) {
+                    newDir = Direction.East
+                } else if (currentDirection == Direction.West) {
+                    newDir = Direction.South
+                }
+            }
+        }
+
+        return newDir
     }
 
     /**

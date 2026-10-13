@@ -211,12 +211,64 @@ class TargetCreatureFacts(
     val masterId: Long? = null,
     val masterPlayerId: Long? = null,
     val isRemoved: Boolean = false,
+    val isLoginProtected: Boolean = false,
     val isAttackable: Boolean = true,
     val zoneType: ZoneType = ZoneType.Normal,
     val isInvisible: Boolean = false,
     val isSummon: Boolean = false,
     val isMonster: Boolean = false,
     val ignoresMonsters: Boolean = false,
+)
+
+/**
+ * Port of `Monster::TargetReference` (src/creatures/monsters/monster.hpp:42-46).
+ * The C++ `std::weak_ptr<Creature>` is modelled as re-resolvable identity:
+ * [isExpired] marks a reference whose creature no longer resolves, so stale
+ * entries are dropped on their next use instead of ever holding a raw object.
+ */
+class MonsterTargetReference(
+    val creatureId: Long,
+    val countsAsPlayerOnScreen: Boolean = false,
+    val isExpired: Boolean = false,
+)
+
+/**
+ * Port of the `Monster` target/friend list state
+ * (src/creatures/monsters/monster.hpp:346-397): `targetList`, `friendList`,
+ * `totalPlayersOnScreen` and the `targetStateEpoch`/`targetDecisionEpoch`
+ * generations that invalidate deferred target work.
+ *
+ * [targetStateEpoch]/[targetDecisionEpoch] mirror the C++ `uint64_t` wrap: the
+ * two's complement `Long` representation increments to `0` then resets to `1`
+ * exactly like the unsigned type.
+ */
+class MonsterTargetListState {
+    val targetList: MutableList<MonsterTargetReference> = mutableListOf()
+    val friendList: MutableList<Long> = mutableListOf()
+    var totalPlayersOnScreen: Int = 0
+    var targetStateEpoch: Long = 1L
+    var targetDecisionEpoch: Long = 1L
+}
+
+/**
+ * `Monster::onThinkTarget` inputs (src/creatures/monsters/monster.cpp:2141-2200).
+ * [rollTargetChange] is `uniform_random(1, 100)`; [isDecisionEpochCurrent]
+ * replaces the C++ `monster->targetDecisionEpoch == decisionEpoch` guard of the
+ * deferred search request, and [requestTargetSearchCompute] is the async
+ * `Monster::requestTargetSearchCompute` seam.
+ */
+class MonsterTargetThinkRequest(
+    val state: MonsterBehaviorState,
+    val interval: Int,
+    val isSummon: Boolean,
+    val changeTargetSpeed: Int,
+    val changeTargetChance: Int,
+    val targetDistance: Int,
+    val monsterPerfTestFriendlyFire: Boolean,
+    val runAwayHealth: Int,
+    val rollTargetChange: () -> Int = { 1 },
+    val isDecisionEpochCurrent: () -> Boolean = { true },
+    val requestTargetSearchCompute: (TargetSearchType) -> Unit = {},
 )
 
 /**
@@ -486,6 +538,362 @@ object MonsterTargeting {
         val creature = resolve(targetId)
         creature != null && creature.health > 0 && canSee(creature.position)
     }
+
+    /**
+     * `Monster::searchTarget` (src/creatures/monsters/monster.cpp:899-905):
+     * inside a barrier-parallel dispatcher context the search is deferred through
+     * [requestTargetSearchCompute], otherwise the synchronous
+     * [searchTargetImmediate] runs.
+     */
+    fun searchTarget(
+        searchType: TargetSearchType,
+        isBarrierParallel: Boolean,
+        requestTargetSearchCompute: (TargetSearchType) -> Boolean,
+        searchTargetImmediate: (TargetSearchType) -> Boolean,
+    ): Boolean =
+        if (isBarrierParallel) {
+            requestTargetSearchCompute(searchType)
+        } else {
+            searchTargetImmediate(searchType)
+        }
+
+    /**
+     * `Monster::selectTarget` (src/creatures/monsters/monster.cpp:1464-1497):
+     * validates the target, rejects login-protected players, requires a live
+     * entry in `targetList` (an expired reference is forgotten and erased), then
+     * for hostile monsters/summons sets the attacked creature plus the attack
+     * check and always follows.
+     */
+    fun selectTarget(
+        monster: MonsterTargetFacts,
+        creature: TargetCreatureFacts,
+        monsterPerfTestFriendlyFire: Boolean,
+        state: MonsterTargetListState,
+        setAttackedCreature: (TargetCreatureFacts) -> Boolean = { true },
+        checkCreatureAttack: () -> Unit = {},
+        setFollowCreature: (TargetCreatureFacts) -> Boolean = { true },
+    ): Boolean {
+        if (!isTarget(monster, creature, monsterPerfTestFriendlyFire)) {
+            return false
+        }
+
+        if (creature.playerId != null && creature.isLoginProtected) {
+            return false
+        }
+
+        val index = state.targetList.indexOfFirst { it.creatureId == creature.id }
+        if (index < 0) {
+            return false
+        }
+
+        val reference = state.targetList[index]
+        if (reference.isExpired) {
+            forgetTargetReference(state, reference)
+            state.targetList.removeAt(index)
+            markTargetStateChanged(state)
+            return false
+        }
+
+        if (monster.isHostile || monster.isSummon) {
+            if (setAttackedCreature(creature)) {
+                checkCreatureAttack()
+            }
+        }
+        return setFollowCreature(creature)
+    }
+
+    /** `Monster::addFriend` (src/creatures/monsters/monster.cpp:652-660). */
+    fun addFriend(state: MonsterTargetListState, creatureId: Long, monsterId: Long = 0L): Boolean {
+        if (creatureId == monsterId) {
+            return false
+        }
+        if (state.friendList.contains(creatureId)) {
+            return false
+        }
+        state.friendList.add(creatureId)
+        return true
+    }
+
+    /** `Monster::removeFriend` (src/creatures/monsters/monster.cpp:662-664). */
+    fun removeFriend(state: MonsterTargetListState, creatureId: Long): Boolean =
+        state.friendList.remove(creatureId)
+
+    /**
+     * `Monster::countsAsPlayerOnScreenTarget` (monster.cpp:666-669): a real
+     * (non-default) faction monster without a master counts player creatures.
+     */
+    fun countsAsPlayerOnScreenTarget(monster: MonsterTargetFacts, creature: TargetCreatureFacts): Boolean =
+        monster.masterId == null &&
+            monster.effectiveFaction() != Faction.Default &&
+            creature.playerId != null
+
+    /** `Monster::forgetTargetReference` (src/creatures/monsters/monster.cpp:671-675). */
+    fun forgetTargetReference(state: MonsterTargetListState, reference: MonsterTargetReference) {
+        if (reference.countsAsPlayerOnScreen && state.totalPlayersOnScreen > 0) {
+            state.totalPlayersOnScreen--
+        }
+    }
+
+    /**
+     * `Monster::addTarget` (src/creatures/monsters/monster.cpp:677-708): replaces
+     * an expired entry at its old position, otherwise appends/pushes the new
+     * reference, keeps `totalPlayersOnScreen` in step and marks the state epoch.
+     */
+    fun addTarget(
+        state: MonsterTargetListState,
+        monster: MonsterTargetFacts,
+        creature: TargetCreatureFacts,
+        pushFront: Boolean,
+    ): Boolean {
+        if (creature.id == monster.id) {
+            return false
+        }
+
+        val index = state.targetList.indexOfFirst { it.creatureId == creature.id }
+        if (index >= 0) {
+            val existing = state.targetList[index]
+            if (!existing.isExpired) {
+                return false
+            }
+            forgetTargetReference(state, existing)
+            state.targetList.removeAt(index)
+        }
+
+        val countsAsPlayer = countsAsPlayerOnScreenTarget(monster, creature)
+        val reference = MonsterTargetReference(creature.id, countsAsPlayer)
+        if (pushFront) {
+            state.targetList.add(0, reference)
+        } else {
+            state.targetList.add(reference)
+        }
+
+        if (countsAsPlayer) {
+            state.totalPlayersOnScreen++
+        }
+
+        markTargetStateChanged(state)
+        return true
+    }
+
+    /**
+     * `Monster::removeTarget` (src/creatures/monsters/monster.cpp:710-733):
+     * a missing reference reports false; an expired one is forgotten, erased and
+     * still reports false, a live one is forgotten/erased and reports true.
+     */
+    fun removeTarget(state: MonsterTargetListState, creature: TargetCreatureFacts): Boolean {
+        val index = state.targetList.indexOfFirst { it.creatureId == creature.id }
+        if (index < 0) {
+            return false
+        }
+
+        val reference = state.targetList[index]
+        if (reference.isExpired) {
+            forgetTargetReference(state, reference)
+            state.targetList.removeAt(index)
+            markTargetStateChanged(state)
+            return false
+        }
+
+        forgetTargetReference(state, reference)
+        state.targetList.removeAt(index)
+        markTargetStateChanged(state)
+        return true
+    }
+
+    /** `Monster::clearTargetList` (src/creatures/monsters/monster.cpp:772-778). */
+    fun clearTargetList(state: MonsterTargetListState) {
+        if (state.targetList.isNotEmpty()) {
+            markTargetStateChanged(state)
+        }
+        state.targetList.clear()
+        state.totalPlayersOnScreen = 0
+    }
+
+    /** `Monster::clearFriendList` (src/creatures/monsters/monster.cpp:780-782). */
+    fun clearFriendList(state: MonsterTargetListState) {
+        state.friendList.clear()
+    }
+
+    /** `Monster::markTargetStateChanged` (src/creatures/monsters/monster.cpp:1312-1316). */
+    fun markTargetStateChanged(state: MonsterTargetListState) {
+        if (++state.targetStateEpoch == 0L) {
+            state.targetStateEpoch = 1L
+        }
+    }
+
+    /** `Monster::markTargetDecisionChanged` (src/creatures/monsters/monster.cpp:1318-1324). */
+    fun markTargetDecisionChanged(state: MonsterTargetListState) {
+        markTargetStateChanged(state)
+        if (++state.targetDecisionEpoch == 0L) {
+            state.targetDecisionEpoch = 1L
+        }
+    }
+
+    /**
+     * `Monster::onCreatureFound` (src/creatures/monsters/monster.cpp:784-801):
+     * friends and opponents are recorded and any list change (or an idle
+     * monster) refreshes the idle status.
+     */
+    fun onCreatureFound(
+        state: MonsterTargetListState,
+        monster: MonsterTargetFacts,
+        creature: TargetCreatureFacts,
+        pushFront: Boolean,
+        monsterPerfTestFriendlyFire: Boolean,
+        isIdle: Boolean,
+        updateIdleStatus: () -> Unit = {},
+    ): Boolean {
+        var listChanged = false
+        if (isFriend(monster, creature, monsterPerfTestFriendlyFire)) {
+            listChanged = addFriend(state, creature.id, monster.id) || listChanged
+        }
+
+        if (isOpponent(monster, creature, monsterPerfTestFriendlyFire)) {
+            listChanged = addTarget(state, monster, creature, pushFront) || listChanged
+        }
+
+        if (listChanged || isIdle) {
+            updateIdleStatus()
+        }
+
+        return listChanged
+    }
+
+    /** `Monster::onCreatureEnter` (monster.cpp:803-806) without the spectator bookkeeping. */
+    fun onCreatureEnter(
+        state: MonsterTargetListState,
+        monster: MonsterTargetFacts,
+        creature: TargetCreatureFacts,
+        monsterPerfTestFriendlyFire: Boolean,
+        isIdle: Boolean,
+        updateIdleStatus: () -> Unit = {},
+    ): Boolean = onCreatureFound(
+        state = state,
+        monster = monster,
+        creature = creature,
+        pushFront = true,
+        monsterPerfTestFriendlyFire = monsterPerfTestFriendlyFire,
+        isIdle = isIdle,
+        updateIdleStatus = updateIdleStatus,
+    )
+
+    /**
+     * `Monster::onCreatureLeave` (src/creatures/monsters/monster.cpp:882-897):
+     * removes a departing friend and, when a departing opponent empties the
+     * target list, refreshes the idle status.
+     */
+    fun onCreatureLeave(
+        state: MonsterTargetListState,
+        monster: MonsterTargetFacts,
+        creature: TargetCreatureFacts,
+        monsterPerfTestFriendlyFire: Boolean,
+        updateIdleStatus: () -> Unit = {},
+    ) {
+        if (isFriend(monster, creature, monsterPerfTestFriendlyFire)) {
+            removeFriend(state, creature.id)
+        }
+
+        if (isOpponent(monster, creature, monsterPerfTestFriendlyFire)) {
+            if (removeTarget(state, creature) && state.targetList.isEmpty()) {
+                updateIdleStatus()
+            }
+        }
+    }
+
+    /**
+     * `Monster::updateSummonTarget` (src/creatures/monsters/monster.cpp:1332-1345):
+     * a summon that attacked itself drops its follow, otherwise it follows its
+     * attacker, then adopts the master's target, then falls back to the master.
+     */
+    fun updateSummonTarget(
+        monsterId: Long,
+        attackedCreatureId: Long?,
+        followCreatureId: Long?,
+        masterId: Long?,
+        masterAttackedCreatureId: Long?,
+        resolve: (Long) -> TargetCreatureFacts?,
+        selectTarget: (TargetCreatureFacts) -> Boolean = { true },
+        setFollowCreature: (TargetCreatureFacts?) -> Unit = {},
+    ) {
+        if (attackedCreatureId == monsterId) {
+            setFollowCreature(null)
+        } else if (attackedCreatureId != null && followCreatureId != attackedCreatureId) {
+            resolve(attackedCreatureId)?.let(setFollowCreature)
+        } else if (masterId != null && masterAttackedCreatureId != null) {
+            resolve(masterAttackedCreatureId)?.let(selectTarget)
+        } else if (masterId != null && masterId != followCreatureId) {
+            resolve(masterId)?.let(setFollowCreature)
+        }
+    }
+
+    /**
+     * `Monster::onThinkTarget` (src/creatures/monsters/monster.cpp:2141-2200):
+     * the target-change speed window. Challenge focus pauses changes while it
+     * ticks down; the fatal hold ticks down while the monster flees; a running
+     * cooldown rearms the tick counter to the full speed once it expires; when
+     * the tick window is reached the cooldown is armed, challenge focus is
+     * cleared and the chance-gated random/nearest re-search is requested only
+     * while the captured decision epoch is still current.
+     */
+    fun onThinkTarget(request: MonsterTargetThinkRequest) {
+        if (request.isSummon || request.changeTargetSpeed == 0) {
+            return
+        }
+
+        val state = request.state
+        var canChangeTarget = true
+
+        if (state.challengeFocusDuration > 0) {
+            state.challengeFocusDuration = subtractElapsedTime(state.challengeFocusDuration, request.interval)
+            canChangeTarget = false
+        }
+
+        if (state.fatalHoldDuration > 0 && request.runAwayHealth > 0) {
+            state.fatalHoldDuration = subtractElapsedTime(state.fatalHoldDuration, request.interval)
+        }
+
+        if (state.targetChangeCooldown > 0) {
+            state.targetChangeCooldown = subtractElapsedTime(state.targetChangeCooldown, request.interval)
+            if (state.targetChangeCooldown <= 0) {
+                state.targetChangeCooldown = 0
+                state.targetChangeTicks = request.changeTargetSpeed
+            } else {
+                canChangeTarget = false
+            }
+        }
+
+        if (!canChangeTarget) {
+            return
+        }
+
+        state.targetChangeTicks += request.interval
+        if (state.targetChangeTicks < request.changeTargetSpeed) {
+            return
+        }
+
+        state.targetChangeTicks = 0
+        state.targetChangeCooldown = request.changeTargetSpeed
+        if (state.challengeFocusDuration > 0) {
+            state.challengeFocusDuration = 0
+        }
+
+        val searchType = if (request.monsterPerfTestFriendlyFire || request.targetDistance <= 1) {
+            TargetSearchType.Random
+        } else {
+            TargetSearchType.Nearest
+        }
+        if (request.changeTargetChance >= request.rollTargetChange() && request.isDecisionEpochCurrent()) {
+            request.requestTargetSearchCompute(searchType)
+        }
+    }
+
+    /** `subtractElapsedTime` (src/utils/tools.hpp:82-87), saturating at zero. */
+    fun subtractElapsedTime(remaining: Int, elapsed: Int): Int =
+        if (remaining <= 0 || elapsed >= remaining) {
+            0
+        } else {
+            remaining - elapsed
+        }
 
     private fun selectByNearest(
         request: MonsterTargetSearchRequest,

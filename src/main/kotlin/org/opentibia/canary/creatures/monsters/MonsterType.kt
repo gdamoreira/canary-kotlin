@@ -5,7 +5,9 @@ import org.opentibia.canary.combat.condition.CombatType
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.LightInfo
 import org.opentibia.canary.combat.condition.Outfit
+import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Skulls_t
+import org.opentibia.canary.map.Position
 import org.opentibia.canary.spells.SoundEffect
 import org.opentibia.canary.systems.bestiary.BestiaryRace
 import java.util.TreeMap
@@ -253,6 +255,24 @@ class MonsterType(name: String) {
 
     /** `MonsterType::isBoss` (`src/creatures/monsters/monsters.cpp:344-346`). */
     fun isBoss(): Boolean = info.bosstiaryClass.isNotEmpty()
+
+    /**
+     * `MonsterType::canSpawn` (`src/creatures/monsters/monsters.cpp:35-45`): a
+     * day/night-gated spawn only survives off-period when underground below the
+     * surface layer (`MAP_INIT_SURFACE_LAYER`), see [org.opentibia.canary.creatures.Creature].
+     */
+    fun canSpawn(pos: Position, isDay: Boolean): Boolean {
+        var canSpawn = true
+
+        if ((isDay && info.respawnType.period == RespawnPeriod.RESPAWNPERIOD_NIGHT) ||
+            (!isDay && info.respawnType.period == RespawnPeriod.RESPAWNPERIOD_DAY)
+        ) {
+            // It will ignore day and night if underground
+            canSpawn = pos.z > Creature.MAP_INIT_SURFACE_LAYER && info.respawnType.underground
+        }
+
+        return canSpawn
+    }
 }
 
 /**
