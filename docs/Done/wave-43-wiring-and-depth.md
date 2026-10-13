@@ -31,3 +31,7 @@
 ## Post-wave (§6)
 
 Update §1–§4, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+
+## Completion
+
+Completed: production Game wiring, 4 more opcode groups applied, 34 misc senders (142/187 total), 41 game.cpp family methods, 68 Player methods (479/821), monster targeting/combat/walk/summon/respawn (89 name-matched). 527 suites / 5745 tests.
