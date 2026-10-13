@@ -64,7 +64,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | `forge_conversion.hpp` | **IMPLEMENTED** | `systems/forge/ForgeEnums.kt` |
 | `account_coins.hpp` | **IMPLEMENTED** | `systems/gamestore/AccountCoins.kt` |
 | `account_errors.hpp`, `account_group_type.hpp`, `account_type.hpp` | **IMPLEMENTED** | `account/AccountInfo.kt` (`AccountErrors`, `AccountType`) |
-| `container_type.hpp`, `object_category.hpp` | MISSING | container/object categories used by depot/market/stash |
+| `container_type.hpp`, `object_category.hpp` | **IMPLEMENTED** | `items/ContainerType.kt` (`ContainerSpecial_t`) + `items/ObjectCategory.kt` |
 | `lua_variant_type.hpp` | **IMPLEMENTED** | `spells/SpellValues.kt` (`LuaVariantType`) |
 | `player_blessings.hpp` | **IMPLEMENTED** | `creatures/Creature.kt` (`Blessings`) |
 | `player_cyclopedia.hpp` | **IMPLEMENTED** | `creatures/players/components/PlayerCyclopedia.kt` |

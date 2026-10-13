@@ -316,10 +316,14 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Definitions** — `TransactionStates_t`. 2 tests.
 - `docs/missing-features.md`: `src/database/` section added and flipped to **IMPLEMENTED**.
 
+### Phase 32: `src/enums/` Section Complete (12:45 – 13:00)
+- **Container/object categories** — `ContainerSpecial_t` + `ObjectCategory_t` with exact values. 3 tests.
+- `docs/missing-features.md`: `src/enums/` section added; all rows **IMPLEMENTED**.
+
 ---
 
 ### Current Status
-- **Automated Tests**: **302 test suites / 3099 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **304 test suites / 3102 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.

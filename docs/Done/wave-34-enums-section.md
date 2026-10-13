@@ -25,3 +25,7 @@
 ## Post-wave (AGENTS.md §6)
 
 Flip the `src/enums/` rows to `IMPLEMENTED` in `docs/missing-features.md`; update `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/Done/`; commit the docs separately and push to `origin`.
+
+## Completion
+
+Completed. `ContainerSpecial_t` + `ObjectCategory_t` ported. The `src/enums/` section is now fully IMPLEMENTED.
