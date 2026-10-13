@@ -8,7 +8,6 @@ import org.opentibia.canary.lua.bindings.ActionBindings
 import org.opentibia.canary.lua.bindings.CreatureEventBindings
 import org.opentibia.canary.lua.bindings.GlobalEventBindings
 import org.opentibia.canary.lua.bindings.MoveEventBindings
-import org.opentibia.canary.lua.bindings.SpellBindings
 import org.opentibia.canary.lua.bindings.TalkActionBindings
 import org.opentibia.canary.lua.registry.Actions
 import org.opentibia.canary.lua.registry.CreatureEvents
@@ -52,6 +51,15 @@ class LuaEnvironment {
         libraries.add(fetch)
     }
 
+    /**
+     * Binds the canonical spell registry created by `WorldLuaOperations.install`
+     * (`SpellBindings` -> `SpellFunctions`), keeping `env.spells` and the Lua
+     * `Spell` global on the same instance.
+     */
+    fun installSpells(registry: Spells) {
+        spells = registry
+    }
+
     fun initState() {
         loadCompatShim()
         userdata = UserdataRegistry(globals)
@@ -62,7 +70,6 @@ class LuaEnvironment {
 
         ActionBindings.install(this)
         TalkActionBindings.install(this)
-        spells = SpellBindings.install(this)
         creatureEvents = CreatureEventBindings.install(this)
         globalEvents = GlobalEventBindings.install(this)
         moveEvents = MoveEventBindings.install(this)
