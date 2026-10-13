@@ -17,9 +17,15 @@ import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.grouping.Group
 import org.opentibia.canary.creatures.grouping.Party
 import org.opentibia.canary.creatures.grouping.PartyShields_t
+import org.opentibia.canary.creatures.monsters.MonsterType
+import org.opentibia.canary.creatures.players.components.CyclopediaPlayer
 import org.opentibia.canary.creatures.players.components.InMemoryKV
 import org.opentibia.canary.creatures.players.components.KV
+import org.opentibia.canary.creatures.players.components.PlayerAsyncTask
+import org.opentibia.canary.creatures.players.components.PlayerCyclopedia
 import org.opentibia.canary.creatures.players.components.PlayerSex_t
+import org.opentibia.canary.creatures.players.components.RecentDeathEntry
+import org.opentibia.canary.creatures.players.components.RecentPvPKillEntry
 import org.opentibia.canary.creatures.players.pvp.PlayerPvp
 import org.opentibia.canary.social.guild.Guild
 import org.opentibia.canary.social.guild.GuildRank
@@ -30,7 +36,12 @@ import org.opentibia.canary.creatures.vocations.Vocation
 import org.opentibia.canary.creatures.vocations.VocationRequirementsAdapter
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.systems.forge.PlayerForgeHistory
+import org.opentibia.canary.systems.prey.PreySlot
 import org.opentibia.canary.systems.rewardchest.ReturnValue
+import org.opentibia.canary.systems.taskhunting.TaskHuntingSlot
+import org.opentibia.canary.systems.taskhunting.TaskMonsterInfo
+import org.opentibia.canary.systems.wheel.PlayerWheel
 import org.opentibia.canary.spells.SpellBook
 import org.opentibia.canary.spells.Spells
 import java.util.Collections
@@ -61,6 +72,22 @@ interface SpellCooldownClient {
 
     /** `ProtocolGame::sendSpellGroupCooldown` (player.cpp:9005). */
     fun sendSpellGroupCooldown(groupId: SpellGroup, time: Int)
+}
+
+/**
+ * `ProtocolGame` senders the `Player` cyclopedia monster-tracker hooks forward
+ * to (`player.cpp:951-990, 992-996`). A `null` client models
+ * `Player::client == nullptr`, where the tracker list updates early-return.
+ */
+interface CyclopediaMonsterTrackerClient {
+    /** `ProtocolGame::parseSendBosstiary` (player.cpp:959). */
+    fun parseSendBosstiary()
+
+    /** `ProtocolGame::sendBestiaryEntryChanged` (player.cpp:961). */
+    fun sendBestiaryEntryChanged(raceId: Int)
+
+    /** `ProtocolGame::refreshCyclopediaMonsterTracker` (player.cpp:964, 987, 994). */
+    fun refreshCyclopediaMonsterTracker(tracker: Set<MonsterType>, isBoss: Boolean)
 }
 
 abstract class Creature(
@@ -993,6 +1020,7 @@ class Player(
                 ?.let { VocationRequirementsAdapter(it) }
                 ?: UnwiredVocationRequirements
         },
+        cyclopediaPlayer = PlayerCyclopediaAdapter(this),
     )
 
     /**
@@ -2468,6 +2496,249 @@ class Player(
         return false
     }
 
+    // --- advanced feature hooks (player.cpp:941-996, 10392-10681, 11825-11866, 12749-12798) ---
+
+    /** `PlayerWheel m_wheelPlayer` (player.hpp:1959); `Player::wheel()` (player.cpp:12749-12751). */
+    fun wheel(): PlayerWheel = features.wheel
+
+    /** `PlayerCyclopedia m_playerCyclopedia` (player.hpp:1963); `Player::cyclopedia()` (player.cpp:12785-12787). */
+    fun cyclopedia(): PlayerCyclopedia = features.cyclopedia
+
+    /** `PlayerForgeHistory m_forgeHistoryPlayer` (player.hpp:1969); `Player::forgeHistory()` (player.cpp:12794-12796). */
+    fun forgeHistory(): PlayerForgeHistory = features.forgeHistory
+
+    // forge dust ledger (player.cpp:11825-11866)
+
+    /** `Player::setForgeDusts` (player.cpp:11825-11830); the client balance refresh is protocol scope. */
+    fun setForgeDusts(amount: Long) {
+        features.forge.setForgeDusts(amount)
+    }
+
+    /** `Player::addForgeDusts` (player.cpp:11832-11837). */
+    fun addForgeDusts(amount: Long) {
+        features.forge.addForgeDusts(amount)
+    }
+
+    /** `Player::removeForgeDusts` (player.cpp:11839-11844). */
+    fun removeForgeDusts(amount: Long) {
+        features.forge.removeForgeDusts(amount)
+    }
+
+    /** `Player::getForgeDusts` (player.cpp:11846-11848). */
+    fun getForgeDusts(): Long = features.forge.getForgeDusts()
+
+    /** `Player::addForgeDustLevel` (player.cpp:11850-11855). */
+    fun addForgeDustLevel(amount: Long) {
+        features.forge.addForgeDustLevel(amount)
+    }
+
+    /** `Player::removeForgeDustLevel` (player.cpp:11857-11862). */
+    fun removeForgeDustLevel(amount: Long) {
+        features.forge.removeForgeDustLevel(amount)
+    }
+
+    /** `Player::getForgeDustLevel` (player.cpp:11864-11866). */
+    fun getForgeDustLevel(): Long = features.forge.getForgeDustLevel()
+
+    // prey system (player.cpp:10392-10491, 12641-12667)
+
+    /**
+     * `Player::initializePrey` (player.cpp:12641-12659). The slot construction
+     * lives in [PlayerFeatures.preyEngine]; the port's split state receives the
+     * live player level and premium status before the engine runs (PARITY GAP:
+     * the legacy base-data packet is protocol scope).
+     */
+    fun initializePrey() {
+        features.prey.setLevel(level)
+        features.prey.isPremium = isPremium()
+        features.preyEngine.initializePrey(features.prey)
+    }
+
+    /** `Player::removePreySlotById` (player.cpp:12661-12667). */
+    fun removePreySlotById(slotId: Int) {
+        features.prey.removePreySlotById(slotId)
+    }
+
+    /** `Player::reloadPreySlot` (player.cpp:10408-10413); the client send is a recorded no-op. */
+    fun reloadPreySlot(slotId: Int) {
+        features.prey.reloadPreySlot(slotId)
+    }
+
+    /** `Player::getPreySlotById` (player.cpp:10415-10424). */
+    fun getPreySlotById(slotId: Int): PreySlot? = features.prey.getPreySlotById(slotId)
+
+    /** `Player::setPreySlotClass` (player.cpp:10426-10433). */
+    fun setPreySlotClass(slot: PreySlot): Boolean = features.prey.setPreySlotClass(slot)
+
+    /** `Player::usePreyCards` (player.cpp:10435-10445). */
+    fun usePreyCards(amount: Int): Boolean = features.prey.usePreyCards(amount)
+
+    /** `Player::addPreyCards` (player.cpp:10447-10452). */
+    fun addPreyCards(amount: Long) {
+        features.prey.addPreyCards(amount)
+    }
+
+    /** `Player::getPreyCards` (player.cpp:10454-10456). */
+    fun getPreyCards(): Long = features.prey.getPreyCards()
+
+    /** `Player::getPreyRerollPrice` (player.cpp:10458-10460); the live level feeds the split state first. */
+    fun getPreyRerollPrice(): Long {
+        features.prey.setLevel(level)
+        return features.prey.getPreyRerollPrice()
+    }
+
+    /** `Player::getPreyBlackList` (player.cpp:10462-10476). */
+    fun getPreyBlackList(): List<Int> = features.prey.getPreyBlackList()
+
+    /** `Player::getPreyWithMonster` (player.cpp:10478-10491). */
+    fun getPreyWithMonster(raceId: Int): PreySlot? = features.prey.getPreyWithMonster(raceId)
+
+    // task hunting system (player.cpp:10495-10681)
+
+    /**
+     * `Player::initializeTaskHunting` (player.cpp:10495-10525). The slot
+     * construction lives in [PlayerFeatures.taskHuntingEngine]; the port's
+     * split state receives the live player level and premium status first
+     * (PARITY GAP: the legacy base-data packet is protocol scope).
+     */
+    fun initializeTaskHunting() {
+        features.taskHunting.setLevel(level)
+        features.taskHunting.isPremium = isPremium()
+        features.taskHuntingEngine.initializeTaskHunting(features.taskHunting)
+    }
+
+    /** `Player::isCreatureUnlockedOnTaskHunting` (player.cpp:10527-10533). */
+    fun isCreatureUnlockedOnTaskHunting(mtype: TaskMonsterInfo?): Boolean =
+        features.taskHunting.isCreatureUnlockedOnTaskHunting(mtype)
+
+    /** `Player::setTaskHuntingSlotClass` (player.cpp:10535-10542). */
+    fun setTaskHuntingSlotClass(slot: TaskHuntingSlot): Boolean = features.taskHunting.setTaskHuntingSlotClass(slot)
+
+    /** `Player::reloadTaskSlot` (player.cpp:10596-10601); the client send is a recorded no-op. */
+    fun reloadTaskSlot(slotId: Int) {
+        features.taskHunting.reloadTaskSlot(slotId)
+    }
+
+    /** `Player::getTaskHuntingSlotById` (player.cpp:10603-10612). */
+    fun getTaskHuntingSlotById(slotId: Int): TaskHuntingSlot? = features.taskHunting.getTaskHuntingSlotById(slotId)
+
+    /** `Player::getTaskHuntingBlackList` (player.cpp:10614-10628). */
+    fun getTaskHuntingBlackList(): List<Int> = features.taskHunting.getTaskHuntingBlackList()
+
+    /** `Player::addTaskHuntingPoints` (player.cpp:10641-10646). */
+    fun addTaskHuntingPoints(amount: Long) {
+        features.taskHunting.addTaskHuntingPoints(amount)
+    }
+
+    /** `Player::useTaskHuntingPoints` (player.cpp:10648-10658). */
+    fun useTaskHuntingPoints(amount: Long): Boolean = features.taskHunting.useTaskHuntingPoints(amount)
+
+    /** `Player::getTaskHuntingPoints` (player.cpp:10660-10662). */
+    fun getTaskHuntingPoints(): Long = features.taskHunting.getTaskHuntingPoints()
+
+    /** `Player::getTaskHuntingRerollPrice` (player.cpp:10664-10666); the live level feeds the split state first. */
+    fun getTaskHuntingRerollPrice(): Long {
+        features.taskHunting.setLevel(level)
+        return features.taskHunting.getTaskHuntingRerollPrice()
+    }
+
+    /** `Player::getTaskHuntingWithCreature` (player.cpp:10668-10681). */
+    fun getTaskHuntingWithCreature(raceId: Int): TaskHuntingSlot? = features.taskHunting.getTaskHuntingWithCreature(raceId)
+
+    // cyclopedia monster tracker (player.cpp:941-996) and async ongoing tasks (8510-8520)
+
+    /** `Player::m_bestiaryMonsterTracker` (player.hpp:1700). */
+    private val bestiaryMonsterTracker = linkedSetOf<MonsterType>()
+
+    /** `Player::m_bosstiaryMonsterTracker` (player.hpp:1701). */
+    private val bosstiaryMonsterTracker = linkedSetOf<MonsterType>()
+
+    /**
+     * `Player::client` view used by the tracker updates (player.cpp:951-990); a
+     * null client mirrors Canary's `if (!client) return;` guard.
+     */
+    var cyclopediaMonsterTrackerClient: CyclopediaMonsterTrackerClient? = null
+
+    /** `Player::getCyclopediaMonsterTrackerSet` (player.cpp:941-943). */
+    fun getCyclopediaMonsterTrackerSet(isBoss: Boolean): Set<MonsterType> =
+        if (isBoss) bosstiaryMonsterTracker else bestiaryMonsterTracker
+
+    /**
+     * `Player::addMonsterToCyclopediaTrackerList` (player.cpp:946-964). The
+     * C++ `shared_ptr` parameter (which may be null) is narrowed to a non-null
+     * [MonsterType] because the tracker set cannot hold a null; Canary callers
+     * always pass a live monster type.
+     */
+    fun addMonsterToCyclopediaTrackerList(mtype: MonsterType, isBoss: Boolean, reloadClient: Boolean = false) {
+        val client = cyclopediaMonsterTrackerClient ?: return
+        val raceId = mtype.info.raceid
+        val tracker = if (isBoss) bosstiaryMonsterTracker else bestiaryMonsterTracker
+        if (tracker.size < UINT8_MAX && tracker.add(mtype)) {
+            if (reloadClient && raceId != 0) {
+                if (isBoss) {
+                    client.parseSendBosstiary()
+                } else {
+                    client.sendBestiaryEntryChanged(raceId)
+                }
+            }
+
+            client.refreshCyclopediaMonsterTracker(tracker, isBoss)
+        }
+    }
+
+    /** `Player::removeMonsterFromCyclopediaTrackerList` (player.cpp:966-990). */
+    fun removeMonsterFromCyclopediaTrackerList(mtype: MonsterType, isBoss: Boolean, reloadClient: Boolean = false) {
+        val client = cyclopediaMonsterTrackerClient ?: return
+        val raceId = mtype.info.raceid
+        val tracker = if (isBoss) bosstiaryMonsterTracker else bestiaryMonsterTracker
+        if (tracker.remove(mtype)) {
+            if (reloadClient && raceId != 0) {
+                if (isBoss) {
+                    client.parseSendBosstiary()
+                } else {
+                    client.sendBestiaryEntryChanged(raceId)
+                }
+            }
+
+            client.refreshCyclopediaMonsterTracker(tracker, isBoss)
+        }
+    }
+
+    /** `Player::refreshCyclopediaMonsterTracker` (player.hpp:390-392). */
+    fun refreshCyclopediaMonsterTracker(isBoss: Boolean = false) {
+        refreshCyclopediaMonsterTracker(getCyclopediaMonsterTrackerSet(isBoss), isBoss)
+    }
+
+    /** `Player::refreshCyclopediaMonsterTracker` (player.cpp:992-996). */
+    fun refreshCyclopediaMonsterTracker(trackerList: Set<MonsterType>, isBoss: Boolean) {
+        cyclopediaMonsterTrackerClient?.refreshCyclopediaMonsterTracker(trackerList, isBoss)
+    }
+
+    /** `Player::sendCyclopediaCharacterRecentDeaths` (player.cpp:8426-8430) protocol seam. */
+    var sendCyclopediaCharacterRecentDeaths: (page: Int, pages: Int, entries: List<RecentDeathEntry>) -> Unit =
+        { _, _, _ -> }
+
+    /** `Player::sendCyclopediaCharacterRecentPvPKills` (player.cpp:8432-8436) protocol seam. */
+    var sendCyclopediaCharacterRecentPvPKills: (page: Int, pages: Int, entries: List<RecentPvPKillEntry>) -> Unit =
+        { _, _, _ -> }
+
+    /** `Player::asyncOngoingTasks` (player.hpp:1752), a `uint64_t` bitmask. */
+    private var asyncOngoingTasks: Long = 0
+
+    /** `Player::addAsyncOngoingTask` (player.cpp:8510-8512). */
+    fun addAsyncOngoingTask(task: PlayerAsyncTask) {
+        asyncOngoingTasks = asyncOngoingTasks or task.value.toLong()
+    }
+
+    /** `Player::hasAsyncOngoingTask` (player.cpp:8514-8516). */
+    fun hasAsyncOngoingTask(task: PlayerAsyncTask): Boolean =
+        (asyncOngoingTasks and task.value.toLong()) != 0L
+
+    /** `Player::resetAsyncOngoingTask` (player.cpp:8518-8520). */
+    fun resetAsyncOngoingTask(task: PlayerAsyncTask) {
+        asyncOngoingTasks = asyncOngoingTasks and task.value.toLong().inv()
+    }
+
     companion object {
         /** `PLAYER_MAX_STAFF_SPEED` (`src/creatures/players/player.hpp:126`). */
         const val PLAYER_MAX_STAFF_SPEED = 65535
@@ -2508,5 +2779,37 @@ class Player(
             val result = Math.round((count * 100.0 / nextLevelCount) * 100.0) / 100.0
             return if (result > 100) 0.0 else result
         }
+    }
+}
+
+/**
+ * `PlayerCyclopedia(Player&)` (`player_cyclopedia.hpp:26`) binding: the
+ * component's [CyclopediaPlayer] view over the [Player] it belongs to. The
+ * adapter keeps the "live player" lookup semantics of the C++ reference
+ * (`kv()` follows later `Player::kv` replacements).
+ */
+private class PlayerCyclopediaAdapter(private val player: Player) : CyclopediaPlayer {
+    override fun getGUID(): Long = player.getGUID()
+
+    override fun getID(): Int = player.id.toInt()
+
+    override fun getName(): String = player.name
+
+    override fun kv(): KV = player.kv
+
+    override fun addAsyncOngoingTask(task: PlayerAsyncTask) {
+        player.addAsyncOngoingTask(task)
+    }
+
+    override fun resetAsyncOngoingTask(task: PlayerAsyncTask) {
+        player.resetAsyncOngoingTask(task)
+    }
+
+    override fun sendCyclopediaCharacterRecentDeaths(page: Int, pages: Int, entries: List<RecentDeathEntry>) {
+        player.sendCyclopediaCharacterRecentDeaths(page, pages, entries)
+    }
+
+    override fun sendCyclopediaCharacterRecentPvPKills(page: Int, pages: Int, entries: List<RecentPvPKillEntry>) {
+        player.sendCyclopediaCharacterRecentPvPKills(page, pages, entries)
     }
 }

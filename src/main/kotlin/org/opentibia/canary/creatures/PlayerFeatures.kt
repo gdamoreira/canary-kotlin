@@ -1,5 +1,12 @@
 package org.opentibia.canary.creatures
 
+import org.opentibia.canary.creatures.players.components.CyclopediaPlayer
+import org.opentibia.canary.creatures.players.components.InMemoryKV
+import org.opentibia.canary.creatures.players.components.KV
+import org.opentibia.canary.creatures.players.components.PlayerAsyncTask
+import org.opentibia.canary.creatures.players.components.PlayerCyclopedia
+import org.opentibia.canary.creatures.players.components.RecentDeathEntry
+import org.opentibia.canary.creatures.players.components.RecentPvPKillEntry
 import org.opentibia.canary.systems.bestiary.PlayerBestiaryState
 import org.opentibia.canary.systems.concoction.PlayerConcoctions
 import org.opentibia.canary.systems.dailyreward.PlayerDailyReward
@@ -14,8 +21,12 @@ import org.opentibia.canary.systems.mount.PlayerMountState
 import org.opentibia.canary.systems.offlinetraining.OfflineTraining
 import org.opentibia.canary.systems.offlinetraining.Skill
 import org.opentibia.canary.systems.offlinetraining.VocationRequirements
+import org.opentibia.canary.systems.prey.PlayerPreyState
+import org.opentibia.canary.systems.prey.PreyEngine
 import org.opentibia.canary.systems.proficiency.WeaponProficiencyData
 import org.opentibia.canary.systems.rewardchest.RewardChest
+import org.opentibia.canary.systems.taskhunting.PlayerTaskHuntingState
+import org.opentibia.canary.systems.taskhunting.TaskHuntingEngine
 import org.opentibia.canary.systems.wheel.PlayerWheel
 import org.opentibia.canary.creatures.vocations.VocationRequirementsAdapter
 import org.opentibia.canary.creatures.vocations.Vocations
@@ -64,6 +75,20 @@ class PlayerFeatures(
     /** `Familiars::getInstance()` definition registry. */
     private val familiarDefinitions: Familiars = Familiars(),
     forgeConfig: ForgeConfig = ForgeConfig(),
+    /**
+     * `g_ioprey()` prey engine core (`src/io/ioprey.cpp`); Canary reaches it
+     * through the global singleton and `Player::initializePrey` uses it, so it
+     * is injected here per AGENTS.md 1.1.
+     */
+    val preyEngine: PreyEngine = PreyEngine(),
+    /** `g_ioprey()` task-hunting engine core (`src/io/ioprey.cpp`); see [preyEngine]. */
+    val taskHuntingEngine: TaskHuntingEngine = TaskHuntingEngine(),
+    /**
+     * `Player&` view backing [cyclopedia]
+     * (`src/creatures/players/components/player_cyclopedia.hpp:26`); absent
+     * when the holder is constructed without a player (tooling/tests).
+     */
+    private val cyclopediaPlayer: CyclopediaPlayer? = null,
 ) {
     /** `PlayerWheel m_wheelPlayer` (player.hpp:1959); accessor `wheel()`. */
     val wheel: PlayerWheel by lazy(LazyThreadSafetyMode.NONE) {
@@ -97,6 +122,21 @@ class PlayerFeatures(
     /** `Player` bestiary/charm state (player.hpp:1836-1841). */
     val bestiary: PlayerBestiaryState = PlayerBestiaryState()
 
+    /**
+     * `Player::preys` / `Player::preyCards` (player.hpp:1689, 1728) through the
+     * prey engine state holder; the `Player` accessors delegate to it.
+     */
+    val prey: PlayerPreyState = PlayerPreyState()
+
+    /**
+     * `Player::taskHunting` / `Player::taskHuntingPoints` (player.hpp:1690, 1729).
+     * `Player::isCreatureUnlockedOnTaskHunting` reads the bestiary kill count
+     * (player.cpp:10527-10533), wired to the owned [bestiary] state.
+     */
+    val taskHunting: PlayerTaskHuntingState = PlayerTaskHuntingState(
+        bestiaryKillCount = { raceId -> bestiary.getBestiaryKillCount(raceId) },
+    )
+
     /** Exaltation Forge dust ledger and fusion trivance core. */
     val forge: Forge = Forge(forgeConfig)
 
@@ -113,6 +153,15 @@ class PlayerFeatures(
      */
     val rewardChest: RewardChest by lazy(LazyThreadSafetyMode.NONE) {
         RewardChest(RewardChest.ITEM_REWARD_CHEST)
+    }
+
+    /**
+     * `PlayerCyclopedia m_playerCyclopedia` (player.hpp:1963); the component is
+     * constructed over the injected [CyclopediaPlayer] view and is stateless
+     * beyond that reference (`player_cyclopedia.hpp:41-43`).
+     */
+    val cyclopedia: PlayerCyclopedia by lazy(LazyThreadSafetyMode.NONE) {
+        PlayerCyclopedia(cyclopediaPlayer ?: NullCyclopediaPlayer)
     }
 
     /**
@@ -134,4 +183,30 @@ class PlayerFeatures(
 internal object UnwiredVocationRequirements : VocationRequirements {
     override fun getReqSkillTries(skill: Skill, level: Int): Long = 0L
     override fun getReqMana(magLevel: Int): Long = 0L
+}
+
+/**
+ * Null [CyclopediaPlayer] used when a [PlayerFeatures] is constructed without a
+ * live player view (tooling and unit tests). The `Player` always supplies an
+ * adapter over itself, so the summary reads and sends only reach this object in
+ * the unwired configuration, where they are inert.
+ */
+internal object NullCyclopediaPlayer : CyclopediaPlayer {
+    private val kv: KV = InMemoryKV()
+
+    override fun getGUID(): Long = 0
+
+    override fun getID(): Int = 0
+
+    override fun getName(): String = ""
+
+    override fun kv(): KV = kv
+
+    override fun addAsyncOngoingTask(task: PlayerAsyncTask) = Unit
+
+    override fun resetAsyncOngoingTask(task: PlayerAsyncTask) = Unit
+
+    override fun sendCyclopediaCharacterRecentDeaths(page: Int, pages: Int, entries: List<RecentDeathEntry>) = Unit
+
+    override fun sendCyclopediaCharacterRecentPvPKills(page: Int, pages: Int, entries: List<RecentPvPKillEntry>) = Unit
 }
