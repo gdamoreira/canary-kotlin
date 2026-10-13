@@ -64,20 +64,20 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | `monsters/monster_targeting.cpp` | **IMPLEMENTED** | `MonsterTargeting` (rank/search/isTarget) |
 | `monsters/monsters.cpp` | **IMPLEMENTED** | `MonsterType` full schema + `Monsters` registry (reload epoch) |
 | `monsters/spawns/spawn_monster.cpp` | **IMPLEMENTED** | `SpawnMonster` + `SpawnXmlLoader` (blocks, intervals, despawn) |
-| `npcs/npc.cpp` (1,282) | PARTIAL | dialogue state machine, keywords/focus, walk-to, shop runtime |
-| `npcs/npcs.cpp`, `spawns/spawn_npc.cpp` | MISSING | NPC registry + spawn engine |
+| `npcs/npc.cpp` (1,282) | **IMPLEMENTED** | interaction/focus, walk-to/queue, shop buy/sell runtime (dialogue stays Lua) |
+| `npcs/npcs.cpp`, `spawns/spawn_npc.cpp` | **IMPLEMENTED** | `Npcs` registry + `SpawnNpc` engine |
 | `players/player.cpp` (13,456, ~765 methods) | PARTIAL | conditions, spells/cooldowns, PvP/skull, party/guild, VIP, blessings, stash, containers, wheel/forge/prey/task-hunting/cyclopedia, harmony/serene, ban/waitlist/livestream |
 | `players/components/player_storage.cpp` | PARTIAL | delta/dirty/ingest lifecycle, reserved ranges |
 | `players/components/player_achievement/title/badge/vip/cyclopedia/attached_effects` | MISSING | entire components |
-| `players/components/pvp/*` | MISSING | expert PvP, unjustified points |
+| `players/components/pvp/*` | **IMPLEMENTED** | `PlayerPvp` (situations/unjustified/skull) + `ExpertPvp` |
 | `players/components/weapon_proficiency.cpp` | PARTIAL | gain-on-hit/kill runtime; perks applied in combat |
 | `players/components/wheel/*` | PARTIAL | spell-table registration into spell registry |
 | `players/grouping/party.cpp`, `team_finder.hpp` | MISSING | entire party system + team finder |
 | `players/grouping/guild.cpp` | PARTIAL | ranks persistence, invites, wars, MOTD |
-| `players/imbuements/imbuements.cpp` | PARTIAL | apply/clear/scroll, item stats, shrine window |
-| `players/livestream`, `management/ban`, `management/waitlist` | MISSING | entire systems |
-| `players/storages/storages.cpp` (stash) | MISSING | stash add/count/withdraw |
-| `players/vocations/vocation.cpp` | PARTIAL | req skill/mana formulas, promotion |
+| `players/imbuements/imbuements.cpp` | **IMPLEMENTED** | apply/clear/scroll + `createScrollImbuement` + shrine window seam |
+| `players/livestream`, `management/ban`, `management/waitlist` | **IMPLEMENTED** | `LivestreamManager`, `Ban`/`IOBan`, `WaitingList` |
+| `players/storages/storages.cpp` (stash) | **IMPLEMENTED** | `Stash` (add/count/withdraw) + `Storages` XML |
+| `players/vocations/vocation.cpp` | **IMPLEMENTED** | req formulas, promotion, gain caps, wheel gems |
 
 ### `src/game/`
 | C++ | Status | Missing |

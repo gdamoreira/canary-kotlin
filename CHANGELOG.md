@@ -285,10 +285,17 @@ All notable technical milestones, architectural transformations, feature impleme
 - Rows flipped: `combat/condition.cpp`, `monster.cpp`, `monster_pathfinding.cpp`, `monster_combat_intention.cpp`, `monster_relevance.cpp`, `monster_targeting.cpp`, `monsters.cpp`, `spawn_monster.cpp`.
 - Fixed a post-merge `RaceType` redeclaration.
 
+### Phase 27: `src/creatures/` Part 3 — NPC, PvP, Management, Stash/Vocations/Imbuements (10:30 – 11:00)
+- **NPC runtime** — interaction/focus, walk-to/queue, shop buy/sell runtime + `Npcs` registry. 51 tests.
+- **PvP** — `PlayerPvp` (situations/unjustified/skull/PZ lock) + `ExpertPvp`. 134 tests.
+- **Management** — `Ban`/`IOBan`, `WaitingList`, `LivestreamManager`. 84 tests.
+- **Stash/vocations/imbuements** — `Stash` + `Storages` XML, Vocation req/promotion/wheel-gems, `createScrollImbuement`. 37 tests.
+- Rows flipped to IMPLEMENTED (NPC, PvP, ban/waitlist/livestream, stash, vocations, imbuements).
+
 ---
 
 ### Current Status
-- **Automated Tests**: **258 test suites / 2359 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **271 test suites / 2665 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.
