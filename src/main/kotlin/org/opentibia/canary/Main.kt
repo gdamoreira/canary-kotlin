@@ -44,8 +44,9 @@ fun main() {
     val dispatcher = GameDispatcher().apply { start() }
 
     val luaEnvironment = LuaEnvironment().apply { initState() }
-    val scripts = Scripts(luaEnvironment).apply {
-        setDirectories(Path.of("data"), Path.of("data-canary"))
+    Scripts(luaEnvironment).apply {
+        setDirectories(Path.of("data-canary"), Path.of("data"))
+        loadLibs()
         loadScripts(Path.of("data-canary/scripts"))
     }
 
