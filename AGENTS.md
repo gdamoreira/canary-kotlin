@@ -107,14 +107,17 @@ Each document must follow this layout:
 
 ## 6. Mandatory Wave Documentation & Publication Gate (MUST)
 
+**Before each wave**, create a wave plan document `docs/Plan/wave-<N>-<topic>.md` describing what the wave will implement: the tasks, the Kotlin deliverables, the Canary C++ sources (exact paths), and the tests. Then run the wave.
+
 After **each wave** (a batch of parallel-agent implementations merged into `main`), the following is a **MUST** and is not complete until every step has run:
 
 1. **Update every affected document.**
+   - `docs/missing-features.md` — coverage numbers and the affected inventory rows/ranked gaps.
    - `docs/game-play-features.md` — status, implemented components, residual gaps, and the current test-suite/test-count metrics.
-   - `docs/Plan/`, `docs/Implementing/`, `docs/Done/` — move specs that are now implemented to `Done/`, update any `Implementing/` entries, and refresh their Implementation Status sections.
+   - `docs/Plan/`, `docs/Implementing/`, `docs/Done/` — **move the wave plan doc to `Done/`**, move feature specs that are now implemented to `Done/`, update any `Implementing/` entries, and refresh their Implementation Status sections.
    - `README.md` — feature coverage, project structure, and test metrics.
    - `CHANGELOG.md` — add the new phase entry and refresh the Current Status metrics.
 2. **Commit the documentation update in a separate commit** (never fold it into the code/merge commits).
 3. **Push to `origin`** (`git push origin main`).
 
-A wave is **not finished** until the documentation commit is pushed. Do not start the next wave before this gate passes. Keep the documented metrics truthful: run `./gradlew test` and record the real suite/test counts and any new residual gaps.
+A wave is **not finished** until the wave plan is in `Done/` and the documentation commit is pushed. Do not start the next wave before this gate passes. Keep the documented metrics truthful: run `./gradlew test` and record the real suite/test counts and any new residual gaps.
