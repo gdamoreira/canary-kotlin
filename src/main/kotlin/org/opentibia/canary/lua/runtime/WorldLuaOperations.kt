@@ -11,6 +11,7 @@ import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.creatures.spawns.MonsterType
 import org.opentibia.canary.game.movement.Direction
+import org.opentibia.canary.game.movement.Teleport
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.INDEX_WHEREEVER
 import org.opentibia.canary.items.Item
@@ -47,10 +48,26 @@ import org.opentibia.canary.lua.bindings.core.PositionFunctions
 import org.opentibia.canary.lua.bindings.core.PositionOperations
 import org.opentibia.canary.lua.bindings.core.TileFunctions
 import org.opentibia.canary.lua.bindings.core.TileOperations
+import org.opentibia.canary.lua.bindings.items.ImbuementFunctions
+import org.opentibia.canary.lua.bindings.items.ImbuementOperations
+import org.opentibia.canary.lua.bindings.map.HouseFunctions
+import org.opentibia.canary.lua.bindings.map.HouseOperations
+import org.opentibia.canary.lua.bindings.map.TeleportFunctions
+import org.opentibia.canary.lua.bindings.map.TeleportOperations
+import org.opentibia.canary.lua.bindings.map.TownFunctions
+import org.opentibia.canary.lua.bindings.map.TownOperations
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Tile
+import org.opentibia.canary.map.Town
+import org.opentibia.canary.map.Towns
+import org.opentibia.canary.map.house.House
+import org.opentibia.canary.network.protocol.MessageClass
 import org.opentibia.canary.systems.forge.ItemClassifications
+import org.opentibia.canary.systems.imbuement.BaseImbuement
+import org.opentibia.canary.systems.imbuement.CategoryImbuement
+import org.opentibia.canary.systems.imbuement.Imbuement
+import org.opentibia.canary.systems.imbuement.Imbuements
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import org.opentibia.canary.systems.rewardchest.Reward
 import java.util.WeakHashMap
@@ -99,6 +116,13 @@ import kotlin.random.Random
  *   absent those primitives return `nil` like Canary's `g_game().map.getTile` miss.
  * @param itemClassifications optional forge classification catalog backing
  *   `Game.createItemClassification`.
+ * @param towns optional town registry backing `Town(id or name)` and `house:getTown`.
+ * @param imbuements optional imbuement registry backing `Imbuement(id)` and its
+ *   base/category lookups.
+ * @param teleportByUid optional script-environment UID resolver backing `Teleport(uid)`.
+ * @param playerByGuid optional `g_game().getPlayerByGUID` resolver used by
+ *   `house:setNewOwnerGuid`.
+ * @param startTrade optional `g_game().internalStartTrade` backing `house:startTrade`.
  */
 class WorldLuaOperations(
     itemTypes: ItemTypeRegistry? = null,
@@ -108,6 +132,11 @@ class WorldLuaOperations(
     monsterTypesByRaceId: Map<Int, Any> = emptyMap(),
     gameMap: GameMap? = null,
     itemClassifications: ItemClassifications? = null,
+    towns: Towns? = null,
+    imbuements: Imbuements? = null,
+    teleportByUid: (Int) -> Teleport? = { null },
+    playerByGuid: (Long) -> Player? = { null },
+    startTrade: (Player, Player, Item) -> Boolean = { _, _, _ -> false },
 ) {
     val game: GameOperations =
         WorldGameOperations(itemIdsByName, itemTypes, gameMap, monsterTypesByName, itemClassifications)
@@ -132,6 +161,14 @@ class WorldLuaOperations(
 
     val loot: LootOperations = WorldLootOperations(itemIdsByName)
 
+    val house: HouseOperations = WorldHouseOperations(gameMap, towns, playerByGuid, startTrade)
+
+    val town: TownOperations = WorldTownOperations(towns)
+
+    val teleport: TeleportOperations = WorldTeleportOperations(teleportByUid)
+
+    val imbuement: ImbuementOperations = WorldImbuementOperations(imbuements)
+
     /**
      * Registers every real seam on [env], replacing the inert `NO_OP_*` placeholders
      * installed by `LuaEnvironment.initState()`. Safe to call after `initState()`.
@@ -149,6 +186,11 @@ class WorldLuaOperations(
         MonsterFunctions.install(env, monster)
         MonsterTypeFunctions.install(env, monsterType)
         LootFunctions.install(env, loot)
+        // Wave 40 lua-map-items
+        HouseFunctions.install(env, house)
+        TownFunctions.install(env, town)
+        TeleportFunctions.install(env, teleport)
+        ImbuementFunctions.install(env, imbuement)
     }
 
     companion object {
@@ -1719,4 +1761,80 @@ class WorldLootOperations(
     private val itemIdsByName: Map<String, Int> = emptyMap(),
 ) : LootOperations {
     override fun itemIdByName(name: String): Int = itemIdsByName[name] ?: 0
+}
+
+/**
+ * `House` metatable seam backed by the optional [GameMap] house registry and [Towns]
+ * registry, mirroring the `g_game()` lookups of
+ * src/lua/functions/map/house_functions.cpp.
+ *
+ * Parity gaps, all documented no-ops because the Kotlin server does not wire the
+ * corresponding engine yet:
+ * - [startTrade] defaults to `false` (Canary's `Game::internalStartTrade` has no
+ *   injectable trade manager here); a failed start makes `house:startTrade` reset the
+ *   transfer item exactly like Canary.
+ * - [playerByGuid] defaults to null (no offline/online player registry is wired), so
+ *   `house:setNewOwnerGuid` cannot message a pending-transfer owner.
+ * - [isTransferOnServerRestart] reads the flag from the house's injected [House.world],
+ *   the port's config seam (`TOGGLE_HOUSE_TRANSFER_ON_SERVER_RESTART`).
+ */
+class WorldHouseOperations(
+    private val gameMap: GameMap? = null,
+    private val towns: Towns? = null,
+    private val playerByGuid: (Long) -> Player? = { null },
+    private val tradeStarter: (Player, Player, Item) -> Boolean = { _, _, _ -> false },
+) : HouseOperations {
+    override fun getHouse(id: Int): House? = gameMap?.houses?.getHouse(id)
+
+    override fun getTown(townId: Int): Town? = towns?.getTown(townId)
+
+    override fun getPlayerByGuid(guid: Long): Player? = playerByGuid(guid)
+
+    override fun isTransferOnServerRestart(house: House): Boolean =
+        house.world.toggleHouseTransferOnServerRestart
+
+    /** Mirrors `Player::sendTextMessage(MESSAGE_EVENT_ADVANCE, message)`. */
+    override fun sendTextMessage(player: Player, message: String) {
+        player.sendTextMessageTyped(MessageClass.MESSAGE_EVENT_ADVANCE, message)
+    }
+
+    override fun getHouseByPlayerId(playerId: Long): House? = gameMap?.houses?.getHouseByPlayerId(playerId)
+
+    override fun startTrade(player: Player, tradePartner: Player, item: Item): Boolean =
+        tradeStarter(player, tradePartner, item)
+
+    override fun getTile(position: Position): Tile? = gameMap?.getTile(position)
+}
+
+/** `Town` metatable seam backed by the optional [Towns] registry. */
+class WorldTownOperations(
+    private val towns: Towns? = null,
+) : TownOperations {
+    override fun getTown(id: Int): Town? = towns?.getTown(id)
+
+    override fun getTown(name: String): Town? = towns?.getTown(name)
+}
+
+/**
+ * `Teleport` metatable seam. The port does not model Canary's script environment UID
+ * registry, so [getItemByUid] defaults to the identity resolver `null` (documented
+ * PARITY GAP); callers inject the resolver that matches their script environment.
+ */
+class WorldTeleportOperations(
+    private val teleportByUid: (Int) -> Teleport? = { null },
+) : TeleportOperations {
+    override fun getItemByUid(uid: Int): Teleport? = teleportByUid(uid)
+}
+
+/** `Imbuement` metatable seam backed by the optional [Imbuements] registry. */
+class WorldImbuementOperations(
+    private val imbuements: Imbuements? = null,
+) : ImbuementOperations {
+    override fun getImbuement(id: Int): Imbuement? = imbuements?.getImbuement(id)
+
+    override fun getBase(imbuement: Imbuement): BaseImbuement? =
+        imbuements?.getBaseByID(imbuement.baseId)
+
+    override fun getCategory(imbuement: Imbuement): CategoryImbuement? =
+        imbuements?.getCategoryByID(imbuement.category)
 }
