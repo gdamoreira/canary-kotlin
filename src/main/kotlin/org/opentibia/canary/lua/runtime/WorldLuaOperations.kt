@@ -7,6 +7,7 @@ import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
+import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.ItemTypeRegistry
 import org.opentibia.canary.lua.bindings.core.ContainerFunctions
 import org.opentibia.canary.lua.bindings.core.ContainerOperations
@@ -24,6 +25,7 @@ import org.opentibia.canary.lua.bindings.core.PositionOperations
 import org.opentibia.canary.map.Position
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
  * Real, non-no-op implementations of the Lua binding seams in
@@ -107,6 +109,9 @@ class WorldGameOperations(
         }
         return listOf(Item.create(itemId, count, itemTypes))
     }
+
+    /** Mirrors `Player::getExpForLevel`, exposed through `Game.getExperienceForLevel`. */
+    override fun getExperienceForLevel(level: Int): Long = Player.getExpForLevel(level)
 }
 
 /**
@@ -323,12 +328,15 @@ class WorldCreatureOperations : CreatureOperations {
 }
 
 /**
- * `Item` metatable family seam backed by the Kotlin [Item] domain object.
+ * `Item` metatable family seam backed by the Kotlin [Item] domain object. Item attributes,
+ * action/unique ids, container status, charges/fluid type and Canary-hundredths weight
+ * delegate to the domain; parent/tile links, cloning, splitting, custom attribute bags and
+ * world removal are still absent and inherit the seam's documented defaults.
  *
- * Parity gaps: the Kotlin `Item` models only `id`, `count` and its optional [ItemType];
- * it has no action/unique id, attribute bag, decay timer, or mutable id. `transform`
- * therefore reproduces only Canary's identity no-op branch, and `decay`, action-id and
- * attribute methods return their failure/no-op values.
+ * Parity gaps: `transform` reproduces only Canary's identity no-op branch because
+ * [Item.id] is immutable, `decay` is a no-op, and `setAttribute` does not reproduce
+ * Canary's `DURATION`/`DECAYSTATE` decay scheduling beyond rejecting the protected
+ * `duration timestamp` attribute.
  */
 class WorldItemOperations(
     private val itemIdsByName: Map<String, Int> = emptyMap(),
@@ -358,15 +366,100 @@ class WorldItemOperations(
 
     override fun decay(item: Any, decayId: Int): Boolean = false
 
-    override fun getActionId(item: Any): Int = 0
+    /** Mirrors `Item::getActionId` (the `ACTIONID` attribute masked to 16 bits). */
+    override fun getActionId(item: Any): Int = (item as? Item)?.getActionId() ?: 0
 
-    override fun setActionId(item: Any, actionId: Int): Boolean = false
+    override fun setActionId(item: Any, actionId: Int): Boolean {
+        val target = item as? Item ?: return false
+        target.setActionId(actionId)
+        return true
+    }
 
-    override fun getUniqueId(item: Any): Long = 0L
+    /** Mirrors `Item::getUniqueId` (the `UNIQUEID` attribute masked to 16 bits). */
+    override fun getUniqueId(item: Any): Long = (item as? Item)?.getUniqueId() ?: 0L
 
-    override fun getAttribute(item: Any, attribute: Int): Any? = null
+    override fun isItem(item: Any): Boolean = item is Item
 
-    override fun setAttribute(item: Any, attribute: Int, value: Any?): Boolean = false
+    /** Mirrors `Item::getContainer` returning the item itself when it is a container. */
+    override fun getContainer(item: Any): Any? = item as? Container
+
+    override fun getCharges(item: Any): Int = integerAttribute(item, ItemAttribute.CHARGES)
+
+    override fun getFluidType(item: Any): Int = integerAttribute(item, ItemAttribute.FLUIDTYPE)
+
+    /** Canary reports weight in hundredths of an ounce; the domain stores ounces. */
+    override fun getWeight(item: Any): Int = (((item as? Item)?.weight ?: 0.0) * 100.0).roundToInt()
+
+    override fun getPluralName(item: Any): String = stringAttribute(item, ItemAttribute.PLURALNAME)
+
+    override fun getArticle(item: Any): String = stringAttribute(item, ItemAttribute.ARTICLE)
+
+    override fun hasAttribute(item: Any, attribute: Int): Boolean {
+        val target = item as? Item ?: return false
+        val resolved = itemAttribute(attribute) ?: return false
+        return target.hasAttribute(resolved)
+    }
+
+    /** Mirrors `ItemFunctions::luaItemGetAttribute`, including the `DURATION` special case. */
+    override fun getAttribute(item: Any, attribute: Int): Any? {
+        val target = item as? Item ?: return null
+        val resolved = itemAttribute(attribute) ?: return null
+        if (resolved == ItemAttribute.DURATION) {
+            return target.getDuration()
+        }
+        if (!ItemAttribute.isAttributeInteger(resolved) && !ItemAttribute.isAttributeString(resolved)) {
+            return null
+        }
+        return target.getAttribute(resolved)
+    }
+
+    override fun setAttribute(item: Any, attribute: Int, value: Any?): Boolean {
+        val target = item as? Item ?: return false
+        val resolved = itemAttribute(attribute) ?: return false
+        if (resolved == ItemAttribute.DURATION_TIMESTAMP) {
+            return false
+        }
+        return when {
+            ItemAttribute.isAttributeInteger(resolved) -> {
+                val number = value as? Number ?: return false
+                target.setAttribute(resolved, number.toLong())
+                true
+            }
+            ItemAttribute.isAttributeString(resolved) -> {
+                val text = value as? String ?: return false
+                target.setAttribute(resolved, text)
+                true
+            }
+            else -> false
+        }
+    }
+
+    /** Mirrors `ItemFunctions::luaItemRemoveAttribute` protecting `uid`/`duration timestamp`. */
+    override fun removeAttribute(item: Any, attribute: Int): Boolean {
+        val target = item as? Item ?: return false
+        val resolved = itemAttribute(attribute) ?: return false
+        if (resolved == ItemAttribute.UNIQUEID || resolved == ItemAttribute.DURATION_TIMESTAMP) {
+            return false
+        }
+        return target.removeAttribute(resolved)
+    }
+
+    /** Mirrors `Item::isContainer` (the type flag, for plain items and containers alike). */
+    override fun isContainer(item: Any): Boolean =
+        item is Container || (item as? Item)?.type?.isContainer == true
+
+    private fun itemAttribute(attribute: Int): ItemAttribute? =
+        ItemAttribute.entries.firstOrNull { it.value == attribute.toLong() }
+
+    private fun integerAttribute(item: Any, attribute: ItemAttribute): Int {
+        val target = item as? Item ?: return 0
+        return ((target.getAttribute(attribute) as? Long) ?: 0L).toInt()
+    }
+
+    private fun stringAttribute(item: Any, attribute: ItemAttribute): String {
+        val target = item as? Item ?: return ""
+        return target.getAttribute(attribute) as? String ?: ""
+    }
 }
 
 /**
