@@ -5,8 +5,14 @@ import org.luaj.vm2.LuaValue
 data class LuaTalkAction(
     val words: String,
     val separator: String,
-    val onSay: LuaValue
-)
+    val onSay: LuaValue,
+    val groupType: Int = GROUP_TYPE_NONE,
+) {
+    companion object {
+        /** `GroupType::GROUP_TYPE_NONE` (`src/enums/account_group_type.hpp`). */
+        const val GROUP_TYPE_NONE = 0
+    }
+}
 
 /**
  * Mirrors Canary's TalkActions registry (src/lua/creature/talkaction.hpp): command

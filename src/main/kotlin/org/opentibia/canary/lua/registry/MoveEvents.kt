@@ -11,6 +11,7 @@ data class LuaMoveEvent(
     val callback: LuaValue,
     val requiredLevel: Int = 0,
     val requiredMagicLevel: Int = 0,
+    val premium: Boolean = false,
     val slot: Int = 0,
     val positions: List<Position> = emptyList(),
     val vocations: List<String> = emptyList(),

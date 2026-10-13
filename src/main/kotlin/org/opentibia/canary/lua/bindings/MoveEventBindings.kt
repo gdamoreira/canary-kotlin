@@ -5,6 +5,7 @@ import org.luaj.vm2.LuaValue
 import org.luaj.vm2.Varargs
 import org.luaj.vm2.lib.VarArgFunction
 import org.luaj.vm2.lib.ZeroArgFunction
+import org.opentibia.canary.lua.bindings.events.CallbackMethods
 import org.opentibia.canary.lua.registry.LuaMoveEvent
 import org.opentibia.canary.lua.registry.MoveEvents
 import org.opentibia.canary.lua.runtime.LuaEnvironment
@@ -67,12 +68,14 @@ object MoveEventBindings {
                 var explicitType = ""
                 var requiredLevel = 0
                 var requiredMagicLevel = 0
+                var premium = false
                 var slot = 0
                 val itemIds = mutableListOf<Int>()
                 val actionIds = mutableListOf<Int>()
                 val uniqueIds = mutableListOf<Int>()
                 val positions = mutableListOf<Position>()
                 val vocations = mutableListOf<String>()
+                val callbacks = CallbackMethods()
 
                 self.set("type", object : VarArgFunction() {
                     override fun invoke(a: Varargs): Varargs {
@@ -80,6 +83,10 @@ object MoveEventBindings {
                         return LuaValue.NONE
                     }
                 })
+
+                for (field in CALLBACK_TYPES.keys) {
+                    callbacks.install(self, field)
+                }
 
                 self.set("id", idCollector(itemIds))
                 self.set("aid", idCollector(actionIds))
@@ -95,6 +102,13 @@ object MoveEventBindings {
                 self.set("magicLevel", object : VarArgFunction() {
                     override fun invoke(a: Varargs): Varargs {
                         requiredMagicLevel = a.arg(2).toint()
+                        return LuaValue.TRUE
+                    }
+                })
+
+                self.set("premium", object : VarArgFunction() {
+                    override fun invoke(a: Varargs): Varargs {
+                        premium = a.arg(2).checkboolean()
                         return LuaValue.TRUE
                     }
                 })
@@ -132,7 +146,7 @@ object MoveEventBindings {
                         var eventType = explicitType
                         var callback = LuaValue.NIL
                         for ((field, type) in CALLBACK_TYPES) {
-                            val candidate = owner.get(field)
+                            val candidate = callbacks.resolve(owner, field)
                             if (candidate.isfunction()) {
                                 callback = candidate
                                 if (eventType.isEmpty()) {
@@ -152,6 +166,7 @@ object MoveEventBindings {
                             callback,
                             requiredLevel,
                             requiredMagicLevel,
+                            premium,
                             slot,
                             positions.toList(),
                             vocations.toList()

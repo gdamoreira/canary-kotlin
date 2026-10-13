@@ -1,5 +1,6 @@
 package org.opentibia.canary.lua.runtime
 
+import org.luaj.vm2.LuaValue
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionId
 import org.opentibia.canary.combat.condition.ConditionType
@@ -47,6 +48,8 @@ import org.opentibia.canary.lua.bindings.core.PositionFunctions
 import org.opentibia.canary.lua.bindings.core.PositionOperations
 import org.opentibia.canary.lua.bindings.core.TileFunctions
 import org.opentibia.canary.lua.bindings.core.TileOperations
+import org.opentibia.canary.lua.bindings.events.EventCallbackFunctions
+import org.opentibia.canary.lua.bindings.events.EventsSchedulerFunctions
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Tile
@@ -109,8 +112,10 @@ class WorldLuaOperations(
     gameMap: GameMap? = null,
     itemClassifications: ItemClassifications? = null,
 ) {
-    val game: GameOperations =
+    private val worldGame: WorldGameOperations =
         WorldGameOperations(itemIdsByName, itemTypes, gameMap, monsterTypesByName, itemClassifications)
+
+    val game: GameOperations = worldGame
 
     val player: PlayerOperations = WorldPlayerOperations(itemIdsByName)
 
@@ -149,6 +154,10 @@ class WorldLuaOperations(
         MonsterFunctions.install(env, monster)
         MonsterTypeFunctions.install(env, monsterType)
         LootFunctions.install(env, loot)
+
+        // Wave 40 lua-events
+        worldGame.setEventCallbacks(EventCallbackFunctions.install(env))
+        EventsSchedulerFunctions.install(env)
     }
 
     companion object {
@@ -179,6 +188,21 @@ class WorldGameOperations(
 ) : GameOperations {
     private var gameState: Int = 0
     private var worldType: Int = 0
+
+    /**
+     * `Game.getEventCallbacks()` loaders, populated by `EventCallbackFunctions.install`
+     * with the `luaEventCallbackLoad` table Canary builds from `EventCallback_t`.
+     */
+    private val eventCallbacks: MutableMap<String, LuaValue> = linkedMapOf()
+
+    /** Mirrors `GameFunctions::luaGameGetEventCallbacks`. */
+    override fun getEventCallbacks(): Map<String, LuaValue> = eventCallbacks
+
+    /** Installs the `EventCallback_t` name -> loader table produced by the binding. */
+    fun setEventCallbacks(loaders: Map<String, LuaValue>) {
+        eventCallbacks.clear()
+        eventCallbacks.putAll(loaders)
+    }
 
     override fun itemIdByName(name: String): Int = itemIdsByName[name] ?: 0
 

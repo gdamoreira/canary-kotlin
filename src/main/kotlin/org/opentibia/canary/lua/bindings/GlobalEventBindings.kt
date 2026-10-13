@@ -4,6 +4,7 @@ import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
 import org.luaj.vm2.Varargs
 import org.luaj.vm2.lib.VarArgFunction
+import org.opentibia.canary.lua.bindings.events.CallbackMethods
 import org.opentibia.canary.lua.registry.GlobalEvents
 import org.opentibia.canary.lua.registry.LuaGlobalEvent
 import org.opentibia.canary.lua.runtime.LuaEnvironment
@@ -16,8 +17,9 @@ import org.opentibia.canary.lua.runtime.LuaEnvironment
  *   function onlineRecord.onRecord(current, old) ... end
  *   onlineRecord:register()
  *
- * Mirrors GlobalEventFunctions::luaCreateGlobalEvent, `time`/`interval`, and the
- * revscriptsys `on<Callback>` -> `type` mapping.
+ * Mirrors GlobalEventFunctions::luaCreateGlobalEvent, `type`, `time`, `interval`,
+ * `register` and every `on<Callback>` setter (`onThink`, `onTime`, `onStartup`,
+ * `onShutdown`, `onRecord`, `onPeriodChange`, `onSave`).
  */
 object GlobalEventBindings {
     private val CALLBACK_TYPES = linkedMapOf(
@@ -39,6 +41,7 @@ object GlobalEventBindings {
                 val self = LuaTable()
                 var explicitType = ""
                 var interval = 0
+                val callbacks = CallbackMethods()
 
                 self.set("type", object : VarArgFunction() {
                     override fun invoke(a: Varargs): Varargs {
@@ -67,13 +70,17 @@ object GlobalEventBindings {
                     }
                 })
 
+                for (field in CALLBACK_TYPES.keys) {
+                    callbacks.install(self, field)
+                }
+
                 self.set("register", object : VarArgFunction() {
                     override fun invoke(a: Varargs): Varargs {
                         val owner = a.arg1()
                         var eventType = explicitType
                         var callback = LuaValue.NIL
                         for ((field, type) in CALLBACK_TYPES) {
-                            val candidate = owner.get(field)
+                            val candidate = callbacks.resolve(owner, field)
                             if (candidate.isfunction()) {
                                 callback = candidate
                                 if (eventType.isEmpty()) {
