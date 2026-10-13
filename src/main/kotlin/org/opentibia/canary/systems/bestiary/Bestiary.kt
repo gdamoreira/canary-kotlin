@@ -330,7 +330,7 @@ enum class BestiaryRace(val value: Int) {
 /**
  * Carrier for the bestiary subset of Canary `MonsterType::info`
  * (monsters.hpp:89-99): raceid, unlock thresholds, charm points, star rating,
- * race/class metadata and the damage `elementMap` (monsters.hpp:53).
+ * occurrence, race/class metadata and the damage `elementMap` (monsters.hpp:53).
  *
  * `elementMap` keys are `CombatType_t` values (creatures_definitions.hpp:833-853).
  */
@@ -342,6 +342,7 @@ data class MonsterBestiaryInfo(
     val bestiaryToUnlock: Int = 0,
     val bestiaryCharmsPoints: Int = 0,
     val bestiaryStars: Int = 0,
+    val bestiaryOccurrence: Int = 0,
     val bestiaryClass: String = "",
     val bestiaryRace: BestiaryRace = BestiaryRace.BESTY_RACE_NONE,
     val elementMap: Map<Int, Int> = emptyMap(),

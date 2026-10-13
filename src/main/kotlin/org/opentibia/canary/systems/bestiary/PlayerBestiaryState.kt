@@ -37,9 +37,24 @@ class PlayerBestiaryState {
     var hasCharmExpansion: Boolean = false
     var isPremium: Boolean = false
 
+    /**
+     * `player->kv()->get("promoted")` read by the reset-all charm flow
+     * (iobestiary.cpp:563).
+     */
+    var isPromoted: Boolean = false
+
+    /** `Player::level` (player.hpp:1786); `Player::getLevel` (player.hpp:574). */
+    private var level = 1
+
+    /** `Player::bankBalance` (player.hpp:1726); `Player::getBankBalance` (player.hpp:354). */
+    private var bankBalance = 0L
+
     /** Observable sinks for the messages the Bestiary engine emits. */
     val textMessages: MutableList<String> = mutableListOf()
     val bestiaryEntriesChanged: MutableList<Int> = mutableListOf()
+    val fyiBoxMessages: MutableList<String> = mutableListOf()
+    var bestiaryCharmsSent: Int = 0
+        private set
 
     /** `Player::addBestiaryKillCount` (player.cpp:12969-12973). */
     fun addBestiaryKillCount(raceid: Int, amount: Int) {
@@ -131,6 +146,40 @@ class PlayerBestiaryState {
     /** `Player::getUnlockedRunesBit` (player.cpp:1893-1895). */
     fun getUnlockedRunesBit(): Int = unlockedRunesBit
 
+    /** `Player::getLevel` (player.hpp:574-576). */
+    fun getLevel(): Int = level
+
+    /** `Player::setLevel` (player.hpp:577-579). */
+    fun setLevel(newLevel: Int) {
+        level = newLevel
+    }
+
+    /** `Player::getBankBalance` (player.hpp:354). */
+    fun getBankBalance(): Long = bankBalance
+
+    /** `Player::setBankBalance` (player.hpp:355). */
+    fun setBankBalance(balance: Long) {
+        bankBalance = balance
+    }
+
+    /**
+     * Wallet seam for `g_game().removeMoney(player, amount, 0, true)`
+     * (game.cpp:3299-3365): Canary collects inventory money first and falls back
+     * to the bank balance; both are collapsed into [bankBalance] here. A zero
+     * amount succeeds without mutation (game.cpp:3305-3307) and an unaffordable
+     * amount fails without touching the balance (game.cpp:3313-3315).
+     */
+    fun removeMoney(amount: Long): Boolean {
+        if (amount == 0L) {
+            return true
+        }
+        if (bankBalance < amount) {
+            return false
+        }
+        bankBalance -= amount
+        return true
+    }
+
     /** `Player::parseRacebyCharm` (player.cpp:1940-1979). */
     fun parseRacebyCharm(charmId: CharmRune, set: Boolean = false, newRaceid: Int = 0): Int {
         if (charmId == CharmRune.CHARM_NONE) {
@@ -152,6 +201,16 @@ class PlayerBestiaryState {
     /** `Player::sendBestiaryEntryChanged` sink (player.cpp) used by the Bestiary engine. */
     fun sendBestiaryEntryChanged(raceId: Int) {
         bestiaryEntriesChanged.add(raceId)
+    }
+
+    /** `Player::sendFYIBox` sink (player.cpp:12951-12954) used by the charm rune flow. */
+    fun sendFYIBox(message: String) {
+        fyiBoxMessages.add(message)
+    }
+
+    /** `Player::sendBestiaryCharms` sink (player.cpp:12963-12966). */
+    fun sendBestiaryCharms() {
+        bestiaryCharmsSent++
     }
 
     private companion object {
