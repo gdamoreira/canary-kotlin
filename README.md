@@ -104,7 +104,7 @@ canary-kotlin/
 │   │   └── resources/
 │   │       ├── db/migration/  # Flyway schema migrations (V1, V2)
 │   │       └── lua/           # LuaJ compatibility shim
-│   └── test/                  # JUnit 5 + AssertJ test suite (159 suites / 1048 tests, all green)
+│   └── test/                  # JUnit 5 + AssertJ test suite (160 suites / 1076 tests, all green)
 ├── docker-compose.yml         # Containerized PostgreSQL 16 + Server stack
 ├── Dockerfile                 # Multi-stage alpine build
 └── build.gradle.kts           # Kotlin 2.4 / Java 25 Gradle build file
@@ -145,3 +145,23 @@ Consequently, each of the 15 advanced features (`docs/Plan/050–064`) is delive
 `wheel` · `forge` · `bestiary` · `gamestore` · `hazard` · `dailyreward` · `rewardchest` · `familiar` · `hireling` · `mount` · `proficiency` · `soulwar` · `raid` · `offlinetraining` · `concoction`
 
 Protocol parsers/serializers for wheel (`0x61`/`0x62`/`0xE7`), offline training (`0x74`), reward chest (`0xFF`), bestiary (`0xE1`–`0xE4`), forge (`0xBF`) and weapon proficiencies are routed through `GamePacketRouter` on the WorldCommit lane. Residual per-feature parity gaps (protocol sends, deeper persistence, Lua-driven side effects) are tracked in `docs/game-play-features.md`.
+
+---
+
+## 📊 Implementation Coverage
+
+The port is a faithful, incremental transcription of Canary's C++ engine. Two views of progress:
+
+| View | Progress |
+|---|---|
+| **Tracked gameplay features** (`docs/game-play-features.md`) | **56 / 56 (100%)** — engine scope, tested |
+| **Inbound `ProtocolGame` opcodes** | ~24 / ~105 (**~23%**) |
+| **Outbound `ProtocolGame` senders** | ~6 / ~180 (**~3%**) |
+| **Lua bindings** | ~150 / 1,310 (**~11%**) |
+| **`Player` methods** | ~14 / ~765 (**~2%**) |
+| **Monster engine** | **~2%** (no A*/targeting/loot runtime) |
+| **Map engine** | **~30%** |
+| **Persistence** | **~15%** |
+| **Estimated full-parity completion** | **~25–30%** |
+
+The 56 tracked gameplay features are engine-complete, but Canary's full surface (`player.cpp` ~765 methods, `game.cpp` ~352 methods, ~1,310 Lua registrations, ~105 opcodes) is far larger. The complete per-subsystem inventory and ranked remaining work lives in **[`docs/missing-features.md`](docs/missing-features.md)**.
