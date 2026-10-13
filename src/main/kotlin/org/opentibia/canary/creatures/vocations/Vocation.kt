@@ -1,7 +1,29 @@
 package org.opentibia.canary.creatures.vocations
 
+import org.opentibia.canary.systems.wheel.WheelGemSupremeModifier
 import kotlin.math.floor
 import kotlin.math.pow
+
+/**
+ * Dependency-injected replacement for the `g_configManager().getFloat(RATE_*)`
+ * reads inside `Vocation` (src/creatures/players/vocations/vocation.cpp:337-367),
+ * per AGENTS.md 1.1 (no global singletons). Each field defaults to the
+ * `configmanager.cpp` default of `1.0`.
+ */
+data class VocationRates(
+    /** `RATE_MANA_REGEN_SPEED` (configmanager.cpp:198). */
+    val rateManaRegenSpeed: Float = 1.0f,
+    /** `RATE_MANA_REGEN` (configmanager.cpp:199). */
+    val rateManaRegen: Float = 1.0f,
+    /** `RATE_HEALTH_REGEN_SPEED` (configmanager.cpp:196). */
+    val rateHealthRegenSpeed: Float = 1.0f,
+    /** `RATE_HEALTH_REGEN` (configmanager.cpp:197). */
+    val rateHealthRegen: Float = 1.0f,
+    /** `RATE_SOUL_REGEN_SPEED` (configmanager.cpp:205). */
+    val rateSoulRegenSpeed: Float = 1.0f,
+    /** `RATE_ATTACK_SPEED` (configmanager.cpp:191). */
+    val rateAttackSpeed: Float = 1.0f,
+)
 
 /**
  * Mirror of Canary's `class Vocation`
@@ -20,11 +42,13 @@ import kotlin.math.pow
  * in Canary and are promoted to `double` inside `std::pow<double>`, so they are
  * kept as [Float] here and widened at the call site to preserve bit-exact results.
  *
- * Not ported (require `WheelGemSupremeModifier_t` / `Item` registries):
- * `getSupremeGemModifiers` and `getWheelGemId` (vocation.cpp:385-411). The
- * `<gem>` nodes are captured in [wheelGems] for a later wiring.
+ * The regen/attack-speed getters (vocation.cpp:337-367) apply the config rates
+ * from the injected [rates] with the C++ `uint32_t`/`float` truncation semantics.
  */
-class Vocation(private val idValue: Int) {
+class Vocation(
+    private val idValue: Int,
+    internal val rates: VocationRates = VocationRates(),
+) {
 
     internal var name: String = "none"
     internal var description: String = ""
@@ -69,6 +93,18 @@ class Vocation(private val idValue: Int) {
     /** `std::map<WheelGemQuality_t, std::string> wheelGems` (vocation.hpp:87). */
     internal val wheelGems: MutableMap<Int, String> = linkedMapOf()
 
+    /**
+     * `g_vocations().getVocation(getBaseId())` seam used by
+     * [getSupremeGemModifiers] (vocation.cpp:389). Wired by [Vocations].
+     */
+    internal var baseVocationProvider: (Int) -> Vocation? = { null }
+
+    /** `Item::items.getItemIdByName` seam used by [getWheelGemId] (vocation.cpp:410). */
+    internal var itemIdByName: (String) -> Int = { 0 }
+
+    /** `std::vector<WheelGemSupremeModifier_t> m_supremeGemModifiers` (vocation.hpp:117). */
+    private var supremeGemModifiers: List<WheelGemSupremeModifier>? = null
+
     /** `Vocation::getId` (vocation.cpp:309). */
     fun getId(): Int = idValue
 
@@ -99,8 +135,26 @@ class Vocation(private val idValue: Int) {
     /** `Vocation::getSoulMax` (vocation.cpp:353). */
     fun getSoulMax(): Int = soulMax
 
+    /** `Vocation::getManaGainTicks` (vocation.cpp:337). */
+    fun getManaGainTicks(): Int = (gainManaTicks / rates.rateManaRegenSpeed).toInt()
+
+    /** `Vocation::getManaGainAmount` (vocation.cpp:341). */
+    fun getManaGainAmount(): Int = (gainManaAmount * rates.rateManaRegen).toInt()
+
+    /** `Vocation::getHealthGainTicks` (vocation.cpp:345). */
+    fun getHealthGainTicks(): Int = (gainHealthTicks / rates.rateHealthRegenSpeed).toInt()
+
+    /** `Vocation::getHealthGainAmount` (vocation.cpp:349). */
+    fun getHealthGainAmount(): Int = (gainHealthAmount * rates.rateHealthRegen).toInt()
+
+    /** `Vocation::getSoulGainTicks` (vocation.cpp:357). */
+    fun getSoulGainTicks(): Int = (gainSoulTicks / rates.rateSoulRegenSpeed).toInt()
+
     /** `Vocation::getBaseAttackSpeed` (vocation.cpp:361). */
     fun getBaseAttackSpeed(): Int = attackSpeed
+
+    /** `Vocation::getAttackSpeed` (vocation.cpp:365). */
+    fun getAttackSpeed(): Int = (attackSpeed / rates.rateAttackSpeed).toInt()
 
     /** `Vocation::getBaseSpeed` (vocation.cpp:369). */
     fun getBaseSpeed(): Int = baseSpeed
@@ -113,6 +167,33 @@ class Vocation(private val idValue: Int) {
 
     /** `Vocation::canCombat` (vocation.cpp:381). */
     fun canCombat(): Boolean = combat
+
+    /**
+     * `Vocation::getSupremeGemModifiers` (vocation.cpp:385): every `General_*`
+     * modifier plus the ones whose prefix matches the base vocation name, in
+     * enum declaration order. The C++ result is cached after the first call.
+     *
+     * Canary dereferences the base vocation unconditionally; without a wired
+     * registry this returns an empty list instead of crashing.
+     */
+    fun getSupremeGemModifiers(): List<WheelGemSupremeModifier> {
+        supremeGemModifiers?.let { return it }
+
+        val baseVocation = baseVocationProvider(baseId) ?: return emptyList()
+        val vocationName = baseVocation.getVocName().lowercase()
+        val modifiers = WheelGemSupremeModifier.entries.filter { modifier ->
+            val targetVocation = modifier.name.substringBefore('_').lowercase()
+            targetVocation == "general" || targetVocation.contains(vocationName)
+        }
+        supremeGemModifiers = modifiers
+        return modifiers
+    }
+
+    /** `Vocation::getWheelGemId` (vocation.cpp:405): `Item::items.getItemIdByName(gemName)`. */
+    fun getWheelGemId(quality: Int): Int {
+        val gemName = wheelGems[quality] ?: return 0
+        return itemIdByName(gemName)
+    }
 
     /**
      * `Vocation::getReqSkillTries` (vocation.cpp:265). Uses

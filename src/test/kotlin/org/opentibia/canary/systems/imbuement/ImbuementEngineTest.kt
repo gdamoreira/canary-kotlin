@@ -283,6 +283,139 @@ class ImbuementEngineTest {
     }
 
     @Test
+    fun `onApplyImbuement opens the pick item window at the end`() {
+        val item = ImbuementItem(
+            id = 2400,
+            imbuementSlot = 1,
+            imbuementTypes = mapOf(ImbuementTypes_t.IMBUEMENT_CRITICAL_HIT to 3)
+        )
+        val player = FakeImbuementPlayer(money = 10000)
+        player.itemCounts[11444] = 20
+
+        engine.onApplyImbuement(strike(1), item, 0, player)
+
+        assertThat(player.openedWindows.map { it.first }).containsExactly(ImbuementAction.PICK_ITEM)
+        assertThat(player.openedWindows.single().second).isSameAs(item)
+    }
+
+    @Test
+    fun `createScrollImbuement charges the price and consumes inventory materials`() {
+        val player = FakeImbuementPlayer(money = 40000)
+        player.itemCounts[11444] = 20
+        player.itemCounts[ITEM_EMPTY_IMBUEMENT_SCROLL] = 1
+
+        engine.createScrollImbuement(strike(2), player)
+
+        assertThat(player.removedMoney).containsExactly(30000)
+        assertThat(player.removedItemTypes).containsExactly(11444 to 20)
+        assertThat(player.withdrawnItems).isEmpty()
+        assertThat(player.countByIdCalls).containsExactly(Triple(ITEM_EMPTY_IMBUEMENT_SCROLL, 1, true))
+        assertThat(player.addedItems.map { it.first.id }).containsExactly(51742)
+        assertThat(player.openedWindows.map { it.first }).containsExactly(ImbuementAction.SCROLL)
+        assertThat(player.openedWindows.single().second).isNull()
+    }
+
+    @Test
+    fun `createScrollImbuement withdraws materials missing from the inventory from the stash`() {
+        val player = FakeImbuementPlayer(money = 40000)
+        player.itemCounts[11444] = 5
+        player.stashCounts[11444] = 15
+        player.stashCounts[ITEM_EMPTY_IMBUEMENT_SCROLL] = 1
+
+        engine.createScrollImbuement(strike(2), player)
+
+        assertThat(player.removedItemTypes).containsExactly(11444 to 5)
+        assertThat(player.withdrawnItems).containsExactly(11444 to 15)
+        assertThat(player.textMessages).containsExactly("Using 15x item 11444 from your stash.")
+        assertThat(player.resultMessages).isEmpty()
+        assertThat(player.addedItems.map { it.first.id }).containsExactly(51742)
+    }
+
+    @Test
+    fun `createScrollImbuement refuses when a material is missing`() {
+        val player = FakeImbuementPlayer(money = 40000)
+        player.itemCounts[11444] = 19
+        player.itemCounts[ITEM_EMPTY_IMBUEMENT_SCROLL] = 1
+
+        engine.createScrollImbuement(strike(2), player)
+
+        assertThat(player.removedMoney).isEmpty()
+        assertThat(player.addedItems).isEmpty()
+        assertThat(player.resultMessages).containsExactly("You don't have all necessary items.")
+    }
+
+    @Test
+    fun `createScrollImbuement refuses without an empty imbuement scroll`() {
+        val player = FakeImbuementPlayer(money = 40000)
+        player.itemCounts[11444] = 20
+
+        engine.createScrollImbuement(strike(2), player)
+
+        assertThat(player.removedMoney).isEmpty()
+        assertThat(player.addedItems).isEmpty()
+        assertThat(player.resultMessages).containsExactly("You don't have all necessary items.")
+    }
+
+    @Test
+    fun `createScrollImbuement refuses when the player cannot pay`() {
+        val player = FakeImbuementPlayer(money = 10, removeMoneyResult = false)
+        player.itemCounts[11444] = 20
+        player.itemCounts[ITEM_EMPTY_IMBUEMENT_SCROLL] = 1
+
+        engine.createScrollImbuement(strike(2), player)
+
+        assertThat(player.removedItemTypes).isEmpty()
+        assertThat(player.addedItems).isEmpty()
+        assertThat(player.resultMessages).containsExactly("You don't have 30000 gold coins.")
+    }
+
+    @Test
+    fun `createScrollImbuement aborts when the empty scroll cannot be removed`() {
+        val player = FakeImbuementPlayer(money = 40000, removeItemCountByIdResult = false)
+        player.itemCounts[11444] = 20
+        player.itemCounts[ITEM_EMPTY_IMBUEMENT_SCROLL] = 1
+
+        engine.createScrollImbuement(strike(2), player)
+
+        assertThat(player.addedItems).isEmpty()
+        assertThat(player.openedWindows).isEmpty()
+        assertThat(player.resultMessages).isEmpty()
+    }
+
+    @Test
+    fun `createScrollImbuement reports a failed scroll delivery`() {
+        val player = FakeImbuementPlayer(money = 40000, internalAddItemResult = false)
+        player.itemCounts[11444] = 20
+        player.itemCounts[ITEM_EMPTY_IMBUEMENT_SCROLL] = 1
+
+        engine.createScrollImbuement(strike(2), player)
+
+        assertThat(player.openedWindows).isEmpty()
+        assertThat(player.resultMessages)
+            .containsExactly("Failed to add imbuement scroll. Please contact administration.")
+    }
+
+    @Test
+    fun `onClearImbuement opens the pick item window on the payment failure and success paths`() {
+        val failing = FakeImbuementPlayer(money = 10, removeMoneyResult = false)
+        val item = ImbuementItem(
+            id = 2400,
+            imbuementSlot = 1,
+            imbuementTypes = mapOf(ImbuementTypes_t.IMBUEMENT_CRITICAL_HIT to 3)
+        )
+        item.setImbuement(0, strike(1).id, 72000)
+
+        engine.onClearImbuement(item, 0, failing)
+
+        assertThat(failing.openedWindows.map { it.first }).containsExactly(ImbuementAction.PICK_ITEM)
+
+        val paid = FakeImbuementPlayer(money = 20000)
+        engine.onClearImbuement(item, 0, paid)
+
+        assertThat(paid.openedWindows.map { it.first }).containsExactly(ImbuementAction.PICK_ITEM)
+    }
+
+    @Test
     fun `onClearImbuement charges the remove cost and clears the slot`() {
         val item = ImbuementItem(
             id = 2400,

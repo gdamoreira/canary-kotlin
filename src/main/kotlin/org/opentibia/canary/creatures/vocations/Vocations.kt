@@ -19,8 +19,16 @@ import javax.xml.parsers.DocumentBuilderFactory
  * `<gem>` child parse is transcribed from `Vocations::loadFromXml`
  * (vocation.cpp:28-201), including `gaincap` being stored multiplied by 100 and
  * pugixml `as_bool()` semantics.
+ *
+ * [rates] and [itemIdByName] are the dependency-injected replacements for the
+ * `g_configManager()`/`Item::items` reads the `Vocation` runtime performs
+ * (vocation.cpp:337-411); each loaded [Vocation] receives them plus a
+ * `g_vocations().getVocation` back-reference for the supreme gem modifiers.
  */
-class Vocations {
+class Vocations(
+    private val rates: VocationRates = VocationRates(),
+    private val itemIdByName: (String) -> Int = { 0 },
+) {
 
     private val vocationsMap = sortedMapOf<Int, Vocation>()
 
@@ -58,7 +66,9 @@ class Vocations {
             }
             val id = idAttr.toIntOrNull() ?: continue
 
-            val vocation = vocationsMap.getOrPut(id) { Vocation(id) }
+            val vocation = vocationsMap.getOrPut(id) { Vocation(id, rates) }
+            vocation.itemIdByName = itemIdByName
+            vocation.baseVocationProvider = { baseId -> vocationsMap[baseId] }
 
             stringAttribute(vocationNode, "name")?.let { vocation.name = it }
             intAttribute(vocationNode, "clientid")?.let { vocation.clientId = it }
