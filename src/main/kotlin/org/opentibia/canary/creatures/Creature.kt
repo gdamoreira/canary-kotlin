@@ -36,12 +36,15 @@ import org.opentibia.canary.creatures.vocations.Vocation
 import org.opentibia.canary.creatures.vocations.VocationRequirementsAdapter
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.network.protocol.MessageClass
+import org.opentibia.canary.network.protocol.SourceEffect
 import org.opentibia.canary.systems.forge.PlayerForgeHistory
 import org.opentibia.canary.systems.prey.PreySlot
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import org.opentibia.canary.systems.taskhunting.TaskHuntingSlot
 import org.opentibia.canary.systems.taskhunting.TaskMonsterInfo
 import org.opentibia.canary.systems.wheel.PlayerWheel
+import org.opentibia.canary.spells.SoundEffect
 import org.opentibia.canary.spells.SpellBook
 import org.opentibia.canary.spells.Spells
 import java.util.Collections
@@ -115,6 +118,65 @@ abstract class Creature(
 
     /** `Creature::isRemoved()` (src/creatures/creature.hpp:210). */
     fun isRemoved(): Boolean = internalRemoved
+
+    /** `Creature::creatureCheck` (src/creatures/creature.hpp:927). */
+    var creatureCheck: Boolean = false
+
+    /** `Creature::inCheckCreaturesVector` (src/creatures/creature.hpp:928). */
+    var inCheckCreaturesVector: Boolean = false
+
+    /** `Creature::lastPosition` (src/creatures/creature.hpp:672). */
+    private var lastPosition: Position = position
+
+    /** `Creature::getLastPosition()` (src/creatures/creature.hpp:675-677). */
+    fun getLastPosition(): Position = lastPosition
+
+    /** `Creature::setLastPosition()` (src/creatures/creature.hpp:678-680). */
+    fun setLastPosition(newLastPos: Position) {
+        lastPosition = newLastPos
+    }
+
+    /**
+     * `Creature::onCreatureAppear` (`creature.cpp:403-410`). The base body only
+     * records the last position when a creature appears to itself on login;
+     * `Player::onCreatureAppear` (`player.cpp:12220`) extends it with inventory,
+     * tracker and condition restore (PARITY GAP).
+     */
+    open fun onCreatureAppear(creature: Creature, isLogin: Boolean) {
+        if (creature === this && isLogin) {
+            setLastPosition(position)
+        }
+    }
+
+    /**
+     * `Creature::onRemoveCreature` (`creature.cpp:412-421`). The monster
+     * target/follow clearing of the tail (`creature.cpp:417-420`) is not modeled
+     * (PARITY GAP).
+     */
+    open fun onRemoveCreature(creature: Creature, isLogout: Boolean) {
+        onCreatureDisappear(creature, isLogout)
+    }
+
+    /**
+     * `Creature::onCreatureDisappear` (`creature.cpp:423-434`); the follow
+     * clearing (`creature.cpp:430-433`) is not modeled (PARITY GAP).
+     */
+    open fun onCreatureDisappear(creature: Creature, isLogout: Boolean) {
+        if (getAttackedCreature() === creature) {
+            setAttackedCreature(null)
+            onAttackedCreatureDisappear(isLogout)
+        }
+    }
+
+    /** `Creature::onAttackedCreatureDisappear` (creature.hpp:613) virtual hook. */
+    open fun onAttackedCreatureDisappear(isLogout: Boolean) {
+        // No behaviour.
+    }
+
+    /** `Creature::onPlacedCreature` (creature.hpp:618) virtual hook. */
+    open fun onPlacedCreature() {
+        // No behaviour.
+    }
 
     // --- async task queue (creature.hpp:977-1076, creature.cpp:2148-2217) --------
 
@@ -1196,6 +1258,36 @@ class Player(
 
     /** `Player::sendTextMessage(MessageType, text)` (`player.cpp:6350-6407`) seam. */
     var sendTextMessage: (String) -> Unit = {}
+
+    /** `Player::sendTextMessage(MessageClasses, text)` (`player.cpp:6350-6407`) typed protocol seam. */
+    var sendTextMessageTyped: (MessageClass, String) -> Unit = { _, text -> sendTextMessage(text) }
+
+    /** `Player::sendCreatureAppear(creature, pos, isLogin)` (`player.cpp:8785-8802`) protocol seam. */
+    var sendCreatureAppear: (Creature, Position, Boolean) -> Unit = { _, _, _ -> }
+
+    /** `Player::sendRemoveTileThing(pos, stackpos)` (`player.cpp:7076-7080`) protocol seam. */
+    var sendRemoveTileThing: (Position, Int) -> Unit = { _, _ -> }
+
+    /** `Player::sendWorldLight(lightInfo)` (`player.cpp:2511-2515`) protocol seam. */
+    var sendWorldLight: (LightInfo) -> Unit = { _ -> }
+
+    /** `Player::sendTibiaTime(time)` (`player.cpp:2517-2521`) protocol seam. */
+    var sendTibiaTime: (Int) -> Unit = { _ -> }
+
+    /** `Player::sendSingleSoundEffect(pos, id, source)` (`player.cpp:12076-12080`) protocol seam. */
+    var sendSingleSoundEffect: (Position, SoundEffect, SourceEffect) -> Unit = { _, _, _ -> }
+
+    /** `Player::sendDoubleSoundEffect(pos, main, mainSource, secondary, secondarySource)` (`player.cpp:12082-12086`) protocol seam. */
+    var sendDoubleSoundEffect: (Position, SoundEffect, SourceEffect, SoundEffect, SourceEffect) -> Unit =
+        { _, _, _, _, _ -> }
+
+    /** `Player::cancelNextWalk` (player.hpp); `Player::stopWalk` latches it. */
+    var cancelNextWalk: Boolean = false
+
+    /** `Player::stopWalk()` (player.cpp:6273-6275). */
+    fun stopWalk() {
+        cancelNextWalk = true
+    }
 
     /**
      * `Player::m_conditionSuppressionCount` / `Player::lastConditionTime`
