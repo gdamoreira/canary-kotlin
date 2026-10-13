@@ -40,3 +40,7 @@ Continue closing the highest-impact gaps in `docs/missing-features.md`: missing 
 ## Post-wave (AGENTS.md §6)
 
 Update `docs/missing-features.md`, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/Done/`; commit the docs separately and push to `origin`.
+
+## Completion
+
+Completed. Player components (titles/badges/achievements), imbuement engine, prey + task-hunting engines, and inbound opcode batch 2 implemented and merged; full suite green. See `docs/missing-features.md` for updated coverage.

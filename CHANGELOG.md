@@ -235,10 +235,16 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Inventory persistence** — Flyway `V5__player_items.sql` + `JdbcPlayerItemsRepository` with Canary attribute serialization.
 - **Process** — `AGENTS.md` §6 now mandates a pre-wave plan doc in `docs/Plan/` (moved to `Done/` after the wave).
 
+### Phase 19: Player Components, Imbuements, Prey/Task Hunting, Opcode Batch 2 (06:30 – 07:00)
+- **Player components** — `PlayerTitles`, `PlayerBadges`, `PlayerAchievements` (+ scoped `KV`), 82 tests.
+- **Imbuement engine** — `Imbuements` XML registry + `ImbuementEngine` (apply/clear/scroll, tiers, decay, stat bonuses), 61 tests.
+- **Prey + Task Hunting** — `PreyEngine` (slots, reroll, bonuses, time-left) + `TaskHuntingEngine` (tasks, points, kills, rewards), 60 tests.
+- **Inbound opcodes** — party `0xA3–0xA8`, imbuements `0xB2`/`0xD5–0xD7`, depot/stash `0x28/0x29/0x92–0x94`, quick loot `0x8F–0x91`, modal `0xF9`, quest `0xF0/F1` decoded and routed.
+
 ---
 
 ### Current Status
-- **Automated Tests**: **185 test suites / 1371 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **200 test suites / 1652 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.

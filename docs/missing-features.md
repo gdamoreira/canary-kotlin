@@ -15,14 +15,14 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | Dimension | Coverage | Notes |
 |---|---|---|
 | Tracked gameplay features (56) | **100%** engine scope | `docs/game-play-features.md`; residual parity gaps per feature |
-| Inbound `ProtocolGame` opcodes | **~33%** (35 / ~105) | ~70 opcodes unhandled (see §5) |
+| Inbound `ProtocolGame` opcodes | **~53%** (56 / ~105) | ~49 opcodes unhandled (see §5) |
 | Outbound `ProtocolGame` senders | **~8%** (~14 / ~180) | self-appear, map description, window serializers, core stats/skills/inventory/container/creature/text senders |
 | Lua bindings (`src/lua/functions/*`) | **~13%** (~169 / 1,310) | player (306), monster-type (101), game (59), item-type (57) mostly missing |
 | `Player` methods (`player.cpp`) | **~4%** (~33 / ~765) | inventory/skills/attributes/vocation/premium + more Lua primitives |
 | Monster engine (`monster.cpp`, 4k lines) | **~5%** | A* pathfinder + spawn engines ported; no targeting/loot runtime |
 | Map engine (`map.cpp`) | **~35%** | OTBM load + sectors + tiles + A*; no sight/canWalkTo/houses save |
 | Persistence (`iologindata*`, `iomapserialize`) | **~18%** | vitals/level/pos + feature state (V3/V4); no inventory/depot/spells/VIP/houses |
-| **Estimated full-parity completion** | **~32–37%** | weighted across the above; the 56 tracked features are engine-complete but the full Canary surface is far larger |
+| **Estimated full-parity completion** | **~35–40%** | weighted across the above; the 56 tracked features are engine-complete but the full Canary surface is far larger |
 
 ---
 
