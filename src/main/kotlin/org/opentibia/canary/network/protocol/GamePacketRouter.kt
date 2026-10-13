@@ -32,6 +32,7 @@ data class GamePacketContext(
 object GamePacketRouter {
 
     private val wheelApplication = WheelApplication()
+    private val bestiaryApplication = org.opentibia.canary.systems.bestiary.BestiaryApplication()
 
     fun route(player: Player, buffer: ByteBuf, context: GamePacketContext): Int {
         var packetsHandled = 0
@@ -141,8 +142,7 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // Cyclopedia responses are produced by the bestiary
-                            // senders; this is the WorldCommit confinement boundary.
+                            bestiaryApplication.apply(player.features.bestiary, command)
                         }
                         true
                     }
