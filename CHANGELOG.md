@@ -260,10 +260,15 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Database tasks** — `database/DatabaseTasks` (FIFO async queue, flush, idempotent shutdown).
 - `docs/missing-features.md`: `src/` bootstrap + `appearances.proto` rows flipped to **IMPLEMENTED**.
 
+### Phase 23: `src/account/` Section Complete (08:30 – 09:00)
+- **Account core** — `Account` auth (`authenticate`/`authenticatePassword`/`authenticateSession`), `load`/`reload`/`save`, account type, house bid, premium days, coin ledger; `AccountInfo`/`AccountType`/`AccountErrors`. 67 tests.
+- **Account repository** — `JdbcAccountRepository` create/save, coin ledger + `coins_transactions`, ban/session tables, `loadBySession`; Flyway `V7__account_details.sql`. 14 tests.
+- `docs/missing-features.md`: `src/account/` rows flipped to **IMPLEMENTED**.
+
 ---
 
 ### Current Status
-- **Automated Tests**: **237 test suites / 2036 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **242 test suites / 2113 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.

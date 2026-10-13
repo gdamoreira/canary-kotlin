@@ -33,3 +33,7 @@
 ## Post-wave (AGENTS.md §6)
 
 Flip the `src/account/` rows to `IMPLEMENTED` in `docs/missing-features.md`; update `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/Done/`; commit the docs separately and push to `origin`.
+
+## Completion
+
+Completed. `src/account/` section implemented: Account auth/session/load/save/premium/house-bid/coins, `AccountInfo`/`AccountType`/`AccountErrors`, and the account repository (create/save, coin ledger + transactions, ban/session columns, Flyway V7). Rows flipped to IMPLEMENTED.

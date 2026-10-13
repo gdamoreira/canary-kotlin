@@ -36,8 +36,9 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 ### `src/account/`
 | C++ | Status | Missing |
 |---|---|---|
-| `account.*` | PARTIAL | authenticate/session/load/save, coin ledger, account type, house bid, premium purchase |
-| `account_repository_db.cpp` | PARTIAL | account create/save, coin transactions, ban/session columns |
+| `account.*` | **IMPLEMENTED** | authenticate/session/load/save, coin ledger, account type, house bid, premium purchase |
+| `account_repository_db.cpp` | **IMPLEMENTED** | account create/save, coin transactions (Flyway V7), ban/session columns |
+| `account_repository.cpp`, `account_info.hpp` | **IMPLEMENTED** | `AccountInfo`, `AccountType`, `AccountErrors`, session auth |
 
 ### `src/config/`
 | C++ | Status | Missing |
