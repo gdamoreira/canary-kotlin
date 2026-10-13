@@ -3,57 +3,8 @@ package org.opentibia.canary.lua.bindings.library
 import org.luaj.vm2.LuaValue
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.items.Container
-import org.opentibia.canary.items.ContainerBatchActor
 import org.opentibia.canary.lua.runtime.LuaEnvironment
-import java.lang.ref.WeakReference
-import java.util.IdentityHashMap
-
-/**
- * Port of Canary's `BatchUpdate` (`src/utils/batch_update.hpp:23-48`,
- * `batch_update.cpp:23-63`): the per-actor cache of containers currently being
- * batched. [add] mirrors the duplicate/alive check, [release] mirrors the C++
- * destructor's `endBatchUpdate` cascade.
- *
- * Parity gaps: `Player::beginBatchUpdate`/`endBatchUpdate` are not modeled by the
- * Kotlin player, so the actor-side begin/end calls are skipped; the container-side
- * `Container::beginBatchUpdate`/`endBatchUpdate` calls are applied, and the actor is
- * only handed to `Container::endBatchUpdate` when it implements [ContainerBatchActor].
- */
-class BatchUpdate(actor: Any?) {
-    private val actorRef: WeakReference<Any> = WeakReference(actor)
-    private val cached = mutableListOf<WeakReference<Container>>()
-    private val cachedLookup = IdentityHashMap<Container, WeakReference<Container>>()
-
-    /** `BatchUpdate::add` (`batch_update.cpp:41-62`). */
-    fun add(container: Container?): Boolean {
-        if (container == null) {
-            return false
-        }
-
-        val existing = cachedLookup[container]
-        if (existing?.get() != null) {
-            return false
-        }
-        if (existing != null) {
-            cachedLookup.remove(container)
-        }
-
-        cachedLookup[container] = WeakReference(container)
-        cached.add(WeakReference(container))
-        container.beginBatchUpdate()
-        return true
-    }
-
-    /** `BatchUpdate::~BatchUpdate` (`batch_update.cpp:31-39`). */
-    fun release() {
-        val actor = actorRef.get() as? ContainerBatchActor
-        for (containerRef in cached) {
-            containerRef.get()?.endBatchUpdate(actor)
-        }
-        cached.clear()
-        cachedLookup.clear()
-    }
-}
+import org.opentibia.canary.utils.BatchUpdate
 
 /**
  * Engine seam behind the `BatchUpdate` userdata class. Mirrors
@@ -72,7 +23,11 @@ interface BatchUpdateOperations {
     fun reportError(message: String) {}
 }
 
-/** [BatchUpdateOperations] over the ported [BatchUpdate] engine class. */
+/**
+ * [BatchUpdateOperations] over the ported [BatchUpdate] engine class
+ * (src/utils/batch_update.cpp). `Player` provides the
+ * `Player::beginBatchUpdate`/`endBatchUpdate` seam.
+ */
 class WorldBatchUpdateOperations : BatchUpdateOperations {
     override fun create(player: Any?): Any? =
         (player as? Player)?.let { BatchUpdate(it) }
