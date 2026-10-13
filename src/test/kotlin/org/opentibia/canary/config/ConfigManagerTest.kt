@@ -2,6 +2,9 @@ package org.opentibia.canary.config
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
+import java.nio.file.Path
 
 class ConfigManagerTest {
 
@@ -16,6 +19,7 @@ class ConfigManagerTest {
         assertThat(config.statusPort).isEqualTo(7171)
         assertThat(config.maxPlayers).isEqualTo(1000)
         assertThat(config.motd).isEqualTo("Welcome to Canary Kotlin Edition!")
+        assertThat(config.dataDir).isEqualTo("data-canary")
     }
 
     @Test
@@ -54,5 +58,56 @@ class ConfigManagerTest {
         assertThat(config.maxPlayers).isEqualTo(250)
         // Default remains for unspecified
         assertThat(config.gamePort).isEqualTo(7172)
+    }
+
+    @Test
+    fun `CLI options override environment and defaults`() {
+        val env = mapOf("CANARY_DATA_DIR" to "env-data")
+
+        val config = ConfigManager.load(environment = env, options = CliOptions(dataDir = "cli-data"))
+
+        assertThat(config.dataDir).isEqualTo("cli-data")
+    }
+
+    @Test
+    fun `CLI data dir overrides the default when no environment is set`() {
+        val config = ConfigManager.load(environment = emptyMap(), options = CliOptions(dataDir = "cli-data"))
+
+        assertThat(config.dataDir).isEqualTo("cli-data")
+    }
+
+    @Test
+    fun `config file supplies values with CLI taking precedence`(@TempDir dir: Path) {
+        val file = dir.resolve("canary.properties")
+        Files.writeString(
+            file,
+            """
+            server.name = File Server
+            server.loginPort = 7200
+            server.dataDir = file-data
+            """.trimIndent()
+        )
+
+        val config = ConfigManager.load(
+            environment = emptyMap(),
+            options = CliOptions(configPath = file.toString(), dataDir = "cli-data")
+        )
+
+        assertThat(config.serverName).isEqualTo("File Server")
+        assertThat(config.loginPort).isEqualTo(7200)
+        assertThat(config.dataDir).isEqualTo("cli-data")
+    }
+
+    @Test
+    fun `config file values override environment values`(@TempDir dir: Path) {
+        val file = dir.resolve("canary.properties")
+        Files.writeString(file, "server.name = File Server")
+
+        val config = ConfigManager.load(
+            environment = mapOf("CANARY_SERVER_NAME" to "Env Server"),
+            options = CliOptions(configPath = file.toString())
+        )
+
+        assertThat(config.serverName).isEqualTo("File Server")
     }
 }

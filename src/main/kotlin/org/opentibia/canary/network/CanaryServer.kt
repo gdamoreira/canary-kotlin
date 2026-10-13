@@ -22,9 +22,17 @@ import org.opentibia.canary.network.crypto.RsaCipher
 import org.opentibia.canary.network.protocol.GameHandler
 import org.opentibia.canary.network.protocol.LoginHandler
 import org.opentibia.canary.network.protocol.StatusHandler
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 private val logger = KotlinLogging.logger {}
+
+/** Lifecycle seam for the network listeners (`CanaryServer::start`/`stop`). */
+interface ListenerBoot {
+    fun start()
+    fun stop()
+}
 
 /**
  * Netty-based TCP Server managing inbound client connections across Login (7171) and Game (7172) ports.
@@ -37,7 +45,7 @@ class CanaryServer(
     private val dispatcher: GameDispatcher = GameDispatcher(),
     private val rsaCipher: RsaCipher = RsaCipher(),
     private val luaEnvironment: LuaEnvironment = LuaEnvironment().apply { initState() }
-) {
+) : ListenerBoot {
     val scriptingEnvironment: LuaEnvironment get() = luaEnvironment
 
     private val scriptingDispatch = ScriptingDispatch(luaEnvironment, dispatcher)
@@ -52,8 +60,9 @@ class CanaryServer(
     private var workerGroup: EventLoopGroup? = null
     private var loginChannelFuture: ChannelFuture? = null
     private var gameChannelFuture: ChannelFuture? = null
+    private val stopped = AtomicBoolean(false)
 
-    fun start() {
+    override fun start() {
         bossGroup = NioEventLoopGroup(1)
         workerGroup = NioEventLoopGroup()
 
@@ -147,11 +156,13 @@ class CanaryServer(
         return false
     }
 
-    fun stop() {
+    override fun stop() {
+        if (!stopped.compareAndSet(false, true)) return
         loginChannelFuture?.channel()?.close()?.sync()
         gameChannelFuture?.channel()?.close()?.sync()
-        workerGroup?.shutdownGracefully()
-        bossGroup?.shutdownGracefully()
+        // Join the I/O producers before the bootstrap drains the dispatcher and globals.
+        workerGroup?.shutdownGracefully(0, 5, TimeUnit.SECONDS)?.sync()
+        bossGroup?.shutdownGracefully(0, 5, TimeUnit.SECONDS)?.sync()
         logger.info { "Canary Kotlin Server listeners stopped" }
     }
 }

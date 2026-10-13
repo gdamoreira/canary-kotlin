@@ -30,11 +30,14 @@ class GameDispatcher(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default.limitedParallelism(1))
 ) {
     private val eventChannel = Channel<suspend () -> Unit>(Channel.UNLIMITED)
-    private val isRunning = AtomicBoolean(false)
+    private val running = AtomicBoolean(false)
     private var workerJob: Job? = null
 
+    /** World-confinement gate: tasks are accepted only while the worker is running. */
+    val isRunning: Boolean get() = running.get()
+
     fun start() {
-        if (isRunning.compareAndSet(false, true)) {
+        if (running.compareAndSet(false, true)) {
             workerJob = scope.launch {
                 for (event in eventChannel) {
                     try {
@@ -48,7 +51,7 @@ class GameDispatcher(
     }
 
     fun dispatch(lane: DispatcherLane = DispatcherLane.WorldCommit, task: suspend () -> Unit) {
-        if (!isRunning.get()) return
+        if (!running.get()) return
         eventChannel.trySend(task)
     }
 
@@ -61,7 +64,7 @@ class GameDispatcher(
     }
 
     fun shutdown() {
-        if (isRunning.compareAndSet(true, false)) {
+        if (running.compareAndSet(true, false)) {
             eventChannel.close()
             workerJob?.cancel()
             scope.cancel()

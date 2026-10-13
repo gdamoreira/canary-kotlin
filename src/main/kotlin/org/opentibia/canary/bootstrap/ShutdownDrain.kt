@@ -1,0 +1,45 @@
+package org.opentibia.canary.bootstrap
+
+import io.github.oshai.kotlinlogging.KotlinLogging
+import java.util.concurrent.atomic.AtomicBoolean
+
+private val logger = KotlinLogging.logger {}
+
+/**
+ * Ordered, idempotent shutdown drain for the server bootstrap. Producers and consumers
+ * are stopped before retained global ownership is released (AGENTS.md Static Ownership
+ * Lifetime Safety): listeners -> dispatcher -> SaveManager flush -> database close.
+ *
+ * The first request runs every step exactly once; repeated SIGINT/SIGTERM notifications
+ * or an uncaught-exception drain become no-ops. A failing step is logged and the drain
+ * continues so a later resource is never leaked because an earlier one failed.
+ */
+class ShutdownDrain(
+    private val stopListeners: () -> Unit,
+    private val shutdownDispatcher: () -> Unit,
+    private val flushSaveManager: () -> Unit,
+    private val closeDatabase: () -> Unit
+) {
+    private val drained = AtomicBoolean(false)
+
+    val isDrained: Boolean get() = drained.get()
+
+    fun drain() {
+        if (!drained.compareAndSet(false, true)) return
+
+        logger.info { "Shutdown drain started: listeners -> dispatcher -> save manager -> database" }
+        runStep("listeners", stopListeners)
+        runStep("dispatcher", shutdownDispatcher)
+        runStep("save manager", flushSaveManager)
+        runStep("database", closeDatabase)
+        logger.info { "Shutdown drain complete." }
+    }
+
+    private fun runStep(name: String, step: () -> Unit) {
+        try {
+            step()
+        } catch (e: Exception) {
+            logger.error(e) { "Shutdown drain step '$name' failed; continuing drain" }
+        }
+    }
+}
