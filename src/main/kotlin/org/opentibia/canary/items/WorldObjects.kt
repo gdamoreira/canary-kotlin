@@ -5,14 +5,28 @@ import org.opentibia.canary.map.Position
 
 class MagicField(
     id: Int,
-    val damage: Int
-) : Item(id) {
+    damage: Int,
+    var replaceable: Boolean = true,
+    type: ItemType? = null,
+) : Item(id, type = type) {
+
+    private val damageValue: Int = damage
+
+    /** `MagicField::getMagicField` (src/creatures/combat/combat.cpp:2787-2789). */
+    override fun getMagicField(): MagicField = this
+
+    /** `MagicField::isReplaceable` (src/creatures/combat/combat.cpp:2790-2792). */
+    fun isReplaceable(): Boolean = replaceable
+
+    /** `MagicField::getDamage` (src/creatures/combat/combat.cpp:2799-2805). */
+    fun getDamage(): Int = damageValue
+
     /**
      * Mirrors Canary MagicField::onStepInField(creature)
      * src/creatures/combat/combat.hpp:369
      */
     fun onStepInField(player: Player) {
-        player.drainHealth(damage)
+        player.drainHealth(damageValue)
     }
 }
 

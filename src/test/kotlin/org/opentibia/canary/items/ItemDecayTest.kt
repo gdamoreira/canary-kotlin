@@ -145,7 +145,5 @@ class ItemDecayTest {
         assertThat(item.isRemoved()).isFalse()
     }
 
-    private fun liveCylinder(): Cylinder = object : Cylinder {
-        override fun internalAddThing(item: Item) = Unit
-    }
+    private fun liveCylinder(): Cylinder = VirtualCylinder()
 }

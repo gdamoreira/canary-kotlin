@@ -30,12 +30,15 @@ import org.opentibia.canary.creatures.players.pvp.PlayerPvp
 import org.opentibia.canary.social.guild.Guild
 import org.opentibia.canary.social.guild.GuildRank
 import org.opentibia.canary.items.Container
+import org.opentibia.canary.items.Cylinder
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
+import org.opentibia.canary.items.Thing
 import org.opentibia.canary.creatures.vocations.Vocation
 import org.opentibia.canary.creatures.vocations.VocationRequirementsAdapter
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.map.Tile
 import org.opentibia.canary.network.protocol.MessageClass
 import org.opentibia.canary.network.protocol.SourceEffect
 import org.opentibia.canary.systems.forge.PlayerForgeHistory
@@ -101,9 +104,9 @@ abstract class Creature(
     var maxMana: Int = 0,
     var mana: Int = 0,
     speed: Int = 200,
-    var position: Position,
+    override var position: Position,
     var direction: org.opentibia.canary.game.movement.Direction = org.opentibia.canary.game.movement.Direction.South
-) {
+) : Thing {
     val isDead: Boolean get() = health <= 0
 
     /** `Creature::isAlive` (creature.hpp:275-277): `!isLifeless()`. */
@@ -117,7 +120,40 @@ abstract class Creature(
     }
 
     /** `Creature::isRemoved()` (src/creatures/creature.hpp:210). */
-    fun isRemoved(): Boolean = internalRemoved
+    override fun isRemoved(): Boolean = internalRemoved
+
+    /**
+     * `Creature::m_tile` (src/creatures/creature.hpp:656): the tile the creature
+     * stands on, set through [setParent].
+     */
+    private var parentTile: Tile? = null
+
+    /** `Creature::getParent()` (src/creatures/creature.cpp:1728-1730). */
+    override fun getParent(): Cylinder? = getTile()
+
+    /** `Creature::setParent()` (src/creatures/creature.cpp:1732+): the parent tile becomes the creature position. */
+    override fun setParent(cylinder: Cylinder?) {
+        val newParent = cylinder?.getTile()
+        parentTile = newParent
+        if (newParent != null) {
+            position = newParent.position
+        }
+    }
+
+    /** `Creature::getTile()` (src/creatures/creature.hpp:667-669). */
+    override fun getTile(): Tile? = parentTile
+
+    /** `Creature::getCreature()` (src/creatures/creature.hpp:86-88). */
+    override fun getCreature(): Creature = this
+
+    /** `Creature::getThrowRange()` (src/creatures/creature.hpp:204-206). */
+    override fun getThrowRange(): Int = 1
+
+    /** `Creature::isPushable()` (src/creatures/creature.hpp:207-209); `getWalkDelay()` is a PARITY GAP. */
+    override fun isPushable(): Boolean = true
+
+    /** `Creature::getDescription(int32_t)` is implemented by Player/Monster/Npc; the base placeholder is a PARITY GAP. */
+    override fun getDescription(lookDistance: Int): String = ""
 
     /** `Creature::creatureCheck` (src/creatures/creature.hpp:927). */
     var creatureCheck: Boolean = false
