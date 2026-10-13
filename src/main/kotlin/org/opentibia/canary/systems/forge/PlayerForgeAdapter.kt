@@ -20,10 +20,11 @@ import java.util.IdentityHashMap
  *    imbuements; the port stores forge items directly in inventory slots and
  *    does not model imbuements, so all slots are searched.
  *  - [getItemsClassifications]: `Game::getItemsClassifications()` (game.hpp:591)
- *    through [classifications]; the Lua-authored classification registry
- *    (`data/scripts/systems/item_tiers.lua`) is not loaded yet, so the default is
- *    empty and [itemClassificationOf] defaults every item to classification 0
- *    (`ItemType::upgradeClassification` is not ported).
+ *    through [itemClassifications]. The Lua-authored classification price tables
+ *    (`data/scripts/systems/item_tiers.lua`) populate that store through
+ *    `Game.createItemClassification`; until `ItemType::upgradeClassification` is
+ *    ported, [itemClassificationOf] defaults every item to the registry's
+ *    classification 0.
  *  - [getForgeSliversAndCores] / [hasItemCountById]: `Player::getForgeSliversAndCores`
  *    (player.cpp:1561) and `Player::hasItemCountById` (player.cpp:5335) over the
  *    inventory counts plus the injected stash seams (`Player::getStashItems()`).
@@ -49,7 +50,7 @@ import java.util.IdentityHashMap
  */
 class PlayerForgeAdapter(
     private val player: Player,
-    private val classifications: () -> List<ItemClassification> = { emptyList() },
+    private val itemClassifications: ItemClassifications = ItemClassifications(),
     private val itemClassificationOf: (Int) -> Int = { 0 },
     private val stashSlivers: () -> Long = { 0L },
     private val stashCores: () -> Long = { 0L },
@@ -77,7 +78,7 @@ class PlayerForgeAdapter(
         return wrap(item)
     }
 
-    override fun getItemsClassifications(): List<ItemClassification> = classifications()
+    override fun getItemsClassifications(): List<ItemClassification> = itemClassifications.getAll()
 
     override fun getForgeSliversAndCores(): Pair<Long, Long> =
         (player.getItemCount(ForgeItemIds.ITEM_FORGE_SLIVER) + stashSlivers()) to
