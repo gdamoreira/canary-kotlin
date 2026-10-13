@@ -177,4 +177,26 @@ class GameHandlerLoginFlowTest {
         val response: ByteBuf? = channel.readOutbound()
         assertThat(response).isNotNull
     }
+
+    @Test
+    fun `notifies the injected player lifecycle hooks on login and disconnect`() {
+        var appearances = 0
+        var disappearances = 0
+        val handler = GameHandler(
+            rsaCipher,
+            MockAccountRepo(),
+            gameMap,
+            dispatcher,
+            onPlayerAppear = { appearances++ },
+            onPlayerDisappear = { disappearances++ },
+        )
+        val channel = channel(handler)
+
+        channel.writeInbound(loginPacket())
+        assertThat(appearances).isEqualTo(1)
+        assertThat(disappearances).isEqualTo(0)
+
+        channel.close()
+        assertThat(disappearances).isEqualTo(1)
+    }
 }

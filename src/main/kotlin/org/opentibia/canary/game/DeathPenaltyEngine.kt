@@ -1,6 +1,8 @@
 package org.opentibia.canary.game
 
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.items.Item
+import org.opentibia.canary.lua.runtime.ScriptingDispatch
 import org.opentibia.canary.map.Position
 
 data class DeathResult(
@@ -27,9 +29,26 @@ object DeathPenaltyEngine {
         return (player.experience * lossPercentage).toLong()
     }
 
-    fun processDeath(player: Player, templePosition: Position, blessingsCount: Int): DeathResult {
+    fun processDeath(
+        player: Player,
+        templePosition: Position,
+        blessingsCount: Int,
+        scripting: ScriptingDispatch? = null,
+    ): DeathResult {
         val expLost = calculateExperienceLoss(player, blessingsCount)
         player.experience = kotlin.math.max(0L, player.experience - expLost)
+
+        // Canary fires the scripting `onDeath` events from `Creature::dropCorpse`
+        // (src/creatures/creature.cpp:820-824) while the creature is still dead and the
+        // corpse exists, before `Player::death` revives the player at the temple.
+        scripting?.creatureOnDeath(
+            creature = player,
+            corpse = Item(CORPSE_ITEM_ID),
+            killer = null,
+            mostDamageKiller = null,
+            lastHitUnjustified = false,
+            mostDamageUnjustified = false,
+        )
 
         // Revive vitals and teleport to temple
         player.health = player.maxHealth
@@ -38,8 +57,10 @@ object DeathPenaltyEngine {
 
         return DeathResult(
             expLost = expLost,
-            corpseItemId = 3058, // Standard dead human body ID
+            corpseItemId = CORPSE_ITEM_ID,
             templePosition = templePosition
         )
     }
+
+    private const val CORPSE_ITEM_ID = 3058
 }

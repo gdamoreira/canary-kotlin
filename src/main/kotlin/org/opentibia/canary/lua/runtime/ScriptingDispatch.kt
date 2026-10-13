@@ -56,15 +56,50 @@ class ScriptingDispatch(
      * WorldCommit lane so the `onLogin` callbacks run confined. Returns whether at least one
      * login event was registered.
      */
-    fun playerLogin(player: Player): Boolean {
-        val loginEvents = environment.creatureEvents.names()
-            .mapNotNull { environment.creatureEvents.get(it) }
-            .filter { it.eventType == LOGIN_EVENT_TYPE }
-        return submit(loginEvents.isNotEmpty()) {
-            loginEvents.forEach { LuaEventDispatcher.creatureEventOnLogin(environment, it.name, player) }
-            true
+    fun playerLogin(player: Player): Boolean =
+        submitCreatureEvents(LOGIN_EVENT_TYPE) { name ->
+            LuaEventDispatcher.creatureEventOnLogin(environment, name, player)
         }
-    }
+
+    /**
+     * Mirrors the `onThink` loop of `Creature::onThink` (src/creatures/creature.cpp:157-163):
+     * submits every registered creature event whose type is `think`, in registration order,
+     * to the WorldCommit lane so the `onThink` callbacks run confined. Returns whether at
+     * least one think event was registered.
+     *
+     * Canary only fires the events attached to the creature through
+     * `Creature::registerCreatureEvent`; this port has no per-creature attachment registry
+     * yet, so every registered think event fires (recorded in PARITY GAPS).
+     */
+    fun creatureOnThink(creature: Creature, interval: Long): Boolean =
+        submitCreatureEvents(THINK_EVENT_TYPE) { name ->
+            LuaEventDispatcher.creatureEventOnThink(environment, name, creature, interval)
+        }
+
+    /**
+     * Mirrors the `onDeath` loop of `Creature::dropCorpse` (src/creatures/creature.cpp:820-824):
+     * submits every registered creature event whose type is `death`, in registration order,
+     * to the WorldCommit lane so the `onDeath` callbacks run confined. Returns whether at
+     * least one death event was registered.
+     *
+     * Canary only fires the events attached to the creature through
+     * `Creature::registerCreatureEvent`; this port has no per-creature attachment registry
+     * yet, so every registered death event fires (recorded in PARITY GAPS).
+     */
+    fun creatureOnDeath(
+        creature: Creature,
+        corpse: Item?,
+        killer: Creature?,
+        mostDamageKiller: Creature?,
+        lastHitUnjustified: Boolean,
+        mostDamageUnjustified: Boolean,
+    ): Boolean =
+        submitCreatureEvents(DEATH_EVENT_TYPE) { name ->
+            LuaEventDispatcher.creatureEventOnDeath(
+                environment, name, creature, corpse, killer, mostDamageKiller,
+                lastHitUnjustified, mostDamageUnjustified,
+            )
+        }
 
     fun creatureEventOnLogout(name: String, player: Player): Boolean =
         submitCreature(name) { LuaEventDispatcher.creatureEventOnLogout(environment, name, player) }
@@ -141,6 +176,29 @@ class ScriptingDispatch(
         }
 
     // --- GlobalEvents (GlobalEvent::executeEvent/executeRecord) ----------------------
+
+    /**
+     * Mirrors `GlobalEvents::startup` (src/lua/global/globalevent.cpp:112-114) and its
+     * `execute(GLOBALEVENT_STARTUP)` loop (globalevent.cpp:210-216): submits every registered
+     * global event whose type is `startup`, in registration order, to the WorldCommit lane
+     * so the `onStartup` callbacks run confined. Returns whether at least one startup event
+     * was registered.
+     */
+    fun globalStartup(): Boolean =
+        submitGlobalEvents(STARTUP_EVENT_TYPE) { name ->
+            LuaEventDispatcher.globalEventOnStartup(environment, name)
+        }
+
+    /**
+     * Mirrors `Game::checkPlayersRecord` (src/game/game.cpp:9625-9636): submits every
+     * registered global event whose type is `record`, in registration order, to the
+     * WorldCommit lane so the `onRecord` callbacks receive `current`/`old` confined.
+     * Returns whether at least one record event was registered.
+     */
+    fun globalRecord(current: Long, old: Long): Boolean =
+        submitGlobalEvents(RECORD_EVENT_TYPE) { name ->
+            LuaEventDispatcher.globalEventOnRecord(environment, name, current, old)
+        }
 
     fun globalEventOnThink(name: String): Boolean =
         submitGlobal(name) { LuaEventDispatcher.globalEventOnThink(environment, name) }
@@ -230,8 +288,30 @@ class ScriptingDispatch(
     private fun submitMove(itemId: Int, eventType: String, invoke: () -> Boolean): Boolean =
         submit(environment.moveEvents.getByItemId(itemId).any { it.eventType == eventType }, invoke)
 
+    private fun submitCreatureEvents(eventType: String, invoke: (String) -> Boolean): Boolean {
+        val names = environment.creatureEvents.names()
+            .filter { environment.creatureEvents.get(it)?.eventType == eventType }
+        return submit(names.isNotEmpty()) {
+            names.forEach { invoke(it) }
+            true
+        }
+    }
+
+    private fun submitGlobalEvents(eventType: String, invoke: (String) -> Boolean): Boolean {
+        val names = environment.globalEvents.names()
+            .filter { environment.globalEvents.get(it)?.eventType == eventType }
+        return submit(names.isNotEmpty()) {
+            names.forEach { invoke(it) }
+            true
+        }
+    }
+
     private companion object {
         const val LOGIN_EVENT_TYPE = "login"
+        const val THINK_EVENT_TYPE = "think"
+        const val DEATH_EVENT_TYPE = "death"
+        const val STARTUP_EVENT_TYPE = "startup"
+        const val RECORD_EVENT_TYPE = "record"
         const val STEP_IN_EVENT_TYPE = "stepin"
         const val STEP_OUT_EVENT_TYPE = "stepout"
         const val EQUIP_EVENT_TYPE = "equip"
