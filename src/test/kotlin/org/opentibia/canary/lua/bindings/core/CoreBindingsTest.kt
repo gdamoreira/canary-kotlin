@@ -241,6 +241,39 @@ class CoreBindingsTest {
         }
 
         override fun removeMagicEffect(position: Position, magicEffect: Int, spectator: Any?): Boolean = true
+
+        override fun getPathTo(
+            position: Position,
+            target: Position,
+            minTargetDist: Int,
+            maxTargetDist: Int,
+            fullPathSearch: Boolean,
+            clearSight: Boolean,
+            maxSearchDist: Int,
+        ): List<Int>? = null
+
+        override fun isSightClear(position: Position, target: Position, sameFloor: Boolean): Boolean =
+            position.z == target.z
+
+        override fun getTile(position: Position): Any? = null
+
+        override fun getZones(position: Position): List<Any>? = null
+
+        override fun sendDistanceEffect(
+            position: Position,
+            target: Position,
+            distanceEffect: Int,
+            spectator: Any?,
+        ): Boolean = true
+
+        override fun sendSingleSoundEffect(position: Position, soundId: Int, actor: Any?): Boolean = true
+
+        override fun sendDoubleSoundEffect(
+            position: Position,
+            mainSoundId: Int,
+            secondarySoundId: Int,
+            actor: Any?,
+        ): Boolean = true
     }
 
     private fun env(): LuaEnvironment = LuaEnvironment().apply { initState() }

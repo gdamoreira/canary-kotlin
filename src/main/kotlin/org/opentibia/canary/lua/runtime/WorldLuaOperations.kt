@@ -10,6 +10,7 @@ import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
+import org.opentibia.canary.items.ItemType
 import org.opentibia.canary.items.ItemTypeRegistry
 import org.opentibia.canary.lua.bindings.LootData
 import org.opentibia.canary.lua.bindings.LootFunctions
@@ -27,12 +28,20 @@ import org.opentibia.canary.lua.bindings.core.GameFunctions
 import org.opentibia.canary.lua.bindings.core.GameOperations
 import org.opentibia.canary.lua.bindings.core.ItemFunctions
 import org.opentibia.canary.lua.bindings.core.ItemOperations
+import org.opentibia.canary.lua.bindings.core.ItemTypeFunctions
+import org.opentibia.canary.lua.bindings.core.ItemTypeOperations
 import org.opentibia.canary.lua.bindings.core.LuaTextMessage
 import org.opentibia.canary.lua.bindings.core.PlayerFunctions
 import org.opentibia.canary.lua.bindings.core.PlayerOperations
 import org.opentibia.canary.lua.bindings.core.PositionFunctions
 import org.opentibia.canary.lua.bindings.core.PositionOperations
+import org.opentibia.canary.lua.bindings.core.TileFunctions
+import org.opentibia.canary.lua.bindings.core.TileOperations
+import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.map.Tile
+import org.opentibia.canary.systems.rewardchest.ReturnValue
+import org.opentibia.canary.systems.rewardchest.Reward
 import java.util.WeakHashMap
 import kotlin.math.abs
 import kotlin.math.max
@@ -49,10 +58,12 @@ import kotlin.math.roundToInt
  * `creatures/monster/monster_functions.cpp`,
  * `creatures/monster/monster_type_functions.cpp`,
  * `creatures/monster/loot_functions.cpp`, `items/item_functions.cpp`,
- * `items/container_functions.cpp`, `map/position_functions.cpp` and
+ * `items/item_type_functions.cpp`, `items/container_functions.cpp`,
+ * `map/tile_functions.cpp`, `map/position_functions.cpp` and
  * `core/game/game_functions.cpp`. Capabilities the Kotlin domain does not model yet
- * (inventories, vocations, item attributes/action ids, decay timers, magic-effect
- * broadcasts, name catalogs) degrade to a documented no-op rather than inventing state.
+ * (inventories, vocations, item attributes/action ids, decay timers, tile creatures,
+ * magic-effect broadcasts, name catalogs) degrade to a documented no-op rather than
+ * inventing state.
  *
  * The operation groups are exposed as separate values because `CreatureOperations`
  * and `ItemOperations` cannot be implemented by one class (their `getId` return types
@@ -71,6 +82,8 @@ import kotlin.math.roundToInt
  *   `g_monsters().getMonsterType(name)` for `MonsterType(name)` and `monster:getType`.
  * @param monsterTypesByRaceId optional `race id -> MonsterType` catalog mirroring
  *   `g_monsters().getMonsterTypeByRaceId(id)`.
+ * @param gameMap optional spatial grid backing `Tile(...)` and `Position:getTile`; when
+ *   absent those primitives return `nil` like Canary's `g_game().map.getTile` miss.
  */
 class WorldLuaOperations(
     itemTypes: ItemTypeRegistry? = null,
@@ -78,6 +91,7 @@ class WorldLuaOperations(
     itemAttributeIdsByName: Map<String, Int> = emptyMap(),
     monsterTypesByName: Map<String, Any> = emptyMap(),
     monsterTypesByRaceId: Map<Int, Any> = emptyMap(),
+    gameMap: GameMap? = null,
 ) {
     val game: GameOperations = WorldGameOperations(itemIdsByName, itemTypes)
 
@@ -87,9 +101,13 @@ class WorldLuaOperations(
 
     val item: ItemOperations = WorldItemOperations(itemIdsByName, itemAttributeIdsByName)
 
-    val container: ContainerOperations = WorldContainerOperations(itemIdsByName)
+    val itemType: ItemTypeOperations = WorldItemTypeOperations(itemTypes, itemIdsByName)
 
-    val position: PositionOperations = WorldPositionOperations()
+    val container: ContainerOperations = WorldContainerOperations(itemIdsByName, itemTypes)
+
+    val tile: TileOperations = WorldTileOperations(gameMap, itemTypes, itemIdsByName)
+
+    val position: PositionOperations = WorldPositionOperations(gameMap)
 
     val monster: MonsterOperations = WorldMonsterOperations(monsterTypesByName)
 
@@ -106,7 +124,9 @@ class WorldLuaOperations(
         PlayerFunctions.install(env, player)
         CreatureFunctions.install(env, creature)
         ItemFunctions.install(env, item)
+        ItemTypeFunctions.install(env, itemType)
         ContainerFunctions.install(env, container)
+        TileFunctions.install(env, tile)
         PositionFunctions.install(env, position)
         MonsterFunctions.install(env, monster)
         MonsterTypeFunctions.install(env, monsterType)
@@ -493,11 +513,171 @@ class WorldItemOperations(
 }
 
 /**
+ * `ItemType` metatable seam backed by the Kotlin [ItemType] domain object plus the
+ * optional [ItemTypeRegistry] and name catalog for `ItemType(id or name)`. Fields the
+ * Kotlin type does not model inherit the documented Canary `ItemType` struct defaults
+ * from [ItemTypeOperations].
+ *
+ * Parity gaps: `create` resolves only through the supplied registry/catalog (Canary's
+ * global `Item::items` catalog is not wired into this class), and `getWeight` converts
+ * the domain's ounces to Canary's hundredths.
+ */
+class WorldItemTypeOperations(
+    private val itemTypes: ItemTypeRegistry? = null,
+    private val itemIdsByName: Map<String, Int> = emptyMap(),
+) : ItemTypeOperations {
+    override fun create(idOrName: Any): Any? = when (idOrName) {
+        is Number -> itemTypes?.get(idOrName.toInt())
+        is String -> itemIdsByName[idOrName]?.let { itemTypes?.get(it) }
+        else -> null
+    }
+
+    override fun getId(itemType: Any): Int = (itemType as? ItemType)?.id ?: 0
+
+    override fun getName(itemType: Any): String = (itemType as? ItemType)?.name ?: ""
+
+    override fun isContainer(itemType: Any): Boolean = (itemType as? ItemType)?.isContainer ?: false
+
+    override fun isStackable(itemType: Any): Boolean = (itemType as? ItemType)?.isStackable ?: false
+
+    override fun isPickupable(itemType: Any): Boolean = (itemType as? ItemType)?.isPickupable ?: false
+
+    override fun getCapacity(itemType: Any): Int = (itemType as? ItemType)?.capacity ?: 0
+
+    /** Canary reports hundredths of an ounce; the domain stores ounces. */
+    override fun getWeight(itemType: Any, count: Int): Int =
+        (((itemType as? ItemType)?.weight ?: 0.0) * 100.0 * max(1, count)).roundToInt()
+
+    override fun hasSubType(itemType: Any): Boolean = isStackable(itemType)
+}
+
+/**
+ * `Tile` metatable seam backed by the Kotlin [Tile] domain object (ground plus item
+ * list) and the optional [GameMap] for `Tile(x, y, z)`/`Position:getTile`.
+ *
+ * Parity gaps: the Kotlin tile models no creatures, top/down item ordering, tile flags,
+ * `ItemProperty` data, magic-field classification, house link or reward sweep; those
+ * methods inherit the documented defaults from [TileOperations]. `addItem` does not cap
+ * the count by `ItemType::stackSize` (not modeled), `addItemEx` treats every item as
+ * parentless, and `queryAdd` allows any item because the domain has no tile query rules.
+ */
+class WorldTileOperations(
+    private val gameMap: GameMap? = null,
+    private val itemTypes: ItemTypeRegistry? = null,
+    private val itemIdsByName: Map<String, Int> = emptyMap(),
+) : TileOperations {
+    override fun itemIdByName(name: String): Int = itemIdsByName[name] ?: 0
+
+    override fun create(position: Position): Any? = gameMap?.getTile(position)
+
+    override fun getPosition(tile: Any): Position? = (tile as? Tile)?.position
+
+    override fun getGround(tile: Any): Any? = (tile as? Tile)?.ground
+
+    /** 0 is the ground item, then the tile item list in order. */
+    override fun getThing(tile: Any, index: Int): Any? {
+        val target = tile as? Tile ?: return null
+        if (index < 0) {
+            return null
+        }
+        if (index == 0 && target.ground != null) {
+            return target.ground
+        }
+        val offset = if (target.ground != null) 1 else 0
+        return target.items.getOrNull(index - offset)
+    }
+
+    override fun getThingCount(tile: Any): Int {
+        val target = tile as? Tile ?: return 0
+        return target.items.size + if (target.ground != null) 1 else 0
+    }
+
+    override fun getItems(tile: Any): List<Any> = (tile as? Tile)?.items?.toList() ?: emptyList()
+
+    override fun getItemCount(tile: Any): Int = (tile as? Tile)?.items?.size ?: 0
+
+    /** Mirrors `Tile::getItemTypeCount` (ground first, then the item list). */
+    override fun getItemCountById(tile: Any, itemId: Int, subType: Int): Int {
+        val target = tile as? Tile ?: return 0
+        var count = 0
+        val ground = target.ground
+        if (ground != null && ground.id == itemId && (subType == -1 || subType == subtype(ground))) {
+            count += ground.count
+        }
+        for (item in target.items) {
+            if (item.id == itemId && (subType == -1 || subType == subtype(item))) {
+                count += item.count
+            }
+        }
+        return count
+    }
+
+    /** Mirrors `Game::findItemOfType` on a tile (ground first, then the item list). */
+    override fun getItemById(tile: Any, itemId: Int, subType: Int): Any? {
+        val target = tile as? Tile ?: return null
+        val ground = target.ground
+        if (ground != null && ground.id == itemId && (subType == -1 || subType == subtype(ground))) {
+            return ground
+        }
+        return target.items.firstOrNull { it.id == itemId && (subType == -1 || subType == subtype(it)) }
+    }
+
+    override fun addItem(tile: Any, itemId: Int, count: Int, flags: Long): Any? {
+        val target = tile as? Tile ?: return null
+        val item = Item.create(itemId, count.coerceAtLeast(1), itemTypes)
+        target.addItem(item)
+        return item
+    }
+
+    override fun addItemEx(tile: Any, item: Any, flags: Long): Int {
+        val target = tile as? Tile ?: return ReturnValue.NOTPOSSIBLE.ordinal
+        val candidate = item as? Item ?: return ReturnValue.NOTPOSSIBLE.ordinal
+        if (target.ground === candidate || target.items.any { it === candidate }) {
+            return ReturnValue.NOTPOSSIBLE.ordinal
+        }
+        target.addItem(candidate)
+        return ReturnValue.NOERROR.ordinal
+    }
+
+    /** Mirrors `Tile::queryAdd` for the domain, which accepts any item on any tile. */
+    override fun queryAdd(tile: Any, thing: Any, flags: Long): Int =
+        if (tile is Tile && thing is Item) ReturnValue.NOERROR.ordinal else ReturnValue.NOTPOSSIBLE.ordinal
+
+    /** Mirrors `Tile::getThingIndex` for the modeled ground/item order. */
+    override fun getThingIndex(tile: Any, thing: Any): Int? {
+        val target = tile as? Tile ?: return null
+        if (target.ground === thing) {
+            return 0
+        }
+        val index = target.items.indexOfFirst { it === thing }
+        if (index < 0) {
+            return -1
+        }
+        return index + if (target.ground != null) 1 else 0
+    }
+
+    private fun subtype(item: Item): Int =
+        if (item.type?.isStackable == true) item.count else 0
+}
+
+/**
  * `Container` metatable seam backed by the Kotlin [Container] domain object. Read-only
- * queries mirror Canary's `Container` semantics, including recursive descent.
+ * queries mirror Canary's `Container` semantics, including recursive descent; `addItem`,
+ * `addItemEx` and `registerReward` mutate the domain container, while
+ * `removeAllItems`/`removeItemById` are documented no-ops because [Container] exposes no
+ * removal API.
+ *
+ * Parity gaps:
+ * - `addItem` does not split stacks by `ItemType::stackSize` (not modeled) and ignores
+ *   the insertion index (`Container.addItem` always appends).
+ * - `getContentDescription` renders item type names only; Canary's `getNameDescription`
+ *   count/plural/attribute rendering is not ported.
+ * - `registerReward` sets the `DATE` attributes and appends an `ITEM_REWARD_CONTAINER`
+ *   item but cannot mark the container as a reward corpse.
  */
 class WorldContainerOperations(
     private val itemIdsByName: Map<String, Int> = emptyMap(),
+    private val itemTypes: ItemTypeRegistry? = null,
 ) : ContainerOperations {
     override fun itemIdByName(name: String): Int = itemIdsByName[name] ?: 0
 
@@ -558,8 +738,72 @@ class WorldContainerOperations(
         return flatten(target, recursive)
     }
 
+    /** Mirrors `Container::getContentDescription` for the modeled item names. */
+    override fun getContentDescription(container: Any, oldProtocol: Boolean): String {
+        val target = container as? Container ?: return ""
+        val descriptions = mutableListOf<String>()
+        collectDescriptions(target, oldProtocol, descriptions)
+        return if (descriptions.isEmpty()) "nothing" else descriptions.joinToString(", ")
+    }
+
+    /** Appends through `Container::addItem`; the stack split and index insertion are not modeled. */
+    override fun addItem(container: Any, itemId: Int, count: Int, index: Int, flags: Long): Any? {
+        val target = container as? Container ?: return null
+        val item = Item.create(itemId, count.coerceAtLeast(1), itemTypes)
+        return if (target.addItem(item)) item else null
+    }
+
+    override fun addItemEx(container: Any, item: Any, index: Int, flags: Long): Int {
+        val target = container as? Container ?: return ReturnValue.NOTPOSSIBLE.ordinal
+        val candidate = item as? Item ?: return ReturnValue.NOTPOSSIBLE.ordinal
+        if (target.items.any { it === candidate }) {
+            return ReturnValue.NOTPOSSIBLE.ordinal
+        }
+        return if (target.addItem(candidate)) ReturnValue.NOERROR.ordinal else ReturnValue.CONTAINERISFULL.ordinal
+    }
+
+    /** Mirrors `Item::getCorpseOwner` (the `CORPSEOWNER` attribute). */
+    override fun getCorpseOwner(container: Any): Long =
+        ((container as? Item)?.getAttribute(ItemAttribute.CORPSEOWNER) as? Long) ?: 0L
+
+    override fun registerReward(container: Any): Boolean {
+        val target = container as? Container ?: return false
+        val rewardId = System.currentTimeMillis()
+        val reward = Item.create(Reward.ITEM_REWARD_CONTAINER, 1, itemTypes)
+        reward.setAttribute(ItemAttribute.DATE, rewardId)
+        target.setAttribute(ItemAttribute.DATE, rewardId)
+        target.addItem(reward)
+        return true
+    }
+
+    /** No-op: [Container] exposes no removal API (documented parity gap). */
+    override fun removeAllItems(container: Any, actor: Any?, recursive: Boolean): Long = 0L
+
+    /** No-op: [Container] exposes no removal API (documented parity gap). */
+    override fun removeItemById(container: Any, itemId: Int, count: Int, subType: Int): Boolean = false
+
     private fun subtype(item: Item): Int =
         if (item.type?.isStackable == true) item.count else 0
+
+    /**
+     * Mirrors `Container::getContentDescription`: recursively walk the contents, skip
+     * non-empty containers (their children are described instead) and render leaf item
+     * names, `{id|name}` for the colored/old-protocol form.
+     */
+    private fun collectDescriptions(container: Container, oldProtocol: Boolean, out: MutableList<String>) {
+        for (item in container.items) {
+            val nested = item as? Container
+            if (nested != null && nested.items.isNotEmpty()) {
+                collectDescriptions(nested, oldProtocol, out)
+                continue
+            }
+            val name = item.type?.name ?: ""
+            if (name.isEmpty()) {
+                continue
+            }
+            out += if (oldProtocol) "{${item.id}|$name}" else name
+        }
+    }
 
     private fun flatten(container: Container, recursive: Boolean): List<Item> {
         val result = mutableListOf<Item>()
@@ -575,16 +819,75 @@ class WorldContainerOperations(
 
 /**
  * `Position` metatable seam. `getDistance` reproduces Canary's
- * `PositionFunctions::luaPositionGetDistance` max-of-|dx|,|dy|,|dz| formula; magic-effect
- * dispatch is a no-op because there is no spectator/protocol sink wired yet.
+ * `PositionFunctions::luaPositionGetDistance` max-of-|dx|,|dy|,|dz| formula; `getTile`
+ * and `getZones` consult the optional [GameMap]. Magic-effect, distance-effect and sound
+ * dispatch are no-ops because there is no spectator/protocol sink wired yet.
+ *
+ * Parity gaps:
+ * - `getPathTo` returns null (Canary's `false`) because no pathfinder is wired.
+ * - `isSightClear` reproduces only Canary's map-independent early decisions
+ *   (`Map::isSightClear`); the tile sight-line check needs blocking properties the
+ *   Kotlin [Tile] does not model, so it falls through to false.
+ * - `getZones` returns an empty list for a real tile and null for a missing one; no zone
+ *   engine is wired yet.
  */
-class WorldPositionOperations : PositionOperations {
+class WorldPositionOperations(
+    private val gameMap: GameMap? = null,
+) : PositionOperations {
     override fun getDistance(position: Position, target: Position): Int =
         max(max(abs(position.x - target.x), abs(position.y - target.y)), abs(position.z - target.z))
 
     override fun sendMagicEffect(position: Position, magicEffect: Int, spectator: Any?): Boolean = false
 
     override fun removeMagicEffect(position: Position, magicEffect: Int, spectator: Any?): Boolean = false
+
+    override fun getPathTo(
+        position: Position,
+        target: Position,
+        minTargetDist: Int,
+        maxTargetDist: Int,
+        fullPathSearch: Boolean,
+        clearSight: Boolean,
+        maxSearchDist: Int,
+    ): List<Int>? = null
+
+    /** Mirrors `Map::isSightClear`'s map-independent gates. */
+    override fun isSightClear(position: Position, target: Position, sameFloor: Boolean): Boolean {
+        if (sameFloor && position.z != target.z) {
+            return false
+        }
+        if (position.z == target.z && abs(position.x - target.x) <= 1 && abs(position.y - target.y) <= 1) {
+            return true
+        }
+        if (position.z == target.z && !sameFloor && position.z == 0) {
+            return true
+        }
+        if (position.z > target.z && position.z - target.z > 1) {
+            return false
+        }
+        return false
+    }
+
+    override fun getTile(position: Position): Any? = gameMap?.getTile(position)
+
+    override fun getZones(position: Position): List<Any>? =
+        if (gameMap?.getTile(position) != null) emptyList() else null
+
+    override fun sendDistanceEffect(
+        position: Position,
+        target: Position,
+        distanceEffect: Int,
+        spectator: Any?,
+    ): Boolean = false
+
+    override fun sendSingleSoundEffect(position: Position, soundId: Int, actor: Any?): Boolean = false
+
+    override fun sendDoubleSoundEffect(
+        position: Position,
+        mainSoundId: Int,
+        secondarySoundId: Int,
+        actor: Any?,
+    ): Boolean = false
 }
 
 /**

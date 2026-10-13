@@ -50,6 +50,20 @@ class ContainerBindingsTest {
 
         override fun getItems(container: Any, recursive: Boolean): List<Any> =
             (container as FakeContainer).items
+
+        override fun getContentDescription(container: Any, oldProtocol: Boolean): String = ""
+
+        override fun addItem(container: Any, itemId: Int, count: Int, index: Int, flags: Long): Any? = null
+
+        override fun addItemEx(container: Any, item: Any, index: Int, flags: Long): Int = 0
+
+        override fun getCorpseOwner(container: Any): Long = 0L
+
+        override fun registerReward(container: Any): Boolean = false
+
+        override fun removeAllItems(container: Any, actor: Any?, recursive: Boolean): Long = 0L
+
+        override fun removeItemById(container: Any, itemId: Int, count: Int, subType: Int): Boolean = false
     }
 
     private fun env(): LuaEnvironment = LuaEnvironment().apply { initState() }
