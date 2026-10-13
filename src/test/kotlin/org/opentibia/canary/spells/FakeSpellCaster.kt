@@ -1,5 +1,7 @@
 package org.opentibia.canary.spells
 
+import org.opentibia.canary.account.Account
+import org.opentibia.canary.account.AccountType
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.ZoneType
@@ -8,6 +10,7 @@ import org.opentibia.canary.creatures.Skulls_t
 import org.opentibia.canary.creatures.WeaponType_t
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.network.protocol.MessageClass
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 
 /**
@@ -32,6 +35,11 @@ class FakeSpellCaster(
     var premiumValue: Boolean = false,
     var groupIdValue: Int = 1,
     var firstOnStackValue: Boolean = true,
+    var accountTypeValue: AccountType = AccountType.ACCOUNT_TYPE_NORMAL,
+    var accountValue: Account? = null,
+    var offlineValue: Boolean = false,
+    var tileValue: SpellTile? = null,
+    var exivaAllowed: Boolean = true,
 ) : SpellCaster {
 
     var currentPosition: Position = position
@@ -41,6 +49,7 @@ class FakeSpellCaster(
     val flags = mutableSetOf<PlayerFlags_t>()
     val conditions = mutableListOf<Condition>()
     val cancelMessages = mutableListOf<ReturnValue>()
+    val textMessages = mutableListOf<Pair<MessageClass, String>>()
     val fightTicks = mutableListOf<Int>()
     val aggressiveActions = mutableListOf<Int>()
     var manaSpent = 0
@@ -88,6 +97,20 @@ class FakeSpellCaster(
     override fun isAccessPlayer(): Boolean = false
 
     override fun isFirstOnStack(): Boolean = firstOnStackValue
+
+    override fun getAccountType(): AccountType = accountTypeValue
+
+    override fun getAccount(): Account? = accountValue
+
+    override fun isOffline(): Boolean = offlineValue
+
+    override fun getTile(): SpellTile? = tileValue
+
+    override fun canExiva(spellParam: String): Boolean = exivaAllowed
+
+    override fun sendTextMessage(type: MessageClass, text: String) {
+        textMessages.add(type to text)
+    }
 
     override fun hasFlag(flag: PlayerFlags_t): Boolean = flag in flags
 

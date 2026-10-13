@@ -1,5 +1,7 @@
 package org.opentibia.canary.spells
 
+import org.opentibia.canary.account.Account
+import org.opentibia.canary.account.AccountType
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.ZoneType
@@ -7,7 +9,9 @@ import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.creatures.Skulls_t
 import org.opentibia.canary.creatures.WeaponType_t
 import org.opentibia.canary.game.movement.Direction
+import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.network.protocol.MessageClass
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 
 /** `WorldType_t` (`src/game/game_definitions.hpp:22-26`). */
@@ -16,6 +20,16 @@ enum class WorldType(val value: Int) {
     PVP(2),
     PVP_ENFORCED(3),
 }
+
+/**
+ * Injected view of a tile for the `Tile::hasFlag` calls of `spells.cpp`
+ * (lines 85, 93). Canary reaches the tile through `Creature::getTile()`.
+ */
+fun interface SpellTile {
+    /** `Tile::hasFlag(flag)`. */
+    fun hasFlag(flag: TileFlags): Boolean
+}
+
 
 /**
  * Injected view of a creature targeted by the spell pipeline.
@@ -102,6 +116,24 @@ interface SpellCaster {
     /** `Player::isFirstOnStack()` (`spells.cpp:606`). */
     fun isFirstOnStack(): Boolean
 
+    /** `Player::getAccountType()` (`spells.cpp:85`). */
+    fun getAccountType(): AccountType
+
+    /** `Player::getAccount()` (`spells.cpp:87`). */
+    fun getAccount(): Account?
+
+    /** `Player::isOffline()` (`spells.cpp:90`). */
+    fun isOffline(): Boolean
+
+    /** `Creature::getTile()` (`spells.cpp:84`, `93`). */
+    fun getTile(): SpellTile?
+
+    /** `Player::canExiva(param)` (`spells.cpp:146`). */
+    fun canExiva(spellParam: String): Boolean
+
+    /** `Player::sendTextMessage(type, text)` (`spells.cpp:98`, `105`, `147`). */
+    fun sendTextMessage(type: MessageClass, text: String)
+
     /** `Player::hasFlag(flag)` (spells.cpp, passim). */
     fun hasFlag(flag: PlayerFlags_t): Boolean
 
@@ -153,6 +185,12 @@ interface SpellWorld {
     /** `g_configManager().getFloat(RATE_SPELL_COOLDOWN)` (`spells.cpp:826`). */
     val rateSpellCooldown: Double
 
+    /** `g_configManager().getNumber(MAX_PLAYERS_PER_ACCOUNT)` (`spells.cpp:83`). */
+    val maxPlayersPerAccount: Int
+
+    /** `g_configManager().getNumber(MAX_PLAYERS_OUTSIDE_PZ_PER_ACCOUNT)` (`spells.cpp:86`). */
+    val maxPlayersOutsidePzPerAccount: Int
+
     /** `Game::sendDoubleSoundEffect(pos, cast, impact, player)` (`spells.cpp:926`). */
     fun sendDoubleSoundEffect(
         position: Position,
@@ -175,6 +213,9 @@ interface SpellWorld {
 
     /** `Game::getPlayerByNameWildcard(name, target)` (`spells.cpp:1193`, `1250`). */
     fun getPlayerByNameWildcard(name: String): SpellTarget?
+
+    /** `Game::getPlayersByAccount(account)` (`spells.cpp:87`). */
+    fun getPlayersByAccount(account: Account?): List<SpellCaster>
 }
 
 /**

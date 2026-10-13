@@ -8,8 +8,10 @@ import org.opentibia.canary.combat.condition.ZoneType
 import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.creatures.Skulls_t
 import org.opentibia.canary.creatures.WeaponType_t
+import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.network.protocol.MessageClass
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import kotlin.math.abs
 
@@ -62,6 +64,136 @@ class SpellEngine(
     /** `Player::forgetInstantSpell` (`player.cpp:3128-3130`). */
     fun forgetInstantSpell(caster: SpellCaster, spellName: String) {
         caster.getSpellBook()?.forgetInstantSpell(spellName)
+    }
+
+    /**
+     * `InstantSpell::canCast` (`spells.cpp:1419-1443`).
+     *
+     * Pure castability query used by the Lua/spell-list surfaces: unlike
+     * [playerSpellCheck] there is no group/gamemaster bypass, no cancel message
+     * and no cooldown/level/mana checks. The `vocSpellMap.contains` check is a
+     * key-presence test, so a `false` entry still allows the spell.
+     */
+    fun canCast(caster: SpellCaster, spell: InstantSpell): Boolean {
+        if (caster.hasFlag(PlayerFlags_t.CannotUseSpells)) {
+            return false
+        }
+
+        if (caster.hasFlag(PlayerFlags_t.IgnoreSpellCheck)) {
+            return true
+        }
+
+        if (world.learnSpells) {
+            return hasLearnedInstantSpell(caster, spell.name)
+        }
+
+        if (spell.isLearnable()) {
+            if (hasLearnedInstantSpell(caster, spell.name)) {
+                return true
+            }
+        } else if (spell.vocSpellMap.isEmpty() || spell.vocSpellMap.containsKey(caster.getVocationId())) {
+            return true
+        }
+
+        return false
+    }
+
+    /**
+     * `Spells::playerSaySpell` (`spells.cpp:82-162`).
+     *
+     * Resolves the spoken words into an instant spell, extracts the
+     * (optionally quoted) parameter and runs [playerCastInstant]. The `words`
+     * out-parameter of Canary is returned in [PlayerSaySpellResult].
+     *
+     * PARITY GAPS: the per-account/outside-PZ message and the feared/Exiva
+     * messages are dispatched through the [SpellCaster] text seam; the
+     * `g_game().addMagicEffect(CONST_ME_POFF)` feedback of the cast path stays
+     * in [playerCastInstant].
+     */
+    fun playerSaySpell(caster: SpellCaster, words: String): PlayerSaySpellResult {
+        val maxOnline = world.maxPlayersPerAccount
+        val tile = caster.getTile()
+        if (
+            maxOnline > 1 &&
+            caster.getAccountType().value < ACCOUNT_TYPE_GAMEMASTER &&
+            tile != null &&
+            !tile.hasFlag(TileFlags.TILESTATE_PROTECTIONZONE)
+        ) {
+            val maxOutsidePz = world.maxPlayersOutsidePzPerAccount
+            var countOutsidePz = 0
+            for (accountPlayer in world.getPlayersByAccount(caster.getAccount())) {
+                if (accountPlayer === caster || accountPlayer.isOffline()) {
+                    continue
+                }
+
+                val accountTile = accountPlayer.getTile()
+                if (accountTile != null && !accountTile.hasFlag(TileFlags.TILESTATE_PROTECTIONZONE)) {
+                    ++countOutsidePz
+                }
+            }
+
+            if (countOutsidePz >= maxOutsidePz) {
+                caster.sendTextMessage(
+                    MessageClass.MESSAGE_FAILURE,
+                    "You cannot cast spells while you have $maxOutsidePz character(s) outside of a protection zone.",
+                )
+                return PlayerSaySpellResult(TalkActionResult.TALKACTION_FAILED, words)
+            }
+        }
+
+        if (caster.hasCondition(ConditionType.CONDITION_FEARED)) {
+            caster.sendTextMessage(MessageClass.MESSAGE_FAILURE, "You are feared.")
+            return PlayerSaySpellResult(TalkActionResult.TALKACTION_FAILED, words)
+        }
+
+        val strWords = trimSpaces(words)
+        val instantSpell = registry.getInstantSpell(strWords)
+            ?: return PlayerSaySpellResult(TalkActionResult.TALKACTION_CONTINUE, words)
+
+        var param = ""
+        if (instantSpell.hasParam) {
+            val spellLen = instantSpell.words.length
+            val paramText = strWords.substring(spellLen)
+            if (paramText.isNotEmpty() && paramText[0] == ' ') {
+                val loc1 = paramText.indexOf('"', 1)
+                if (loc1 != -1) {
+                    var loc2 = paramText.indexOf('"', loc1 + 1)
+                    if (loc2 == -1) {
+                        loc2 = paramText.length
+                    } else if (paramText.indexOfLast { it != ' ' } != loc2) {
+                        return PlayerSaySpellResult(TalkActionResult.TALKACTION_CONTINUE, words)
+                    }
+
+                    param = paramText.substring(loc1 + 1, loc2)
+                } else {
+                    val quotedText = trimSpaces(paramText)
+                    if (quotedText.indexOf(' ') == -1) {
+                        param = quotedText
+                    } else {
+                        return PlayerSaySpellResult(TalkActionResult.TALKACTION_CONTINUE, words)
+                    }
+                }
+            }
+        }
+
+        if (instantSpell.name == "Find Person" && !caster.canExiva(param)) {
+            caster.sendTextMessage(
+                MessageClass.MESSAGE_TRADE,
+                "The character you are trying to find with Exiva is currently protected from your spell.",
+            )
+            return PlayerSaySpellResult(TalkActionResult.TALKACTION_FAILED, words)
+        }
+
+        val cast = castInstant(caster, instantSpell, param)
+        if (cast.cast) {
+            var resultWords = instantSpell.words
+            if (instantSpell.hasParam && cast.param.isNotEmpty()) {
+                resultWords += " \"" + cast.param + "\""
+            }
+            return PlayerSaySpellResult(TalkActionResult.TALKACTION_BREAK, resultWords)
+        }
+
+        return PlayerSaySpellResult(TalkActionResult.TALKACTION_FAILED, words)
     }
 
     /**
@@ -379,18 +511,31 @@ class SpellEngine(
     /**
      * `InstantSpell::playerCastInstant` (`spells.cpp:1171-1297`).
      *
+     * Canary mutates the by-reference `param` when a target player name is
+     * resolved; [castInstant] carries that value back for
+     * [playerSaySpell]'s words echo.
+     *
      * PARITY GAPS: `applyInstantSpellDirection` cannot consult
      * `getAimAtTargetSpells()` (unported wheel state) so the caster facing is
      * kept; a failed wildcard lookup cancels with `NOTPOSSIBLE` instead of the
      * exact `getPlayerByNameWildcard` return value.
      */
-    fun playerCastInstant(caster: SpellCaster, spell: InstantSpell, param: String = ""): Boolean {
+    fun playerCastInstant(caster: SpellCaster, spell: InstantSpell, param: String = ""): Boolean =
+        castInstant(caster, spell, param).cast
+
+    /**
+     * Port of `InstantSpell::playerCastInstant(player, std::string &param)`
+     * exposing the resolved `param` out-parameter (spells.cpp:1192-1213).
+     */
+    private data class InstantCastResult(val cast: Boolean, val param: String)
+
+    private fun castInstant(caster: SpellCaster, spell: InstantSpell, param: String): InstantCastResult {
         if (!playerSpellCheck(caster, spell)) {
-            return false
+            return InstantCastResult(false, param)
         }
 
         if (caster.hasCondition(ConditionType.CONDITION_POWERLESS) && spell.group == SpellGroup.SPELLGROUP_ATTACK) {
-            return false
+            return InstantCastResult(false, param)
         }
 
         val variant = LuaVariant()
@@ -417,7 +562,7 @@ class SpellEngine(
                     if (!spell.casterTargetOrDirection) {
                         applyCooldownConditions(caster, spell)
                         caster.sendCancelMessage(ReturnValue.NOTPOSSIBLE)
-                        return false
+                        return InstantCastResult(false, resolvedParam)
                     }
                     useDirection = true
                 }
@@ -430,7 +575,7 @@ class SpellEngine(
                 if (target == null || target.isRemoved() || target.getHealth() <= 0) {
                     if (!spell.casterTargetOrDirection) {
                         caster.sendCancelMessage(ReturnValue.YOUCANONLYUSEITONCREATURES)
-                        return false
+                        return InstantCastResult(false, resolvedParam)
                     }
                     useDirection = true
                 }
@@ -439,7 +584,7 @@ class SpellEngine(
             if (!useDirection) {
                 if (!canThrowSpell(caster, spell, target!!)) {
                     caster.sendCancelMessage(ReturnValue.CREATUREISNOTREACHABLE)
-                    return false
+                    return InstantCastResult(false, resolvedParam)
                 }
 
                 variant.type = LuaVariantType.VARIANT_NUMBER
@@ -450,7 +595,7 @@ class SpellEngine(
                 variant.pos = Spells.getCasterPosition(caster, caster.getDirection())
 
                 if (!playerInstantSpellCheck(caster, spell, variant.pos)) {
-                    return false
+                    return InstantCastResult(false, resolvedParam)
                 }
             }
         } else if (spell.hasParam) {
@@ -461,7 +606,7 @@ class SpellEngine(
                 if (playerTarget == null) {
                     applyCooldownConditions(caster, spell)
                     caster.sendCancelMessage(ReturnValue.NOTPOSSIBLE)
-                    return false
+                    return InstantCastResult(false, resolvedParam)
                 }
 
                 if (!playerTarget.isAccessPlayer() || caster.isAccessPlayer()) {
@@ -479,13 +624,13 @@ class SpellEngine(
             }
 
             if (!playerInstantSpellCheck(caster, spell, variant.pos)) {
-                return false
+                return InstantCastResult(false, resolvedParam)
             }
         }
 
         if (!spell.allowOnSelf && playerTarget != null && playerTarget.getName() == caster.getName()) {
             caster.sendCancelMessage(ReturnValue.NOTPOSSIBLE)
-            return false
+            return InstantCastResult(false, resolvedParam)
         }
 
         if (
@@ -501,7 +646,7 @@ class SpellEngine(
             postCastSpell(caster, spell)
         }
 
-        return result
+        return InstantCastResult(result, resolvedParam)
     }
 
     /**
@@ -603,9 +748,18 @@ class SpellEngine(
         variant.pos = Spells.getCasterPosition(caster, direction)
     }
 
+    /**
+     * `trimString` (`src/utils/tools.cpp:482-485`) trims only the space
+     * character from both ends.
+     */
+    private fun trimSpaces(value: String): String = value.trimEnd(' ').trimStart(' ')
+
     private companion object {
         /** `GROUP_TYPE_GAMEMASTER` (`src/enums/account_group_type.hpp:21`). */
         const val GROUP_TYPE_GAMEMASTER = 4
+
+        /** `ACCOUNT_TYPE_GAMEMASTER` (`src/enums/account_type.hpp:21`). */
+        const val ACCOUNT_TYPE_GAMEMASTER = 4
 
         /** `std::numeric_limits<float>::epsilon()` (`spells.cpp:827`). */
         const val FLOAT_EPSILON = 1.1920929E-7

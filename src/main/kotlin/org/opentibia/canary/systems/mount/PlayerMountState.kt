@@ -1,5 +1,7 @@
 package org.opentibia.canary.systems.mount
 
+import org.opentibia.canary.systems.rewardchest.ReturnValue
+
 /**
  * Self-contained mirror of the Player mount state machine
  * (src/creatures/players/player.cpp: getLastMount, getCurrentMount,
@@ -11,11 +13,12 @@ package org.opentibia.canary.systems.mount
  * engine services that Canary reaches through globals are injected as
  * constructor seams (AGENTS.md 1.1): `changeSpeed` replaces
  * `g_game().changeSpeed`, `isPremium`/`isAccessPlayer` replace the Account/group
- * checks, and the outfit predicates replace `Outfits::getInstance()` and
- * `defaultOutfit`. Storage follows Canary's reserved mount range exactly.
+ * checks, `outfitSupportsMount`/`outfitExists` replace `g_game().outfitSupportsMount`
+ * and `Outfits::getInstance().getOutfitByLookType`, and [storage]/[kv] replace
+ * `Player::getStorageValue`/`addStorageValue` and `Player::kv()`.
  *
- * Protocol side effects (`sendCancelMessage`, `sendOutfitWindow`) are out of
- * scope for the engine core; the corresponding branches still return `false`.
+ * Protocol side effects (`sendCancelMessage`, `sendOutfitWindow`) are injected
+ * as callbacks at the exact C++ call sites.
  */
 class PlayerMountState(
     private val mounts: Mounts,
@@ -32,11 +35,19 @@ class PlayerMountState(
         min + kotlin.random.Random.nextInt(max - min + 1)
     },
     private val now: () -> Long = { System.currentTimeMillis() },
-    private val onOutfitChanged: () -> Unit = {}
+    private val onOutfitChanged: () -> Unit = {},
+    /** `Player::getStorageValue`/`addStorageValue` (player_storage component). */
+    private val storage: MountStorage = InMemoryMountStorage(),
+    /** `Player::kv()` (`player.cpp:7923-8036`). */
+    private val kv: MountKeyValueStore = InMemoryMountKeyValueStore(),
+    /** `Player::sendCancelMessage(ret)` (`player.cpp:7973-8030`). */
+    private val sendCancelMessage: (ReturnValue) -> Unit = {},
+    /** `Player::sendOutfitWindow()` (`player.cpp:8004`, `8020`). */
+    private val sendOutfitWindow: () -> Unit = {},
+    /** `Outfits::getInstance().getOutfitByLookType(...) != nullptr` (`player.cpp:7997`). */
+    private val outfitExists: () -> Boolean = { true },
 ) {
 
-    private val storage = mutableMapOf<Int, Int>()
-    private var lastMount = 0
     private var defaultOutfitLookMount = 0
     private var randomMount = 0
     private var wasMounted = false
@@ -48,7 +59,7 @@ class PlayerMountState(
         if (value > 0) {
             return value
         }
-        return lastMount
+        return kv.get(LAST_MOUNT_KEY) ?: 0
     }
 
     /** Canary `Player::getCurrentMount`. */
@@ -92,6 +103,7 @@ class PlayerMountState(
     /** Canary `Player::toggleMount`. */
     fun toggleMount(mount: Boolean): Boolean {
         if ((now() - lastToggleMount) < TOGGLE_MOUNT_COOLDOWN_MS && !wasMounted) {
+            sendCancelMessage(ReturnValue.YOUAREEXHAUSTED)
             return false
         }
 
@@ -101,6 +113,7 @@ class PlayerMountState(
 
         if (mount) {
             if (!outfitSupportsMount(lookType())) {
+                sendCancelMessage(ReturnValue.NOTPOSSIBLE)
                 return false
             }
 
@@ -109,11 +122,17 @@ class PlayerMountState(
             }
 
             if (!toggleMountInPz && !isAccessPlayer() && isInProtectionZone()) {
+                sendCancelMessage(ReturnValue.ACTIONNOTPERMITTEDINPROTECTIONZONE)
+                return false
+            }
+
+            if (!outfitExists()) {
                 return false
             }
 
             var currentMountId = getLastMount()
             if (currentMountId == 0) {
+                sendOutfitWindow()
                 return false
             }
 
@@ -125,21 +144,24 @@ class PlayerMountState(
 
             if (!hasMount(currentMount)) {
                 setCurrentMount(0)
-                lastMount = 0
+                kv.set(LAST_MOUNT_KEY, 0)
+                sendOutfitWindow()
                 return false
             }
 
             if (currentMount.premium && !isPremium()) {
+                sendCancelMessage(ReturnValue.YOUNEEDPREMIUMACCOUNT)
                 return false
             }
 
             if (hasOutfitCondition()) {
+                sendCancelMessage(ReturnValue.NOTPOSSIBLE)
                 return false
             }
 
             defaultOutfitLookMount = currentMount.clientId
             setCurrentMount(currentMount.id)
-            lastMount = currentMount.id
+            kv.set(LAST_MOUNT_KEY, currentMount.id)
 
             if (currentMount.speed != 0) {
                 changeSpeed(currentMount.speed)
@@ -200,7 +222,7 @@ class PlayerMountState(
             }
 
             setCurrentMount(0)
-            lastMount = 0
+            kv.set(LAST_MOUNT_KEY, 0)
         }
 
         return true
@@ -245,7 +267,7 @@ class PlayerMountState(
     fun getOwnedMounts(): Set<Int> {
         val result = linkedSetOf<Int>()
         for (storageIndex in 0 until PSTRG_MOUNTS_RANGE_SIZE) {
-            val value = storage[PSTRG_MOUNTS_RANGE_START + storageIndex] ?: continue
+            val value = getStorageValue(PSTRG_MOUNTS_RANGE_START + storageIndex)
             if (value == -1) {
                 continue
             }
@@ -268,20 +290,20 @@ class PlayerMountState(
      */
     fun setOwnedMounts(mountIds: Set<Int>) {
         for (storageIndex in 0 until PSTRG_MOUNTS_RANGE_SIZE) {
-            storage.remove(PSTRG_MOUNTS_RANGE_START + storageIndex)
+            storage.removeStorageValue(PSTRG_MOUNTS_RANGE_START + storageIndex)
         }
         for (mountId in mountIds) {
             val tmpMountId = (mountId - 1) and MAX_TMP_MOUNT_ID
             val key = PSTRG_MOUNTS_RANGE_START + (tmpMountId / MOUNT_BITS_PER_STORAGE)
-            val value = storage[key] ?: 0
-            storage[key] = value or (1 shl (tmpMountId % MOUNT_BITS_PER_STORAGE))
+            val value = storage.getStorageValue(key).takeIf { it != -1 } ?: 0
+            storage.addStorageValue(key, value or (1 shl (tmpMountId % MOUNT_BITS_PER_STORAGE)))
         }
     }
 
-    private fun getStorageValue(key: Int): Int = storage[key] ?: -1
+    private fun getStorageValue(key: Int): Int = storage.getStorageValue(key)
 
     private fun addStorageValue(key: Int, value: Int) {
-        storage[key] = value
+        storage.addStorageValue(key, value)
     }
 
     companion object {
@@ -290,6 +312,9 @@ class PlayerMountState(
         const val PSTRG_MOUNTS_RANGE_START = PSTRG_RESERVED_RANGE_START + 2001 // 10002001
         const val PSTRG_MOUNTS_RANGE_SIZE = 10
         const val PSTRG_MOUNTS_CURRENTMOUNT = PSTRG_MOUNTS_RANGE_START + 10 // 10002011
+
+        /** `kv()->set("last-mount", ...)` (`player.cpp:7923`). */
+        const val LAST_MOUNT_KEY = "last-mount"
 
         /** `Player::tameMount` packs 31 mount ids per reserved storage key. */
         private const val MOUNT_BITS_PER_STORAGE = 31

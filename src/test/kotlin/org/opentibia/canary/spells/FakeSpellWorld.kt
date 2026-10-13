@@ -1,5 +1,7 @@
 package org.opentibia.canary.spells
 
+import org.opentibia.canary.account.Account
+import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.map.Position
 
 /** Injected world/config seam replacement for `g_game()`/`g_configManager()`. */
@@ -8,6 +10,8 @@ class FakeSpellWorld(
     override var removeRuneCharges: Boolean = true,
     override var worldType: WorldType = WorldType.PVP,
     override var rateSpellCooldown: Double = 1.0,
+    override var maxPlayersPerAccount: Int = 1,
+    override var maxPlayersOutsidePzPerAccount: Int = 1,
 ) : SpellWorld {
 
     var tileBlockingSolid: (Position) -> Boolean = { false }
@@ -15,6 +19,7 @@ class FakeSpellWorld(
     var canThrow: (from: Position, to: Position, checkSightLine: Boolean, range: Int) -> Boolean =
         { _, _, _, _ -> true }
     var playerByName: (String) -> SpellTarget? = { null }
+    var playersByAccount: (Account?) -> List<SpellCaster> = { emptyList() }
 
     /** Every sound effect dispatched through `g_game().sendDoubleSoundEffect`. */
     val doubleSounds: MutableList<Triple<Position, SoundEffect, SoundEffect>> = mutableListOf()
@@ -36,6 +41,16 @@ class FakeSpellWorld(
         canThrow(from, to, checkSightLine, range)
 
     override fun getPlayerByNameWildcard(name: String): SpellTarget? = playerByName(name)
+
+    override fun getPlayersByAccount(account: Account?): List<SpellCaster> = playersByAccount(account)
+}
+
+/** Test double for `Tile::hasFlag` (`spells.cpp:85`, `93`). */
+class FakeSpellTile(
+    private val protectionZone: Boolean = false,
+) : SpellTile {
+    override fun hasFlag(flag: TileFlags): Boolean =
+        flag == TileFlags.TILESTATE_PROTECTIONZONE && protectionZone
 }
 
 /** Test double for a creature targeted by the spell pipeline. */
