@@ -32,6 +32,7 @@ class LuaEnvironment {
 
     val actions = Actions()
     val talkActions = TalkActions()
+    val itemClassifications = org.opentibia.canary.systems.forge.ItemClassifications()
 
     lateinit var spells: Spells
         private set
@@ -57,6 +58,7 @@ class LuaEnvironment {
 
         // Install the Canary-named engine primitives backed by the world domain objects.
         WorldLuaOperations.forEnvironment(this).install(this)
+        org.opentibia.canary.lua.bindings.core.ItemClassificationFunctions.install(this, itemClassifications)
 
         ActionBindings.install(this)
         TalkActionBindings.install(this)

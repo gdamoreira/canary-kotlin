@@ -11,6 +11,8 @@ import org.opentibia.canary.network.protocol.offline.StartOfflineTrainingPacketP
 import org.opentibia.canary.network.protocol.rewardchest.RewardChestCollectPacketParser
 import org.opentibia.canary.network.protocol.bestiary.BestiaryPacketParser
 import org.opentibia.canary.network.protocol.forge.ForgePacketParser
+import org.opentibia.canary.network.protocol.guild.GuildPacketParser
+import org.opentibia.canary.network.protocol.market.MarketPacketParser
 import org.opentibia.canary.network.protocol.wheel.OpenWheelCommand
 import org.opentibia.canary.network.protocol.wheel.SaveWheelCommand
 import org.opentibia.canary.network.protocol.wheel.WheelGemActionCommand
@@ -166,6 +168,32 @@ object GamePacketRouter {
                             val adapter = PlayerForgeAdapter(player)
                             forgeApplication.apply(player.features.forge, adapter, command)
                             adapter.syncItemTiers()
+                        }
+                        true
+                    }
+                }
+
+                // Guild: 0x9C parseEditGuildMessage
+                GuildPacketParser.OPCODE_EDIT_GUILD_MESSAGE -> {
+                    val command = GuildPacketParser.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Guild message edit; confinement boundary.
+                        }
+                        true
+                    }
+                }
+
+                // Market: 0xF4 leave / 0xF5 browse / 0xF6 create / 0xF7 cancel / 0xF8 accept
+                in MarketPacketParser.OPCODE_MARKET_LEAVE..MarketPacketParser.OPCODE_MARKET_ACCEPT_OFFER -> {
+                    val command = MarketPacketParser.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Market operations mutate the offer book; confinement boundary.
                         }
                         true
                     }
