@@ -16,10 +16,14 @@ import org.opentibia.canary.network.protocol.GameWindowWriter
  * (`parseCyclopediaMapAction`) are inbound and already decoded elsewhere; every
  * response frame shares the `0xDA` opcode plus the
  * `CyclopediaCharacterInfoType_t` byte (`src/game/game_definitions.hpp:64-80`).
- * The remaining response types (general stats, deaths, achievements, item
- * summary, outfits/mounts, ...) are not ported (PARITY GAPS). Every multi-byte
- * field is Little-Endian and strings are `uint16` length plus UTF-8; the
- * `!player`/`oldProtocol` guard stays with the caller.
+ * The remaining response types (general stats, recent deaths, achievements,
+ * item summary, outfits/mounts, store summary, inspection, badges, titles,
+ * offence/defence/misc stats, house list) are ported in
+ * `CyclopediaCharacterWriter`; their `addCyclopedia*`, `handleImbuementDamage`,
+ * `calculateAbsorbValues`, `getForgeSkillStat` and `getCipbia*` computations
+ * live in `CyclopediaComputation`. Every multi-byte field is Little-Endian and
+ * strings are `uint16` length plus UTF-8; the `!player`/`oldProtocol` guard
+ * stays with the caller.
  */
 object CyclopediaWindowWriter {
 
