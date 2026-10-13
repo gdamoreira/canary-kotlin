@@ -52,9 +52,9 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | `creature.cpp` (2,239 lines) | **IMPLEMENTED** | conditions, outfit/light/speed, onThink/onAttacked/onTarget/onDeath, master/summon, spectator `canSee`, creature icons |
 | `combat/combat.cpp` | **IMPLEMENTED** | full `getCombatDamage` matrix, absorb/increase/mantra, target validation, areas |
 | `combat/condition.cpp` (2,955) | **IMPLEMENTED** | full condition family, attribute params, `ConditionFeared`, Player suppression |
-| `combat/spells.cpp` (1,654) | PARTIAL | runes, groups/cooldowns, areas/effects, learn/forget, Lua callbacks |
+| `combat/spells.cpp` (1,654) | **IMPLEMENTED** | runes/groups/cooldowns, learn/forget, `playerSaySpell`, `canCast`, `CombatSpell` |
 | `appearance/outfit/outfit.cpp` | **IMPLEMENTED** | `Outfits`/`Outfit`/`PlayerOutfits` (XML registry, addons, `getOutfitByLookType`) |
-| `appearance/mounts/mounts.cpp` | PARTIAL | outfit protocol, persistence, tame runtime |
+| `appearance/mounts/mounts.cpp` | **IMPLEMENTED** | outfit protocol, storage/KV persistence, tame/toggle runtime |
 | `appearance/attached_effects.cpp` | **IMPLEMENTED** | `AttachedEffects` (aura/wing/shader/effect XML registry + lookup) |
 | `interactions/chat.cpp` | **IMPLEMENTED** | channel registry/invites/users, private/guild/party channels, muted checks, yell rules |
 | `monsters/monster.cpp` (4,014) | **IMPLEMENTED** | spells, death/corpse, defense/reflect, random/dance step, walk-back, despawn, forge/hazard |
@@ -66,15 +66,15 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | `monsters/spawns/spawn_monster.cpp` | **IMPLEMENTED** | `SpawnMonster` + `SpawnXmlLoader` (blocks, intervals, despawn) |
 | `npcs/npc.cpp` (1,282) | **IMPLEMENTED** | interaction/focus, walk-to/queue, shop buy/sell runtime (dialogue stays Lua) |
 | `npcs/npcs.cpp`, `spawns/spawn_npc.cpp` | **IMPLEMENTED** | `Npcs` registry + `SpawnNpc` engine |
-| `players/player.cpp` (13,456, ~765 methods) | PARTIAL | chunk 1 done (conditions, spells/cooldowns, PvP/skull, async tasks); remaining: blessings, containers, wheel/forge/prey/task-hunting/cyclopedia hooks, harmony/serene |
+| `players/player.cpp` (13,456, ~765 methods) | PARTIAL | chunks 1–2 done (conditions, spells/cooldowns, PvP/skull, async tasks, blessings, containers, harmony/serene); remaining: wheel/forge/prey/task-hunting/cyclopedia hooks |
 | `players/components/player_storage.cpp` | **IMPLEMENTED** | `PlayerStorage` delta/dirty/ingest lifecycle + reserved ranges |
 | `players/components/player_forge_history.cpp` | **IMPLEMENTED** | DB load/save + Flyway `V8` |
-| `players/components/player_achievement/title/badge/vip/cyclopedia/attached_effects` | MISSING | entire components |
+| `players/components/player_achievement/title/badge/vip/cyclopedia/attached_effects` | **IMPLEMENTED** | titles/badges/achievements/VIP + `PlayerCyclopedia` + `PlayerAttachedEffects` |
 | `players/components/pvp/*` | **IMPLEMENTED** | `PlayerPvp` (situations/unjustified/skull) + `ExpertPvp` |
-| `players/components/weapon_proficiency.cpp` | PARTIAL | gain-on-hit/kill runtime; perks applied in combat |
-| `players/components/wheel/*` | PARTIAL | spell-table registration into spell registry |
-| `players/grouping/party.cpp`, `team_finder.hpp` | MISSING | entire party system + team finder |
-| `players/grouping/guild.cpp` | PARTIAL | ranks persistence, invites, wars, MOTD |
+| `players/components/weapon_proficiency.cpp` | **IMPLEMENTED** | gain-on-hit/kill runtime, `m_stats`, experience tables |
+| `players/components/wheel/*` | **IMPLEMENTED** | `WheelSpellRegistration` into the spell registry |
+| `players/grouping/party.cpp`, `team_finder.hpp` | **IMPLEMENTED** | `Party` + `TeamFinder` |
+| `players/grouping/guild.cpp` | **IMPLEMENTED** | ranks/MOTD/balance, war rows/emblems, JDBC repo (Flyway V9) |
 | `players/imbuements/imbuements.cpp` | **IMPLEMENTED** | apply/clear/scroll + `createScrollImbuement` + shrine window seam |
 | `players/livestream`, `management/ban`, `management/waitlist` | **IMPLEMENTED** | `LivestreamManager`, `Ban`/`IOBan`, `WaitingList` |
 | `players/storages/storages.cpp` (stash) | **IMPLEMENTED** | `Stash` (add/count/withdraw) + `Storages` XML |

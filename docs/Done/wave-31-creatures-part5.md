@@ -50,3 +50,7 @@
 ## Post-wave (AGENTS.md §6)
 
 Flip the covered rows to `IMPLEMENTED` in `docs/missing-features.md`; update `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/Done/`; commit the docs separately and push to `origin`.
+
+## Completion
+
+Completed. Player runtime chunk 2 (blessings/containers/harmony), spells+mounts completion, team finder + guild, and cyclopedia/attached-effects components + WP gain + wheel spell-table. Rows flipped.

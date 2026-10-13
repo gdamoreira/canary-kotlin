@@ -299,10 +299,17 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Combat completion** — full `getCombatDamage` matrix, absorb/increase/mantra, target validation, combat areas. 30 tests.
 - Rows flipped: `combat/combat.cpp`, `player_storage.cpp`, `player_forge_history.cpp`.
 
+### Phase 29: `src/creatures/` Part 5 — Player Runtime 2, Spells/Mounts, Team Finder/Guild, Components (11:30 – 12:00)
+- **Player runtime 2** — blessings + `getLostPercent`, container integration, harmony/serene. 76 tests.
+- **Spells + mounts** — `playerSaySpell`/`canCast`/`CombatSpell`, mount outfit protocol + persistence + tame runtime. 71 tests.
+- **Team finder + guild** — `TeamFinder`, guild ranks/MOTD/wars/emblems + JDBC repo (Flyway V9). 39 tests.
+- **Components + WP gain + wheel spells** — `PlayerCyclopedia`, `PlayerAttachedEffects`, weapon-proficiency gain runtime, wheel spell-table registration. 84 tests.
+- Rows flipped (spells, mounts, components, weapon_proficiency, wheel, team_finder, guild).
+
 ---
 
 ### Current Status
-- **Automated Tests**: **280 test suites / 2769 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **296 test suites / 3037 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.
