@@ -41,3 +41,7 @@ Advance the highest-impact gaps from `docs/missing-features.md`: the party and V
 ## Post-wave (AGENTS.md §6)
 
 Update `docs/missing-features.md`, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/Done/`; commit the docs separately and push to `origin`.
+
+## Completion
+
+Completed. Party system, VIP component, 11 inbound opcodes, and inventory persistence (Flyway V5) implemented and merged; full suite green. See `docs/missing-features.md` for updated coverage.

@@ -15,14 +15,14 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | Dimension | Coverage | Notes |
 |---|---|---|
 | Tracked gameplay features (56) | **100%** engine scope | `docs/game-play-features.md`; residual parity gaps per feature |
-| Inbound `ProtocolGame` opcodes | **~23%** (24 / ~105) | 81 opcodes unhandled (see §5) |
+| Inbound `ProtocolGame` opcodes | **~33%** (35 / ~105) | ~70 opcodes unhandled (see §5) |
 | Outbound `ProtocolGame` senders | **~8%** (~14 / ~180) | self-appear, map description, window serializers, core stats/skills/inventory/container/creature/text senders |
 | Lua bindings (`src/lua/functions/*`) | **~13%** (~169 / 1,310) | player (306), monster-type (101), game (59), item-type (57) mostly missing |
 | `Player` methods (`player.cpp`) | **~4%** (~33 / ~765) | inventory/skills/attributes/vocation/premium + more Lua primitives |
 | Monster engine (`monster.cpp`, 4k lines) | **~5%** | A* pathfinder + spawn engines ported; no targeting/loot runtime |
 | Map engine (`map.cpp`) | **~35%** | OTBM load + sectors + tiles + A*; no sight/canWalkTo/houses save |
 | Persistence (`iologindata*`, `iomapserialize`) | **~18%** | vitals/level/pos + feature state (V3/V4); no inventory/depot/spells/VIP/houses |
-| **Estimated full-parity completion** | **~30–35%** | weighted across the above; the 56 tracked features are engine-complete but the full Canary surface is far larger |
+| **Estimated full-parity completion** | **~32–37%** | weighted across the above; the 56 tracked features are engine-complete but the full Canary surface is far larger |
 
 ---
 
@@ -192,7 +192,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 1. **`Player` domain model** — ~14 Kotlin methods vs ~765 C++ (`player.cpp`).
 2. **No `Game` class** — `game.cpp` (13.1k lines, ~352 methods) has no counterpart.
-3. **Inbound protocol opcodes** — ~81 unhandled (trade `0x7D–0x80`, follow `0xA2`, party `0xA3–0xA8`, useItemEx `0x83`, containers `0x75/0x87/0x88/0x95`, outfit `0xD3/D4`, imbuements `0xB2/0xD5–0xD7`, prey `0xEB`, task hunting `0xBA`, bosstiary `0xAE–0xB0`, VIP `0xDC–0xDF`, depot `0x28/0x29/0x92–0x95`, modal `0xF9`, quest `0xF0/F1`, quick loot `0x8F–0x91`, …).
+3. **Inbound protocol opcodes** — ~70 unhandled (trade `0x7D–0x80`, follow `0xA2`, party `0xA3–0xA8`, useItemEx `0x83`, containers `0x75/0x87/0x88/0x95`, outfit `0xD3/D4`, imbuements `0xB2/0xD5–0xD7`, prey `0xEB`, task hunting `0xBA`, bosstiary `0xAE–0xB0`, VIP `0xDC–0xDF`, depot `0x28/0x29/0x92–0x95`, modal `0xF9`, quest `0xF0/F1`, quick loot `0x8F–0x91`, …).
 4. **Outbound serialization** — ~180 `sendX` methods missing (stats, skills, inventory, containers, creatures, trade, market, shop, houses, VIP, channels, cyclopedia).
 5. **Monster AI + pathfinding** — no A*, targeting, relevance, combat-intention; `monster.cpp` (4k lines) largely missing.
 6. **Spawn engines** — monster/NPC XML spawns, blocks, respawn timers.

@@ -228,10 +228,17 @@ All notable technical milestones, architectural transformations, feature impleme
 - **More outbound senders** — `CreatureWindowWriter` (health/outfit/speed/light/icons/magic-effect/…), `SocialWindowWriter` (trade/channels/VIP/houses/modal), `HighscoresWindowSerializer`.
 - **Lua bindings** — +11 `Game.*` and +23 `item:*` Canary methods with real domain delegation.
 
+### Phase 18: Party, VIP, Inbound Opcodes, Inventory Persistence (06:00 – 06:30)
+- **Party system** — full `Party` (leader/members, invite/join/leave/revoke, leader transfer, shared-exp split, shields).
+- **VIP system** — `PlayerVip` (entries/groups CRUD, status/icon, caps).
+- **Inbound opcodes** — trade `0x7D–0x80`, follow `0xA2`, containers `0x75/0x87/0x88/0x95`, outfit/mount `0xD3/0xD4`, use-item-ex `0x83` decoded and routed.
+- **Inventory persistence** — Flyway `V5__player_items.sql` + `JdbcPlayerItemsRepository` with Canary attribute serialization.
+- **Process** — `AGENTS.md` §6 now mandates a pre-wave plan doc in `docs/Plan/` (moved to `Done/` after the wave).
+
 ---
 
 ### Current Status
-- **Automated Tests**: **178 test suites / 1247 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **185 test suites / 1371 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.
