@@ -25,6 +25,7 @@ import org.opentibia.canary.creatures.vocations.Vocation
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.database.Database
 import org.opentibia.canary.database.PlayerLoginRepository
+import org.opentibia.canary.economy.market.MarketOfferType
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.game.movement.areInRange
 import org.opentibia.canary.game.movement.getDirectionTo
@@ -36,10 +37,16 @@ import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.game.zones.Zone
 import org.opentibia.canary.game.zones.ZoneType
+import org.opentibia.canary.io.HistoryMarketOffer
+import org.opentibia.canary.io.IOMarket
+import org.opentibia.canary.io.MarketOffer
 import org.opentibia.canary.items.BedItem
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
+import org.opentibia.canary.items.ITEM_CRYSTAL_COIN
+import org.opentibia.canary.items.ITEM_GOLD_COIN
+import org.opentibia.canary.items.ITEM_PLATINUM_COIN
 import org.opentibia.canary.items.Items
 import org.opentibia.canary.items.Thing
 import org.opentibia.canary.map.GameMap
@@ -243,6 +250,11 @@ class Game(
      * can drive the rate-limit windows.
      */
     private val otsysTimeMs: () -> Long = { System.currentTimeMillis() },
+    /**
+     * `IOMarket::getInstance()` (game.cpp:10297, 4078) seam for the market
+     * browse handlers and the average-price query.
+     */
+    private val ioMarket: IOMarket? = null,
 ) {
     private val players = mutableMapOf<Long, Player>()
 
@@ -647,6 +659,26 @@ class Game(
 
     /** `Game::motdHash` (game.hpp:941). */
     private var motdHash: String = ""
+
+    /**
+     * `Game::itemsPriceMap` (game.hpp:835) filled by `Game::loadItemsPrice`
+     * (game.cpp). The database loader is not ported, so hosts seed this map.
+     */
+    var itemsPriceMap: Map<Int, Map<Int, Long>> = emptyMap()
+
+    /** `Player::sendMarketBrowseItem(itemId, buyOffers, sellOffers, tier)` protocol seam (game.cpp:10302). */
+    var sendMarketBrowseItem: (Player, Int, List<MarketOffer>, List<MarketOffer>, Int) -> Unit =
+        { _, _, _, _, _ -> }
+
+    /** `Player::sendMarketDetail(itemId, tier)` protocol seam (game.cpp:10303). */
+    var sendMarketDetail: (Player, Int, Int) -> Unit = { _, _, _ -> }
+
+    /** `Player::sendMarketBrowseOwnOffers(buyOffers, sellOffers)` protocol seam (game.cpp:10318). */
+    var sendMarketBrowseOwnOffers: (Player, List<MarketOffer>, List<MarketOffer>) -> Unit = { _, _, _ -> }
+
+    /** `Player::sendMarketBrowseOwnHistory(buyOffers, sellOffers)` protocol seam (game.cpp:10333). */
+    var sendMarketBrowseOwnHistory: (Player, List<HistoryMarketOffer>, List<HistoryMarketOffer>) -> Unit =
+        { _, _, _ -> }
 
     /** `Game::addPlayer` (src/game/game.cpp:11624). */
     fun addPlayer(player: Player) {
@@ -4035,6 +4067,150 @@ class Game(
     fun playerLeaveMarket(playerId: Long) {
         val player = getPlayerByID(playerId) ?: return
         player.setInMarket(false)
+    }
+
+    /**
+     * `Game::playerBrowseMarket` (src/game/game.cpp:10282): only players inside
+     * the market may browse, unknown items resolve to the empty
+     * `Item::items[0]` entry, items without `wareId` are not marketable, and a
+     * successful browse sends the active buy/sell offers plus the detail.
+     */
+    fun playerBrowseMarket(playerId: Long, itemId: Int, tier: Int) {
+        val player = getPlayerByID(playerId) ?: return
+
+        if (!player.isInMarket()) {
+            return
+        }
+
+        val itemType = itemTypes?.get(itemId) ?: return
+        if (itemType.id == 0) {
+            return
+        }
+
+        if (itemType.wareId == 0) {
+            return
+        }
+
+        val market = ioMarket ?: return
+        val buyOffers = market.getActiveOffers(MarketOfferType.Buy, itemType.id, tier)
+        val sellOffers = market.getActiveOffers(MarketOfferType.Sell, itemType.id, tier)
+        sendMarketBrowseItem(player, itemType.id, buyOffers, sellOffers, tier)
+        sendMarketDetail(player, itemType.id, tier)
+    }
+
+    /** `Game::playerBrowseMarketOwnOffers` (src/game/game.cpp:10307): own buy/sell offers of a player inside the market. */
+    fun playerBrowseMarketOwnOffers(playerId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+
+        if (!player.isInMarket()) {
+            return
+        }
+
+        val market = ioMarket ?: return
+        val buyOffers = market.getOwnOffers(MarketOfferType.Buy, player.getGUID())
+        val sellOffers = market.getOwnOffers(MarketOfferType.Sell, player.getGUID())
+        sendMarketBrowseOwnOffers(player, buyOffers, sellOffers)
+    }
+
+    /** `Game::playerBrowseMarketOwnHistory` (src/game/game.cpp:10322): own buy/sell history of a player inside the market. */
+    fun playerBrowseMarketOwnHistory(playerId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+
+        if (!player.isInMarket()) {
+            return
+        }
+
+        val market = ioMarket ?: return
+        val buyOffers = market.getOwnHistory(MarketOfferType.Buy, player.getGUID())
+        val sellOffers = market.getOwnHistory(MarketOfferType.Sell, player.getGUID())
+        sendMarketBrowseOwnHistory(player, buyOffers, sellOffers)
+    }
+
+    /**
+     * `Game::getItemMarketPrice` (src/game/game.cpp:4027): gold/platinum/crystal
+     * coins convert at 1/100/10000, a tier-0 `itemsPriceMap` entry wins over the
+     * NPC buy/sell price, and unknown items contribute nothing.
+     */
+    fun getItemMarketPrice(itemMap: Map<Int, Long>, buyPrice: Boolean): Long {
+        var total = 0L
+
+        for ((itemId, count) in itemMap) {
+            when (itemId) {
+                ITEM_GOLD_COIN -> {
+                    total += count
+                    continue
+                }
+
+                ITEM_PLATINUM_COIN -> {
+                    total += 100 * count
+                    continue
+                }
+
+                ITEM_CRYSTAL_COIN -> {
+                    total += 10000 * count
+                    continue
+                }
+            }
+
+            val marketPrice = itemsPriceMap[itemId]?.get(0)
+            if (marketPrice != null) {
+                total += marketPrice * count
+                continue
+            }
+
+            val itemType = itemTypes?.get(itemId)
+            val npcPrice = if (itemType != null) {
+                if (buyPrice) itemType.buyPrice else itemType.sellPrice
+            } else {
+                0L
+            }
+            total += npcPrice * count
+        }
+
+        return total
+    }
+
+    /**
+     * `Game::getItemMarketAveragePrice` (src/game/game.cpp:4078): the fixed coin
+     * values, otherwise the `IOMarket` statistics averages blended with the
+     * `(purchase & sale) + ((purchase ^ sale) >> 1)` formula.
+     */
+    fun getItemMarketAveragePrice(itemId: Int, tier: Int): Long {
+        if (itemId == ITEM_GOLD_COIN) {
+            return 1
+        }
+        if (itemId == ITEM_PLATINUM_COIN) {
+            return 100
+        }
+        if (itemId == ITEM_CRYSTAL_COIN) {
+            return 10000
+        }
+
+        val snapshot = ioMarket?.getStatistics(itemId, tier) ?: return 0
+
+        var purchaseAverage = 0L
+        var saleAverage = 0L
+        var hasPurchaseData = false
+        var hasSaleData = false
+
+        val purchase = snapshot.purchase
+        if (purchase != null && purchase.numTransactions > 0) {
+            purchaseAverage = purchase.totalPrice / purchase.numTransactions
+            hasPurchaseData = true
+        }
+
+        val sale = snapshot.sale
+        if (sale != null && sale.numTransactions > 0) {
+            saleAverage = sale.totalPrice / sale.numTransactions
+            hasSaleData = true
+        }
+
+        return when {
+            hasPurchaseData && hasSaleData -> (purchaseAverage and saleAverage) + ((purchaseAverage xor saleAverage) shr 1)
+            hasPurchaseData -> purchaseAverage
+            hasSaleData -> saleAverage
+            else -> 0
+        }
     }
 
     /** `Game::playerCloseImbuementWindow` (src/game/game.cpp:7178). */
