@@ -2,7 +2,13 @@ package org.opentibia.canary.creatures
 
 import org.opentibia.canary.account.Account
 import org.opentibia.canary.account.getTimeNow
+import org.opentibia.canary.combat.condition.Condition
+import org.opentibia.canary.combat.condition.ConditionId
+import org.opentibia.canary.combat.condition.ConditionTarget
+import org.opentibia.canary.combat.condition.ConditionType
+import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.grouping.Group
+import org.opentibia.canary.creatures.grouping.Party
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.creatures.vocations.Vocation
@@ -41,6 +47,191 @@ abstract class Creature(
 
     fun addHealth(amount: Int) {
         health = kotlin.math.min(maxHealth, health + amount)
+    }
+
+    /** `Creature::skull` (creature.hpp:925), default `SKULL_NONE`. */
+    private var skull: Skulls_t = Skulls_t.SKULL_NONE
+
+    /** `Creature::getSkull` (creature.hpp:168-170). */
+    open fun getSkull(): Skulls_t = skull
+
+    /**
+     * `Creature::setSkull` (creature.cpp:100-103); the
+     * `g_game().updateCreatureSkull` broadcast is a world side effect that lands
+     * with the protocol senders.
+     */
+    fun setSkull(newSkull: Skulls_t) {
+        skull = newSkull
+    }
+
+    /** `Creature::conditions` (creature.hpp:843) — kept in insertion order. */
+    private val conditionList = mutableListOf<Condition>()
+
+    /** Read-only view of the stored conditions for inspecting systems. */
+    val conditions: List<Condition> get() = conditionList
+
+    /**
+     * `OTSYS_TIME()` millisecond clock. Injected per AGENTS.md 1.1 so condition
+     * lifetime checks are deterministic; conditions keep the clock they were
+     * created with.
+     */
+    open var now: () -> Long = { System.currentTimeMillis() }
+
+    /**
+     * `Creature::getCreature()` self-view handed to the condition engine.
+     * Injected per AGENTS.md 1.1: when null, conditions still attach, tick and
+     * expire, but engine side effects (healing, speed, icons) are skipped.
+     */
+    open var conditionTarget: ConditionTarget? = null
+
+    /**
+     * `Creature::addCondition` (creature.cpp:1372-1395). A condition with the
+     * same `(type, id, subId)` already stored is refreshed through the stored
+     * instance; otherwise it must `startCondition` before it is retained.
+     */
+    fun addCondition(condition: Condition?, attackerPlayer: Boolean = false): Boolean {
+        if (condition == null) {
+            return false
+        }
+
+        val type = condition.type
+        if (isSuppress(type, attackerPlayer)) {
+            return false
+        }
+
+        val prevCond = getCondition(type, condition.id, condition.subId)
+        if (prevCond != null) {
+            prevCond.addCondition(conditionTarget, condition)
+            return true
+        }
+
+        if (condition.startCondition(conditionTarget)) {
+            conditionList.add(condition)
+            onAddCondition(type)
+            return true
+        }
+
+        return false
+    }
+
+    /**
+     * `Creature::isSuppress` (creature.hpp:525-527) — the base creature never
+     * suppresses. `Player::isSuppress` suppression counts and the
+     * `MIN_DELAY_BETWEEN_CONDITIONS` gate (player.cpp:356-364) are not ported
+     * (PARITY GAP).
+     */
+    open fun isSuppress(type: ConditionType, attackerPlayer: Boolean): Boolean = false
+
+    /**
+     * `Creature::onAddCondition` (creature.cpp:1216-1222): haste and paralyze
+     * are mutually exclusive.
+     */
+    open fun onAddCondition(type: ConditionType) {
+        if (type == ConditionType.CONDITION_PARALYZE && hasCondition(ConditionType.CONDITION_HASTE)) {
+            removeCondition(ConditionType.CONDITION_HASTE)
+        } else if (type == ConditionType.CONDITION_HASTE && hasCondition(ConditionType.CONDITION_PARALYZE)) {
+            removeCondition(ConditionType.CONDITION_PARALYZE)
+        }
+    }
+
+    /** `Creature::onEndCondition` (creature.cpp:1228-1230) — base no-op hook. */
+    open fun onEndCondition(type: ConditionType) {
+        // No behaviour.
+    }
+
+    /** `Creature::removeCondition(type)` (creature.cpp:1412-1433). */
+    fun removeCondition(type: ConditionType) {
+        val iterator = conditionList.iterator()
+        while (iterator.hasNext()) {
+            val condition = iterator.next()
+            if (condition.type != type) {
+                continue
+            }
+
+            iterator.remove()
+            condition.endCondition(conditionTarget)
+            onEndCondition(type)
+        }
+    }
+
+    /**
+     * `Creature::removeCondition(type, conditionId, force)` (creature.cpp:1435-1467).
+     *
+     * The Canary paralysed walk-delay reschedule (`g_dispatcher().scheduleEvent`,
+     * 1450-1458) is not ported, so removal always applies immediately; `force`
+     * is kept for signature parity (PARITY GAP).
+     */
+    fun removeCondition(conditionType: ConditionType, conditionId: ConditionId, force: Boolean = false) {
+        val iterator = conditionList.iterator()
+        while (iterator.hasNext()) {
+            val condition = iterator.next()
+            if (condition.type != conditionType || condition.id != conditionId) {
+                continue
+            }
+
+            iterator.remove()
+            condition.endCondition(conditionTarget)
+            onEndCondition(conditionType)
+        }
+    }
+
+    /** `Creature::removeCondition(condition)` (creature.cpp:1486-1498). */
+    fun removeCondition(condition: Condition) {
+        if (!conditionList.remove(condition)) {
+            return
+        }
+
+        condition.endCondition(conditionTarget)
+        onEndCondition(condition.type)
+    }
+
+    /** `Creature::getCondition(type)` (creature.cpp:1500-1511). */
+    fun getCondition(type: ConditionType): Condition? = conditionList.firstOrNull { it.type == type }
+
+    /** `Creature::getCondition(type, conditionId, subId)` (creature.cpp:1513-1525). */
+    fun getCondition(type: ConditionType, conditionId: ConditionId, subId: Int = 0): Condition? =
+        conditionList.firstOrNull { it.type == type && it.id == conditionId && it.subId == subId }
+
+    /** `Creature::getConditionsByType(type)` (creature.cpp:1551-1563). */
+    fun getConditionsByType(type: ConditionType): List<Condition> =
+        conditionList.filter { it.type == type }
+
+    /**
+     * `Creature::executeConditions(interval)` (creature.cpp:1565-1583). Every
+     * stored condition ticks; a rejected tick ends and drops it.
+     */
+    fun executeConditions(interval: Int) {
+        val iterator = conditionList.iterator()
+        while (iterator.hasNext()) {
+            val condition = iterator.next()
+            if (!condition.executeCondition(conditionTarget, interval)) {
+                iterator.remove()
+                condition.endCondition(conditionTarget)
+                onEndCondition(condition.type)
+            }
+        }
+    }
+
+    /** `Creature::hasCondition(type, subId)` (creature.cpp:1585-1605). */
+    fun hasCondition(type: ConditionType, subId: Int = 0): Boolean {
+        if (isSuppress(type, false)) {
+            return false
+        }
+
+        val timeNow = now()
+        return conditionList.any {
+            it.type == type && it.subId == subId && (it.endTime >= timeNow || it.ticks == -1)
+        }
+    }
+
+    /**
+     * `Creature::onThink` (creature.cpp:128-172) folded with the condition tick
+     * `Game::checkCreatures` performs on the creature right after it
+     * (game.cpp:7726-7733). The follow/block/scripting steps of the C++ body
+     * belong to their own subsystems in this port.
+     */
+    open fun onThink(interval: Int) {
+        executeConditions(interval)
     }
 }
 
@@ -160,6 +351,117 @@ class Player(
 
     /** `Player::isAccessPlayer()` (player.cpp:7524). */
     fun isAccessPlayer(): Boolean = group?.access ?: false
+
+    /** `Player::m_party` (player.hpp:1767). */
+    private var mParty: Party? = null
+
+    /**
+     * `Player::setParty` (player.cpp:1038-1045); the
+     * `ExpertPvp::refreshAllVisibleSituationMarks()` side effect is not ported.
+     */
+    fun setParty(newParty: Party?) {
+        if (mParty === newParty) {
+            return
+        }
+        mParty = newParty
+    }
+
+    /** `Player::getParty` (player.cpp:1047-1049). */
+    fun getParty(): Party? = mParty
+
+    /**
+     * `Player::hasFlag` (player.cpp:7853-7855) — port of the group flag lookup.
+     * Canary resolves flags from `Group::flags` (`groups.hpp:16`); the port's
+     * [Group] does not model the array yet, so the flags are held on the player.
+     */
+    private val playerFlags = mutableSetOf<PlayerFlags_t>()
+
+    /** `Player::hasFlag` (player.cpp:7853-7855). */
+    fun hasFlag(flag: PlayerFlags_t): Boolean = flag in playerFlags
+
+    /** `Player::setFlag` (player.cpp:7857-7859). */
+    fun setFlag(flag: PlayerFlags_t) {
+        playerFlags.add(flag)
+    }
+
+    /** `Player::removeFlag` (player.cpp:7861-7863). */
+    fun removeFlag(flag: PlayerFlags_t) {
+        playerFlags.remove(flag)
+    }
+
+    /** `Player::getSkull` (player.cpp:7116-7121): `NotGainInFight` hides the skull. */
+    override fun getSkull(): Skulls_t =
+        if (hasFlag(PlayerFlags_t.NotGainInFight)) Skulls_t.SKULL_NONE else super.getSkull()
+
+    /** `Player::magLevel` (player.hpp:1787). */
+    var magLevel: Int = 0
+
+    /** `Player::varStats[STAT_LAST + 1]` (player.hpp:1802). */
+    val varStats = IntArray(Stat.LAST + 1)
+
+    /** `Player::setVarStats` (player.cpp:1251-1253) — accumulates the modifier. */
+    fun setVarStats(stat: Stat, modifier: Int) {
+        varStats[stat.value] += modifier
+    }
+
+    /** `Player::getBaseMagicLevel` (player.hpp:585-587). */
+    fun getBaseMagicLevel(): Int = magLevel
+
+    /**
+     * `Player::getMagicLevel` (player.cpp:7420-7427):
+     * `max(0, getLoyaltyMagicLevel() + varStats[STAT_MAGICPOINTS])`. The Wheel
+     * of Destiny and weapon-proficiency terms are unported subsystems
+     * (PARITY GAP).
+     */
+    fun getMagicLevel(): Int = maxOf(0, getLoyaltyMagicLevel() + varStats[Stat.STAT_MAGICPOINTS.value])
+
+    /**
+     * `Player::getLoyaltyMagicLevel` (player.cpp:7429-7455). The account loyalty
+     * bonus and `manaSpent` progression are not ported (PARITY GAP); without a
+     * loyalty bonus Canary's loop cannot advance either, so the base magic level
+     * is returned.
+     */
+    fun getLoyaltyMagicLevel(): Int = magLevel
+
+    /**
+     * `Item::items[id].weaponType` lookup (`Item::getWeaponType`, src/items/item.hpp:340).
+     * `ItemType` has no weapon classification in this port yet, so per
+     * AGENTS.md 1.1 the lookup is injected; unwired, every item resolves
+     * `WEAPON_NONE`.
+     */
+    var weaponTypeProvider: (Int) -> WeaponType_t = { _ -> WeaponType_t.WEAPON_NONE }
+
+    /** `Player::getWeaponId` (player.cpp:396-403). */
+    fun getWeaponId(ignoreAmmo: Boolean = false): Int = getWeapon(ignoreAmmo)?.id ?: 0
+
+    /** `Player::getWeapon(ignoreAmmo)` (player.cpp:453-464) — left hand first. */
+    fun getWeapon(ignoreAmmo: Boolean = false): Item? =
+        getWeapon(Slots_t.CONST_SLOT_LEFT, ignoreAmmo) ?: getWeapon(Slots_t.CONST_SLOT_RIGHT, ignoreAmmo)
+
+    /**
+     * `Player::getWeapon(slot, ignoreAmmo)` (player.cpp:405-424). Shields and
+     * ammo are never weapons.
+     */
+    fun getWeapon(slot: Slots_t, ignoreAmmo: Boolean = false): Item? {
+        val item = getInventoryItem(slot) ?: return null
+        val weaponType = weaponTypeProvider(item.id)
+        if (weaponType == WeaponType_t.WEAPON_NONE ||
+            weaponType == WeaponType_t.WEAPON_SHIELD ||
+            weaponType == WeaponType_t.WEAPON_AMMO
+        ) {
+            return null
+        }
+
+        if (!ignoreAmmo &&
+            (weaponType == WeaponType_t.WEAPON_DISTANCE || weaponType == WeaponType_t.WEAPON_MISSILE)
+        ) {
+            // `getQuiverAmmoOfType` (player.cpp:436-451) is not ported (PARITY
+            // GAP): Canary returns the matching quiver ammo here, the port
+            // returns the equipped weapon itself.
+        }
+
+        return item
+    }
 
     /** `Player::inventory[CONST_SLOT_LAST + 1]` (player.hpp:1763). */
     private val inventory = arrayOfNulls<Item>(Slots_t.LAST + 1)
