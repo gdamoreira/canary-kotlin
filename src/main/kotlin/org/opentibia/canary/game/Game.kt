@@ -107,6 +107,12 @@ data class HighscoreCategory(
  *    `checkLight` (game.cpp:9402)
  *  - `sendSingleSoundEffect` (game.cpp:7833) / `sendDoubleSoundEffect` (game.cpp:7853)
  *  - `playerStopAutoWalk` (game.cpp:4567)
+ *  - trade window (`playerRequestTrade` game.cpp:5797, `internalStartTrade` game.cpp:5951,
+ *    `playerAcceptTrade` game.cpp:5986, `getTradeErrorDescription` game.cpp:6088,
+ *    `playerLookInTrade` game.cpp:6119, `playerCloseTrade` game.cpp:6178,
+ *    `internalCloseTrade` game.cpp:6187)
+ *  - shop (`playerBuyItem` game.cpp:6228, `playerSellItem` game.cpp:6284,
+ *    `playerCloseShop` game.cpp:6319, `getInteractableShopOwner` game.cpp:196)
  *  - party family (`playerInviteToParty` game.cpp:9657 … `playerEnableSharedPartyExperience`
  *    game.cpp:9778)
  *  - `checkCreatures` (game.cpp:7719)
