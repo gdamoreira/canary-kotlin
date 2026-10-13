@@ -5,54 +5,203 @@ import org.opentibia.canary.io.PropWriteStream
 import org.opentibia.canary.map.house.Door
 
 data class ItemType(
-    val id: Int,
-    val name: String,
-    val isStackable: Boolean = false,
-    val isContainer: Boolean = false,
-    val capacity: Int = 0,
-    val weight: Double = 0.0,
+    var id: Int,
+    var name: String,
+    var isStackable: Boolean = false,
+    var isContainer: Boolean = false,
+    var capacity: Int = 0,
+    var weight: Double = 0.0,
     /** Mirrors `ItemType::upgradeClassification` (src/items/items.hpp:329). */
-    val upgradeClassification: Int = 0,
-    val isPickupable: Boolean = true,
+    var upgradeClassification: Int = 0,
+    var isPickupable: Boolean = true,
     /** Mirrors `ItemType::magicEffect` (src/items/items.hpp:318); default `CONST_ME_NONE` (0). */
-    val magicEffect: Int = 0,
+    var magicEffect: Int = 0,
     /** `ItemType::movable` (src/items/items.hpp:288), the house-serialization guard. */
-    val isMovable: Boolean = false,
+    var isMovable: Boolean = false,
     /** `ItemType::isBed()` (src/items/items.hpp:378). */
-    val isBed: Boolean = false,
+    var isBed: Boolean = false,
     /** `ItemType::bedPartOf` (src/items/items.hpp:468), the partner id `BedItem::isBedComplete` checks. */
-    val bedPartOf: Int = 0,
+    var bedPartOf: Int = 0,
     /** `ItemType::isCarpet()` (src/items/items.hpp:420). */
-    val isCarpet: Boolean = false,
+    var isCarpet: Boolean = false,
     /** `ItemType::isTrashHolder()` (src/items/items.hpp:410). */
-    val isTrashHolder: Boolean = false,
+    var isTrashHolder: Boolean = false,
     /** `ItemType::isDoor()` (src/items/items.hpp:414). */
-    val isDoor: Boolean = false,
+    var isDoor: Boolean = false,
     /** `ItemType::isWrappable()` (src/items/items.hpp:411). */
-    val isWrappable: Boolean = false,
+    var isWrappable: Boolean = false,
     /** `ItemType::canWriteText` (src/items/items.hpp:342). */
-    val canWriteText: Boolean = false,
+    var canWriteText: Boolean = false,
     /** `ItemType::m_transformOnUse` (src/items/items.hpp:347). */
-    val transformOnUse: Int = 0,
+    var transformOnUse: Int = 0,
     /** `ItemType::isFluidContainer()` (src/items/items.hpp:416). */
-    val isFluidContainer: Boolean = false,
+    var isFluidContainer: Boolean = false,
     /** `ItemType::isSplash()` (src/items/items.hpp:417). */
-    val isSplash: Boolean = false,
+    var isSplash: Boolean = false,
     /** `ItemType::isGroundTile()` (src/items/items.hpp:407). */
-    val isGroundTile: Boolean = false,
+    var isGroundTile: Boolean = false,
     /** `ItemType::charges` (src/items/items.hpp:290), used by `getSubType`/`setSubType`. */
-    val charges: Int = 0,
-)
+    var charges: Int = 0,
+    /** `ItemType::group` (src/items/items.hpp:262), default `ITEM_GROUP_NONE`. */
+    var group: ItemGroup_t = ItemGroup_t.ITEM_GROUP_NONE,
+    /** `ItemType::type` (src/items/items.hpp:263), default `ITEM_TYPE_NONE`. */
+    var type: ItemTypes_t = ItemTypes_t.ITEM_TYPE_NONE,
+    /** `ItemType::description` (src/items/items.hpp:269). */
+    var description: String = "",
+    /** `ItemType::article` (src/items/items.hpp:267). */
+    var article: String = "",
+    /** `ItemType::pluralName` (src/items/items.hpp:268). */
+    var pluralName: String = "",
+    /** `ItemType::showCount` (src/items/items.hpp:375), Canary's default is true. */
+    var showCount: Boolean = true,
+    /** `ItemType::animationType` (src/items/items.hpp:302). */
+    var animationType: ItemAnimation_t = ItemAnimation_t.ANIMATION_NONE,
+    /** `ItemType::alwaysOnTopOrder` (src/items/items.hpp:330). */
+    var alwaysOnTopOrder: Int = 0,
+    /** `ItemType::slotPosition` (src/items/items.hpp:312), default `SLOTP_HAND` (48). */
+    var slotPosition: Int = Items.SLOTP_HAND,
+    /** `ItemType::lightLevel` (src/items/items.hpp:331). */
+    var lightLevel: Int = 0,
+    /** `ItemType::lightColor` (src/items/items.hpp:332). */
+    var lightColor: Int = 0,
+    /** `ItemType::speed` (src/items/items.hpp:313). */
+    var speed: Int = 0,
+    /** `ItemType::wareId` (src/items/items.hpp:314). */
+    var wareId: Int = 0,
+    /** `ItemType::isCorpse` (src/items/items.hpp:378). */
+    var isCorpse: Boolean = false,
+    /** `ItemType::forceUse` (src/items/items.hpp:349). */
+    var forceUse: Boolean = false,
+    /** `ItemType::hasHeight` (src/items/items.hpp:350). */
+    var hasHeight: Boolean = false,
+    /** `ItemType::blockSolid` (src/items/items.hpp:352). */
+    var blockSolid: Boolean = false,
+    /** `ItemType::blockProjectile` (src/items/items.hpp:354). */
+    var blockProjectile: Boolean = false,
+    /** `ItemType::blockPathFind` (src/items/items.hpp:355). */
+    var blockPathFind: Boolean = false,
+    /** `ItemType::rotatable` (src/items/items.hpp:361). */
+    var rotatable: Boolean = false,
+    /** `ItemType::wrapContainer` (src/items/items.hpp:363). */
+    var wrapContainer: Boolean = false,
+    /** `ItemType::wrapableTo` (src/items/items.hpp:297). */
+    var wrapableTo: Int = 0,
+    /** `ItemType::wrapable` (src/items/items.hpp:362). */
+    var wrapable: Boolean = false,
+    /** `ItemType::multiUse` (src/items/items.hpp:364). */
+    var multiUse: Boolean = false,
+    /** `ItemType::canReadText` (src/items/items.hpp:366). */
+    var canReadText: Boolean = false,
+    /** `ItemType::isVertical` (src/items/items.hpp:368). */
+    var isVertical: Boolean = false,
+    /** `ItemType::isHorizontal` (src/items/items.hpp:369). */
+    var isHorizontal: Boolean = false,
+    /** `ItemType::isHangable` (src/items/items.hpp:370). */
+    var isHangable: Boolean = false,
+    /** `ItemType::lookThrough` (src/items/items.hpp:372). */
+    var lookThrough: Boolean = false,
+    /** `ItemType::isPodium` (src/items/items.hpp:377). */
+    var isPodium: Boolean = false,
+    /** `ItemType::wearOut` (src/items/items.hpp:344). */
+    var wearOut: Boolean = false,
+    /** `ItemType::clockExpire` (src/items/items.hpp:345). */
+    var clockExpire: Boolean = false,
+    /** `ItemType::expire` (src/items/items.hpp:346). */
+    var expire: Boolean = false,
+    /** `ItemType::expireStop` (src/items/items.hpp:347). */
+    var expireStop: Boolean = false,
+    /** `ItemType::isWrapKit` (src/items/items.hpp:381). */
+    var isWrapKit: Boolean = false,
+    /** `ItemType::isDualWielding` (src/items/items.hpp:385). */
+    var isDualWielding: Boolean = false,
+    /** `ItemType::proficiencyId` (src/items/items.hpp:337). */
+    var proficiencyId: Int = 0,
+    /** `ItemType::m_isMagicShieldPotion` (src/items/items.hpp:386). */
+    var isMagicShieldPotion: Boolean = false,
+    /** `ItemType::loaded` (src/items/items.hpp:379). */
+    var loaded: Boolean = false,
+    /** `ItemType::weaponType` (src/items/items.hpp:321), default `WEAPON_NONE` (0). */
+    var weaponType: Int = Items.WEAPON_NONE,
+    /** `ItemType::ammoType` (src/items/items.hpp:322), default `AMMO_NONE` (0). */
+    var ammoType: Int = Items.AMMO_NONE,
+    /** `ItemType::attack` (src/items/items.hpp:289). */
+    var attack: Int = 0,
+    /** `ItemType::defense` (src/items/items.hpp:290). */
+    var defense: Int = 0,
+    /** `ItemType::extraDefense` (src/items/items.hpp:291). */
+    var extraDefense: Int = 0,
+    /** `ItemType::armor` (src/items/items.hpp:292). */
+    var armor: Int = 0,
+    /** `ItemType::transformToFree` (src/items/items.hpp:305). */
+    var transformToFree: Int = 0,
+    /** `ItemType::transformToOnUse[2]` (src/items/items.hpp:304), index 0 female, 1 male. */
+    var transformToOnUse: List<Int> = listOf(0, 0),
+    /** `ItemType::augments` (src/items/items.hpp:341). */
+    var augments: MutableList<AugmentInfo> = mutableListOf(),
+    /** `ItemType::imbuementTypes` (src/items/items.hpp:327). */
+    var imbuementTypes: MutableMap<ImbuementTypes_t, Int> = mutableMapOf(),
+) {
 
-class ItemTypeRegistry {
-    private val types = mutableMapOf<Int, ItemType>()
+    /** `ItemType::parseAugmentDescription` (src/items/items.cpp:82-97). */
+    fun parseAugmentDescription(inspect: Boolean = false): String {
+        if (augments.isEmpty()) {
+            return ""
+        }
 
-    fun register(itemType: ItemType) {
-        types[itemType.id] = itemType
+        val descriptions = augments.joinToString(", ") { getFormattedAugmentDescription(it) }
+        return if (inspect) {
+            "$descriptions."
+        } else {
+            "\nAugments: ($descriptions)."
+        }
     }
 
-    fun get(id: Int): ItemType? = types[id]
+    /** `ItemType::getFormattedAugmentDescription` (src/items/items.cpp:99-116). */
+    fun getFormattedAugmentDescription(augmentInfo: AugmentInfo): String {
+        val augmentName = Items.getAugmentNameByType(augmentInfo.type)
+        val augmentSpellNameCapitalized = capitalizeWordsIgnoringString(augmentInfo.spellName, " of ")
+
+        val signal = if (augmentInfo.value > 0) '-' else '+'
+
+        if (Items.isAugmentWithoutValueDescription(augmentInfo.type)) {
+            return "$augmentSpellNameCapitalized -> $augmentName"
+        }
+        if (augmentInfo.type == Augment_t.Cooldown) {
+            return "$augmentSpellNameCapitalized -> $signal${augmentInfo.value / 1000}s $augmentName"
+        }
+        return "$augmentSpellNameCapitalized -> ${signedPercent(augmentInfo.value)}% $augmentName"
+    }
+
+    /** `ItemType::addAugment` (src/items/items.cpp:118-121). */
+    fun addAugment(spellName: String, augmentType: Augment_t, value: Int) {
+        augments.add(AugmentInfo(spellName, augmentType, value))
+    }
+
+    /** `ItemType::setImbuementType` (src/items/items.cpp:123-125). */
+    fun setImbuementType(imbuementType: ImbuementTypes_t, slotMaxTier: Int) {
+        imbuementTypes[imbuementType] = minOf(Items.IMBUEMENT_MAX_TIER, slotMaxTier)
+    }
+
+    /** `ItemType::triggerExhaustion` (src/items/items.cpp:127-129). */
+    fun triggerExhaustion(): Boolean =
+        type == ItemTypes_t.ITEM_TYPE_RUNE ||
+            (type == ItemTypes_t.ITEM_TYPE_POTION && !isMagicShieldPotion)
+
+    /** `ItemType::getPluralName` (src/items/items.hpp:239-253). */
+    @JvmName("getPluralNameValue")
+    fun getPluralName(): String {
+        if (pluralName.isNotEmpty()) {
+            return pluralName
+        }
+        if (!showCount) {
+            return name
+        }
+        return name + "s"
+    }
 }
+
+/** `fmt::format("{:+}", value)` for the int32 augment value. */
+private fun signedPercent(value: Int): String = if (value >= 0) "+$value" else "$value"
 
 /**
  * Mirrors Canary `ItemAttribute_t` (src/enums/item_attribute.hpp:12) with the exact
