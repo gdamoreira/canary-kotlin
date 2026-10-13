@@ -2,12 +2,13 @@ package org.opentibia.canary.items
 
 import org.opentibia.canary.io.PropStream
 import org.opentibia.canary.io.PropWriteStream
+import org.opentibia.canary.map.house.House
 
 /**
  * Port of the serialization and sleeper state of `BedItem`
- * (src/items/bed.hpp:16-52, src/items/bed.cpp:26-95). `wakeUp`/`sleep`/
- * `trySleep` and `getNextBedItem` need the game engine and remain in
- * `IOMapSerialize`'s seams (PARITY GAP).
+ * (src/items/bed.hpp:16-52, src/items/bed.cpp:26-95). The lifecycle methods
+ * (`trySleep`/`sleep`/`wakeUp`/`regeneratePlayer`/`updateAppearance`) live in
+ * `Bed.kt` and take the injected [BedWorld] seam.
  */
 class BedItem(
     id: Int,
@@ -27,6 +28,15 @@ class BedItem(
         }
 
     override fun getBed(): BedItem = this
+
+    /** `BedItem::house` (src/items/bed.hpp:60). */
+    var house: House? = null
+        private set
+
+    /** `BedItem::setHouse` (src/items/bed.hpp:36-38). */
+    fun setHouse(h: House) {
+        house = h
+    }
 
     /** `BedItem::getSleeper` (src/items/bed.hpp:34). */
     fun getSleeper(): Long = sleeperGUID
@@ -67,11 +77,14 @@ class BedItem(
         }
     }
 
-    /** `BedItem::forceClearSleeper` (src/items/bed.cpp:26-36); `g_game().removeBedSleeper` is a PARITY GAP. */
+    /**
+     * `BedItem::forceClearSleeper` (src/items/bed.cpp:26-36). The
+     * `g_game().removeBedSleeper`/`updateAppearance` half is the
+     * `Bed.kt` extension taking a `BedWorld`; this state-only overload remains
+     * for the `IOMapSerialize` bed-fix path.
+     */
     fun forceClearSleeper() {
-        sleeperGUID = 0
-        sleepStart = 0
-        setAttribute(ItemAttribute.DESCRIPTION, "Nobody is sleeping there.")
+        internalRemoveSleeper()
     }
 
     /** `BedItem::isBedComplete` (src/items/bed.cpp:135-149). */

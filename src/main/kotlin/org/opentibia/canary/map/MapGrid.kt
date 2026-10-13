@@ -33,11 +33,13 @@ class Tile(val position: Position) : Cylinder {
 
     fun addItem(item: Item) {
         _items.add(item)
+        item.parent = this
     }
 
     /** `Tile::internalAddThing` — insert bypassing the query checks. */
     override fun internalAddThing(item: Item) {
         _items.add(item)
+        item.parent = this
     }
 
     /** `Tile::isHouse` (src/items/tile.hpp). */
@@ -47,7 +49,11 @@ class Tile(val position: Position) : Cylinder {
     fun isEmpty(): Boolean = ground == null && _items.isEmpty() && !isHouse()
 
     fun removeItem(item: Item): Boolean {
-        return _items.remove(item)
+        val removed = _items.remove(item)
+        if (removed) {
+            item.parent = null
+        }
+        return removed
     }
 }
 

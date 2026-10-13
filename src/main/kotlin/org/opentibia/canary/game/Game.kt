@@ -794,6 +794,7 @@ class Game(
     private fun removeThing(tile: Tile, item: Item, count: Int) {
         if (item === tile.ground) {
             tile.ground = null
+            item.parent = null
             itemParents.remove(item)
             return
         }
@@ -802,6 +803,7 @@ class Game(
             item.count = maxOf(0, item.count - count)
         } else {
             tile.removeItem(item)
+            item.parent = null
             itemParents.remove(item)
         }
     }

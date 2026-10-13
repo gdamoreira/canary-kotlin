@@ -2,6 +2,7 @@ package org.opentibia.canary.map.house
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.io.PropStream
 import org.opentibia.canary.io.PropWriteStream
 import org.opentibia.canary.items.ATTR_HOUSEDOORID
@@ -22,6 +23,14 @@ const val GUEST_LIST: Int = 0x100
 
 /** `SUBOWNER_LIST` (`src/map/map_definitions.hpp:15`). */
 const val SUBOWNER_LIST: Int = 0x101
+
+/** `AccessHouseLevel_t` (`src/map/map_definitions.hpp:18-23`). */
+enum class AccessHouseLevel(val value: Int) {
+    HOUSE_NOT_INVITED(0),
+    HOUSE_GUEST(1),
+    HOUSE_SUBOWNER(2),
+    HOUSE_OWNER(3),
+}
 
 /** `NETWORKMESSAGE_PLAYERNAME_MAXLENGTH` (src/utils/const.hpp:15). */
 private const val PLAYERNAME_MAX_LENGTH = 30
@@ -344,6 +353,39 @@ class House internal constructor(
         if (owner != 0L && player.id == owner) return true
         val name = player.name.lowercase()
         return subOwnerList.isInList(name) || guestList.isInList(name)
+    }
+
+    /**
+     * `House::getHouseAccessLevel` (src/map/house/house.cpp:183-210). The
+     * `HOUSE_OWNED_BY_ACCOUNT` config lookup of `house.cpp:189` is an injected
+     * parameter (AGENTS.md 1.1), defaulting to the disabled config value.
+     */
+    fun getHouseAccessLevel(player: Player?, houseOwnedByAccount: Boolean = false): AccessHouseLevel {
+        if (player == null) {
+            return AccessHouseLevel.HOUSE_OWNER
+        }
+
+        if (houseOwnedByAccount && ownerAccountId == (player.account?.id ?: 0L)) {
+            return AccessHouseLevel.HOUSE_OWNER
+        }
+
+        if (player.hasFlag(PlayerFlags_t.CanEditHouses)) {
+            return AccessHouseLevel.HOUSE_OWNER
+        }
+
+        if (player.getGUID() == owner) {
+            return AccessHouseLevel.HOUSE_OWNER
+        }
+
+        if (subOwnerList.isInList(player.name)) {
+            return AccessHouseLevel.HOUSE_SUBOWNER
+        }
+
+        if (guestList.isInList(player.name)) {
+            return AccessHouseLevel.HOUSE_GUEST
+        }
+
+        return AccessHouseLevel.HOUSE_NOT_INVITED
     }
 
     private fun now(): Long = System.currentTimeMillis() / 1000

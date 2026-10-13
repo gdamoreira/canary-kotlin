@@ -1,5 +1,6 @@
 package org.opentibia.canary.items
 
+import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.io.PropStream
 import org.opentibia.canary.io.PropWriteStream
 import org.opentibia.canary.map.house.Door
@@ -42,6 +43,22 @@ data class ItemType(
     val isGroundTile: Boolean = false,
     /** `ItemType::charges` (src/items/items.hpp:290), used by `getSubType`/`setSubType`. */
     val charges: Int = 0,
+    /** `ItemType::decayTime` (src/items/items.hpp:278). */
+    val decayTime: Int = 0,
+    /** `ItemType::decayTo` (src/items/items.hpp:288); `-1` disables decay (items.hpp:193, 3440). */
+    val decayTo: Int = -1,
+    /** `ItemType::transformEquipTo` (src/items/items.hpp:307). */
+    val transformEquipTo: Int = 0,
+    /** `ItemType::transformDeEquipTo` (src/items/items.hpp:308). */
+    val transformDeEquipTo: Int = 0,
+    /** `ItemType::transformToOnUse[2]` (src/items/items.hpp:304), indexed by `PlayerSex_t`. */
+    val transformToOnUse: List<Int> = listOf(0, 0),
+    /** `ItemType::transformToFree` (src/items/items.hpp:305). */
+    val transformToFree: Int = 0,
+    /** `ItemType::bedPartnerDir` (src/items/items.hpp:319); `null` is `DIRECTION_NONE`. */
+    val bedPartnerDir: Direction? = null,
+    /** `ItemType::bedPart` (src/items/items.hpp:320). */
+    val bedPart: BedItemPart = BedItemPart.BED_NONE_PART,
 )
 
 class ItemTypeRegistry {
@@ -257,6 +274,51 @@ open class Item(
 
     fun getDecaying(): ItemDecayState =
         ItemDecayState.fromValue((attributes[ItemAttribute.DECAYSTATE] as? Long ?: 0L).toInt())
+
+    /**
+     * `Item::m_parent` (src/items/item.hpp:774-775). Canary holds a
+     * `std::weak_ptr<Cylinder>`; the port stores the owning [Cylinder] and
+     * clears it when the item is unlinked from its tile/container.
+     */
+    var parent: Cylinder? = null
+
+    /**
+     * `Item::isRemoved` (src/items/item.cpp:859-864): an item without a parent
+     * is removed. Canary asks the parent `Cylinder::isRemoved()`; the Kotlin
+     * [Cylinder] has no removal state yet, so only the immediate parent link is
+     * evaluated (PARITY GAP).
+     */
+    fun isRemoved(): Boolean = parent == null
+
+    /** `Item::decayDisabled` (src/items/item.hpp:779). */
+    var decayDisabled: Boolean = false
+
+    /** `Item::isDecayDisabled` (src/items/item.hpp:572-574). */
+    fun isDecayDisabled(): Boolean = decayDisabled
+
+    /** `Item::loadedFromMap` (src/items/item.hpp:777). */
+    var loadedFromMap: Boolean = false
+
+    /** `Item::isLoadedFromMap` (src/items/item.hpp:671-673). */
+    fun isLoadedFromMap(): Boolean = loadedFromMap
+
+    /** `Item::isMovable` (src/items/item.hpp:508-510). */
+    fun isMovable(): Boolean = type?.isMovable == true
+
+    /** `Item::canDecay` (src/items/item.cpp:3438-3457). */
+    fun canDecay(): Boolean {
+        val itemType = type ?: return false
+        if (itemType.decayTo < 0 || itemType.decayTime == 0 || isDecayDisabled()) {
+            return false
+        }
+        if (hasAttribute(ItemAttribute.UNIQUEID)) {
+            return false
+        }
+        if (isRemoved()) {
+            return false
+        }
+        return true
+    }
 
     /** `Item::getSubType` (src/items/item.cpp:867-877). */
     fun getSubType(): Int {
@@ -744,6 +806,7 @@ class Container(
     fun addItem(item: Item): Boolean {
         if (_items.size >= capacity) return false
         _items.add(item)
+        item.parent = this
         return true
     }
 
@@ -758,6 +821,7 @@ class Container(
     /** `Container::internalAddThing` (`src/items/containers/container.hpp`). */
     override fun internalAddThing(item: Item) {
         _items.add(item)
+        item.parent = this
     }
 
     override fun getContainer(): Container = this
