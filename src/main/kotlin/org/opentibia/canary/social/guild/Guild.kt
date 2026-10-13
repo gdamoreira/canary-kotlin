@@ -2,10 +2,17 @@ package org.opentibia.canary.social.guild
 
 import org.opentibia.canary.creatures.Player
 
-enum class GuildRank {
-    Leader,
-    ViceLeader,
-    Member
+/**
+ * Rank levels mirror the Canary `GuildRank::level` values loaded from
+ * `data/XML/guilds.xml` (`guild.hpp:16-23`): member 1, vice-leader 2,
+ * leader 3. `Player::setGuild` looks the level-1 rank up (player.cpp:9331) and
+ * `Chat::talkToChannel` promotes ranks above level 1 to `TALKTYPE_CHANNEL_O`
+ * (chat.cpp:577-581).
+ */
+enum class GuildRank(val level: Int) {
+    Leader(3),
+    ViceLeader(2),
+    Member(1)
 }
 
 class Guild(
@@ -23,6 +30,9 @@ class Guild(
     }
 
     fun getRank(player: Player): GuildRank? = memberRanks[player.id]
+
+    /** `Guild::getRankByLevel` (`guild.hpp:77`); the port keeps one rank per level. */
+    fun getRankByLevel(level: Int): GuildRank? = GuildRank.entries.firstOrNull { it.level == level }
 
     fun isMember(player: Player): Boolean = memberRanks.containsKey(player.id)
 }

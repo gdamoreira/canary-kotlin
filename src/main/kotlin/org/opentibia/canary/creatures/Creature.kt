@@ -1,6 +1,7 @@
 package org.opentibia.canary.creatures
 
 import org.opentibia.canary.account.Account
+import org.opentibia.canary.account.AccountType
 import org.opentibia.canary.account.getTimeNow
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionId
@@ -12,6 +13,9 @@ import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.grouping.Group
 import org.opentibia.canary.creatures.grouping.Party
 import org.opentibia.canary.creatures.grouping.PartyShields_t
+import org.opentibia.canary.creatures.players.components.PlayerSex_t
+import org.opentibia.canary.social.guild.Guild
+import org.opentibia.canary.social.guild.GuildRank
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.creatures.vocations.Vocation
@@ -780,6 +784,105 @@ class Player(
         val maxStepSpeed =
             if (hasFlag(PlayerFlags_t.SetMaxSpeed)) PLAYER_MAX_STAFF_SPEED else PLAYER_MAX_SPEED
         return maxOf(PLAYER_MIN_SPEED, minOf(maxStepSpeed, getSpeed()))
+    }
+
+    /** `Player::getAccountType()` (player.cpp:12627-12629): `NORMAL` without an account. */
+    fun getAccountType(): AccountType = account?.accountType ?: AccountType.ACCOUNT_TYPE_NORMAL
+
+    /** `Player::getGUID()`; the port's identity is [id]. */
+    fun getGUID(): Long = id
+
+    /** `Player::sex` (player.hpp:1853), default `PLAYERSEX_FEMALE`. */
+    private var sex: PlayerSex_t = PlayerSex_t.FEMALE
+
+    /** `Player::getSex()` (player.hpp:610-612). */
+    fun getSex(): PlayerSex_t = sex
+
+    /** `Player::setSex()` (player.cpp:7108-7110). */
+    fun setSex(newSex: PlayerSex_t) {
+        sex = newSex
+    }
+
+    /** `Player::pronoun`; `PLAYERPRONOUN_UNSET` until set. */
+    private var pronoun: PlayerPronoun_t = PlayerPronoun_t.PLAYERPRONOUN_UNSET
+
+    /** `Player::getPronoun()` (player.hpp:613-615). */
+    fun getPronoun(): PlayerPronoun_t = pronoun
+
+    /** `Player::setPronoun()` (player.cpp:7112-7114). */
+    fun setPronoun(newPronoun: PlayerPronoun_t) {
+        pronoun = newPronoun
+    }
+
+    /**
+     * `Player::getPossessivePronoun()` (player.cpp:7096-7098) through
+     * `getPlayerPossessivePronoun` (tools.cpp:1929-1944). Read by the private
+     * chat channel invite message (chat.cpp:49).
+     */
+    fun getPossessivePronoun(): String = when (pronoun) {
+        PlayerPronoun_t.PLAYERPRONOUN_THEY -> "their"
+        PlayerPronoun_t.PLAYERPRONOUN_SHE -> "her"
+        PlayerPronoun_t.PLAYERPRONOUN_HE -> "his"
+        PlayerPronoun_t.PLAYERPRONOUN_ZE -> "zir"
+        PlayerPronoun_t.PLAYERPRONOUN_NAME -> "$name's"
+        PlayerPronoun_t.PLAYERPRONOUN_UNSET -> if (sex == PlayerSex_t.FEMALE) "her" else "his"
+    }
+
+    /** `Player::guild` (player.hpp:1851). */
+    private var mGuild: Guild? = null
+
+    /** `Player::getGuild()` (player.cpp:9312-9314). */
+    fun getGuild(): Guild? = mGuild
+
+    /**
+     * `Player::setGuild()` (player.cpp:9316-9347). The `ExpertPvp` broadcast is
+     * not ported (PARITY GAP); the port resolves the level-1 rank through the
+     * injected [Guild] instead of Canary's data-loaded rank table.
+     */
+    fun setGuild(newGuild: Guild?) {
+        if (newGuild === mGuild) {
+            return
+        }
+
+        mGuild?.removeMember(this)
+        mGuild = null
+        mGuildRank = null
+
+        if (newGuild != null) {
+            val rank = newGuild.getRankByLevel(1) ?: return
+            mGuild = newGuild
+            mGuildRank = rank
+            newGuild.addMember(this, rank)
+        }
+    }
+
+    /** `Player::guildRank` (player.hpp:1852). */
+    private var mGuildRank: GuildRank? = null
+
+    /** `Player::getGuildRank()` (player.cpp:9349-9351). */
+    fun getGuildRank(): GuildRank? = mGuildRank
+
+    /** `Player::setGuildRank()` (player.cpp:9353-9355). */
+    fun setGuildRank(newGuildRank: GuildRank?) {
+        mGuildRank = newGuildRank
+    }
+
+    /**
+     * `Player::isMuted()` (player.cpp:3494-3506): the longest remaining
+     * `CONDITION_MUTED` in seconds, or 0 for `CannotBeMuted` players.
+     */
+    fun isMuted(): Long {
+        if (hasFlag(PlayerFlags_t.CannotBeMuted)) {
+            return 0
+        }
+
+        var muteTicks = 0
+        for (condition in conditions) {
+            if (condition.type == ConditionType.CONDITION_MUTED && condition.ticks > muteTicks) {
+                muteTicks = condition.ticks
+            }
+        }
+        return (muteTicks / 1000).toLong()
     }
 
     /** `Player::m_party` (player.hpp:1767). */
