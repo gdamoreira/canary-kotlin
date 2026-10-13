@@ -80,6 +80,8 @@ import org.opentibia.canary.lua.bindings.creatures.GuildFunctions
 import org.opentibia.canary.lua.bindings.creatures.MountFunctions
 import org.opentibia.canary.lua.bindings.creatures.PartyFunctions
 import org.opentibia.canary.lua.bindings.creatures.VocationFunctions
+import org.opentibia.canary.lua.bindings.events.EventCallbackFunctions
+import org.opentibia.canary.lua.bindings.events.EventsSchedulerFunctions
 import org.opentibia.canary.lua.bindings.items.ImbuementFunctions
 import org.opentibia.canary.lua.bindings.items.ImbuementOperations
 import org.opentibia.canary.lua.bindings.library.BankFunctions
@@ -103,6 +105,7 @@ import org.opentibia.canary.lua.bindings.map.TeleportFunctions
 import org.opentibia.canary.lua.bindings.map.TeleportOperations
 import org.opentibia.canary.lua.bindings.map.TownFunctions
 import org.opentibia.canary.lua.bindings.map.TownOperations
+
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Tile
@@ -188,8 +191,10 @@ class WorldLuaOperations(
     playerByGuid: (Long) -> Player? = { null },
     startTrade: (Player, Player, Item) -> Boolean = { _, _, _ -> false },
 ) {
-    val game: GameOperations =
+    private val worldGame: WorldGameOperations =
         WorldGameOperations(itemIdsByName, itemTypes, gameMap, monsterTypesByName, itemClassifications)
+
+    val game: GameOperations = worldGame
 
     val player: PlayerOperations = WorldPlayerOperations(itemIdsByName)
 
@@ -286,6 +291,10 @@ class WorldLuaOperations(
         TownFunctions.install(env, town)
         TeleportFunctions.install(env, teleport)
         ImbuementFunctions.install(env, imbuement)
+
+        // Wave 40 lua-events
+        worldGame.setEventCallbacks(EventCallbackFunctions.install(env))
+        EventsSchedulerFunctions.install(env)
     }
 
     companion object {
@@ -316,6 +325,21 @@ class WorldGameOperations(
 ) : GameOperations {
     private var gameState: Int = 0
     private var worldType: Int = 0
+
+    /**
+     * `Game.getEventCallbacks()` loaders, populated by `EventCallbackFunctions.install`
+     * with the `luaEventCallbackLoad` table Canary builds from `EventCallback_t`.
+     */
+    private val eventCallbacks: MutableMap<String, LuaValue> = linkedMapOf()
+
+    /** Mirrors `GameFunctions::luaGameGetEventCallbacks`. */
+    override fun getEventCallbacks(): Map<String, LuaValue> = eventCallbacks
+
+    /** Installs the `EventCallback_t` name -> loader table produced by the binding. */
+    fun setEventCallbacks(loaders: Map<String, LuaValue>) {
+        eventCallbacks.clear()
+        eventCallbacks.putAll(loaders)
+    }
 
     override fun itemIdByName(name: String): Int = itemIdsByName[name] ?: 0
 

@@ -4,6 +4,7 @@ import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
 import org.luaj.vm2.Varargs
 import org.luaj.vm2.lib.VarArgFunction
+import org.opentibia.canary.lua.bindings.events.CallbackMethods
 import org.opentibia.canary.lua.registry.CreatureEvents
 import org.opentibia.canary.lua.registry.LuaCreatureEvent
 import org.opentibia.canary.lua.runtime.LuaEnvironment
@@ -16,8 +17,10 @@ import org.opentibia.canary.lua.runtime.LuaEnvironment
  *   function playerLogin.onLogin(player) ... end
  *   playerLogin:register()
  *
- * Mirrors CreatureEventFunctions::luaCreateCreatureEvent and the revscriptsys
- * `on<Callback>` -> `type` mapping.
+ * Mirrors CreatureEventFunctions::luaCreateCreatureEvent, `type`, `register` and every
+ * `on<Callback>` setter (`onLogin`, `onLogout`, `onThink`, `onPrepareDeath`, `onDeath`,
+ * `onKill`, `onAdvance`, `onModalWindow`, `onTextEdit`, `onHealthChange`,
+ * `onManaChange`, `onExtendedOpcode`).
  */
 object CreatureEventBindings {
     private val CALLBACK_TYPES = linkedMapOf(
@@ -43,6 +46,7 @@ object CreatureEventBindings {
                 val name = if (args.arg(1).isstring()) args.arg(1).tojstring() else ""
                 val self = LuaTable()
                 var explicitType = ""
+                val callbacks = CallbackMethods()
 
                 self.set("type", object : VarArgFunction() {
                     override fun invoke(a: Varargs): Varargs {
@@ -51,13 +55,17 @@ object CreatureEventBindings {
                     }
                 })
 
+                for (field in CALLBACK_TYPES.keys) {
+                    callbacks.install(self, field)
+                }
+
                 self.set("register", object : VarArgFunction() {
                     override fun invoke(a: Varargs): Varargs {
                         val owner = a.arg1()
                         var eventType = explicitType
                         var callback = LuaValue.NIL
                         for ((field, type) in CALLBACK_TYPES) {
-                            val candidate = owner.get(field)
+                            val candidate = callbacks.resolve(owner, field)
                             if (candidate.isfunction()) {
                                 callback = candidate
                                 if (eventType.isEmpty()) {

@@ -4,6 +4,7 @@ import org.luaj.vm2.Globals
 import org.luaj.vm2.LuaError
 import org.luaj.vm2.LuaValue
 import org.luaj.vm2.lib.jse.JsePlatform
+import org.opentibia.canary.game.scheduling.EventsScheduler
 import org.opentibia.canary.lua.bindings.ActionBindings
 import org.opentibia.canary.lua.bindings.CreatureEventBindings
 import org.opentibia.canary.lua.bindings.GlobalEventBindings
@@ -11,6 +12,7 @@ import org.opentibia.canary.lua.bindings.MoveEventBindings
 import org.opentibia.canary.lua.bindings.TalkActionBindings
 import org.opentibia.canary.lua.registry.Actions
 import org.opentibia.canary.lua.registry.CreatureEvents
+import org.opentibia.canary.lua.registry.EventCallbacks
 import org.opentibia.canary.lua.registry.GlobalEvents
 import org.opentibia.canary.lua.registry.MoveEvents
 import org.opentibia.canary.lua.registry.Spells
@@ -31,6 +33,8 @@ class LuaEnvironment {
 
     val actions = Actions()
     val talkActions = TalkActions()
+    val eventCallbacks = EventCallbacks()
+    val eventsScheduler = EventsScheduler()
     val itemClassifications = org.opentibia.canary.systems.forge.ItemClassifications()
 
     lateinit var spells: Spells
