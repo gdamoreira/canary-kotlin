@@ -7,7 +7,7 @@ import org.opentibia.canary.lua.runtime.LuaEnvironment
 /**
  * Transcript tests for the `kv` table and the `KV` userdata class, mirroring
  * `KVFunctions` (src/lua/functions/core/libs/kv_functions.cpp) over the ported
- * in-memory `KVStore`/`ScopedKV` pair (src/kv/kv.hpp).
+ * `KVMemory`/`KVSQL` engine (`src/kv/kv.hpp`, `src/kv/kv_sql.cpp`).
  */
 class KvFunctionsLibraryTest {
 
@@ -150,16 +150,20 @@ class KvFunctionsLibraryTest {
     }
 
     @Test
-    fun `kv get with forceLoad keeps the second-argument shape`() {
+    fun `kv get with forceLoad bypasses the in-memory cache like KVMemory`() {
         val environment = environment()
 
         environment.loadChunk(
             """
             kv.set('k', 'v')
             loaded = kv.get('k', true)
+            cached = kv.get('k')
             """.trimIndent(),
         )
 
-        assertThat(environment.getGlobal("loaded").tojstring()).isEqualTo("v")
+        // KVMemory::load returns nullopt, so the forceLoad miss mirrors the C++ test
+        // fixture; the cached read still resolves.
+        assertThat(environment.getGlobal("loaded").isnil()).isTrue()
+        assertThat(environment.getGlobal("cached").tojstring()).isEqualTo("v")
     }
 }

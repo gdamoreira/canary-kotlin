@@ -54,4 +54,7 @@ kotlin {
 
 tasks.test {
     useJUnitPlatform()
+    // The full suite (~4.9k tests, Netty/H2/Hikari/LuaJ) exceeds the 512 MB
+    // default test-worker heap.
+    maxHeapSize = "3g"
 }

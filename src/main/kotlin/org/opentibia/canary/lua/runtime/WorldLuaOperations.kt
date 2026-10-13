@@ -29,6 +29,8 @@ import org.opentibia.canary.items.ItemTypes_t
 import org.opentibia.canary.items.weapons.Weapon
 import org.opentibia.canary.items.weapons.Weapons
 import org.opentibia.canary.io.PropWriteStream
+import org.opentibia.canary.kv.KV
+import org.opentibia.canary.kv.KVMemory
 import org.opentibia.canary.lua.bindings.CharmFunctions
 import org.opentibia.canary.lua.bindings.CombatFunctions
 import org.opentibia.canary.lua.bindings.CombatOperations
@@ -98,6 +100,7 @@ import org.opentibia.canary.lua.bindings.library.ModalWindowFunctions
 import org.opentibia.canary.lua.bindings.library.NetworkMessageFunctions
 import org.opentibia.canary.lua.bindings.library.ResultFunctions
 import org.opentibia.canary.lua.bindings.library.WebhookFunctions
+import org.opentibia.canary.lua.bindings.library.WorldKvOperations
 import org.opentibia.canary.lua.bindings.library.ZoneFunctions
 import org.opentibia.canary.lua.bindings.map.HouseFunctions
 import org.opentibia.canary.lua.bindings.map.HouseOperations
@@ -175,6 +178,8 @@ import kotlin.random.Random
  * @param playerByGuid optional `g_game().getPlayerByGUID` resolver used by
  *   `house:setNewOwnerGuid`.
  * @param startTrade optional `g_game().internalStartTrade` backing `house:startTrade`.
+ * @param kv the `g_kv()` root store backing the `kv` table and `KV` userdata class;
+ *   defaults to the in-memory `KVMemory` when no SQL-backed `KVSQL` is injected.
  */
 class WorldLuaOperations(
     private val itemTypes: ItemTypeRegistry? = null,
@@ -190,6 +195,7 @@ class WorldLuaOperations(
     teleportByUid: (Int) -> Teleport? = { null },
     playerByGuid: (Long) -> Player? = { null },
     startTrade: (Player, Player, Item) -> Boolean = { _, _, _ -> false },
+    private val kv: KV = KVMemory(),
 ) {
     private val worldGame: WorldGameOperations =
         WorldGameOperations(itemIdsByName, itemTypes, gameMap, monsterTypesByName, itemClassifications)
@@ -272,7 +278,7 @@ class WorldLuaOperations(
         // Wave 40 lua-libraries
         val luaResults = LuaScriptResults()
         DbFunctions.install(env, results = luaResults)
-        KvFunctions.install(env)
+        KvFunctions.install(env, WorldKvOperations(kv))
         LoggerFunctions.install(env)
         MetricsFunctions.install(env)
         ResultFunctions.install(env, luaResults)
