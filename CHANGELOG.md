@@ -306,10 +306,14 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Components + WP gain + wheel spells** — `PlayerCyclopedia`, `PlayerAttachedEffects`, weapon-proficiency gain runtime, wheel spell-table registration. 84 tests.
 - Rows flipped (spells, mounts, components, weapon_proficiency, wheel, team_finder, guild).
 
+### Phase 30: `src/creatures/` Section Complete (12:00 – 12:15)
+- **Player feature hooks** — `Player` now exposes wheel/forge/prey/task-hunting/cyclopedia hooks delegating to `PlayerFeatures`; prey/task state + engines, cyclopedia adapter, tracker seams. 16 tests.
+- `docs/missing-features.md`: `player.cpp` flipped to **IMPLEMENTED** — the entire **`src/creatures/` section is now IMPLEMENTED** (0 PARTIAL/MISSING).
+
 ---
 
 ### Current Status
-- **Automated Tests**: **296 test suites / 3037 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **297 test suites / 3053 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.

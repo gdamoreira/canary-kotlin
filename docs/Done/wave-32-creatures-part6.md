@@ -25,3 +25,7 @@
 ## Post-wave (AGENTS.md §6)
 
 Flip `player.cpp` to `IMPLEMENTED` in `docs/missing-features.md` (the `src/creatures/` section is then fully IMPLEMENTED); update `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/Done/`; commit the docs separately and push to `origin`.
+
+## Completion
+
+Completed. Player feature hooks (wheel/forge/prey/task-hunting/cyclopedia). The entire `src/creatures/` section is now IMPLEMENTED.
