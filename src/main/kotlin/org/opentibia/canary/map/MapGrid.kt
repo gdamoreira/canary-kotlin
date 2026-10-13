@@ -1,9 +1,5 @@
 package org.opentibia.canary.map
 
-import org.opentibia.canary.creatures.spawns.SpawnsMonster
-import org.opentibia.canary.creatures.spawns.SpawnsNpc
-import org.opentibia.canary.game.zones.Zones
-import org.opentibia.canary.map.house.Houses
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -40,78 +36,3 @@ class MapSector(val sectorX: Int, val sectorY: Int, val sectorZ: Int) {
     fun getAllTiles(): List<Tile> = tiles.filterNotNull()
 }
 
-class GameMap(
-    val houses: Houses = Houses(),
-    val zones: Zones = Zones(),
-) {
-    /** `Map::spawnsMonster` (`src/map/map.hpp:178`), loaded by `IOMap::loadMonsters`. */
-    var spawnsMonster: SpawnsMonster = SpawnsMonster()
-
-    /** `Map::spawnsNpc` (`src/map/map.hpp:179`), loaded by `IOMap::loadNpcs`. */
-    var spawnsNpc: SpawnsNpc = SpawnsNpc()
-
-    /** `Map::monsterfile` (`src/map/map.hpp:158`), resolved by `IOMap::loadMonsters`. */
-    var monsterfile: String = ""
-
-    /** `Map::npcfile` (`src/map/map.hpp:159`), resolved by `IOMap::loadNpcs`. */
-    var npcfile: String = ""
-
-    /** `Map::housefile` (`src/map/map.hpp:160`), resolved by `IOMap::loadHouses`. */
-    var housefile: String = ""
-
-    /** `Map::zonesfile` (`src/map/map.hpp:161`), resolved by `IOMap::loadZones`. */
-    var zonesfile: String = ""
-
-    /** `Map::path` (`src/map/map.hpp:146`), the loaded OTBM file identifier. */
-    var path: String = ""
-
-    // Sector key: (z.toLong() shl 32) or ((sectorX.toLong() and 0xFFFF) shl 16) or (sectorY.toLong() and 0xFFFF)
-    private val sectors = mutableMapOf<Long, MapSector>()
-
-    private fun getSectorKey(sx: Int, sy: Int, sz: Int): Long {
-        return (sz.toLong() shl 32) or ((sx.toLong() and 0xFFFFL) shl 16) or (sy.toLong() and 0xFFFFL)
-    }
-
-    fun getOrCreateTile(position: Position): Tile {
-        val sx = position.x shr 5
-        val sy = position.y shr 5
-        val key = getSectorKey(sx, sy, position.z)
-        val sector = sectors.getOrPut(key) { MapSector(sx, sy, position.z) }
-        val tile = sector.getOrCreateTile(position, position.x and 0x1F, position.y and 0x1F)
-        tile.map = this
-        return tile
-    }
-
-    fun getTile(position: Position): Tile? {
-        val sx = position.x shr 5
-        val sy = position.y shr 5
-        val key = getSectorKey(sx, sy, position.z)
-        val sector = sectors[key] ?: return null
-        return sector.getTile(position.x and 0x1F, position.y and 0x1F)
-    }
-
-    fun getTilesInRange(center: Position, radiusX: Int, radiusY: Int): List<Tile> {
-        val minX = center.x - radiusX
-        val maxX = center.x + radiusX
-        val minY = center.y - radiusY
-        val maxY = center.y + radiusY
-
-        val minSx = minX shr 5
-        val maxSx = maxX shr 5
-        val minSy = minY shr 5
-        val maxSy = maxY shr 5
-
-        val result = mutableListOf<Tile>()
-        for (sx in minSx..maxSx) {
-            for (sy in minSy..maxSy) {
-                val sector = sectors[getSectorKey(sx, sy, center.z)] ?: continue
-                for (tile in sector.getAllTiles()) {
-                    if (tile.position.isWithinRange(center, radiusX, radiusY)) {
-                        result.add(tile)
-                    }
-                }
-            }
-        }
-        return result
-    }
-}
