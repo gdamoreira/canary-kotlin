@@ -10,8 +10,11 @@ import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
+import org.opentibia.canary.items.ItemProperty
 import org.opentibia.canary.items.ItemType
 import org.opentibia.canary.items.ItemTypeRegistry
+import org.opentibia.canary.items.ItemTypes_t
+import org.opentibia.canary.io.PropWriteStream
 import org.opentibia.canary.lua.bindings.LootData
 import org.opentibia.canary.lua.bindings.LootFunctions
 import org.opentibia.canary.lua.bindings.LootOperations
@@ -40,12 +43,15 @@ import org.opentibia.canary.lua.bindings.core.TileOperations
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Tile
+import org.opentibia.canary.systems.forge.ItemClassifications
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import org.opentibia.canary.systems.rewardchest.Reward
 import java.util.WeakHashMap
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlin.random.Random
 
 /**
  * Real, non-no-op implementations of the Lua binding seams in
@@ -84,6 +90,8 @@ import kotlin.math.roundToInt
  *   `g_monsters().getMonsterTypeByRaceId(id)`.
  * @param gameMap optional spatial grid backing `Tile(...)` and `Position:getTile`; when
  *   absent those primitives return `nil` like Canary's `g_game().map.getTile` miss.
+ * @param itemClassifications optional forge classification catalog backing
+ *   `Game.createItemClassification`.
  */
 class WorldLuaOperations(
     itemTypes: ItemTypeRegistry? = null,
@@ -92,8 +100,10 @@ class WorldLuaOperations(
     monsterTypesByName: Map<String, Any> = emptyMap(),
     monsterTypesByRaceId: Map<Int, Any> = emptyMap(),
     gameMap: GameMap? = null,
+    itemClassifications: ItemClassifications? = null,
 ) {
-    val game: GameOperations = WorldGameOperations(itemIdsByName, itemTypes)
+    val game: GameOperations =
+        WorldGameOperations(itemIdsByName, itemTypes, gameMap, monsterTypesByName, itemClassifications)
 
     val player: PlayerOperations = WorldPlayerOperations(itemIdsByName)
 
@@ -136,32 +146,135 @@ class WorldLuaOperations(
     companion object {
         /** Convenience factory that installs the real seams on [env] immediately. */
         fun forEnvironment(env: LuaEnvironment): WorldLuaOperations =
-            WorldLuaOperations().also { it.install(env) }
+            WorldLuaOperations(itemClassifications = env.itemClassifications).also { it.install(env) }
     }
 }
 
 /**
- * `Game` global seam backed by `Game.createItem`.
+ * `Game` global seam backed by `Game.createItem`, the optional item/monster catalogs and
+ * the optional [GameMap].
  *
- * Parity gap: Canary splits a stack over `ceil(count / stackSize)` items using
- * `ItemType::stackSize`; the Kotlin [org.opentibia.canary.items.ItemType] does not carry
- * `stackSize`, so a single item with the requested count is produced here.
+ * Parity gaps: Canary's boosted-creature/boss rotations, bestiary, towns, houses,
+ * charms, talkactions, achievements, raids, effects and the influence/fiendish monster
+ * registries are not held by this operations object, so their lookups inherit the
+ * documented empty defaults. `Game.createMonster`/`createNpc` and the soul-pit/generated
+ * npc variants need the spawn engine, and `loadMap`/`loadMapChunk` need the dispatcher;
+ * all inherit their seam defaults. The `Game.createItem` split over
+ * `ceil(count / stackSize)` items is reproduced through the item-type `stackSize`.
  */
 class WorldGameOperations(
     private val itemIdsByName: Map<String, Int> = emptyMap(),
     private val itemTypes: ItemTypeRegistry? = null,
+    private val gameMap: GameMap? = null,
+    private val monsterTypesByName: Map<String, Any> = emptyMap(),
+    private val itemClassifications: ItemClassifications? = null,
 ) : GameOperations {
+    private var gameState: Int = 0
+    private var worldType: Int = 0
+
     override fun itemIdByName(name: String): Int = itemIdsByName[name] ?: 0
 
+    /**
+     * Mirrors `GameFunctions::luaGameCreateItem`: a stackable type spreads `count` over
+     * `ceil(count / stackSize)` items, a subtype type (fluid/splash/charges) keeps one
+     * item with the requested subtype, and any other type creates `max(1, count)` items.
+     */
     override fun createItem(itemId: Int, count: Int): List<Any> {
-        if (itemTypes != null && itemTypes.get(itemId) == null) {
+        val type = itemTypes?.get(itemId)
+        if (itemTypes != null && type == null) {
             return emptyList()
         }
-        return listOf(Item.create(itemId, count, itemTypes))
+        if (type == null) {
+            return listOf(Item.create(itemId, count, itemTypes))
+        }
+
+        var itemCount = 1
+        var subType = 1
+        if (type.hasSubType()) {
+            if (type.isStackable) {
+                itemCount = ceil(count / type.stackSize.coerceAtLeast(1).toDouble()).toInt()
+            }
+            subType = count
+        } else {
+            itemCount = max(1, count)
+        }
+
+        val items = mutableListOf<Any>()
+        repeat(itemCount) {
+            var stackCount = subType
+            if (type.isStackable) {
+                stackCount = minOf(stackCount, type.stackSize.coerceAtLeast(1))
+                subType -= stackCount
+            }
+            items += Item.create(itemId, stackCount, itemTypes)
+        }
+        return items
     }
 
     /** Mirrors `Player::getExpForLevel`, exposed through `Game.getExperienceForLevel`. */
     override fun getExperienceForLevel(level: Int): Long = Player.getExpForLevel(level)
+
+    /** Mirrors `Game::gameState` (`GAME_STATE_STARTUP` is 0). */
+    override fun getGameState(): Int = gameState
+
+    /** Mirrors `Game::setGameState`; the C++ setter has no failure path. */
+    override fun setGameState(state: Int): Boolean {
+        gameState = state
+        return true
+    }
+
+    /** Mirrors `Game::worldType` (`WORLD_TYPE_NO_PVP` is 0). */
+    override fun getWorldType(): Int = worldType
+
+    /** Mirrors `Game::setWorldType`; the C++ setter has no failure path. */
+    override fun setWorldType(type: Int): Boolean {
+        worldType = type
+        return true
+    }
+
+    /**
+     * Mirrors `Item::CreateItemAsContainer(id, size)` plus the optional
+     * `g_game().internalAddItem(tile, container, INDEX_WHEREEVER, FLAG_NOLIMIT)` placement.
+     * An unknown id is rejected when the catalog is wired; the placement inherits
+     * `Tile::addThing`'s append semantics (the Kotlin tile has no static query rules).
+     */
+    override fun createContainer(itemId: Int, size: Int, position: Position?): Any? {
+        val type = itemTypes?.get(itemId)
+        if (itemTypes != null && type == null) {
+            return null
+        }
+        val container = Container(id = itemId, capacity = size, type = type)
+        if (position == null) {
+            return container
+        }
+        val tile = gameMap?.getTile(position) ?: return null
+        tile.addItem(container)
+        return container
+    }
+
+    /** Mirrors `Map::getOrCreateTile(position, isDynamic)`; the Kotlin tile has no dynamic flag. */
+    override fun createTile(position: Position, isDynamic: Boolean): Any? = gameMap?.getOrCreateTile(position)
+
+    /** Mirrors `g_monsters().getMonsterType(name)`; null when no monster catalog is wired. */
+    override fun getMonsterTypeByName(name: String): Any? = monsterTypesByName[name]
+
+    /** Mirrors `g_monsters().monsters`; empty when no monster catalog is wired. */
+    override fun getMonsterTypes(): Map<String, Any> = monsterTypesByName
+
+    /** Mirrors `Game::getItemsClassification(id, create = true)`; null when no catalog is wired. */
+    override fun createItemClassification(id: Int): Any? = itemClassifications?.createClassification(id)
+
+    /** Mirrors `Item::items.getLadders()`. */
+    override fun getLadderIds(): List<Int> = itemTypes?.getLadders() ?: emptyList()
+
+    /** Mirrors `Item::items.getDummys()`. */
+    override fun getDummies(): Map<Int, Int> = itemTypes?.getDummys() ?: emptyMap()
+
+    /** Mirrors `Game.getSoulCoreItems` (`m_primaryType == "SoulCores"` or `ITEM_TYPE_SOULCORES`). */
+    override fun getSoulCoreItems(): List<Any> =
+        itemTypes?.getItems()?.values?.filter {
+            it.primaryType == "SoulCores" || it.type == ItemTypes_t.ITEM_TYPE_SOULCORES
+        } ?: emptyList()
 }
 
 /**
@@ -379,19 +492,31 @@ class WorldCreatureOperations : CreatureOperations {
 
 /**
  * `Item` metatable family seam backed by the Kotlin [Item] domain object. Item attributes,
- * action/unique ids, container status, charges/fluid type and Canary-hundredths weight
- * delegate to the domain; parent/tile links, cloning, splitting, custom attribute bags and
- * world removal are still absent and inherit the seam's documented defaults.
+ * action/unique/owner ids, tier/classification, container status, property flags,
+ * charges/fluid type and Canary-hundredths weight delegate to the domain; the actor and
+ * shader flags are per-instance script state (mirroring `Item::actor`/`Item::shader`),
+ * and `serializeAttributes` streams through `Item::serializeAttr`.
  *
- * Parity gaps: `transform` reproduces only Canary's identity no-op branch because
- * [Item.id] is immutable, `decay` is a no-op, and `setAttribute` does not reproduce
- * Canary's `DURATION`/`DECAYSTATE` decay scheduling beyond rejecting the protected
- * `duration timestamp` attribute.
+ * Parity gaps: parent/tile links, cloning, splitting, custom attribute bags and world
+ * removal are still absent and inherit the seam's documented defaults. `transform`
+ * reproduces only Canary's identity no-op branch because [Item.id] is immutable, `decay`
+ * is a no-op, `setAttribute` does not reproduce Canary's `DURATION`/`DECAYSTATE` decay
+ * scheduling beyond rejecting the protected `duration timestamp` attribute, and
+ * `setDuration` mutates the shared type (`decayTime`/`showDuration`/`decayTo`) without
+ * the Kotlin decay engine's scheduling. `getOwnerName`/`isInsideDepot`/`moveToSlot`/
+ * `getImbuements` need the game player lookup, depot chain, inventory slots and
+ * per-item imbuement store, which the domain does not carry.
  */
 class WorldItemOperations(
     private val itemIdsByName: Map<String, Int> = emptyMap(),
     private val itemAttributeIdsByName: Map<String, Int> = emptyMap(),
 ) : ItemOperations {
+    /** `Item::setActor` flags keyed by instance identity; released with the item. */
+    private val actors = WeakHashMap<Any, Boolean>()
+
+    /** `Item::setShader` names keyed by instance identity; released with the item. */
+    private val shaders = WeakHashMap<Any, String>()
+
     override fun itemIdByName(name: String): Int = itemIdsByName[name] ?: 0
 
     override fun itemAttributeByName(name: String): Int = itemAttributeIdsByName[name] ?: 0
@@ -497,6 +622,127 @@ class WorldItemOperations(
     /** Mirrors `Item::isContainer` (the type flag, for plain items and containers alike). */
     override fun isContainer(item: Any): Boolean =
         item is Container || (item as? Item)?.type?.isContainer == true
+
+    /** Mirrors `Item::canReceiveAutoCarpet` (`isBlocking && isAlwaysOnTop && !hasHeight`). */
+    override fun canReceiveAutoCarpet(item: Any): Boolean = (item as? Item)?.canReceiveAutoCarpet() ?: false
+
+    /** Mirrors `Item::getClassification` (the type upgrade classification). */
+    override fun getClassification(item: Any): Int = (item as? Item)?.getClassification() ?: 0
+
+    /** Mirrors `Item::getTier` (the `TIER` attribute, 0 when absent). */
+    override fun getTier(item: Any): Int = (item as? Item)?.getTier() ?: 0
+
+    /** Mirrors `Item::setTier`; the domain enforces the upgrade-classification gate. */
+    override fun setTier(item: Any, tier: Int): Boolean {
+        val target = item as? Item ?: return false
+        target.setTier(tier)
+        return true
+    }
+
+    /** Mirrors `Item::getImbuementSlot` (the `IMBUEMENT_SLOT` attribute, else the type slot). */
+    override fun getImbuementSlot(item: Any): Int = (item as? Item)?.getImbuementSlot() ?: 0
+
+    /** Mirrors `Item::hasProperty` through the item-type flags. */
+    override fun hasProperty(item: Any, property: Int): Boolean {
+        val target = item as? Item ?: return false
+        val resolved = ItemProperty.entries.firstOrNull { it.value == property } ?: return false
+        return target.hasProperty(resolved)
+    }
+
+    /** Mirrors `Item::serializeAttr` (the `ATTR_*` property stream). */
+    override fun serializeAttributes(item: Any): ByteArray? {
+        val target = item as? Item ?: return null
+        val stream = PropWriteStream()
+        target.serializeAttr(stream)
+        return stream.getStream()
+    }
+
+    /** Mirrors `Item::setOwner` for both the creature and the numeric-id overload. */
+    override fun setOwner(item: Any, owner: Any): Boolean {
+        val target = item as? Item ?: return false
+        return when (owner) {
+            is Number -> {
+                if (owner.toLong() == 0L) {
+                    false
+                } else {
+                    target.setOwner(owner.toLong())
+                    true
+                }
+            }
+
+            is Creature -> {
+                target.setOwner(owner.id)
+                true
+            }
+
+            else -> false
+        }
+    }
+
+    /** Mirrors `Item::getOwnerId` (the `OWNER` attribute masked to 32 bits). */
+    override fun getOwnerId(item: Any): Long = (item as? Item)?.getOwnerId() ?: 0L
+
+    /** Mirrors `Item::isOwner` for both the creature and the numeric-id overload. */
+    override fun isOwner(item: Any, owner: Any): Boolean {
+        val target = item as? Item ?: return false
+        return when (owner) {
+            is Number -> target.isOwner(owner.toLong())
+            is Creature -> target.isOwner(owner)
+            else -> false
+        }
+    }
+
+    /** Mirrors `Item::hasOwner`. */
+    override fun hasOwner(item: Any): Boolean = (item as? Item)?.hasOwner() ?: false
+
+    /** Mirrors `Item::hasActor`; the actor flag is per-instance script state. */
+    override fun hasActor(item: Any): Boolean = actors[item] ?: false
+
+    /** Mirrors `Item::setActor`. */
+    override fun setActor(item: Any, actor: Boolean): Boolean {
+        actors[item] = actor
+        return true
+    }
+
+    /** Mirrors `Item::setShader`; the shader name is per-instance script state. */
+    override fun setShader(item: Any, shader: String): Boolean {
+        shaders[item] = shader
+        return true
+    }
+
+    /** Mirrors `Item::getShader`. */
+    override fun getShader(item: Any): String = shaders[item] ?: ""
+
+    /** Mirrors `Item::hasShader`. */
+    override fun hasShader(item: Any): Boolean = shaders.containsKey(item)
+
+    /**
+     * Mirrors `ItemFunctions::luaItemSetDuration`'s type mutation and random draw
+     * (`uniform_random(min, max)` inclusive on both ends). `Item::startDecaying`'s
+     * scheduling belongs to the decay engine and is not invoked here (PARITY GAP).
+     */
+    override fun setDuration(
+        item: Any,
+        minDuration: Long,
+        maxDuration: Long?,
+        decayTo: Int,
+        showDuration: Boolean,
+    ): Boolean {
+        val target = item as? Item ?: return false
+        val type = target.type ?: return false
+        type.decayTime = if (maxDuration == null || maxDuration == 0L) {
+            minDuration
+        } else {
+            uniformRandom(minDuration, maxDuration)
+        }
+        type.showDuration = showDuration
+        type.decayTo = decayTo
+        return true
+    }
+
+    /** `uniform_random(min, max)` (src/utils/tools.cpp): inclusive on both ends. */
+    private fun uniformRandom(min: Long, max: Long): Long =
+        if (max <= min) min else Random.nextLong(min, max + 1)
 
     private fun itemAttribute(attribute: Int): ItemAttribute? =
         ItemAttribute.entries.firstOrNull { it.value == attribute.toLong() }
