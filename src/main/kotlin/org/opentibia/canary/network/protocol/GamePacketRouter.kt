@@ -9,6 +9,8 @@ import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.network.protocol.offline.StartOfflineTrainingPacketParser
 import org.opentibia.canary.network.protocol.rewardchest.RewardChestCollectPacketParser
+import org.opentibia.canary.network.protocol.bestiary.BestiaryPacketParser
+import org.opentibia.canary.network.protocol.forge.ForgePacketParser
 import org.opentibia.canary.network.protocol.wheel.OpenWheelCommand
 import org.opentibia.canary.network.protocol.wheel.SaveWheelCommand
 import org.opentibia.canary.network.protocol.wheel.WheelGemActionCommand
@@ -126,6 +128,35 @@ object GamePacketRouter {
                                 collectEnabled = context.featureFlags.rewardChestCollectEnabled,
                                 maxCollectItems = context.featureFlags.rewardChestMaxCollectItems,
                             )
+                        }
+                        true
+                    }
+                }
+
+                // Bestiary & charms: 0xE1 send races / 0xE2 send creatures /
+                // 0xE3 monster data / 0xE4 buy charm rune
+                in BestiaryPacketParser.OPCODE_SEND_RACES..BestiaryPacketParser.OPCODE_BUY_CHARM_RUNE -> {
+                    val command = BestiaryPacketParser.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Cyclopedia responses are produced by the bestiary
+                            // senders; this is the WorldCommit confinement boundary.
+                        }
+                        true
+                    }
+                }
+
+                // Exaltation Forge: 0xBF parseForgeEnter
+                ForgePacketParser.OPCODE_FORGE_ENTER -> {
+                    val command = ForgePacketParser.parseForgeEnter(buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Forge actions mutate player.features.forge; the forge
+                            // window is sent by the serializer. Confinement boundary.
                         }
                         true
                     }
