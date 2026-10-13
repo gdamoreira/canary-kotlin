@@ -583,6 +583,106 @@ object GamePacketRouter {
                     }
                 }
 
+                // Wave 35 batch B2
+                // Item interaction: 0x84 parseUseWithCreature / 0x85 parseRotateItem /
+                // 0x86 parseConfigureShowOffSocket / 0x8B parseWrapableItem
+                ItemInteractionPacketHandler.OPCODE_USE_WITH_CREATURE,
+                ItemInteractionPacketHandler.OPCODE_ROTATE_ITEM,
+                ItemInteractionPacketHandler.OPCODE_CONFIGURE_SHOW_OFF_SOCKET,
+                ItemInteractionPacketHandler.OPCODE_WRAPABLE_ITEM -> {
+                    val command = ItemInteractionPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerUseWithCreature (game.cpp:4853),
+                            // Game::playerRotateItem/playerRotatePodium (game.cpp:5104,
+                            // 11395), Game::playerConfigureShowOffSocket (game.cpp:5161)
+                            // and Game::playerWrapableItem (game.cpp:5361) resolve the
+                            // target thing and mutate the world; the item-interaction
+                            // engine is not ported, and the item's `isPodium` /
+                            // `isWrapable` type state is not modeled, so the decoded
+                            // command only marks the confinement boundary (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
+                // Monster podium: 0x9F parseSetMonsterPodium
+                ItemInteractionPacketHandler.OPCODE_SET_MONSTER_PODIUM -> {
+                    val command = ItemInteractionPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerSetMonsterPodium (game.cpp:11283) writes the
+                            // podium custom attributes and re-sends the tile to
+                            // spectators; the podium engine is not ported (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
+                // Text windows: 0x89 parseTextWindow / 0x8A parseHouseWindow
+                TextWindowPacketHandler.OPCODE_TEXT_WINDOW,
+                TextWindowPacketHandler.OPCODE_HOUSE_WINDOW -> {
+                    val command = TextWindowPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerWriteItem (game.cpp:5535) and
+                            // Game::playerUpdateHouseWindow (game.cpp:5780) mutate the
+                            // written item text and the house access list; neither engine
+                            // is ported, and the CREATURE_EVENT_TEXTEDIT callback stays
+                            // Lua (AGENTS.md 1.4), so the decoded command only marks the
+                            // confinement boundary (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
+                // Channels: 0x97 playerRequestChannels / 0x98 parseOpenChannel /
+                // 0x99 parseCloseChannel / 0x9A parseOpenPrivateChannel /
+                // 0x9E playerCloseNpcChannel
+                ChannelPacketHandler.OPCODE_REQUEST_CHANNELS,
+                ChannelPacketHandler.OPCODE_OPEN_CHANNEL,
+                ChannelPacketHandler.OPCODE_CLOSE_CHANNEL,
+                ChannelPacketHandler.OPCODE_OPEN_PRIVATE_CHANNEL,
+                ChannelPacketHandler.OPCODE_CLOSE_NPC_CHANNEL -> {
+                    val command = ChannelPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Channel membership lives in ChatManager, which this context
+                            // does not carry (PARITY GAP), and the NPC close-channel
+                            // dispatch to Npc::onPlayerCloseChannel (game.cpp:4443) needs
+                            // a creature registry the context does not provide (PARITY
+                            // GAP); the decoded command only marks the confinement
+                            // boundary.
+                        }
+                        true
+                    }
+                }
+
+                // Read-and-discard queries: 0x8E parseJoinAggression /
+                // 0x9D parseGetTextForReport
+                AggressionAndReportPacketHandler.OPCODE_JOIN_AGGRESSION,
+                AggressionAndReportPacketHandler.OPCODE_GET_TEXT_FOR_REPORT -> {
+                    val command = AggressionAndReportPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Canary reads and discards both payloads with no Game call
+                            // (protocolgame.cpp:3299, 3307); the decoded command only
+                            // marks the confinement boundary.
+                        }
+                        true
+                    }
+                }
+
                 else -> false
             }
 
