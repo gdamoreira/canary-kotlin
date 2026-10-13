@@ -1,6 +1,8 @@
 package org.opentibia.canary.network.protocol
 
+import io.netty.buffer.ByteBuf
 import io.netty.buffer.Unpooled
+import io.netty.channel.embedded.EmbeddedChannel
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.creatures.Player
@@ -140,5 +142,78 @@ class ItemPacketHandlerTest {
         assertThat(fromTile.items).isEmpty()
         assertThat(toTile.items).hasSize(1)
         assertThat(toTile.items.first().id).isEqualTo(2148)
+    }
+
+    // Use item ex: 0x83 parseUseItemEx (protocolgame.cpp:2566).
+
+    @Test
+    fun `parses use item ex 0x83 from and to positions item ids and stack positions`() {
+        val payload = Unpooled.buffer()
+        writeUseItemEx(payload)
+
+        val command = ItemPacketHandler.parseUseItemEx(payload)
+
+        assertThat(command).isEqualTo(
+            UseItemExCommand(
+                fromPosition = Position(100, 100, 7),
+                fromItemId = 1945,
+                fromStackPosition = 2,
+                toPosition = Position(101, 100, 7),
+                toItemId = 2160,
+                toStackPosition = 3,
+            )
+        )
+        assertThat(payload.readableBytes()).isZero()
+    }
+
+    @Test
+    fun `rejects a truncated use item ex 0x83 payload`() {
+        val payload = Unpooled.buffer()
+        payload.writeShortLE(100)
+        payload.writeShortLE(100)
+        payload.writeByte(7)
+        payload.writeShortLE(1945)
+        payload.writeByte(2)
+        payload.writeShortLE(101) // destination truncated
+
+        assertThat(ItemPacketHandler.parseUseItemEx(payload)).isNull()
+    }
+
+    @Test
+    fun `decodes use item ex 0x83 via EmbeddedChannel inbound message`() {
+        val channel = EmbeddedChannel()
+        try {
+            channel.writeInbound(writeUseItemEx(Unpooled.buffer()))
+
+            val payload = channel.readInbound<ByteBuf>()
+            val command = ItemPacketHandler.parseUseItemEx(payload)
+
+            assertThat(command).isEqualTo(
+                UseItemExCommand(
+                    fromPosition = Position(100, 100, 7),
+                    fromItemId = 1945,
+                    fromStackPosition = 2,
+                    toPosition = Position(101, 100, 7),
+                    toItemId = 2160,
+                    toStackPosition = 3,
+                )
+            )
+        } finally {
+            channel.finishAndReleaseAll()
+        }
+    }
+
+    private fun writeUseItemEx(payload: ByteBuf): ByteBuf {
+        payload.writeShortLE(100) // from x
+        payload.writeShortLE(100) // from y
+        payload.writeByte(7) // from z
+        payload.writeShortLE(1945) // from item id
+        payload.writeByte(2) // from stack position
+        payload.writeShortLE(101) // to x
+        payload.writeShortLE(100) // to y
+        payload.writeByte(7) // to z
+        payload.writeShortLE(2160) // to item id
+        payload.writeByte(3) // to stack position
+        return payload
     }
 }

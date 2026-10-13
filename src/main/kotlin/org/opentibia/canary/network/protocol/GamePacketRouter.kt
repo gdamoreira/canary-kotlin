@@ -76,6 +76,25 @@ object GamePacketRouter {
                     ItemPacketHandler.handleThrow(player, buffer, context.map)
                 }
 
+                // Containers: 0x75 parseContainerAction / 0x87 parseCloseContainer /
+                // 0x88 parseUpArrowContainer / 0x95 parseOpenParentContainer
+                TradeAndContainerPacketHandler.OPCODE_CONTAINER_ACTION,
+                TradeAndContainerPacketHandler.OPCODE_CLOSE_CONTAINER,
+                TradeAndContainerPacketHandler.OPCODE_UP_ARROW_CONTAINER,
+                TradeAndContainerPacketHandler.OPCODE_OPEN_PARENT_CONTAINER -> {
+                    val command = TradeAndContainerPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Open-container state belongs to Player::closeContainer,
+                            // Player::moveUpContainer and Game::playerRequestOpenContainerFromDepotSearch;
+                            // none are ported, and 0x75 reads and discards its operands.
+                        }
+                        true
+                    }
+                }
+
                 // NPC shop: 0x7A parsePlayerBuyOnShop / 0x7B parsePlayerSellOnShop /
                 // 0x7C playerCloseShop
                 in NpcShopPacketHandler.OPCODE_PLAYER_BUY_ON_SHOP..NpcShopPacketHandler.OPCODE_PLAYER_CLOSE_SHOP -> {
@@ -91,8 +110,30 @@ object GamePacketRouter {
                     }
                 }
 
+                // Trade: 0x7D parseRequestTrade / 0x7E parseLookInTrade /
+                // 0x7F playerAcceptTrade / 0x80 playerCloseTrade
+                in TradeAndContainerPacketHandler.OPCODE_REQUEST_TRADE..TradeAndContainerPacketHandler.OPCODE_CLOSE_TRADE -> {
+                    val command = TradeAndContainerPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // The trade session state machine (Game::playerRequestTrade,
+                            // playerAcceptTrade, playerCloseTrade, playerLookInTrade) is
+                            // not yet ported, so the decoded command only marks the
+                            // confinement boundary.
+                        }
+                        true
+                    }
+                }
+
                 0x82 -> {
                     ItemPacketHandler.handleUse(player, buffer, context.map, context.dispatcher, context.luaEnvironment)
+                }
+
+                // Use item ex: 0x83 parseUseItemEx
+                ItemPacketHandler.OPCODE_USE_ITEM_EX -> {
+                    ItemPacketHandler.handleUseItemEx(buffer, context.dispatcher)
                 }
 
                 // Look At
@@ -111,6 +152,21 @@ object GamePacketRouter {
                 }
                 0xA1 -> {
                     CombatPacketHandler.handleAttack(player, buffer, emptyList())
+                }
+
+                // Follow: 0xA2 parseFollow
+                FollowPacketHandler.OPCODE_FOLLOW -> {
+                    val command = FollowPacketHandler.parseFollow(buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerFollowCreature -> Player::setFollowCreature; the
+                            // follow state machine is not yet ported, so the decoded
+                            // command only marks the confinement boundary.
+                        }
+                        true
+                    }
                 }
 
                 // Wheel of Destiny
@@ -166,6 +222,26 @@ object GamePacketRouter {
                                 collectEnabled = context.featureFlags.rewardChestCollectEnabled,
                                 maxCollectItems = context.featureFlags.rewardChestMaxCollectItems,
                             )
+                        }
+                        true
+                    }
+                }
+
+                // Outfit & mount: 0xD3 parseSetOutfit / 0xD4 parseToggleMount
+                in OutfitPacketHandler.OPCODE_SET_OUTFIT..OutfitPacketHandler.OPCODE_TOGGLE_MOUNT -> {
+                    val command = OutfitPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            when (command) {
+                                // Player::toggleMount (player.cpp) is ported as
+                                // PlayerMountState; its speed/outfit-window side effects
+                                // are not wired yet.
+                                is ToggleMountCommand -> player.features.mounts.toggleMount(command.mount)
+                                // Player::changeOutfit / playerSetShowOffSocket are not ported.
+                                is SetOutfitCommand -> Unit
+                            }
                         }
                         true
                     }
