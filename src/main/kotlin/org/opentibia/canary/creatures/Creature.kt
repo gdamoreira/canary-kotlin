@@ -27,6 +27,7 @@ import org.opentibia.canary.creatures.players.components.PlayerSex_t
 import org.opentibia.canary.creatures.players.components.RecentDeathEntry
 import org.opentibia.canary.creatures.players.components.RecentPvPKillEntry
 import org.opentibia.canary.creatures.players.pvp.PlayerPvp
+import org.opentibia.canary.game.QuickLootFilter_t
 import org.opentibia.canary.social.guild.Guild
 import org.opentibia.canary.social.guild.GuildRank
 import org.opentibia.canary.items.Container
@@ -633,6 +634,61 @@ abstract class Creature(
         }
 
         return true
+    }
+
+    /** `Creature::m_followCreature` (creature.hpp:918); Canary holds a `std::weak_ptr`. */
+    private var followCreature: Creature? = null
+
+    /** `Creature::getFollowCreature` (creature.hpp:423-425). */
+    fun getFollowCreature(): Creature? = followCreature
+
+    /** `Creature::isUpdatingPath` (creature.hpp:930). */
+    var isUpdatingPath: Boolean = false
+
+    /** `Creature::hasFollowPath` (creature.hpp:929). */
+    var hasFollowPath: Boolean = false
+
+    /** `Creature::forceUpdateFollowPath` (creature.hpp:931). */
+    var forceUpdateFollowPath: Boolean = false
+
+    /**
+     * `Creature::setFollowCreature` (src/creatures/creature.cpp:1132-1166). The
+     * walk-queue reset (`listWalkDir.clear()` / `onWalkAborted()`,
+     * creature.cpp:1152-1155) belongs to the unported walk state (PARITY GAP).
+     */
+    open fun setFollowCreature(creature: Creature?): Boolean {
+        if (creature != null) {
+            if (getFollowCreature() === creature) {
+                return true
+            }
+
+            if (hasCondition(ConditionType.CONDITION_FEARED)) {
+                followCreature = null
+                return false
+            }
+
+            val creaturePos = creature.position
+            if (creaturePos.z != position.z || !canSee(creaturePos)) {
+                followCreature = null
+                return false
+            }
+
+            hasFollowPath = true
+            forceUpdateFollowPath = false
+            followCreature = creature
+            isUpdatingPath = true
+        } else {
+            isUpdatingPath = false
+            followCreature = null
+        }
+
+        onFollowCreature(creature)
+        return true
+    }
+
+    /** `Creature::onFollowCreature` (creature.hpp:430-432) virtual hook. */
+    open fun onFollowCreature(creature: Creature?) {
+        // No behaviour.
     }
 
     /**
@@ -1351,6 +1407,88 @@ class Player(
     /** `Player::stopWalk()` (player.cpp:6273-6275). */
     fun stopWalk() {
         cancelNextWalk = true
+    }
+
+    /** `Player::sendCancelMessage(ReturnValue)` (player.cpp:2115) protocol seam. */
+    var sendCancelMessage: (ReturnValue) -> Unit = {}
+
+    /** `Player::sendCancelTarget` (player.cpp:2121) protocol seam. */
+    var sendCancelTarget: () -> Unit = {}
+
+    /** `Player::sendCloseContainer` protocol seam (player.cpp). */
+    var sendCloseContainer: (Int) -> Unit = {}
+
+    /** `Player::sendContainer` protocol seam (player.cpp). */
+    var sendContainer: (Int, Container, Boolean, Int) -> Unit = { _, _, _, _ -> }
+
+    /**
+     * `Player::setFollowCreature` (src/creatures/players/player.cpp:6127): a
+     * failed base set clears the follow and attack targets, reports
+     * `RETURNVALUE_THEREISNOWAY`, cancels the target window and stops the walk.
+     */
+    override fun setFollowCreature(creature: Creature?): Boolean {
+        if (!super.setFollowCreature(creature)) {
+            super.setFollowCreature(null)
+            setAttackedCreature(null)
+            sendCancelMessage(ReturnValue.THEREISNOWAY)
+            sendCancelTarget()
+            stopWalk()
+            return false
+        }
+        return true
+    }
+
+    /** `Player::quickLootFallbackToMainContainer` (player.hpp:1875). */
+    var quickLootFallbackToMainContainer: Boolean = false
+
+    /** `Player::quickLootFilter` (player.hpp:1859). */
+    var quickLootFilter: QuickLootFilter_t = QuickLootFilter_t.QUICKLOOTFILTER_SKIPPEDLOOT
+
+    /** `Player::quickLootListItemIds` (player.hpp:1684). */
+    var quickLootListItemIds: List<Int> = emptyList()
+
+    /** `Player::depotSearch` (player.hpp:1830), set by `setSpecialMenuAvailable`. */
+    var depotSearch: Boolean = false
+
+    /** `Player::depotSearchOnItem` (player.hpp:1831). */
+    private var depotSearchItemId: Int = 0
+    private var depotSearchItemTier: Int = 0
+
+    /** `Player::isDepotSearchOpen` (player.hpp:533-535). */
+    fun isDepotSearchOpen(): Boolean = depotSearchItemId != 0
+
+    /** `Player::isDepotSearchOpenOnItem` (player.hpp:536-538). */
+    fun isDepotSearchOpenOnItem(itemId: Int): Boolean = depotSearchItemId == itemId
+
+    /** `Player::setDepotSearchIsOpen` (player.hpp:539-541). */
+    fun setDepotSearchIsOpen(itemId: Int, tier: Int) {
+        depotSearchItemId = itemId
+        depotSearchItemTier = tier
+    }
+
+    /** `Player::isDepotSearchAvailable` (player.hpp:542-544). */
+    fun isDepotSearchAvailable(): Boolean = depotSearch
+
+    /** `Player::inMarket` (player.hpp:1866). */
+    private var inMarket: Boolean = false
+
+    /** `Player::setInMarket` (player.hpp:526-528). */
+    fun setInMarket(value: Boolean) {
+        inMarket = value
+    }
+
+    /** `Player::isInMarket` (player.hpp:529-531). */
+    fun isInMarket(): Boolean = inMarket
+
+    /** `Player::imbuingItem` (player.hpp:1761). */
+    private var imbuingItem: Item? = null
+
+    /** `Player::hasImbuingItem` (player.cpp:2414-2416). */
+    fun hasImbuingItem(): Boolean = imbuingItem != null
+
+    /** `Player::setImbuingItem` (player.cpp:2418-2420). */
+    fun setImbuingItem(item: Item?) {
+        imbuingItem = item
     }
 
     /**

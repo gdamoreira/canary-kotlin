@@ -32,6 +32,7 @@ import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.game.zones.Zone
 import org.opentibia.canary.game.zones.ZoneType
 import org.opentibia.canary.items.BedItem
+import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.Items
@@ -94,6 +95,19 @@ enum class StackPosType_t {
     STACKPOS_USEITEM,
     STACKPOS_USETARGET,
     STACKPOS_FIND_THING,
+}
+
+/** `QuickLootFilter_t` (src/game/game_definitions.hpp:38-41). */
+enum class QuickLootFilter_t(val value: Int) {
+    QUICKLOOTFILTER_SKIPPEDLOOT(0),
+    QUICKLOOTFILTER_ACCEPTEDLOOT(1),
+    ;
+
+    companion object {
+        /** Unknown protocol bytes keep the C++ default value (`quickLootFilter {}`). */
+        fun fromValue(value: Int): QuickLootFilter_t =
+            entries.firstOrNull { it.value == value } ?: QUICKLOOTFILTER_SKIPPEDLOOT
+    }
 }
 
 /**
@@ -3178,6 +3192,106 @@ class Game(
             }
         }
         return null
+    }
+
+    /**
+     * `Game::getCreatureByID` (src/game/game.cpp:1296). The port resolves online
+     * players through [getPlayerByID] and every other placed creature through
+     * the facade's placement index; Canary's typed monster/NPC registries are
+     * not modeled (PARITY GAP).
+     */
+    fun getCreatureByID(creatureId: Long): Creature? {
+        getPlayerByID(creatureId)?.let { return it }
+        return placedCreatures.keys.firstOrNull { it.id == creatureId }
+    }
+
+    /**
+     * `Game::playerCloseContainer` (src/game/game.cpp:5028):
+     * `Player::closeContainer` plus the `sendCloseContainer` protocol send.
+     */
+    fun playerCloseContainer(playerId: Long, cid: Int) {
+        val player = getPlayerByID(playerId) ?: return
+        player.closeContainer(cid)
+        player.sendCloseContainer(cid)
+    }
+
+    /**
+     * `Game::playerMoveUpContainer` (src/game/game.cpp:5038): replaces the open
+     * container with its real parent, honouring the paginated-container index.
+     *
+     * PARITY GAP: the browse-field branch (`g_events().eventPlayerOnBrowseField`,
+     * `Game::browseFields`, `Container::createBrowseField`) is not ported, so a
+     * top-level container has no parent to move to.
+     */
+    fun playerMoveUpContainer(playerId: Long, cid: Int) {
+        val player = getPlayerByID(playerId) ?: return
+        val container = player.getContainerByID(cid) ?: return
+        val parentContainer = container.getRealParent() as? Container ?: return
+
+        if (parentContainer.hasOwner() && !parentContainer.isOwner(player)) {
+            sendCancelMessage(player, ReturnValue.ITEMISNOTYOURS)
+            return
+        }
+
+        if (parentContainer.hasPagination() && parentContainer.hasParent()) {
+            val indexContainer =
+                (parentContainer.getThingIndex(container) / parentContainer.capacity) * parentContainer.capacity
+            player.addContainer(cid, parentContainer)
+            player.setContainerIndex(cid, indexContainer)
+            player.sendContainer(cid, parentContainer, parentContainer.hasParent(), indexContainer)
+        } else {
+            player.addContainer(cid, parentContainer)
+            player.sendContainer(cid, parentContainer, parentContainer.hasParent(), player.getContainerIndex(cid))
+        }
+    }
+
+    /**
+     * `Game::playerFollowCreature` (src/game/game.cpp:7033). PARITY GAP:
+     * `Player::updateCreatureWalk` (the async follow path) is not ported, so the
+     * follow target is stored without scheduling a path.
+     */
+    fun playerFollowCreature(playerId: Long, creatureId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+        player.setAttackedCreature(null)
+        player.setFollowCreature(getCreatureByID(creatureId))
+    }
+
+    /** `Game::playerSetQuickLootFallback` (src/game/game.cpp:6898). */
+    fun playerSetQuickLootFallback(playerId: Long, fallback: Boolean) {
+        val player = getPlayerByID(playerId) ?: return
+        player.quickLootFallbackToMainContainer = fallback
+    }
+
+    /** `Game::playerQuickLootBlackWhitelist` (src/game/game.cpp:6907). */
+    fun playerQuickLootBlackWhitelist(playerId: Long, filter: QuickLootFilter_t, itemIds: List<Int>) {
+        val player = getPlayerByID(playerId) ?: return
+        player.quickLootFilter = filter
+        player.quickLootListItemIds = itemIds
+    }
+
+    /**
+     * `Game::playerRequestCloseDepotSearch` (src/game/game.cpp:6933). PARITY GAP:
+     * the `Player::sendCloseDepotSearch` reply is not ported.
+     */
+    fun playerRequestCloseDepotSearch(playerId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+        if (!player.isDepotSearchOpen()) {
+            return
+        }
+
+        player.setDepotSearchIsOpen(0, 0)
+    }
+
+    /** `Game::playerLeaveMarket` (src/game/game.cpp:10273). */
+    fun playerLeaveMarket(playerId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+        player.setInMarket(false)
+    }
+
+    /** `Game::playerCloseImbuementWindow` (src/game/game.cpp:7178). */
+    fun playerCloseImbuementWindow(playerId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+        player.setImbuingItem(null)
     }
 
     companion object {
