@@ -51,7 +51,7 @@ data class ForgeConversionResult(val cost: Long, val gained: Long)
  *  - tier promotion: src/creatures/players/player.cpp:11375-11491
  *  - resource conversion: src/creatures/players/player.cpp:11709-11789
  */
-class Forge(private val config: ForgeConfig = ForgeConfig()) {
+class Forge(val config: ForgeConfig = ForgeConfig()) {
 
     private var forgeDusts: Long = 0
     private var forgeDustLevel: Long = 0
