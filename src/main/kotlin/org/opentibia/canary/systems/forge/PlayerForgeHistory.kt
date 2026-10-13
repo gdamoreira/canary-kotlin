@@ -1,5 +1,11 @@
 package org.opentibia.canary.systems.forge
 
+import io.github.oshai.kotlinlogging.KotlinLogging
+import java.sql.SQLException
+import javax.sql.DataSource
+
+private val logger = KotlinLogging.logger {}
+
 /**
  * Mirror of Canary `ForgeHistory`
  * (src/creatures/players/components/player_forge_history.hpp:16-39).
@@ -53,6 +59,116 @@ class InMemoryForgeHistoryRepository : ForgeHistoryRepository {
         val list = rows.getOrPut(playerGuid) { mutableListOf() }
         list.addAll(entries.map { it.copy() })
         return true
+    }
+}
+
+/**
+ * JDBC persistence for a player's forge-history rows, mirroring Canary's
+ * `g_database()` calls in `PlayerForgeHistory::load`/`save`
+ * (src/creatures/players/components/player_forge_history.cpp:43-113) against
+ * the `forge_history` table (schema.sql:314-329).
+ *
+ * Load reads only the columns Canary reads (`id`, `action_type`,
+ * `description`, `done_at`, `is_success`), leaving the non-persisted
+ * [ForgeHistory] fields at their defaults, and orders by `id` to reproduce the
+ * in-memory vector order the C++ load appends in. Insert mirrors the
+ * `(player_id, action_type, description, done_at, is_success)` batch and delete
+ * mirrors the `player_id` + `id IN (...)` statement; both report Canary's
+ * `bool` failure contract instead of throwing.
+ */
+class JdbcForgeHistoryRepository(private val dataSource: DataSource) : ForgeHistoryRepository {
+
+    override fun load(playerGuid: Long): List<ForgeHistory> {
+        val result = mutableListOf<ForgeHistory>()
+        dataSource.connection.use { conn ->
+            conn.prepareStatement(
+                """
+                SELECT id, action_type, description, done_at, is_success
+                FROM forge_history
+                WHERE player_id = ?
+                ORDER BY id
+                """.trimIndent(),
+            ).use { stmt ->
+                stmt.setLong(1, playerGuid)
+                stmt.executeQuery().use { rs ->
+                    while (rs.next()) {
+                        result.add(
+                            ForgeHistory(
+                                actionType = ForgeAction_t.entries.firstOrNull {
+                                    it.value == rs.getInt("action_type")
+                                } ?: ForgeAction_t.FUSION,
+                                createdAt = rs.getLong("done_at"),
+                                id = rs.getLong("id"),
+                                success = rs.getBoolean("is_success"),
+                                description = rs.getString("description"),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+        return result
+    }
+
+    override fun delete(playerGuid: Long, ids: List<Long>): Boolean {
+        if (ids.isEmpty()) {
+            return true
+        }
+
+        return try {
+            dataSource.connection.use { conn ->
+                val placeholders = ids.joinToString(", ") { "?" }
+                conn.prepareStatement(
+                    "DELETE FROM forge_history WHERE player_id = ? AND id IN ($placeholders)",
+                ).use { stmt ->
+                    stmt.setLong(1, playerGuid)
+                    ids.forEachIndexed { index, id -> stmt.setLong(index + 2, id) }
+                    stmt.executeUpdate()
+                }
+            }
+            true
+        } catch (ex: SQLException) {
+            logger.error(ex) { "Failed to delete forge history entries for player $playerGuid" }
+            false
+        }
+    }
+
+    override fun insert(playerGuid: Long, entries: List<ForgeHistory>): Boolean {
+        if (entries.isEmpty()) {
+            return true
+        }
+
+        return try {
+            dataSource.connection.use { conn ->
+                conn.autoCommit = false
+                try {
+                    conn.prepareStatement(
+                        """
+                        INSERT INTO forge_history (player_id, action_type, description, done_at, is_success)
+                        VALUES (?, ?, ?, ?, ?)
+                        """.trimIndent(),
+                    ).use { stmt ->
+                        entries.forEach { entry ->
+                            stmt.setLong(1, playerGuid)
+                            stmt.setInt(2, entry.actionType.value)
+                            stmt.setString(3, entry.description)
+                            stmt.setLong(4, entry.createdAt)
+                            stmt.setBoolean(5, entry.success)
+                            stmt.addBatch()
+                        }
+                        stmt.executeBatch()
+                    }
+                    conn.commit()
+                } catch (ex: Exception) {
+                    conn.rollback()
+                    throw ex
+                }
+            }
+            true
+        } catch (ex: SQLException) {
+            logger.error(ex) { "Failed to insert forge history entries for player $playerGuid" }
+            false
+        }
     }
 }
 
