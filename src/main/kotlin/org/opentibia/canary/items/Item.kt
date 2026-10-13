@@ -9,7 +9,9 @@ data class ItemType(
     val weight: Double = 0.0,
     /** Mirrors `ItemType::upgradeClassification` (src/items/items.hpp:329). */
     val upgradeClassification: Int = 0,
-    val isPickupable: Boolean = true
+    val isPickupable: Boolean = true,
+    /** Mirrors `ItemType::magicEffect` (src/items/items.hpp:318); default `CONST_ME_NONE` (0). */
+    val magicEffect: Int = 0
 )
 
 class ItemTypeRegistry {
