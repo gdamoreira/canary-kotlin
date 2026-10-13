@@ -32,6 +32,8 @@ class GameHandler(
     private val dispatcher: GameDispatcher,
     private val luaEnvironment: LuaEnvironment = LuaEnvironment().apply { initState() },
     private val persistenceService: PlayerPersistenceService? = null,
+    private val onPlayerAppear: () -> Unit = {},
+    private val onPlayerDisappear: () -> Unit = {},
 ) : SimpleChannelInboundHandler<ByteBuf>() {
 
     private var player: Player? = null
@@ -137,8 +139,20 @@ class GameHandler(
         persistenceService?.load(activePlayer)
         scriptingDispatch.playerLogin(activePlayer)
 
+        // Canary checks the players record from `Player::onCreatureAppear`
+        // (src/creatures/players/player.cpp:12300); the server owns the online-count
+        // tracking and fires the `record` global events.
+        onPlayerAppear()
+
         logger.info { "Player '${activePlayer.name}' logged into game world" }
         sendLoginSuccess(ctx, activePlayer)
+    }
+
+    override fun channelInactive(ctx: ChannelHandlerContext) {
+        if (player != null) {
+            onPlayerDisappear()
+        }
+        super.channelInactive(ctx)
     }
 
     private fun handleGamePacket(ctx: ChannelHandlerContext, msg: ByteBuf) {

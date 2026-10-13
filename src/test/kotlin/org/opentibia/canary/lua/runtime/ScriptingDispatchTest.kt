@@ -2,6 +2,7 @@ package org.opentibia.canary.lua.runtime
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.items.Item
@@ -158,5 +159,161 @@ class ScriptingDispatchTest {
         } finally {
             dispatcher.shutdown()
         }
+    }
+
+    @Test
+    fun `creatureOnThink dispatches every registered think event on the world commit lane`() {
+        val environment = env()
+        environment.loadChunk(
+            """
+            local first = CreatureEvent("ThinkFirst")
+            function first.onThink(creature, interval)
+                seen_think_first = creature:getName()
+                seen_think_interval = interval
+            end
+            first:register()
+
+            local second = CreatureEvent("ThinkSecond")
+            function second.onThink(creature, interval)
+                seen_think_second = creature:getName()
+            end
+            second:register()
+            """.trimIndent()
+        )
+
+        val monster = Monster(2, "Rat", 20, 20, position = Position(50, 50, 7))
+        val dispatcher = GameDispatcher().apply { start() }
+        try {
+            val scripting = ScriptingDispatch(environment, dispatcher)
+            assertThat(scripting.creatureOnThink(monster, 1000)).isTrue()
+            awaitLane(dispatcher)
+
+            assertThat(environment.getGlobal("seen_think_first").tojstring()).isEqualTo("Rat")
+            assertThat(environment.getGlobal("seen_think_interval").toint()).isEqualTo(1000)
+            assertThat(environment.getGlobal("seen_think_second").tojstring()).isEqualTo("Rat")
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    @Test
+    fun `creatureOnThink reports false when no think event is registered`() {
+        val environment = env()
+        val monster = Monster(2, "Rat", 20, 20, position = Position(50, 50, 7))
+        val dispatcher = GameDispatcher().apply { start() }
+        try {
+            assertThat(ScriptingDispatch(environment, dispatcher).creatureOnThink(monster, 1000)).isFalse()
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    @Test
+    fun `creatureOnDeath dispatches the registered death event with corpse and flags`() {
+        val environment = env()
+        environment.loadChunk(
+            """
+            local death = CreatureEvent("DeathCaller")
+            function death.onDeath(creature, corpse, killer, mostDamageKiller, lastHitUnjustified, mostDamageUnjustified)
+                seen_death_creature = creature:getName()
+                seen_death_corpse = corpse:getId()
+                seen_death_killer_nil = (killer == nil)
+                seen_death_most_nil = (mostDamageKiller == nil)
+                seen_death_last = lastHitUnjustified
+                seen_death_most = mostDamageUnjustified
+            end
+            death:register()
+            """.trimIndent()
+        )
+
+        val monster = Monster(2, "Rat", 20, 0, position = Position(50, 50, 7))
+        val dispatcher = GameDispatcher().apply { start() }
+        try {
+            val scripting = ScriptingDispatch(environment, dispatcher)
+            assertThat(
+                scripting.creatureOnDeath(
+                    monster, Item(2159), null, null, lastHitUnjustified = true, mostDamageUnjustified = false,
+                )
+            ).isTrue()
+            awaitLane(dispatcher)
+
+            assertThat(environment.getGlobal("seen_death_creature").tojstring()).isEqualTo("Rat")
+            assertThat(environment.getGlobal("seen_death_corpse").toint()).isEqualTo(2159)
+            assertThat(environment.getGlobal("seen_death_killer_nil").toboolean()).isTrue()
+            assertThat(environment.getGlobal("seen_death_most_nil").toboolean()).isTrue()
+            assertThat(environment.getGlobal("seen_death_last").toboolean()).isTrue()
+            assertThat(environment.getGlobal("seen_death_most").toboolean()).isFalse()
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    @Test
+    fun `globalStartup dispatches the registered startup event on the world commit lane`() {
+        val environment = env()
+        environment.loadChunk(
+            """
+            local boot = GlobalEvent("CallerBoot")
+            function boot.onStartup()
+                seen_startup = true
+            end
+            boot:register()
+            """.trimIndent()
+        )
+
+        val dispatcher = GameDispatcher().apply { start() }
+        try {
+            val scripting = ScriptingDispatch(environment, dispatcher)
+            assertThat(scripting.globalStartup()).isTrue()
+            awaitLane(dispatcher)
+
+            assertThat(environment.getGlobal("seen_startup").toboolean()).isTrue()
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    @Test
+    fun `globalStartup reports false when no startup event is registered`() {
+        val environment = env()
+        val dispatcher = GameDispatcher().apply { start() }
+        try {
+            assertThat(ScriptingDispatch(environment, dispatcher).globalStartup()).isFalse()
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    @Test
+    fun `globalRecord dispatches the registered record event with current and old`() {
+        val environment = env()
+        environment.loadChunk(
+            """
+            local record = GlobalEvent("CallerRecord")
+            function record.onRecord(current, old)
+                seen_record_current = current
+                seen_record_old = old
+            end
+            record:register()
+            """.trimIndent()
+        )
+
+        val dispatcher = GameDispatcher().apply { start() }
+        try {
+            val scripting = ScriptingDispatch(environment, dispatcher)
+            assertThat(scripting.globalRecord(100, 50)).isTrue()
+            awaitLane(dispatcher)
+
+            assertThat(environment.getGlobal("seen_record_current").toint()).isEqualTo(100)
+            assertThat(environment.getGlobal("seen_record_old").toint()).isEqualTo(50)
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    private fun awaitLane(dispatcher: GameDispatcher) {
+        val ran = CountDownLatch(1)
+        dispatcher.dispatch { ran.countDown() }
+        assertThat(ran.await(2, TimeUnit.SECONDS)).isTrue()
     }
 }

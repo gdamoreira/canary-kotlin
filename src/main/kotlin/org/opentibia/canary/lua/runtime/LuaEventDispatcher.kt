@@ -293,6 +293,9 @@ object LuaEventDispatcher {
 
     // --- GlobalEvents (GlobalEvent::executeEvent/executeRecord) ----------------------
 
+    fun globalEventOnStartup(env: LuaEnvironment, name: String): Boolean =
+        globalEventExecuteEvent(env, name)
+
     fun globalEventOnThink(env: LuaEnvironment, name: String): Boolean =
         globalEventExecuteEvent(env, name)
 

@@ -57,7 +57,10 @@ object GamePacketRouter {
 
                 // Movement & Turns
                 in 0x64..0x72 -> {
-                    MovePacketHandler.handle(player, opcode, buffer, context.map)
+                    MovePacketHandler.handle(
+                        player, opcode, buffer, context.map,
+                        context.luaEnvironment, context.dispatcher,
+                    )
                 }
 
                 // Items & Containers
