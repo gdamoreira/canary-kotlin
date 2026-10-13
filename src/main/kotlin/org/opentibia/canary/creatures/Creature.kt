@@ -50,6 +50,7 @@ import org.opentibia.canary.systems.wheel.PlayerWheel
 import org.opentibia.canary.spells.SoundEffect
 import org.opentibia.canary.spells.SpellBook
 import org.opentibia.canary.spells.Spells
+import org.opentibia.canary.utils.BatchUpdateActor
 import java.util.Collections
 import java.util.IdentityHashMap
 import kotlin.math.abs
@@ -1075,7 +1076,7 @@ class Player(
     var secureMode: Boolean = true,
     var targetCreatureId: Long? = null,
     var inCombat: Boolean = false
-) : Creature(id, name, maxHealth, health, maxMana, mana, speed, position) {
+) : Creature(id, name, maxHealth, health, maxMana, mana, speed, position), BatchUpdateActor {
 
     /**
      * `Player::vocation` (player.hpp). Canary stores the internal [Vocations] id
@@ -1142,6 +1143,33 @@ class Player(
 
     /** `Player::getVocationId()` (player.cpp:201-203): `vocation->getId()`. */
     fun getVocationId(): Int = vocationId
+
+    /** `Player::m_batching` (player.hpp:1973). */
+    private var mBatching = 0
+
+    /** `Player::beginBatchUpdate()` (player.cpp:9140-9142). */
+    override fun beginBatchUpdate() {
+        ++mBatching
+    }
+
+    /**
+     * `Player::endBatchUpdate()` (player.cpp:9144-9156). The final `updateState()`
+     * and `closeContainersOutOfRange()` calls are protocol seams that the Kotlin
+     * player does not model yet (PARITY GAP).
+     */
+    override fun endBatchUpdate() {
+        if (mBatching == 0) {
+            return
+        }
+
+        --mBatching
+        if (mBatching > 0) {
+            return
+        }
+    }
+
+    /** `Player::isBatching()` (player.hpp:772-774). */
+    fun isBatching(): Boolean = mBatching > 0
 
     /**
      * `Player::isPromoted()` (player.cpp:7341-7344). A vocation is promoted when
