@@ -159,41 +159,41 @@ private val logger = KotlinLogging.logger {}
  * models.
  */
 data class ItemType(
-    val id: Int,
+    var id: Int,
     var name: String,
-    val isStackable: Boolean = false,
+    var isStackable: Boolean = false,
     var isContainer: Boolean = false,
-    val capacity: Int = 0,
+    var capacity: Int = 0,
     var weight: Double = 0.0,
     /** Mirrors `ItemType::upgradeClassification` (src/items/items.hpp:329). */
-    val upgradeClassification: Int = 0,
+    var upgradeClassification: Int = 0,
     var isPickupable: Boolean = true,
     /** Mirrors `ItemType::magicEffect` (src/items/items.hpp:318); default `CONST_ME_NONE` (0). */
     var magicEffect: Int = 0,
     /** `ItemType::movable` (src/items/items.hpp:288), the house-serialization guard. */
     var isMovable: Boolean = false,
     /** `ItemType::isBed()` (src/items/items.hpp:378). */
-    val isBed: Boolean = false,
+    var isBed: Boolean = false,
     /** `ItemType::bedPartOf` (src/items/items.hpp:468), the partner id `BedItem::isBedComplete` checks. */
     var bedPartOf: Int = 0,
     /** `ItemType::isCarpet()` (src/items/items.hpp:420). */
-    val isCarpet: Boolean = false,
+    var isCarpet: Boolean = false,
     /** `ItemType::isTrashHolder()` (src/items/items.hpp:410). */
-    val isTrashHolder: Boolean = false,
+    var isTrashHolder: Boolean = false,
     /** `ItemType::isDoor()` (src/items/items.hpp:414). */
-    val isDoor: Boolean = false,
+    var isDoor: Boolean = false,
     /** `ItemType::isWrappable()` (src/items/items.hpp:411). */
-    val isWrappable: Boolean = false,
+    var isWrappable: Boolean = false,
     /** `ItemType::canWriteText` (src/items/items.hpp:342). */
     var canWriteText: Boolean = false,
     /** `ItemType::m_transformOnUse` (src/items/items.hpp:347). */
     var transformOnUse: Int = 0,
     /** `ItemType::isFluidContainer()` (src/items/items.hpp:416). */
-    val isFluidContainer: Boolean = false,
+    var isFluidContainer: Boolean = false,
     /** `ItemType::isSplash()` (src/items/items.hpp:417). */
-    val isSplash: Boolean = false,
+    var isSplash: Boolean = false,
     /** `ItemType::isGroundTile()` (src/items/items.hpp:407). */
-    val isGroundTile: Boolean = false,
+    var isGroundTile: Boolean = false,
     /** `ItemType::charges` (src/items/items.hpp:290), used by `getSubType`/`setSubType`. */
     var charges: Int = 0,
 
@@ -373,7 +373,10 @@ data class ItemType(
     var hasDeEquipEvent: Boolean = false,
     /** `ItemType::showCount` (items.hpp:374), default true. */
     var showCount: Boolean = true,
+    /** `ItemType::animationType` (src/items/items.hpp:302). */
+    var animationType: ItemAnimation_t = ItemAnimation_t.ANIMATION_NONE,
     /** `ItemType::stackable` (items.hpp:375); the XML parse does not set it. */
+    @set:JvmName("setParsedStackable")
     var stackable: Boolean = false,
     /** `ItemType::isPodium` (items.hpp:376). */
     var isPodium: Boolean = false,
@@ -496,6 +499,42 @@ data class ItemType(
     }
 
     /** `ItemType::getAbilities()` (src/items/items.hpp:196-201). */
+    /** `ItemType::parseAugmentDescription` (src/items/items.cpp:82-97). */
+    fun parseAugmentDescription(inspect: Boolean = false): String {
+        if (augments.isEmpty()) {
+            return ""
+        }
+
+        val descriptions = augments.joinToString(", ") { getFormattedAugmentDescription(it) }
+        return if (inspect) {
+            "$descriptions."
+        } else {
+            "\nAugments: ($descriptions)."
+        }
+    }
+
+    /** `ItemType::getFormattedAugmentDescription` (src/items/items.cpp:99-116). */
+    fun getFormattedAugmentDescription(augmentInfo: AugmentInfo): String {
+        val augmentName = Items.getAugmentNameByType(augmentInfo.type)
+        val augmentSpellNameCapitalized = capitalizeWordsIgnoringString(augmentInfo.spellName, " of ")
+
+        val signal = if (augmentInfo.value > 0) '-' else '+'
+
+        if (Items.isAugmentWithoutValueDescription(augmentInfo.type)) {
+            return "$augmentSpellNameCapitalized -> $augmentName"
+        }
+        if (augmentInfo.type == Augment_t.Cooldown) {
+            return "$augmentSpellNameCapitalized -> $signal${augmentInfo.value / 1000}s $augmentName"
+        }
+        return "$augmentSpellNameCapitalized -> ${signedPercent(augmentInfo.value)}% $augmentName"
+    }
+
+    /** `ItemType::triggerExhaustion` (src/items/items.cpp:127-129). */
+    fun triggerExhaustion(): Boolean =
+        type == ItemTypes_t.ITEM_TYPE_RUNE ||
+            (type == ItemTypes_t.ITEM_TYPE_POTION && !isMagicShieldPotion)
+
+
     fun getAbilities(): Abilities = abilities ?: Abilities().also { abilities = it }
 
     /** `ItemType::setImbuementType` (src/items/items.cpp:123-125). */
@@ -509,15 +548,6 @@ data class ItemType(
     }
 }
 
-class ItemTypeRegistry {
-    private val types = mutableMapOf<Int, ItemType>()
-
-    fun register(itemType: ItemType) {
-        types[itemType.id] = itemType
-    }
-
-    fun get(id: Int): ItemType? = types[id]
-}
 
 /**
  * Mirrors Canary `ItemAttribute_t` (src/enums/item_attribute.hpp:12) with the exact
@@ -1920,3 +1950,6 @@ open class Item(
         }
     }
 }
+
+/** `fmt::format("{:+}", value)` for the int32 augment value. */
+private fun signedPercent(value: Int): String = if (value >= 0) "+$value" else "$value"
