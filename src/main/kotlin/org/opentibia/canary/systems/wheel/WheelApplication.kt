@@ -78,6 +78,23 @@ enum class WheelGemActionRejection {
     GEM_LOCKED,
     MAX_GRADE_REACHED,
     INVALID_POSITION,
+
+    /** `revealGem` could not resolve or find the required vocation gem item (player_wheel.cpp:1134-1141). */
+    MISSING_GEM_ITEM,
+
+    /** `removeMoney` could not pay the atelier/grade gold cost (player_wheel.cpp:1143,1298,1486). */
+    NOT_ENOUGH_MONEY,
+
+    /** `improveGemGrade` lacks the required fragments (player_wheel.cpp:1481-1484). */
+    NOT_ENOUGH_FRAGMENTS,
+
+    /**
+     * A seam mutation failed after pre-validation (`removeItemCountById` /
+     * `internalPlayerAddItem`), mirroring Canary's abort branches
+     * (player_wheel.cpp:1147,1240-1256). As in Canary, mutations performed
+     * before the failure are not rolled back.
+     */
+    INTERNAL_ERROR,
 }
 
 /**
@@ -92,6 +109,7 @@ enum class WheelGemActionRejection {
  */
 class WheelApplication(
     private val random: WheelRandom = WheelRandom { minNumber, _ -> minNumber },
+    private val normalRandom: WheelNormalRandom = WheelNormalRandom { minNumber, _ -> minNumber },
 ) {
     private val ioWheel = IOWheel()
 
@@ -405,33 +423,87 @@ class WheelApplication(
         }
     }
 
-    fun applyGemAction(wheel: PlayerWheel, command: WheelGemActionCommand): WheelGemActionResult =
+    fun applyGemAction(
+        wheel: PlayerWheel,
+        command: WheelGemActionCommand,
+        player: WheelPlayer = WheelPlayer.UNWIRED,
+    ): WheelGemActionResult =
         when (command) {
-            is DestroyGemCommand -> destroyGem(wheel, command)
-            is RevealGemCommand -> {
-                val gem = wheel.revealGem(command.quality, random)
-                WheelGemActionResult.Applied(command.action, wheel.gems.revealedGems.indexOf(gem))
-            }
-            is SwitchGemDomainCommand -> switchGemDomain(wheel, command)
+            is DestroyGemCommand -> destroyGem(wheel, command, player)
+            is RevealGemCommand -> revealGem(wheel, command, player)
+            is SwitchGemDomainCommand -> switchGemDomain(wheel, command, player)
             is ToggleGemLockCommand -> toggleGemLock(wheel, command)
-            is ImproveGemGradeCommand -> improveGemGrade(wheel, command)
+            is ImproveGemGradeCommand -> improveGemGrade(wheel, command, player)
         }
 
-    private fun destroyGem(wheel: PlayerWheel, command: DestroyGemCommand): WheelGemActionResult {
+    /**
+     * Mirror of `PlayerWheel::revealGem` (player_wheel.cpp:1132-1183): the
+     * player must own the quality's vocation gem item, then pay the configured
+     * atelier gold cost; only then is the gem item consumed and the gem
+     * revealed.
+     */
+    private fun revealGem(wheel: PlayerWheel, command: RevealGemCommand, player: WheelPlayer): WheelGemActionResult {
+        val gemItemId = player.getWheelGemId(command.quality)
+        if (gemItemId == 0 || !player.hasItemCountById(gemItemId, 1, false)) {
+            return WheelGemActionResult.Rejected(command.action, WheelGemActionRejection.MISSING_GEM_ITEM)
+        }
+        if (!player.removeMoney(wheel.getGemRevealCost(command.quality))) {
+            return WheelGemActionResult.Rejected(command.action, WheelGemActionRejection.NOT_ENOUGH_MONEY)
+        }
+        if (!player.removeItemCountById(gemItemId, 1, false)) {
+            return WheelGemActionResult.Rejected(command.action, WheelGemActionRejection.INTERNAL_ERROR)
+        }
+        val gem = wheel.revealGem(command.quality, random)
+        return WheelGemActionResult.Applied(command.action, wheel.gems.revealedGems.indexOf(gem))
+    }
+
+    /**
+     * Mirror of `PlayerWheel::destroyGem` (player_wheel.cpp:1212-1285): locked
+     * gems are refused, then fragments are refunded by quality before the gem
+     * is unset from its vessel and removed. A failed refund delivery leaves the
+     * gem intact.
+     */
+    private fun destroyGem(
+        wheel: PlayerWheel,
+        command: DestroyGemCommand,
+        player: WheelPlayer,
+    ): WheelGemActionResult {
         val gem = wheel.getGem(command.gemIndex)
             ?: return WheelGemActionResult.Rejected(command.action, WheelGemActionRejection.NO_SUCH_GEM)
         if (gem.locked) {
             return WheelGemActionResult.Rejected(command.action, WheelGemActionRejection.GEM_LOCKED)
         }
+
+        val (fragmentItemId, fragmentCount) = when (gem.quality) {
+            WheelGemQuality.Lesser -> WheelItemIds.ITEM_LESSER_FRAGMENT to normalRandom.normalRandom(1, 5)
+            WheelGemQuality.Regular -> WheelItemIds.ITEM_LESSER_FRAGMENT to normalRandom.normalRandom(2, 10)
+            WheelGemQuality.Greater -> WheelItemIds.ITEM_GREATER_FRAGMENT to normalRandom.normalRandom(1, 5)
+        }
+        if (fragmentCount > 0 && !player.internalPlayerAddItem(fragmentItemId, fragmentCount)) {
+            return WheelGemActionResult.Rejected(command.action, WheelGemActionRejection.INTERNAL_ERROR)
+        }
+
         wheel.destroyGem(command.gemIndex)
         return WheelGemActionResult.Applied(command.action, command.gemIndex)
     }
 
-    private fun switchGemDomain(wheel: PlayerWheel, command: SwitchGemDomainCommand): WheelGemActionResult {
+    /**
+     * Mirror of `PlayerWheel::switchGemDomain` (player_wheel.cpp:1287-1306):
+     * locked gems are refused, then the quality's rotate cost is paid before
+     * the affinity rotates.
+     */
+    private fun switchGemDomain(
+        wheel: PlayerWheel,
+        command: SwitchGemDomainCommand,
+        player: WheelPlayer,
+    ): WheelGemActionResult {
         val gem = wheel.getGem(command.gemIndex)
             ?: return WheelGemActionResult.Rejected(command.action, WheelGemActionRejection.NO_SUCH_GEM)
         if (gem.locked) {
             return WheelGemActionResult.Rejected(command.action, WheelGemActionRejection.GEM_LOCKED)
+        }
+        if (!player.removeMoney(wheel.getGemRotateCost(gem.quality))) {
+            return WheelGemActionResult.Rejected(command.action, WheelGemActionRejection.NOT_ENOUGH_MONEY)
         }
         wheel.switchGemDomain(command.gemIndex)
         return WheelGemActionResult.Applied(command.action, command.gemIndex)
@@ -445,7 +517,17 @@ class WheelApplication(
         return WheelGemActionResult.Applied(command.action, command.gemIndex)
     }
 
-    private fun improveGemGrade(wheel: PlayerWheel, command: ImproveGemGradeCommand): WheelGemActionResult {
+    /**
+     * Mirror of `PlayerWheel::improveGemGrade` (player_wheel.cpp:1448-1506):
+     * the next grade's fragment quantity must be held (stash included) and the
+     * grade's gold cost paid before the fragments are consumed and the grade
+     * raised.
+     */
+    private fun improveGemGrade(
+        wheel: PlayerWheel,
+        command: ImproveGemGradeCommand,
+        player: WheelPlayer,
+    ): WheelGemActionResult {
         val grades = when (command.fragmentType) {
             WheelFragmentType.Lesser -> wheel.gems.basicGrades
             WheelFragmentType.Greater -> wheel.gems.supremeGrades
@@ -456,6 +538,27 @@ class WheelApplication(
         if (grades[command.position] >= PlayerWheel.MAX_GEM_GRADE) {
             return WheelGemActionResult.Rejected(command.action, WheelGemActionRejection.MAX_GRADE_REACHED)
         }
+
+        val nextGrade = grades[command.position] + 1
+        val fragmentItemId = when (command.fragmentType) {
+            WheelFragmentType.Lesser -> WheelItemIds.ITEM_LESSER_FRAGMENT
+            WheelFragmentType.Greater -> WheelItemIds.ITEM_GREATER_FRAGMENT
+        }
+        val (goldCost, fragmentCount) = when (command.fragmentType) {
+            WheelFragmentType.Lesser -> wheel.getLesserGradeCost(nextGrade)
+            WheelFragmentType.Greater -> wheel.getGreaterGradeCost(nextGrade)
+        }
+
+        if (!player.hasItemCountById(fragmentItemId, fragmentCount, true)) {
+            return WheelGemActionResult.Rejected(command.action, WheelGemActionRejection.NOT_ENOUGH_FRAGMENTS)
+        }
+        if (!player.removeMoney(goldCost)) {
+            return WheelGemActionResult.Rejected(command.action, WheelGemActionRejection.NOT_ENOUGH_MONEY)
+        }
+        if (!player.removeItemCountById(fragmentItemId, fragmentCount, true)) {
+            return WheelGemActionResult.Rejected(command.action, WheelGemActionRejection.INTERNAL_ERROR)
+        }
+
         wheel.improveGemGrade(command.fragmentType, command.position)
         return WheelGemActionResult.Applied(command.action, command.position)
     }

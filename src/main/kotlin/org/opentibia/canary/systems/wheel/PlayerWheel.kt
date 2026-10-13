@@ -23,6 +23,7 @@ class PlayerWheel(
     private var modsMaxGrade: Int = 0,
     val pointsBySlot: MutableMap<WheelSlots, Int> = mutableMapOf(),
     val gems: WheelGemState = WheelGemState(),
+    private val config: WheelConfig = WheelConfig(),
 ) {
     fun getPointsBySlotType(slot: WheelSlots): Int = pointsBySlot[slot] ?: 0
 
@@ -38,10 +39,22 @@ class PlayerWheel(
     fun getGem(index: Int): PlayerWheelGem? = gems.revealedGems.getOrNull(index)
 
     /**
-     * Mirror of `PlayerWheel::revealGem` (player_wheel.cpp:1132), minus the
-     * player item/gold consumption and the vocation supreme-modifier pool
-     * (see docs note / PARITY GAPS). The injected [WheelRandom] replaces the
-     * C++ `uniform_random` global, matching [WheelGems.selectBasicModifier2].
+     * Mirror of `PlayerWheel::getGemRevealCost` (player_wheel.cpp:1114): the
+     * configured `WHEEL_ATELIER_REVEAL_*_COST` for the gem quality.
+     */
+    fun getGemRevealCost(quality: WheelGemQuality): Long = when (quality) {
+        WheelGemQuality.Lesser -> config.revealLesserCost.toLong()
+        WheelGemQuality.Regular -> config.revealRegularCost.toLong()
+        WheelGemQuality.Greater -> config.revealGreaterCost.toLong()
+    }
+
+    /**
+     * Mirror of `PlayerWheel::revealGem` (player_wheel.cpp:1132) gem generation
+     * and state effect; the gem item requirement, gold atelier cost and the
+     * vocation supreme-modifier pool are applied by [WheelApplication] through
+     * the [WheelPlayer] seam (see docs note / PARITY GAPS). The injected
+     * [WheelRandom] replaces the C++ `uniform_random` global, matching
+     * [WheelGems.selectBasicModifier2].
      */
     fun revealGem(quality: WheelGemQuality, random: WheelRandom): PlayerWheelGem {
         val affinity = WheelGemAffinity.entries[random.uniformRandom(0, WheelGemAffinity.entries.size - 1)]
@@ -64,7 +77,8 @@ class PlayerWheel(
     /**
      * Mirror of `PlayerWheel::destroyGem` (player_wheel.cpp:1212) state effects:
      * locked gems are refused, the gem is unset from any active vessel, then
-     * removed from the revealed list. Fragment refunds are not modelled.
+     * removed from the revealed list. The fragment refund is credited by
+     * [WheelApplication] through the [WheelPlayer] seam.
      */
     fun destroyGem(index: Int): Boolean {
         val gem = getGem(index) ?: return false
@@ -81,9 +95,20 @@ class PlayerWheel(
     }
 
     /**
+     * Mirror of `PlayerWheel::getGemRotateCost` (player_wheel.cpp:1096): the
+     * configured `WHEEL_ATELIER_ROTATE_*_COST` for the gem quality.
+     */
+    fun getGemRotateCost(quality: WheelGemQuality): Long = when (quality) {
+        WheelGemQuality.Lesser -> config.rotateLesserCost.toLong()
+        WheelGemQuality.Regular -> config.rotateRegularCost.toLong()
+        WheelGemQuality.Greater -> config.rotateGreaterCost.toLong()
+    }
+
+    /**
      * Mirror of `PlayerWheel::switchGemDomain` (player_wheel.cpp:1287) state
      * effect: rotated by `convertWheelGemAffinityToDomain`. Locked gems are
-     * refused; the gold cost is not modelled.
+     * refused; the gold cost is charged by [WheelApplication] through the
+     * [WheelPlayer] seam.
      */
     fun switchGemDomain(index: Int): Boolean {
         val gem = getGem(index) ?: return false
@@ -103,7 +128,8 @@ class PlayerWheel(
     /**
      * Mirror of `PlayerWheel::improveGemGrade` (player_wheel.cpp:1448) grade
      * mutation, including the `m_modsMaxGrade` increment at grade 3. The
-     * fragment/gold consumption is not modelled.
+     * fragment/gold consumption is charged by [WheelApplication] through the
+     * [WheelPlayer] seam.
      */
     fun improveGemGrade(fragmentType: WheelFragmentType, position: Int): Boolean {
         val grades = when (fragmentType) {
@@ -122,6 +148,30 @@ class PlayerWheel(
             modsMaxGrade++
         }
         return true
+    }
+
+    /**
+     * Mirror of `PlayerWheel::getLesserGradeCost` (player_wheel.cpp:1508): the
+     * `(gold, lesser fragments)` cost of reaching the target basic grade; an
+     * unknown grade returns `(0, 0)` like the C++ empty tuple.
+     */
+    fun getLesserGradeCost(grade: Int): Pair<Long, Int> = when (grade) {
+        1 -> 2_000_000L to 5
+        2 -> 5_000_000L to 15
+        3 -> 30_000_000L to 30
+        else -> 0L to 0
+    }
+
+    /**
+     * Mirror of `PlayerWheel::getGreaterGradeCost` (player_wheel.cpp:1521): the
+     * `(gold, greater fragments)` cost of reaching the target supreme grade; an
+     * unknown grade returns `(0, 0)` like the C++ empty tuple.
+     */
+    fun getGreaterGradeCost(grade: Int): Pair<Long, Int> = when (grade) {
+        1 -> 5_000_000L to 5
+        2 -> 12_000_000L to 15
+        3 -> 75_000_000L to 30
+        else -> 0L to 0
     }
 
     fun setActiveGem(affinity: WheelGemAffinity, index: Int): Boolean {
