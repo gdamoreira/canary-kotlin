@@ -95,3 +95,18 @@ enum class PlayerFlags_t(val value: Int) {
     /** Must always be the last (`utils_definitions.hpp:761`). */
     FlagLast(40),
 }
+
+/**
+ * `PlayerPronoun_t` (`src/creatures/creatures_definitions.hpp:455-464`).
+ *
+ * Used by `Player::getPossessivePronoun` (player.cpp:7096-7098), which the
+ * private chat channel invite message reads (chat.cpp:49).
+ */
+enum class PlayerPronoun_t(val value: Int) {
+    PLAYERPRONOUN_UNSET(0),
+    PLAYERPRONOUN_THEY(1),
+    PLAYERPRONOUN_SHE(2),
+    PLAYERPRONOUN_HE(3),
+    PLAYERPRONOUN_ZE(4),
+    PLAYERPRONOUN_NAME(5),
+}
