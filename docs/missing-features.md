@@ -16,13 +16,13 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 |---|---|---|
 | Tracked gameplay features (56) | **100%** engine scope | `docs/game-play-features.md`; residual parity gaps per feature |
 | Inbound `ProtocolGame` opcodes | **~23%** (24 / ~105) | 81 opcodes unhandled (see §5) |
-| Outbound `ProtocolGame` senders | **~3%** (~6 / ~180) | only self-appear, map description, 5 window serializers |
-| Lua bindings (`src/lua/functions/*`) | **~11%** (~150 / 1,310) | player (306), monster-type (101), game (59), item-type (57) mostly missing |
-| `Player` methods (`player.cpp`) | **~2%** (~14 / ~765) | inventory/skills/attributes/vocation/premium ported |
-| Monster engine (`monster.cpp`, 4k lines) | **~2%** | `MonsterAi.kt` is 65 lines (greedy chase); no A*/targeting/loot runtime |
-| Map engine (`map.cpp`) | **~30%** | OTBM load + sectors + tiles; no pathfinding/sight/canWalkTo/houses save |
-| Persistence (`iologindata*`, `iomapserialize`) | **~15%** | vitals/level/pos + feature state; no inventory/depot/spells/VIP/houses |
-| **Estimated full-parity completion** | **~25–30%** | weighted across the above; the 56 tracked features are engine-complete but the full Canary surface is far larger |
+| Outbound `ProtocolGame` senders | **~8%** (~14 / ~180) | self-appear, map description, window serializers, core stats/skills/inventory/container/creature/text senders |
+| Lua bindings (`src/lua/functions/*`) | **~13%** (~169 / 1,310) | player (306), monster-type (101), game (59), item-type (57) mostly missing |
+| `Player` methods (`player.cpp`) | **~4%** (~33 / ~765) | inventory/skills/attributes/vocation/premium + more Lua primitives |
+| Monster engine (`monster.cpp`, 4k lines) | **~5%** | A* pathfinder + spawn engines ported; no targeting/loot runtime |
+| Map engine (`map.cpp`) | **~35%** | OTBM load + sectors + tiles + A*; no sight/canWalkTo/houses save |
+| Persistence (`iologindata*`, `iomapserialize`) | **~18%** | vitals/level/pos + feature state (V3/V4); no inventory/depot/spells/VIP/houses |
+| **Estimated full-parity completion** | **~27–32%** | weighted across the above; the 56 tracked features are engine-complete but the full Canary surface is far larger |
 
 ---
 

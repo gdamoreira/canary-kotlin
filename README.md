@@ -104,7 +104,7 @@ canary-kotlin/
 │   │   └── resources/
 │   │       ├── db/migration/  # Flyway schema migrations (V1, V2)
 │   │       └── lua/           # LuaJ compatibility shim
-│   └── test/                  # JUnit 5 + AssertJ test suite (160 suites / 1076 tests, all green)
+│   └── test/                  # JUnit 5 + AssertJ test suite (167 suites / 1140 tests, all green)
 ├── docker-compose.yml         # Containerized PostgreSQL 16 + Server stack
 ├── Dockerfile                 # Multi-stage alpine build
 └── build.gradle.kts           # Kotlin 2.4 / Java 25 Gradle build file
@@ -156,12 +156,12 @@ The port is a faithful, incremental transcription of Canary's C++ engine. Two vi
 |---|---|
 | **Tracked gameplay features** (`docs/game-play-features.md`) | **56 / 56 (100%)** — engine scope, tested |
 | **Inbound `ProtocolGame` opcodes** | ~24 / ~105 (**~23%**) |
-| **Outbound `ProtocolGame` senders** | ~6 / ~180 (**~3%**) |
-| **Lua bindings** | ~150 / 1,310 (**~11%**) |
-| **`Player` methods** | ~14 / ~765 (**~2%**) |
-| **Monster engine** | **~2%** (no A*/targeting/loot runtime) |
+| **Outbound `ProtocolGame` senders** | ~14 / ~180 (**~8%**) |
+| **Lua bindings** | ~169 / 1,310 (**~13%**) |
+| **`Player` methods** | ~33 / ~765 (**~4%**) |
+| **Monster engine** | **~5%** (A* pathfinder ported; no targeting/loot runtime) |
 | **Map engine** | **~30%** |
 | **Persistence** | **~15%** |
-| **Estimated full-parity completion** | **~25–30%** |
+| **Estimated full-parity completion** | **~27–32%** |
 
 The 56 tracked gameplay features are engine-complete, but Canary's full surface (`player.cpp` ~765 methods, `game.cpp` ~352 methods, ~1,310 Lua registrations, ~105 opcodes) is far larger. The complete per-subsystem inventory and ranked remaining work lives in **[`docs/missing-features.md`](docs/missing-features.md)**.
