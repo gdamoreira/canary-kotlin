@@ -25,6 +25,16 @@ abstract class Creature(
 ) {
     val isDead: Boolean get() = health <= 0
 
+    private var internalRemoved = false
+
+    /** `Creature::setRemoved()` (src/creatures/creature.hpp:152). */
+    fun setRemoved() {
+        internalRemoved = true
+    }
+
+    /** `Creature::isRemoved()` (src/creatures/creature.hpp:210). */
+    fun isRemoved(): Boolean = internalRemoved
+
     fun drainHealth(amount: Int) {
         health = max(0, health - amount)
     }
