@@ -50,3 +50,7 @@ Existing migrations: V1–V9. Each agent uses its assigned versions only; if no 
 ## Post-wave (AGENTS.md §6)
 
 Flip all `src/io/` rows to `IMPLEMENTED`; update `docs/missing-features.md` §1–§3, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/Done/`; commit the docs separately and push to `origin`.
+
+## Completion
+
+Completed. All 9 `src/io/` rows are now IMPLEMENTED (iologindata 24/24, iomapserialize 10/10, iomap nodes, iomarket 18/18, ioprey, iobestiary, io_bosstiary, ioguild, player_storage_repository); migrations V10–V14.

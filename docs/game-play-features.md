@@ -84,7 +84,7 @@ This document establishes the master inventory of all gameplay features from Can
 
 - **Implemented & Verified Gameplay Systems**: **56 / 56** ($100\%$)
 - **Advanced Gameplay Systems**: **15 / 15** implemented (engine scope); residual parity gaps per feature above.
-- **Automated Test Coverage**: 355 test suites / 3568 tests passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered).
+- **Automated Test Coverage**: 375 test suites / 3769 tests passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered).
 - **Combat stack**: `combat/CombatDamage` + `Combat` (damage/armor/mitigation/crit), `combat/condition/*` (Condition engine core + outfit/light/invisible/cooldown/serene).
 - **Combat consumers**: bestiary charm procs, weapon-proficiency combat application, and hazard `CombatDamage` bridge.
 - **Lua engine**: bindings installed at `LuaEnvironment.initState()`; core primitive bindings (Game/Player/Creature/Item/Container/Position) + Spell/CreatureEvent/GlobalEvent/MoveEvent registries; `LuaEventDispatcher`/`ScriptingDispatch`; best-effort `data/libs` load.
@@ -96,7 +96,7 @@ This document establishes the master inventory of all gameplay features from Can
 |---|---|---|---|---|
 | `src/` bootstrap, `src/account/`, `src/config/`, `src/database/`, `src/enums/`, `src/security/`, `src/creatures/` | 53 | 53 | **100%** | sections complete (waves 24–34) |
 | `src/protobuf/` | 2 | 1 | **50%** | `kv.proto` missing |
-| `src/io/` | 9 | 0 | **44%** | persistence depth |
+| `src/io/` | 9 | 9 | **100%** | iologindata/iomapserialize/market/prey/bestiary/bosstiary/guild/storage (wave 36) |
 | `src/items/` | 10 | 0 | **35%** | cylinder/bed/decay/Tile |
 | `src/map/` | 6 | 0 | **33%** | sight/canWalkTo/houses |
 | `src/game/` | 10 | 9 | **95%** | core `Game` class + scheduler/events/compute/reload/movement/modal (wave 35) |
@@ -105,4 +105,4 @@ This document establishes the master inventory of all gameplay features from Can
 | `src/utils/` | 3 | 0 | **17%** | `tools.cpp` |
 | `src/lib/` | 5 | 0 | **10%** | DI/logger/metrics |
 | `src/kv/` | 1 | 0 | **0%** | KV engine |
-| **Overall** | **116** | **63** | **66%** (rows 54%) | full-parity estimate **~50–55%** |
+| **Overall** | **116** | **72** | **70%** (rows 62%) | full-parity estimate **~55–60%** |

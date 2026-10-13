@@ -330,12 +330,22 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Inbound opcodes complete** — all **141/141 active** opcodes now decode; wave 35 added the final 64 across 4 batches (party analyzer/team finder, client options, extended opcode, channels, item interaction, text/house windows, bosstiary, highscores, weapon proficiency, task hunting, forge history, container browse/seek, inspection, VIP, cyclopedia, prey, hireling, resource balance, greet, object info). ~180 new tests.
 - **Outbound senders** — trade/channel/house/VIP/store/inspection/blessing/stash/cyclopedia writers added. 63 tests.
 - Verified per-module coverage percentages added to `docs/missing-features.md` §1.
-- **355 suites / 3568 tests, all green.**
+- **375 suites / 3769 tests, all green.**
+
+---
+
+### Phase 34: `src/io/` Section Complete (14:30 – 15:30)
+- **iologindata** — 24/24 methods: auth/GUID/bank, load/save, inventory/depot/inbox/kills/stash/rewards/storage, VIP entries+groups. Migration V10. 78 tests.
+- **iomapserialize + iomap** — house items/info, guards, tile/container/item serialization; houses/monsters/npcs/zones XML nodes. Migration V11. 54 tests.
+- **iomarket + ioprey** — offers/history/statistics/expiration + prey/task-hunting persistence. Migration V12. 36 tests.
+- **iobestiary + io_bosstiary + ioguild** — charms/kill counts/tracker/animus, boss points/slots/boosted boss, guild load/save. Migration V13. 32 tests.
+- **player_storage_repository** — typed repo (load/deleteKeys/bulk upsert). Migration V14. 14 tests.
+- **375 suites / 3769 tests, all green.**
 
 ---
 
 ### Current Status
-- **Automated Tests**: **355 test suites / 3568 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **375 test suites / 3769 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.

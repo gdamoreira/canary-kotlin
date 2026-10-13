@@ -23,8 +23,8 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | `Player` methods (`player.cpp`) | 821 `Player::` methods | ~409 functions in `creatures/players/**` | **~50%** raw count | not a strict 1:1 mapping; components included |
 | Monster engine (`monster.cpp`, 4,014 lines) | — | 57 functions + `MonsterAi` + `MonsterPathfinder` | **~20%** | A* + spawn engines + targeting/loot/intention/relevance |
 | Map engine (`map.cpp`) | — | — | **~35%** | OTBM load + sectors + tiles + A*; no sight/`canWalkTo`/houses save |
-| Persistence (`iologindata*`, `iomapserialize`) | — | — | **~30%** | vitals/level/pos + feature state (V3/V4) + inventory (V5) + depot/spells (V6); no VIP/houses |
-| **Estimated full-parity completion** | — | — | **~50–55%** | weighted across the above |
+| Persistence (`iologindata*`, `iomapserialize`) | — | — | **~80%** | 24/24 iologindata, 10/10 iomapserialize, market/prey/bestiary/bosstiary/guild/storage (V10–V14) |
+| **Estimated full-parity completion** | — | — | **~55–60%** | weighted across the above |
 
 ### 1.2 Module completion (by inventory rows in §2)
 
@@ -39,7 +39,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | `src/creatures/` | 30 | 30 | 0 | 0 | **100%** | 100% |
 | `src/protobuf/` | 2 | 1 | 0 | 1 | **50%** | 50% |
 | `src/game/` | 10 | 9 | 1 | 0 | **90%** | **95%** |
-| `src/io/` | 9 | 0 | 8 | 1 | 0% | **44%** |
+| `src/io/` | 9 | 9 | 0 | 0 | **100%** | **100%** |
 | `src/items/` | 10 | 0 | 7 | 3 | 0% | **35%** |
 | `src/map/` | 6 | 0 | 4 | 2 | 0% | **33%** |
 | `src/server/` | 5 | 0 | 3 | 2 | 0% | **30%** |
@@ -47,7 +47,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | `src/utils/` | 3 | 0 | 1 | 2 | 0% | **17%** |
 | `src/lib/` | 5 | 0 | 1 | 4 | 0% | **10%** |
 | `src/kv/` | 1 | 0 | 0 | 1 | 0% | **0%** |
-| **All modules** | **116** | **63** | **26** | **27** | **54%** | **66%** |
+| **All modules** | **116** | **72** | **18** | **26** | **62%** | **70%** |
 
 ---
 
@@ -146,15 +146,15 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 ### `src/io/`
 | C++ | Status | Missing |
 |---|---|---|
-| `iologindata.cpp` (24 methods) | PARTIAL | inventory/depot/inbox/stash/spells/kills/storage/VIP/guild/outfits/rewards/prey/imbuements load+save, auth, bank, GUID lookups |
-| `iomapserialize.cpp` (10 methods) | MISSING | house items/info, tile serialization, guards |
-| `iomap.cpp` | PARTIAL | houses/spawns/zones nodes, extended tile attributes |
-| `iomarket.cpp` (19 methods) | PARTIAL | DB persistence, expiration, history, statistics, escrow |
-| `ioprey.cpp` | PARTIAL | prey runtime/actions/reroll, persistence |
-| `io_bosstiary.cpp` | PARTIAL | boss points, slots, cooldown persistence |
-| `iobestiary.cpp` | PARTIAL | kill-counter persistence, tracker, animus mastery |
-| `ioguild.cpp` | PARTIAL | DB load/save, ranks, wars |
-| `player_storage_repository*.cpp` | PARTIAL | typed storage repo (add/remove/upsertKey/delta/ranges) |
+| `iologindata.cpp` (24 methods) | **IMPLEMENTED** | 24/24: auth/GUID/bank, load/save player + online-player data, inventory/depot/inbox/kills/stash/rewards/storage, VIP entries+groups (V10) |
+| `iomapserialize.cpp` (10 methods) | **IMPLEMENTED** | 10/10: house items/info load+save, guards, container/item/tile serialization (V11) |
+| `iomap.cpp` | **IMPLEMENTED** | houses/monsters/npcs/zones XML nodes, extended tile attributes, OTBM house/zone tiles |
+| `iomarket.cpp` (19 methods) | **IMPLEMENTED** | 18/18: offers/history/statistics/expiration, escrow seam (V12) |
+| `ioprey.cpp` | **IMPLEMENTED** | prey + task-hunting persistence, premium slot lock, cooldown promotion (V12) |
+| `io_bosstiary.cpp` | **IMPLEMENTED** | levels/loot/boss points, boosted boss, slots/removeTimes/tracker (V13) |
+| `iobestiary.cpp` | **IMPLEMENTED** | charms/echoes/maxima/bits, kill counts, tracker, animus mastery persistence (V13) |
+| `ioguild.cpp` | **IMPLEMENTED** | `IOGuild` (load/save/getGuildIdByName/getWarList) over V9 tables |
+| `player_storage_repository*.cpp` | **IMPLEMENTED** | typed repo: load/deleteKeys/bulk upsert with exact semantics (V14) |
 
 ### `src/items/`
 | C++ | Status | Missing |
@@ -242,19 +242,18 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 ## 3. Highest-Impact Gaps (ranked, verified)
 
-1. **Outbound serialization** — 132 of 190 `ProtocolGame::send*` methods have no Kotlin counterpart (house/auction senders, store, cyclopedia computation frames, remaining creature/map senders).
+1. **Outbound serialization** — 132 of 190 `ProtocolGame::send*` methods have no Kotlin counterpart (remaining creature/map senders, cyclopedia computation frames).
 2. **Lua bindings** — 167 of 1,246 method registrations (**~13%**); 0 of 673 enum and 8 class registrations.
 3. **`Player` domain model** — ~409 Kotlin functions vs 821 `Player::` methods (~50% raw); many C++ methods still unported.
 4. **Inbound opcode *application*** — all 141 active opcodes decode, but ~95 still stop at the WorldCommit confinement boundary because their engine (trade session, shop, houses, channels, VIP composition, inspection, cyclopedia frames) is unapplied.
-5. **`src/io/` persistence depth** — `iologindata` item/depot depth, `iomapserialize` houses, `iomarket`, `ioprey`, `iobosstiary`, `iobestiary`, `ioguild`.
-6. **`src/items/` fundamentals** — `cylinder`, `bed`, `trashholder`, decay engine, full `Tile`/`Container` behaviors.
-7. **Map engine** — `mapcache`, navigation snapshots, `canWalkTo`/sight/path, house/spawn/zone loading.
-8. **`game.cpp` remainder** — trade/shop/party/guild Game methods, houses/auctions, VIP, highscores, reports, game loop.
-9. **`src/server/`** — webhook, protocol profiles, session hints, transport variants.
-10. **`src/lib/`** — DI container, logger depth, messaging, metrics, thread pool.
-11. **`src/kv/`** — SQL-backed KV engine replaced only by ad-hoc maps.
-12. **`src/utils/`** — `tools.cpp` (2,326 lines) vs 28 Kotlin lines.
-13. **`src/protobuf/`** — `kv.proto` unported (appearances done).
+5. **`src/items/` fundamentals** — `cylinder`, `bed`, `trashholder`, decay engine, full `Tile`/`Container` behaviors.
+6. **Map engine** — `mapcache`, navigation snapshots, `canWalkTo`/sight/path, house/spawn/zone loading.
+7. **`game.cpp` remainder** — trade/shop/party/guild Game methods, houses/auctions, VIP, highscores, reports, game loop.
+8. **`src/server/`** — webhook, protocol profiles, session hints, transport variants.
+9. **`src/lib/`** — DI container, logger depth, messaging, metrics, thread pool.
+10. **`src/kv/`** — SQL-backed KV engine replaced only by ad-hoc maps.
+11. **`src/utils/`** — `tools.cpp` (2,326 lines) vs 28 Kotlin lines.
+12. **`src/protobuf/`** — `kv.proto` unported (appearances done).
 
 ---
 
