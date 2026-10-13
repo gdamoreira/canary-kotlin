@@ -11,11 +11,17 @@ import java.util.Random
  * max-damage helpers live on `Weapons` (see [Weapons]) and formula resolution
  * lives in `Combat::getCombatDamage`. This object only ports functions that
  * exist in Canary, with the `Player`/`Creature` state replaced by explicit
- * input parameters (task constraint: do not edit Player.kt/Creature.kt).
+ * input parameters (task constraint: do not edit Player.kt/Creature.kt) or by
+ * the injected [CombatTarget] seam for the target-dispatch layer.
  *
  * Sources:
  *  - `Combat::getLevelFormula`: src/creatures/combat/combat.cpp:135-152
  *  - `Combat::getCombatDamage`: src/creatures/combat/combat.cpp:154-231
+ *  - `Combat::doCombat`: src/creatures/combat/combat.cpp:1469-1483
+ *  - `Combat::doCombatHealth`: src/creatures/combat/combat.cpp:1649-1711
+ *  - `Combat::doCombatMana`: src/creatures/combat/combat.cpp:1722-1754
+ *  - `Game::combatBlockHit`/`combatChangeHealth`/`combatChangeMana`:
+ *    src/game/game.cpp:7874-8057, 8344-8770, 9063-9072
  *  - `Creature::blockHit` (armor/defense branch): src/creatures/creature.cpp:944-1009
  *  - `Creature::mitigateDamage`: src/creatures/creature.cpp:910-922
  *  - `Combat::applyExtensions` (critical/fatal core): src/creatures/combat/combat.cpp:2647-2781
@@ -92,6 +98,188 @@ object Combat {
         }
 
         return damage
+    }
+
+    /**
+     * Port of the target overload of `Combat::doCombat`
+     * (src/creatures/combat/combat.cpp:1469-1483).
+     *
+     * `params.combatType != COMBAT_NONE` dispatches manadrain damage to
+     * [doCombatMana] and every other type to [doCombatHealth]
+     * (combat.cpp:1474-1481) and reports true. Canary resolves the damage
+     * through `Combat::getCombatDamage` from the `Combat` instance state; this
+     * port keeps that resolution explicit (call [getCombatDamage] first) and
+     * dispatches the supplied [damage].
+     *
+     * The `params.combatType == COMBAT_NONE` branch runs `Combat::doCombatDefault`
+     * (condition/dispel application), which is owned by the condition engine;
+     * this layer returns false for it instead of silently dropping it.
+     */
+    fun doCombat(
+        caster: CombatTarget?,
+        target: CombatTarget,
+        damage: CombatDamage,
+        params: CombatParams,
+        random: Random,
+        affected: Int = 1,
+    ): Boolean {
+        if (params.combatType == CombatType.NONE) {
+            return false
+        }
+
+        damage.affected = affected
+        if (damage.primaryType != CombatType.MANADRAIN) {
+            doCombatHealth(caster, target, damage, params, random)
+        } else {
+            doCombatMana(caster, target, damage, params, random)
+        }
+        return true
+    }
+
+    /**
+     * Port of the single-target `Combat::doCombatHealth`
+     * (src/creatures/combat/combat.cpp:1649-1711) including the
+     * `Game::combatBlockHit` (src/game/game.cpp:7874-8057) and
+     * `Game::combatChangeHealth` (src/game/game.cpp:8344-8770) state changes
+     * it drives.
+     *
+     * Canary's sign convention is preserved: a positive primary value is
+     * healing and bypasses blocking entirely (`game.cpp:7916`, `8347`); a
+     * negative value runs the primary through [blockHit] with
+     * `params.blockedByShield`/`params.blockedByArmor` and the secondary
+     * through [blockHit] without defense/armor (`game.cpp:8009`), then
+     * [mitigateDamage] (`creature.cpp:995-997`) before draining the target.
+     *
+     * PARITY GAPS: `canDoCombatWithExpertPvp` is reduced to
+     * `!params.aggressive || caster !== target` (combat.cpp:1650); the healing
+     * summon/player/monster restrictions (combat.cpp:1660-1685),
+     * `Combat::applyExtensions` critical/fatal resolution, absorb/buff
+     * modifiers, ghost mode, dodge/reflection, mana shield, creature events,
+     * condition/dispel application and every protocol effect stay in their
+     * owning systems.
+     */
+    fun doCombatHealth(
+        caster: CombatTarget?,
+        target: CombatTarget,
+        damage: CombatDamage,
+        params: CombatParams,
+        random: Random,
+    ) {
+        if (params.aggressive && caster === target) {
+            return
+        }
+
+        if (damage.primaryValue > 0) {
+            // game.cpp:8347-8350, 8412: healing skips blockHit.
+            if (target.getHealth() <= 0) {
+                return
+            }
+            target.addHealth(damage.primaryValue)
+            return
+        }
+
+        // game.cpp:7875-7877: nothing to apply.
+        if (damage.primaryType == CombatType.NONE && damage.secondaryType == CombatType.NONE) {
+            return
+        }
+
+        if (damage.primaryType != CombatType.NONE && damage.primaryType != CombatType.AGONYDAMAGE) {
+            damage.primaryValue = -blockDamage(
+                combatType = damage.primaryType,
+                positiveDamage = -damage.primaryValue,
+                checkDefense = params.blockedByShield,
+                checkArmor = params.blockedByArmor,
+                target = target,
+                random = random,
+            )
+        }
+
+        if (damage.secondaryType != CombatType.NONE) {
+            damage.secondaryValue = -blockDamage(
+                combatType = damage.secondaryType,
+                positiveDamage = -damage.secondaryValue,
+                checkDefense = false,
+                checkArmor = false,
+                target = target,
+                random = random,
+            )
+        }
+
+        // game.cpp:8387-8395: the block stage already ran in Canary.
+        if (!target.isAttackable()) {
+            return
+        }
+
+        val healthChange = damage.primaryValue + damage.secondaryValue
+        if (healthChange >= 0) {
+            return
+        }
+
+        // game.cpp:8722: realDamage = min(targetHealth, primary + secondary).
+        val realDamage = minOf(target.getHealth(), -healthChange)
+        if (realDamage == 0) {
+            return
+        }
+        target.drainHealth(realDamage)
+    }
+
+    /**
+     * Port of the single-target `Combat::doCombatMana`
+     * (src/creatures/combat/combat.cpp:1722-1754) including the
+     * `Game::combatChangeMana` change (src/game/game.cpp:9063).
+     *
+     * Mana changes are never blocked, immune or mitigated: the summed primary
+     * and secondary values go straight to `Creature::changeMana`
+     * (`creature.cpp:869-875`), which clamps at 0 and `getMaxMana()`.
+     *
+     * PARITY GAPS: the `CombatManaFunc` black-skull player halving
+     * (combat.cpp:984-996) needs the player/skull model; `applyExtensions`,
+     * conditions, dispel, leech and protocol effects stay in their owning
+     * systems. [random] is accepted for signature parity with [doCombatHealth].
+     */
+    fun doCombatMana(
+        caster: CombatTarget?,
+        target: CombatTarget,
+        damage: CombatDamage,
+        params: CombatParams,
+        random: Random,
+    ) {
+        if (params.aggressive && caster === target) {
+            return
+        }
+
+        target.changeMana(damage.primaryValue + damage.secondaryValue)
+    }
+
+    /**
+     * `Creature::blockHit` (src/creatures/creature.cpp:944-1009) composed with
+     * `Creature::mitigateDamage` (`creature.cpp:995-997`), taking the
+     * positive-damage form Canary uses after its sign flip (`game.cpp:7911`).
+     */
+    private fun blockDamage(
+        combatType: CombatType,
+        positiveDamage: Int,
+        checkDefense: Boolean,
+        checkArmor: Boolean,
+        target: CombatTarget,
+        random: Random,
+    ): Int {
+        val (blocked, blockType) = blockHit(
+            damage = positiveDamage,
+            random = random,
+            checkDefense = checkDefense,
+            checkArmor = checkArmor,
+            hasDefense = target.hasDefense(),
+            canUseDefense = target.canUseDefense(),
+            defense = target.getDefense(),
+            armor = target.getArmor(),
+            immune = target.isImmune(combatType),
+        )
+
+        if (blocked == 0) {
+            return 0
+        }
+        return mitigateDamage(combatType, blocked, target.getMitigation(), blockType).first
     }
 
     /**
