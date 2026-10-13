@@ -38,6 +38,7 @@ import org.opentibia.canary.lua.bindings.core.LuaMoneyResult
 import org.opentibia.canary.lua.bindings.core.LuaTextMessage
 import org.opentibia.canary.lua.bindings.core.PlayerFunctions
 import org.opentibia.canary.lua.bindings.core.PlayerOperations
+import org.opentibia.canary.lua.bindings.core.PlayerSocialFunctions
 import org.opentibia.canary.lua.bindings.core.PositionFunctions
 import org.opentibia.canary.lua.bindings.core.PositionOperations
 import org.opentibia.canary.lua.bindings.core.TileFunctions
@@ -127,6 +128,7 @@ class WorldLuaOperations(
     fun install(env: LuaEnvironment) {
         GameFunctions.install(env, game)
         PlayerFunctions.install(env, player)
+        PlayerSocialFunctions.install(env) // Wave 39 lua-player-2
         CreatureFunctions.install(env, creature)
         ItemFunctions.install(env, item)
         ItemTypeFunctions.install(env, itemType)
