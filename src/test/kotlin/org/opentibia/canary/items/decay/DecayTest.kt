@@ -15,6 +15,7 @@ import org.opentibia.canary.map.Tile
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import java.lang.ref.WeakReference
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -367,6 +368,7 @@ class DecayTest {
             dispatcher.wake()
             awaitUntil("short item was not decayed") { transforms.size == 1 }
             assertThat(transforms.single().first).isSameAs(shortItem)
+            awaitMaintenanceBarrier()
 
             now = 2_000
             dispatcher.wake()
@@ -464,6 +466,7 @@ class DecayTest {
             now = 2_000
             dispatcher.wake()
             awaitUntil("first item was not decayed") { transforms.size == 1 }
+            awaitMaintenanceBarrier()
 
             val second = attachedItem(type = decayingType())
             second.setDuration(1_000)
@@ -506,6 +509,18 @@ class DecayTest {
         }
     }
 
+    /**
+     * Runs a no-op on the maintenance lane so the currently executing decay
+     * check (including its timer re-arm) completes before the test advances the
+     * injected clock again. Without this barrier the re-arm can observe the
+     * advanced clock and schedule the follow-up check past the next wake.
+     */
+    private fun awaitMaintenanceBarrier() {
+        val done = AtomicBoolean(false)
+        dispatcher.dispatch(DispatcherLane.Maintenance) { done.set(true) }
+        awaitUntil("maintenance barrier did not run") { done.get() }
+    }
+
     private fun armOrphanDecay(dispatcher: GameDispatcher, item: Item, transformed: AtomicInteger): WeakReference<Decay> {
         val orphan = Decay(
             dispatcher = dispatcher,
@@ -543,6 +558,7 @@ class DecayTest {
             dispatcher.wake()
             awaitUntil("short item was not decayed") { transforms.size == 1 }
             assertThat(transforms.single().first).isSameAs(shortItem)
+            awaitMaintenanceBarrier()
 
             now = 2_000
             dispatcher.wake()
