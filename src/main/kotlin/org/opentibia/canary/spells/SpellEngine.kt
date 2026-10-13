@@ -1,0 +1,613 @@
+package org.opentibia.canary.spells
+
+import org.opentibia.canary.combat.condition.Condition
+import org.opentibia.canary.combat.condition.ConditionId
+import org.opentibia.canary.combat.condition.ConditionType
+import org.opentibia.canary.combat.condition.SpellGroup
+import org.opentibia.canary.combat.condition.ZoneType
+import org.opentibia.canary.creatures.PlayerFlags_t
+import org.opentibia.canary.creatures.Skulls_t
+import org.opentibia.canary.creatures.WeaponType_t
+import org.opentibia.canary.items.Item
+import org.opentibia.canary.map.Position
+import org.opentibia.canary.systems.rewardchest.ReturnValue
+import kotlin.math.abs
+
+/**
+ * Cast pipeline of Canary `Spell`/`InstantSpell`/`RuneSpell`
+ * (`src/creatures/combat/spells.cpp`).
+ *
+ * The registry data lives in [Spells]; this engine performs the player-state
+ * checks, cooldown application, cost payment and the rune-use charge handling
+ * over the injected [SpellCaster]/[SpellWorld]/[SpellScriptRunner] seams.
+ *
+ * PARITY GAPS (each inherited from an unported subsystem):
+ *  - Wheel of Destiny, weapon proficiency and item-augment cooldown/mana
+ *    reductions (`spells.cpp:822-885`, `952-977`);
+ *  - the Monk harmony builder/spender effects (`spells.cpp:903-918`);
+ *  - the `g_game().addMagicEffect(CONST_ME_POFF)` cancel feedback;
+ *  - `ExpertPvp` gating of the legacy PZ lock (`spells.cpp:70-76`);
+ *  - tile creation/lookup failures in the instant/rune tile checks.
+ */
+class SpellEngine(
+    val registry: Spells,
+    val world: SpellWorld,
+    val scripts: SpellScriptRunner,
+) {
+
+    /**
+     * `Player::hasLearnedInstantSpell` (`player.cpp:3132-3145`).
+     *
+     * The two flags short-circuit the spell-book lookup exactly like Canary.
+     */
+    fun hasLearnedInstantSpell(caster: SpellCaster, spellName: String): Boolean {
+        if (caster.hasFlag(PlayerFlags_t.CannotUseSpells)) {
+            return false
+        }
+
+        if (caster.hasFlag(PlayerFlags_t.IgnoreSpellCheck)) {
+            return true
+        }
+
+        return caster.getSpellBook()?.hasLearned(spellName) == true
+    }
+
+    /** `Player::learnInstantSpell` (`player.cpp:3122-3126`). */
+    fun learnInstantSpell(caster: SpellCaster, spellName: String) {
+        if (!hasLearnedInstantSpell(caster, spellName)) {
+            caster.getSpellBook()?.learnInstantSpell(spellName)
+        }
+    }
+
+    /** `Player::forgetInstantSpell` (`player.cpp:3128-3130`). */
+    fun forgetInstantSpell(caster: SpellCaster, spellName: String) {
+        caster.getSpellBook()?.forgetInstantSpell(spellName)
+    }
+
+    /**
+     * `Spell::playerSpellCheck` (`spells.cpp:494-615`).
+     *
+     * PARITY GAP: the feared text message and every `CONST_ME_POFF` effect are
+     * presentation-only and not dispatched through the seams; the checks
+     * themselves are complete.
+     */
+    fun playerSpellCheck(caster: SpellCaster, spell: Spell): Boolean {
+        if (caster.hasFlag(PlayerFlags_t.CannotUseSpells)) {
+            return false
+        }
+
+        if (caster.hasFlag(PlayerFlags_t.IgnoreSpellCheck)) {
+            return true
+        }
+
+        if (caster.hasCondition(ConditionType.CONDITION_FEARED)) {
+            return false
+        }
+
+        if (!spell.enabled) {
+            return false
+        }
+
+        if (
+            spell.aggressive &&
+            (spell.range < 1 || (spell.range > 0 && caster.getAttackedCreature() == null)) &&
+            caster.getSkull() == Skulls_t.SKULL_BLACK
+        ) {
+            caster.sendCancelMessage(ReturnValue.NOTPOSSIBLE)
+            return false
+        }
+
+        if (spell.aggressive && caster.hasCondition(ConditionType.CONDITION_PACIFIED)) {
+            caster.sendCancelMessage(ReturnValue.YOUAREEXHAUSTED)
+            return false
+        }
+
+        if (
+            spell.aggressive &&
+            !caster.hasFlag(PlayerFlags_t.IgnoreProtectionZone) &&
+            caster.getZoneType() == ZoneType.ZONE_PROTECTION
+        ) {
+            caster.sendCancelMessage(ReturnValue.ACTIONNOTPERMITTEDINPROTECTIONZONE)
+            return false
+        }
+
+        if (
+            caster.hasCondition(ConditionType.CONDITION_SPELLGROUPCOOLDOWN, spell.group.value) ||
+            caster.hasCondition(ConditionType.CONDITION_SPELLCOOLDOWN, spell.spellId) ||
+            (
+                spell.secondaryGroup != SpellGroup.SPELLGROUP_NONE &&
+                    caster.hasCondition(
+                        ConditionType.CONDITION_SPELLGROUPCOOLDOWN,
+                        spell.secondaryGroup.value,
+                    )
+                )
+        ) {
+            caster.sendCancelMessage(ReturnValue.YOUAREEXHAUSTED)
+            return false
+        }
+
+        if (caster.getLevel() < spell.level) {
+            caster.sendCancelMessage(ReturnValue.NOTENOUGHLEVEL)
+            return false
+        }
+
+        if (caster.getMagicLevel() < spell.magicLevel) {
+            caster.sendCancelMessage(ReturnValue.NOTENOUGHMAGICLEVEL)
+            return false
+        }
+
+        if (caster.getMana() < spell.getManaCost(caster) && !caster.hasFlag(PlayerFlags_t.HasInfiniteMana)) {
+            caster.sendCancelMessage(ReturnValue.NOTENOUGHMANA)
+            return false
+        }
+
+        if (caster.getSoul() < spell.soul && !caster.hasFlag(PlayerFlags_t.HasInfiniteSoul)) {
+            caster.sendCancelMessage(ReturnValue.NOTENOUGHSOUL)
+            return false
+        }
+
+        if (world.learnSpells) {
+            if (spell.isInstant() && !hasLearnedInstantSpell(caster, spell.name)) {
+                caster.sendCancelMessage(ReturnValue.YOUNEEDTOLEARNTHISSPELL)
+                return false
+            }
+        } else {
+            if (spell.isInstant() && spell.isLearnable()) {
+                if (!hasLearnedInstantSpell(caster, spell.name)) {
+                    caster.sendCancelMessage(ReturnValue.YOUNEEDTOLEARNTHISSPELL)
+                    return false
+                }
+            } else if (
+                spell.vocSpellMap.isNotEmpty() &&
+                !spell.vocSpellMap.containsKey(caster.getVocationId()) &&
+                caster.getGroupId() < GROUP_TYPE_GAMEMASTER
+            ) {
+                caster.sendCancelMessage(ReturnValue.YOURVOCATIONCANNOTUSETHISSPELL)
+                return false
+            }
+        }
+
+        if (spell.needWeapon) {
+            when (caster.getWeaponType()) {
+                WeaponType_t.WEAPON_FIST,
+                WeaponType_t.WEAPON_SWORD,
+                WeaponType_t.WEAPON_CLUB,
+                WeaponType_t.WEAPON_AXE,
+                -> Unit
+
+                else -> {
+                    caster.sendCancelMessage(ReturnValue.YOUNEEDAWEAPONTOUSETHISSPELL)
+                    return false
+                }
+            }
+        }
+
+        if (spell.premium && !caster.isPremium()) {
+            caster.sendCancelMessage(ReturnValue.YOUNEEDPREMIUMACCOUNT)
+            return false
+        }
+
+        if (world.worldType == WorldType.NO_PVP && !caster.isFirstOnStack()) {
+            val instantSpell = registry.getInstantSpell(spell.name)
+            if ((instantSpell != null && !instantSpell.casterTargetOrDirection) || !spell.needTarget) {
+                caster.sendCancelMessage(ReturnValue.NOTPOSSIBLE)
+                return false
+            }
+        }
+
+        return true
+    }
+
+    /** `Spell::playerInstantSpellCheck` (`spells.cpp:617-654`). */
+    fun playerInstantSpellCheck(caster: SpellCaster, spell: Spell, toPos: Position): Boolean {
+        if (toPos.x == 0xFFFF) {
+            return true
+        }
+
+        val playerPos = caster.getPosition()
+        if (playerPos.z > toPos.z) {
+            caster.sendCancelMessage(ReturnValue.FIRSTGOUPSTAIRS)
+            return false
+        } else if (playerPos.z < toPos.z) {
+            caster.sendCancelMessage(ReturnValue.FIRSTGODOWNSTAIRS)
+            return false
+        }
+
+        if (spell.blockingCreature && world.getBottomVisibleCreatureId(toPos) != null) {
+            caster.sendCancelMessage(ReturnValue.NOTENOUGHROOM)
+            return false
+        }
+
+        if (spell.blockingSolid && world.isTileBlockingSolid(toPos)) {
+            caster.sendCancelMessage(ReturnValue.NOTENOUGHROOM)
+            return false
+        }
+
+        return true
+    }
+
+    /**
+     * `Spell::playerRuneSpellCheck` (`spells.cpp:656-728`).
+     *
+     * PARITY GAPS: `Combat::canDoCombat(player, tile, aggressive)`
+     * (`spells.cpp:690`) and the secure-mode/expert-PvP target gates
+     * (`spells.cpp:710-726`) belong to the PvP systems and are not modelled.
+     */
+    fun playerRuneSpellCheck(caster: SpellCaster, spell: Spell, toPos: Position): Boolean {
+        if (!playerSpellCheck(caster, spell)) {
+            return false
+        }
+
+        if (toPos.x == 0xFFFF) {
+            return true
+        }
+
+        val playerPos = caster.getPosition()
+        if (playerPos.z > toPos.z) {
+            caster.sendCancelMessage(ReturnValue.FIRSTGOUPSTAIRS)
+            return false
+        } else if (playerPos.z < toPos.z) {
+            caster.sendCancelMessage(ReturnValue.FIRSTGODOWNSTAIRS)
+            return false
+        }
+
+        if (spell.range != -1 && !world.canThrowObjectTo(playerPos, toPos, true, spell.range)) {
+            caster.sendCancelMessage(ReturnValue.DESTINATIONOUTOFREACH)
+            return false
+        }
+
+        val topVisibleCreature = world.getBottomVisibleCreatureId(toPos)
+        if (
+            (spell.blockingCreature && topVisibleCreature != null) ||
+            (spell.blockingSolid && world.isTileBlockingSolid(toPos) && topVisibleCreature == null)
+        ) {
+            caster.sendCancelMessage(ReturnValue.NOTENOUGHROOM)
+            return false
+        }
+
+        if (spell.needTarget && topVisibleCreature == null) {
+            caster.sendCancelMessage(ReturnValue.CANONLYUSETHISRUNEONCREATURES)
+            return false
+        }
+
+        return true
+    }
+
+    /**
+     * `Spell::applyCooldownConditions` (`spells.cpp:822-885`).
+     *
+     * The wheel/augment reductions are not modelled (PARITY GAP), so the base
+     * cooldowns divided by `RATE_SPELL_COOLDOWN` are applied; the C++ float
+     * arithmetic is preserved because the truncation to condition ticks is
+     * observable.
+     */
+    fun applyCooldownConditions(caster: SpellCaster, spell: Spell) {
+        var rateCooldown = world.rateSpellCooldown
+        if (abs(rateCooldown) < FLOAT_EPSILON) {
+            rateCooldown = 0.1
+        }
+        val rate = rateCooldown.toFloat()
+
+        if (spell.cooldown > 0) {
+            val ticks = (spell.cooldown / rate).toInt()
+            if (ticks > 0) {
+                Condition.createCondition(
+                    ConditionId.CONDITIONID_DEFAULT,
+                    ConditionType.CONDITION_SPELLCOOLDOWN,
+                    ticks,
+                    0,
+                    false,
+                    spell.spellId,
+                )?.let { caster.addCondition(it) }
+            }
+        }
+
+        if (spell.groupCooldown > 0) {
+            val ticks = (spell.groupCooldown / rate).toInt()
+            if (ticks > 0) {
+                Condition.createCondition(
+                    ConditionId.CONDITIONID_DEFAULT,
+                    ConditionType.CONDITION_SPELLGROUPCOOLDOWN,
+                    ticks,
+                    0,
+                    false,
+                    spell.group.value,
+                )?.let { caster.addCondition(it) }
+            }
+        }
+
+        if (spell.secondaryGroupCooldown > 0) {
+            val ticks = (spell.secondaryGroupCooldown / rate).toInt()
+            if (ticks > 0) {
+                Condition.createCondition(
+                    ConditionId.CONDITIONID_DEFAULT,
+                    ConditionType.CONDITION_SPELLGROUPCOOLDOWN,
+                    ticks,
+                    0,
+                    false,
+                    spell.secondaryGroup.value,
+                )?.let { caster.addCondition(it) }
+            }
+        }
+    }
+
+    /** `Spell::postCastSpell(player, finishedCast, payCost)` (`spells.cpp:903-933`). */
+    fun postCastSpell(
+        caster: SpellCaster,
+        spell: Spell,
+        finishedCast: Boolean = true,
+        payCost: Boolean = true,
+    ) {
+        if (finishedCast) {
+            // Monk harmony spender/builder effects (spells.cpp:905-914) are PARITY GAPS.
+            if (!caster.hasFlag(PlayerFlags_t.HasNoExhaustion)) {
+                applyCooldownConditions(caster, spell)
+            }
+
+            if (spell.aggressive) {
+                caster.addInFightTicks()
+                caster.updateLastAggressiveAction()
+            }
+
+            if (spell.soundCastEffect != SoundEffect.SILENCE) {
+                world.sendDoubleSoundEffect(
+                    caster.getPosition(),
+                    spell.soundCastEffect,
+                    spell.soundImpactEffect,
+                    caster,
+                )
+            }
+        }
+
+        if (payCost) {
+            postCastSpell(caster, spell.getManaCost(caster), spell.getSoulCost())
+        }
+    }
+
+    /** `Spell::postCastSpell(player, manaCost, soulCost)` (`spells.cpp:935-946`). */
+    fun postCastSpell(caster: SpellCaster, manaCost: Int, soulCost: Int) {
+        if (manaCost > 0) {
+            caster.addManaSpent(manaCost)
+            caster.changeMana(-manaCost)
+        }
+
+        if (!caster.hasFlag(PlayerFlags_t.HasInfiniteSoul) && soulCost > 0) {
+            caster.changeSoul(-soulCost)
+        }
+    }
+
+    /**
+     * `InstantSpell::playerCastInstant` (`spells.cpp:1171-1297`).
+     *
+     * PARITY GAPS: `applyInstantSpellDirection` cannot consult
+     * `getAimAtTargetSpells()` (unported wheel state) so the caster facing is
+     * kept; a failed wildcard lookup cancels with `NOTPOSSIBLE` instead of the
+     * exact `getPlayerByNameWildcard` return value.
+     */
+    fun playerCastInstant(caster: SpellCaster, spell: InstantSpell, param: String = ""): Boolean {
+        if (!playerSpellCheck(caster, spell)) {
+            return false
+        }
+
+        if (caster.hasCondition(ConditionType.CONDITION_POWERLESS) && spell.group == SpellGroup.SPELLGROUP_ATTACK) {
+            return false
+        }
+
+        val variant = LuaVariant()
+        variant.instantName = spell.name
+        var playerTarget: SpellTarget? = null
+        var pzLockTarget: SpellTarget? = null
+        var resolvedParam = param
+
+        if (spell.selfTarget) {
+            variant.type = LuaVariantType.VARIANT_NUMBER
+            variant.number = caster.getID()
+        } else if (spell.needTarget || spell.casterTargetOrDirection) {
+            var target: SpellTarget? = null
+            var useDirection = false
+
+            if (spell.hasParam) {
+                playerTarget = world.getPlayerByNameWildcard(resolvedParam)
+                if (playerTarget != null && playerTarget.isAccessPlayer() && !caster.isAccessPlayer()) {
+                    playerTarget = null
+                }
+
+                target = playerTarget
+                if (target == null || target.isRemoved() || target.getHealth() <= 0) {
+                    if (!spell.casterTargetOrDirection) {
+                        applyCooldownConditions(caster, spell)
+                        caster.sendCancelMessage(ReturnValue.NOTPOSSIBLE)
+                        return false
+                    }
+                    useDirection = true
+                }
+
+                if (playerTarget != null) {
+                    resolvedParam = playerTarget.getName()
+                }
+            } else {
+                target = caster.getAttackedCreature()
+                if (target == null || target.isRemoved() || target.getHealth() <= 0) {
+                    if (!spell.casterTargetOrDirection) {
+                        caster.sendCancelMessage(ReturnValue.YOUCANONLYUSEITONCREATURES)
+                        return false
+                    }
+                    useDirection = true
+                }
+            }
+
+            if (!useDirection) {
+                if (!canThrowSpell(caster, spell, target!!)) {
+                    caster.sendCancelMessage(ReturnValue.CREATUREISNOTREACHABLE)
+                    return false
+                }
+
+                variant.type = LuaVariantType.VARIANT_NUMBER
+                variant.number = target.getID()
+                pzLockTarget = target
+            } else {
+                variant.type = LuaVariantType.VARIANT_POSITION
+                variant.pos = Spells.getCasterPosition(caster, caster.getDirection())
+
+                if (!playerInstantSpellCheck(caster, spell, variant.pos)) {
+                    return false
+                }
+            }
+        } else if (spell.hasParam) {
+            variant.type = LuaVariantType.VARIANT_STRING
+
+            if (spell.hasPlayerNameParam) {
+                playerTarget = world.getPlayerByNameWildcard(resolvedParam)
+                if (playerTarget == null) {
+                    applyCooldownConditions(caster, spell)
+                    caster.sendCancelMessage(ReturnValue.NOTPOSSIBLE)
+                    return false
+                }
+
+                if (!playerTarget.isAccessPlayer() || caster.isAccessPlayer()) {
+                    resolvedParam = playerTarget.getName()
+                }
+            }
+
+            variant.text = resolvedParam
+        } else {
+            variant.type = LuaVariantType.VARIANT_POSITION
+            variant.pos = caster.getPosition()
+
+            if (spell.needDirection) {
+                applyInstantSpellDirection(caster, variant, variant.pos)
+            }
+
+            if (!playerInstantSpellCheck(caster, spell, variant.pos)) {
+                return false
+            }
+        }
+
+        if (!spell.allowOnSelf && playerTarget != null && playerTarget.getName() == caster.getName()) {
+            caster.sendCancelMessage(ReturnValue.NOTPOSSIBLE)
+            return false
+        }
+
+        if (
+            spell.pzLocked &&
+            (world.worldType == WorldType.PVP || world.worldType == WorldType.PVP_ENFORCED)
+        ) {
+            caster.addInFightTicks()
+            caster.updateLastAggressiveAction()
+        }
+
+        val result = scripts.executeCastSpell(caster, spell, variant)
+        if (result) {
+            postCastSpell(caster, spell)
+        }
+
+        return result
+    }
+
+    /**
+     * `RuneSpell::executeUse` (`spells.cpp:1501-1559`).
+     *
+     * PARITY GAPS: `player->updateSupplyTracker(item)` is protocol-side;
+     * `Game::transformItem(item, id, 0)` removal semantics stay with the item
+     * owner, so the port clamps `item.count` at zero.
+     */
+    fun executeUse(
+        caster: SpellCaster,
+        rune: RuneSpell,
+        item: Item?,
+        target: SpellTarget?,
+        toPosition: Position,
+        isHotkey: Boolean,
+    ): Boolean {
+        if (!playerRuneSpellCheck(caster, rune, toPosition)) {
+            return false
+        }
+
+        if (rune.scriptId == 0) {
+            return false
+        }
+
+        if (caster.hasCondition(ConditionType.CONDITION_POWERLESS) && rune.group == SpellGroup.SPELLGROUP_ATTACK) {
+            return false
+        }
+
+        val variant = LuaVariant()
+        variant.runeName = rune.name
+        var pzLockTarget: SpellTarget? = null
+
+        if (rune.needTarget) {
+            variant.type = LuaVariantType.VARIANT_NUMBER
+
+            if (target == null) {
+                val visibleCreature = world.getBottomVisibleCreatureId(toPosition)
+                if (visibleCreature != null) {
+                    variant.number = visibleCreature
+                }
+            } else {
+                variant.number = target.getID()
+                pzLockTarget = target
+            }
+        } else {
+            variant.type = LuaVariantType.VARIANT_POSITION
+            variant.pos = toPosition
+        }
+
+        if (!scripts.executeCastSpell(caster, rune, variant, isHotkey)) {
+            return false
+        }
+
+        postCastSpell(caster, rune)
+
+        if (rune.hasCharges && item != null && world.removeRuneCharges) {
+            item.count = maxOf(0, item.count - 1)
+        }
+
+        if (
+            rune.pzLocked &&
+            (world.worldType == WorldType.PVP || world.worldType == WorldType.PVP_ENFORCED)
+        ) {
+            caster.addInFightTicks()
+            caster.updateLastAggressiveAction()
+        }
+
+        return true
+    }
+
+    /**
+     * `InstantSpell::canThrowSpell` (`spells.cpp:1299-1310`). The range-less and
+     * ranged `Game::canThrowObjectTo` overloads are folded into one seam call
+     * with `-1` meaning "no range limit".
+     */
+    private fun canThrowSpell(caster: SpellCaster, spell: InstantSpell, target: SpellTarget): Boolean {
+        val fromPos = caster.getPosition()
+        val toPos = target.getPosition()
+        if (fromPos.z != toPos.z) {
+            return false
+        }
+
+        return world.canThrowObjectTo(fromPos, toPos, spell.checkLineOfSight, spell.range)
+    }
+
+    /**
+     * `applyInstantSpellDirection` (`spells.cpp:47-59`). PARITY GAP: the
+     * `getAimAtTargetSpells()` refinement is not modelled, so an attacked
+     * creature only switches the variant to `VARIANT_TARGETPOSITION` while the
+     * facing stays the caster direction.
+     */
+    private fun applyInstantSpellDirection(caster: SpellCaster, variant: LuaVariant, casterPos: Position) {
+        val direction = caster.getDirection()
+        if (caster.getAttackedCreature() != null) {
+            variant.type = LuaVariantType.VARIANT_TARGETPOSITION
+        }
+
+        variant.pos = Spells.getCasterPosition(caster, direction)
+    }
+
+    private companion object {
+        /** `GROUP_TYPE_GAMEMASTER` (`src/enums/account_group_type.hpp:21`). */
+        const val GROUP_TYPE_GAMEMASTER = 4
+
+        /** `std::numeric_limits<float>::epsilon()` (`spells.cpp:827`). */
+        const val FLOAT_EPSILON = 1.1920929E-7
+    }
+}
