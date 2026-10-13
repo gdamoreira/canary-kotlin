@@ -43,6 +43,8 @@ class JdbcRepositoriesTest {
                         id INTEGER PRIMARY KEY,
                         name TEXT NOT NULL UNIQUE,
                         account_id INTEGER NOT NULL,
+                        group_id INTEGER NOT NULL DEFAULT 1,
+                        vocation INTEGER NOT NULL DEFAULT 0,
                         healthmax INTEGER NOT NULL DEFAULT 150,
                         health INTEGER NOT NULL DEFAULT 150,
                         manamax INTEGER NOT NULL DEFAULT 50,
@@ -54,7 +56,18 @@ class JdbcRepositoriesTest {
                         posx INTEGER NOT NULL DEFAULT 1000,
                         posy INTEGER NOT NULL DEFAULT 1000,
                         posz INTEGER NOT NULL DEFAULT 7,
-                        deletion INTEGER NOT NULL DEFAULT 0
+                        sex INTEGER NOT NULL DEFAULT 0,
+                        pronoun INTEGER NOT NULL DEFAULT 0,
+                        balance INTEGER NOT NULL DEFAULT 0,
+                        deletion INTEGER NOT NULL DEFAULT 0,
+                        blessings1 INTEGER NOT NULL DEFAULT 0,
+                        blessings2 INTEGER NOT NULL DEFAULT 0,
+                        blessings3 INTEGER NOT NULL DEFAULT 0,
+                        blessings4 INTEGER NOT NULL DEFAULT 0,
+                        blessings5 INTEGER NOT NULL DEFAULT 0,
+                        blessings6 INTEGER NOT NULL DEFAULT 0,
+                        blessings7 INTEGER NOT NULL DEFAULT 0,
+                        blessings8 INTEGER NOT NULL DEFAULT 0
                     );
                     """.trimIndent()
                 )

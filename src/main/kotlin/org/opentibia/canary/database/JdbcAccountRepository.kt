@@ -2,7 +2,9 @@ package org.opentibia.canary.database
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import org.opentibia.canary.account.Account
+import org.opentibia.canary.account.AccountInfo
 import org.opentibia.canary.account.AccountRepository
+import org.opentibia.canary.account.AccountType
 import org.opentibia.canary.account.CharacterEntry
 import org.opentibia.canary.account.getTimeNow
 import org.opentibia.canary.systems.gamestore.AccountCoinColumns
@@ -13,6 +15,7 @@ import org.opentibia.canary.systems.gamestore.CoinType
 import org.opentibia.canary.systems.gamestore.RemoveCoinsResult
 import org.opentibia.canary.utils.Tools
 import java.sql.Connection
+import java.sql.PreparedStatement
 import java.sql.ResultSet
 import java.sql.SQLException
 import javax.sql.DataSource
@@ -47,7 +50,16 @@ data class AccountRecord(
     val sessionExpires: Long = 0,
 )
 
-class JdbcAccountRepository(private val dataSource: DataSource) : AccountRepository, AccountCoinRepository {
+/**
+ * Login-side account seam on top of [AccountRepository], carrying the
+ * `IOLoginData::getAccountType` query (src/io/iologindata.cpp:69-78) that the
+ * rest of the `AccountRepository` contract does not describe.
+ */
+interface AccountLoginRepository : AccountRepository {
+    fun getAccountType(accountId: Long): Int
+}
+
+class JdbcAccountRepository(private val dataSource: DataSource) : AccountLoginRepository, AccountCoinRepository {
 
     override fun findByAccountName(name: String): Account? {
         val sqlAccount = "SELECT id, name, password, premdays FROM accounts WHERE LOWER(name) = LOWER(?)"
@@ -80,6 +92,168 @@ class JdbcAccountRepository(private val dataSource: DataSource) : AccountReposit
         val account = findByAccountName(name) ?: return null
         val matches = org.opentibia.canary.network.crypto.Argon2Security.verifyPassword(password, account.passwordHash)
         return if (matches) account else null
+    }
+
+    /** Mirrors `AccountRepositoryDB::loadByID` (src/account/account_repository_db.cpp:28-31). */
+    override fun loadByID(id: Long, acc: AccountInfo): Boolean =
+        loadInfoInto("$ACCOUNT_INFO_COLUMNS WHERE id = ?", acc) { it.setLong(1, id) }
+
+    /** Mirrors `AccountRepositoryDB::loadByEmailOrName` (src/account/account_repository_db.cpp:33-37). */
+    override fun loadByEmailOrName(oldProtocol: Boolean, emailOrName: String, acc: AccountInfo): Boolean {
+        val identifier = if (oldProtocol) "name" else "email"
+        return loadInfoInto("$ACCOUNT_INFO_COLUMNS WHERE $identifier = ?", acc) { it.setString(1, emailOrName) }
+    }
+
+    /** Mirrors `AccountRepositoryDB::loadBySession` (src/account/account_repository_db.cpp:39-53). */
+    override fun loadBySession(sessionKey: String, acc: AccountInfo): Boolean =
+        loadInfoInto(SESSION_ACCOUNT_INFO_QUERY, acc) { stmt ->
+            val sha256SessionId = Tools.transformToSHA256(sessionKey)
+            stmt.setString(1, sha256SessionId)
+            stmt.setString(2, Tools.transformToSHA1(sessionKey))
+            stmt.setString(3, sha256SessionId)
+        }
+
+    /** Mirrors `AccountRepositoryDB::getPassword` (src/account/account_repository_db.cpp:86-95); `null` is the C++ `false`. */
+    override fun getPassword(id: Long): String? {
+        dataSource.connection.use { conn ->
+            conn.prepareStatement("SELECT \"password\" FROM accounts WHERE id = ?").use { stmt ->
+                stmt.setLong(1, id)
+                stmt.executeQuery().use { rs ->
+                    return if (rs.next()) rs.getString("password") else null
+                }
+            }
+        }
+    }
+
+    /** Mirrors `AccountRepositoryDB::getCharacterByAccountIdAndName` (src/account/account_repository_db.cpp:76-84). */
+    override fun getCharacterByAccountIdAndName(id: Long, name: String): Boolean {
+        dataSource.connection.use { conn ->
+            conn.prepareStatement("SELECT id FROM players WHERE account_id = ? AND name = ?").use { stmt ->
+                stmt.setLong(1, id)
+                stmt.setString(2, name)
+                stmt.executeQuery().use { rs ->
+                    return rs.next()
+                }
+            }
+        }
+    }
+
+    /** `IOLoginData::getAccountType` (src/io/iologindata.cpp:69-78); `ACCOUNT_TYPE_NORMAL` is 1. */
+    override fun getAccountType(accountId: Long): Int {
+        dataSource.connection.use { conn ->
+            conn.prepareStatement("SELECT \"type\" FROM accounts WHERE id = ?").use { stmt ->
+                stmt.setLong(1, accountId)
+                stmt.executeQuery().use { rs ->
+                    return if (rs.next()) rs.getInt("type") else ACCOUNT_TYPE_NORMAL
+                }
+            }
+        }
+    }
+
+    /**
+     * Shared load path of the Info-based `AccountRepositoryDB` reads
+     * (src/account/account_repository_db.cpp:285-303): fills the account row,
+     * loads the non-deleted characters, then runs the loyalty sync into [acc].
+     */
+    private fun loadInfoInto(sql: String, acc: AccountInfo, bind: (PreparedStatement) -> Unit): Boolean {
+        dataSource.connection.use { conn ->
+            conn.prepareStatement(sql).use { stmt ->
+                bind(stmt)
+                stmt.executeQuery().use { rs ->
+                    if (!rs.next()) {
+                        return false
+                    }
+                    val info = readAccountInfo(rs)
+                    loadAccountPlayers(conn, info)
+                    setupLoyaltyInfo(info)
+                    applyInfo(acc, info)
+                    return true
+                }
+            }
+        }
+    }
+
+    private fun applyInfo(target: AccountInfo, source: AccountInfo) {
+        target.id = source.id
+        target.premiumRemainingDays = source.premiumRemainingDays
+        target.premiumLastDay = source.premiumLastDay
+        target.accountType = source.accountType
+        target.players = source.players
+        target.houseBidId = source.houseBidId
+        target.sessionExpires = source.sessionExpires
+        target.premiumDaysPurchased = source.premiumDaysPurchased
+        target.creationTime = source.creationTime
+    }
+
+    private fun readAccountInfo(rs: ResultSet): AccountInfo {
+        val lastDay = rs.getLong("lastday")
+        val now = getTimeNow()
+        val premiumRemainingDays =
+            if (lastDay > now) ((lastDay - now) / Account.SECONDS_PER_DAY).toInt() else 0
+
+        return AccountInfo(
+            id = rs.getLong("id"),
+            premiumRemainingDays = premiumRemainingDays,
+            premiumLastDay = lastDay,
+            accountType = AccountType.entries.firstOrNull { it.value == rs.getInt("type") }
+                ?: AccountType.ACCOUNT_TYPE_NORMAL,
+            premiumDaysPurchased = rs.getInt("premdays_purchased"),
+            creationTime = rs.getLong("creation"),
+            sessionExpires = rs.getLong("expires"),
+        )
+    }
+
+    /** Mirrors `AccountRepositoryDB::loadAccountPlayers` (src/account/account_repository_db.cpp:264-283). */
+    private fun loadAccountPlayers(conn: Connection, info: AccountInfo) {
+        conn.prepareStatement("SELECT name, deletion FROM players WHERE account_id = ? ORDER BY name ASC").use { stmt ->
+            stmt.setLong(1, info.id)
+            stmt.executeQuery().use { rs ->
+                while (rs.next()) {
+                    if (rs.getLong("deletion") != 0L) {
+                        continue
+                    }
+                    info.players[rs.getString("name")] = 0uL
+                }
+            }
+        }
+    }
+
+    /** Mirrors the `AccountRepositoryDB::setupLoyaltyInfo` account-Info overload (src/account/account_repository_db.cpp:305-319). */
+    private fun setupLoyaltyInfo(info: AccountInfo) {
+        if (info.premiumDaysPurchased >= info.premiumRemainingDays && info.creationTime != 0L) {
+            return
+        }
+
+        if (info.premiumDaysPurchased < info.premiumRemainingDays) {
+            info.premiumDaysPurchased = info.premiumRemainingDays
+        }
+
+        if (info.creationTime == 0L) {
+            info.creationTime = getTimeNow()
+        }
+
+        saveInfo(info)
+    }
+
+    private fun saveInfo(info: AccountInfo): Boolean {
+        val sql = """
+            UPDATE accounts
+            SET "type" = ?, premdays = ?, lastday = ?, creation = ?, premdays_purchased = ?, house_bid_id = ?
+            WHERE id = ?
+        """.trimIndent()
+
+        dataSource.connection.use { conn ->
+            conn.prepareStatement(sql).use { stmt ->
+                stmt.setInt(1, info.accountType.value)
+                stmt.setInt(2, info.premiumRemainingDays)
+                stmt.setLong(3, info.premiumLastDay)
+                stmt.setLong(4, info.creationTime)
+                stmt.setInt(5, info.premiumDaysPurchased)
+                stmt.setInt(6, info.houseBidId)
+                stmt.setLong(7, info.id)
+                return stmt.executeUpdate() > 0
+            }
+        }
     }
 
     /**
@@ -150,26 +324,22 @@ class JdbcAccountRepository(private val dataSource: DataSource) : AccountReposit
     }
 
     /** Mirrors `AccountRepositoryDB::save` (src/account/account_repository_db.cpp:55-74). */
-    fun save(record: AccountRecord): Boolean {
-        val sql = """
-            UPDATE accounts
-            SET "type" = ?, premdays = ?, lastday = ?, creation = ?, premdays_purchased = ?, house_bid_id = ?
-            WHERE id = ?
-        """.trimIndent()
+    fun save(record: AccountRecord): Boolean = saveInfo(
+        AccountInfo(
+            id = record.id,
+            premiumRemainingDays = record.premiumRemainingDays,
+            premiumLastDay = record.premiumLastDay,
+            accountType = AccountType.entries.firstOrNull { it.value == record.accountType }
+                ?: AccountType.ACCOUNT_TYPE_NORMAL,
+            premiumDaysPurchased = record.premiumDaysPurchased,
+            creationTime = record.creationTime,
+            houseBidId = record.houseBidId.toInt(),
+            sessionExpires = record.sessionExpires,
+        ),
+    )
 
-        dataSource.connection.use { conn ->
-            conn.prepareStatement(sql).use { stmt ->
-                stmt.setInt(1, record.accountType)
-                stmt.setInt(2, record.premiumRemainingDays)
-                stmt.setLong(3, record.premiumLastDay)
-                stmt.setLong(4, record.creationTime)
-                stmt.setInt(5, record.premiumDaysPurchased)
-                stmt.setLong(6, record.houseBidId)
-                stmt.setLong(7, record.id)
-                return stmt.executeUpdate() > 0
-            }
-        }
-    }
+    /** Mirrors `AccountRepositoryDB::save` (src/account/account_repository_db.cpp:55-74). */
+    override fun save(accInfo: AccountInfo): Boolean = saveInfo(accInfo)
 
     /**
      * Mirrors `AccountRepositoryDB::loadBySession`
@@ -466,5 +636,22 @@ class JdbcAccountRepository(private val dataSource: DataSource) : AccountReposit
             }
         }
         return list
+    }
+
+    private companion object {
+        /** `ACCOUNT_TYPE_NORMAL` (`src/enums/account_type.hpp`). */
+        const val ACCOUNT_TYPE_NORMAL = 1
+
+        /** Column projection shared by `loadByID`/`loadByEmailOrName` (src/account/account_repository_db.cpp:28-37). */
+        const val ACCOUNT_INFO_COLUMNS =
+            "SELECT id, \"type\", premdays, lastday, creation, premdays_purchased, 0 AS expires FROM accounts"
+
+        /** `loadBySession` query (src/account/account_repository_db.cpp:39-53). */
+        const val SESSION_ACCOUNT_INFO_QUERY =
+            "SELECT accounts.id, \"type\", premdays, lastday, creation, premdays_purchased, " +
+                "account_sessions.expires FROM accounts " +
+                "INNER JOIN account_sessions ON account_sessions.account_id = accounts.id " +
+                "WHERE account_sessions.id IN (?, ?) " +
+                "ORDER BY CASE account_sessions.id WHEN ? THEN 0 ELSE 1 END LIMIT 1"
     }
 }
