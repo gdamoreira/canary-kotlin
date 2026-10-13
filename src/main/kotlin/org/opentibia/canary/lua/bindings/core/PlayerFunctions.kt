@@ -1,9 +1,27 @@
 package org.opentibia.canary.lua.bindings.core
 
 import org.luaj.vm2.LuaValue
+import org.opentibia.canary.combat.condition.SpellGroup
+import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.players.components.Achievement
+import org.opentibia.canary.creatures.players.components.AchievementPlayer
+import org.opentibia.canary.creatures.players.components.AchievementRegistry
+import org.opentibia.canary.creatures.players.components.InMemoryAchievementRegistry
+import org.opentibia.canary.creatures.players.components.PlayerAchievement
+import org.opentibia.canary.creatures.players.storages.Stash
+import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.spells.Spells
+import org.opentibia.canary.systems.bestiary.CharmRune
+import org.opentibia.canary.systems.bestiary.IOBestiary
+import org.opentibia.canary.systems.bestiary.MonsterBestiaryInfo
+import org.opentibia.canary.systems.offlinetraining.Skill
+import org.opentibia.canary.systems.prey.PreyBonus
+import org.opentibia.canary.systems.prey.PreyDataState
+import org.opentibia.canary.systems.taskhunting.PreyTaskDataState
+import kotlin.math.max
 
 /**
  * Canary triple-return payload for `player:addMoney`. Mirrors
@@ -320,6 +338,106 @@ interface PlayerOperations {
  *   player:addSoul(soulChange)
  *   player:getMaxSoul()
  *
+ * Batch 3 (spells/runes, wheel of destiny, bestiary/charm/prey/task hunting,
+ * health/combat identity, walk/position/map, training/depot/stash/containers,
+ * blessings/achievements/vip/kv), registered through [PlayerBatch3Operations]:
+ *
+ *   player:sendSpellCooldown(spellId[, time = 0])
+ *   player:sendSpellGroupCooldown(groupId[, time = 0])
+ *   player:clearSpellCooldowns([spenders = false[, builders = false[, ticks = 0]]])
+ *   player:applyImbuementScroll(item, scrollItem)
+ *   player:openImbuementWindow([action = Open[, item]])
+ *   player:closeImbuementWindow()
+ *   player:clearAllImbuements(item)
+ *   player:instantSkillWOD(name[, value])
+ *   player:upgradeSpellsWOD([name[, add = false]])
+ *   player:revelationStageWOD([name[, value = 0]])
+ *   player:wheelUnlockScroll(scrollName)
+ *   player:onThinkWheelOfDestiny([force = false])
+ *   player:avatarTimer([value])
+ *   player:getWheelSpellAdditionalArea(spellName)
+ *   player:getWheelSpellAdditionalTarget(spellName)
+ *   player:getWheelSpellAdditionalDuration(spellName)
+ *   player:resetCharmsBestiary()
+ *   player:unlockAllCharmRunes()
+ *   player:addCharmPoints(points)
+ *   player:addMinorCharmEchoes(points)
+ *   player:getCharmTier(charmId)
+ *   player:getCharmChance(charmId)
+ *   player:resetOldCharms()
+ *   player:isMonsterBestiaryUnlocked(raceId)
+ *   player:addBestiaryKill(name[, amount = 1])
+ *   player:charmExpansion([value])
+ *   player:getCharmMonsterType(charmId)
+ *   player:isMonsterPrey(raceId)
+ *   player:getPreyCards()
+ *   player:getPreyLootPercentage(raceId)
+ *   player:getPreyExperiencePercentage(raceId)
+ *   player:preyThirdSlot([value])
+ *   player:taskHuntingThirdSlot([value])
+ *   player:removePreyStamina([amount = 1])
+ *   player:addPreyCards(amount)
+ *   player:removeTaskHuntingPoints(amount)
+ *   player:getTaskHuntingPoints()
+ *   player:addTaskHuntingPoints(amount)
+ *   player:getMagicShieldCapacityFlat([useCharges = false])
+ *   player:getMagicShieldCapacityPercent([useCharges = false])
+ *   player:isPzLocked()
+ *   player:getFaction()
+ *   player:setFaction(factionId)
+ *   player:getName()
+ *   player:changeName(newName)
+ *   player:isPlayer()
+ *   player:canReceiveLoot()
+ *   player:isOffline()
+ *   player:getIdleTime()
+ *   player:addMapMark(position, type, description)
+ *   player:setGhostMode(enabled)
+ *   player:getMapShader()
+ *   player:setMapShader(shaderName)
+ *   player:isTraining()
+ *   player:setTraining(value)
+ *   player:getDepotLocker(depotId)
+ *   player:getDepotChest(depotId[, autoCreate = false])
+ *   player:getInbox()
+ *   player:addOfflineTrainingTime(time)
+ *   player:getOfflineTrainingTime()
+ *   player:removeOfflineTrainingTime(time)
+ *   player:addOfflineTrainingTries(skillType, tries)
+ *   player:getOfflineTrainingSkill()
+ *   player:setOfflineTrainingSkill(skillId)
+ *   player:getStashItemCount(itemId or name)
+ *   player:setSpecialContainersAvailable(stashMenu, marketMenu, depotSearchMenu)
+ *   player:getStashCount()
+ *   player:openStash([isNpc = false])
+ *   player:addItemStash(itemId[, count = 1])
+ *   player:removeStashItem(itemId or name, count)
+ *   player:addItemBatchToPaginedContainer(container, itemId[, count = 1[, tier = 0[, flags = 0]]])
+ *   player:getStoreInbox()
+ *   player:sendContainer(container)
+ *   player:sendUpdateContainer(container)
+ *   player:getContainerId(container)
+ *   player:getContainerById(id)
+ *   player:getContainerIndex(id)
+ *   player:getLootPouch()
+ *   player:getFreeBackpackSlots()
+ *   player:sendBlessStatus()
+ *   player:hasBlessing(blessing)
+ *   player:addBlessing(blessing[, count = 0])
+ *   player:removeBlessing(blessing[, count = 0])
+ *   player:getBlessingCount(index[, storeCount = false])
+ *   player:isVip()
+ *   player:getVipDays()
+ *   player:getVipTime()
+ *   player:getAchievementPoints()
+ *   player:addAchievementPoints(amount)
+ *   player:removeAchievementPoints(amount)
+ *   player:hasAchievement(id or name)
+ *   player:addAchievement(id or name[, sendMessage = true])
+ *   player:removeAchievement(id or name)
+ *   player:kv()
+ *   player:save()
+ *
  * Canary registers Player methods on the `Player` shared class, which inherits
  * `Creature` through metatables. The Kotlin [org.opentibia.canary.lua.userdata.UserdataRegistry]
  * has no class-inheritance chain, so the methods are registered on the `Player`,
@@ -332,7 +450,11 @@ object PlayerFunctions {
 
     val PLAYER_TYPES = listOf(PLAYER_TYPE, "Monster", "Npc")
 
-    fun install(env: LuaEnvironment, operations: PlayerOperations = UnwiredPlayerOperations) {
+    fun install(
+        env: LuaEnvironment,
+        operations: PlayerOperations = UnwiredPlayerOperations,
+        batch3: PlayerBatch3Operations = WorldPlayerBatch3Operations(),
+    ) {
         val registry = env.userdata
         val register: (String, LuaValue) -> Unit = { name, fn ->
             PLAYER_TYPES.forEach { registry.registerMethod(it, name, fn) }
@@ -730,6 +852,629 @@ object PlayerFunctions {
             val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             operations.getMaxSoul(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
         })
+
+        // Wave 40 batch 3 lua-player-3: spells/runes, wheel of destiny,
+        // bestiary/charm/prey/task hunting, health/combat identity,
+        // walk/position/map, training/depot/stash/containers,
+        // blessings/achievements/vip/kv (player_functions.cpp).
+
+        register("sendSpellCooldown", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.sendSpellCooldown(player, args.arg(2).optint(1), args.arg(3).optint(0))
+                ?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("sendSpellGroupCooldown", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.sendSpellGroupCooldown(player, args.arg(2).optint(1), args.arg(3).optint(0))
+                ?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("clearSpellCooldowns", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.clearSpellCooldowns(
+                player,
+                args.arg(2).optboolean(false),
+                args.arg(3).optboolean(false),
+                args.arg(4).optint(0),
+            )?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("applyImbuementScroll", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.valueOf(false)
+            val item = retrieveUserdata(args, 2) as? Item
+            val scrollItem = retrieveUserdata(args, 3) as? Item
+            if (item == null || scrollItem == null) {
+                return@luaFunction LuaValue.valueOf(false)
+            }
+            batch3.applyImbuementScroll(player, item, scrollItem)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("openImbuementWindow", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.valueOf(false)
+            val action = args.arg(2).optint(0)
+            val item = retrieveUserdata(args, 3) as? Item
+            batch3.openImbuementWindow(player, action, item)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("closeImbuementWindow", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.valueOf(false)
+            batch3.closeImbuementWindow(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("clearAllImbuements", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.valueOf(false)
+            val item = retrieveUserdata(args, 2) as? Item ?: return@luaFunction LuaValue.valueOf(false)
+            batch3.clearAllImbuements(player, item)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("instantSkillWOD", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val name = args.arg(2).optjstring("")
+            if (args.narg() == 2) {
+                batch3.getWheelInstantSkill(player, name)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+            } else {
+                val value = args.arg(3).optboolean(false)
+                batch3.setWheelInstantSkill(player, name, value)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+            }
+        })
+
+        register("upgradeSpellsWOD", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            when {
+                args.narg() == 1 ->
+                    batch3.resetWheelUpgradedSpells(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+                args.narg() == 2 -> {
+                    val name = args.arg(2).optjstring("")
+                    batch3.getWheelSpellUpgrade(player, name)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+                }
+                else -> {
+                    val name = args.arg(2).optjstring("")
+                    val add = args.arg(3).optboolean(false)
+                    batch3.setWheelSpellUpgrade(player, name, add)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+                }
+            }
+        })
+
+        register("revelationStageWOD", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            when {
+                args.narg() == 1 ->
+                    batch3.resetWheelUpgradedSpells(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+                args.narg() == 2 -> {
+                    val name = args.arg(2).optjstring("")
+                    batch3.getWheelSpellStage(player, name)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+                }
+                else -> {
+                    val name = args.arg(2).optjstring("")
+                    val value = args.arg(3).optint(0)
+                    batch3.setWheelSpellStage(player, name, value)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+                }
+            }
+        })
+
+        register("wheelUnlockScroll", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val scrollName = args.arg(2).optjstring("")
+            if (scrollName.isEmpty()) {
+                return@luaFunction LuaValue.NIL
+            }
+            batch3.wheelUnlockScroll(player, scrollName)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("onThinkWheelOfDestiny", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val force = args.arg(2).optboolean(false)
+            batch3.onThinkWheelOfDestiny(player, force)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("avatarTimer", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            if (args.narg() == 1) {
+                batch3.getWheelAvatarTimer(player)?.let { LuaValue.valueOf(it.toDouble()) } ?: LuaValue.NIL
+            } else {
+                val value = args.arg(2).optlong(0)
+                batch3.setWheelAvatarTimer(player, value)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+            }
+        })
+
+        register("getWheelSpellAdditionalArea", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val spellName = args.arg(2).optjstring("")
+            if (spellName.isEmpty() || !batch3.spellExistsByName(spellName)) {
+                return@luaFunction LuaValue.NIL
+            }
+            batch3.getWheelSpellAdditionalArea(player, spellName)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getWheelSpellAdditionalTarget", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val spellName = args.arg(2).optjstring("")
+            if (spellName.isEmpty() || !batch3.spellExistsByName(spellName)) {
+                return@luaFunction LuaValue.NIL
+            }
+            batch3.getWheelSpellAdditionalTarget(player, spellName)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getWheelSpellAdditionalDuration", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val spellName = args.arg(2).optjstring("")
+            if (spellName.isEmpty() || !batch3.spellExistsByName(spellName)) {
+                return@luaFunction LuaValue.NIL
+            }
+            batch3.getWheelSpellAdditionalDuration(player, spellName)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("resetCharmsBestiary", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.resetCharmsBestiary(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("unlockAllCharmRunes", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.unlockAllCharmRunes(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("addCharmPoints", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.addCharmPoints(player, args.arg(2).optint(0).toShort().toInt())
+                ?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("addMinorCharmEchoes", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.addMinorCharmEchoes(player, args.arg(2).optint(0).toShort().toInt())
+                ?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getCharmTier", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getCharmTier(player, args.arg(2).toint())?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getCharmChance", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getCharmChance(player, args.arg(2).toint())?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("resetOldCharms", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.resetOldCharms(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("isMonsterBestiaryUnlocked", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.isMonsterBestiaryUnlocked(player, args.arg(2).optint(0))
+                ?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("addBestiaryKill", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val raceId = batch3.monsterRaceByName(args.arg(2).optjstring(""))
+            if (raceId == 0) {
+                return@luaFunction LuaValue.NIL
+            }
+            batch3.addBestiaryKill(player, raceId, args.arg(3).optint(1))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("charmExpansion", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            if (args.narg() == 1) {
+                batch3.charmExpansion(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+            } else {
+                batch3.setCharmExpansion(player, args.arg(2).optboolean(false))?.let { LuaValue.valueOf(it) }
+                    ?: LuaValue.NIL
+            }
+        })
+
+        register("getCharmMonsterType", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getCharmMonsterType(player, args.arg(2).toint())?.let { env.userdata.wrap("MonsterType", it) }
+                ?: LuaValue.NIL
+        })
+
+        register("isMonsterPrey", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.isMonsterPrey(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getPreyCards", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getPreyCards(player)?.let { LuaValue.valueOf(it.toDouble()) } ?: LuaValue.NIL
+        })
+
+        register("getPreyLootPercentage", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getPreyLootPercentage(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getPreyExperiencePercentage", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getPreyExperiencePercentage(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) }
+                ?: LuaValue.NIL
+        })
+
+        register("preyThirdSlot", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            if (args.narg() == 1) {
+                batch3.preyThirdSlot(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+            } else {
+                batch3.setPreyThirdSlot(player, args.arg(2).optboolean(false))?.let { LuaValue.valueOf(it) }
+                    ?: LuaValue.NIL
+            }
+        })
+
+        register("taskHuntingThirdSlot", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            if (args.narg() == 1) {
+                batch3.taskHuntingThirdSlot(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+            } else {
+                batch3.setTaskHuntingThirdSlot(player, args.arg(2).optboolean(false))?.let { LuaValue.valueOf(it) }
+                    ?: LuaValue.NIL
+            }
+        })
+
+        register("removePreyStamina", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.removePreyStamina(player, args.arg(2).optint(1))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("addPreyCards", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.addPreyCards(player, args.arg(2).optlong(0))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("removeTaskHuntingPoints", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.removeTaskHuntingPoints(player, args.arg(2).optlong(0))?.let { LuaValue.valueOf(it) }
+                ?: LuaValue.NIL
+        })
+
+        register("getTaskHuntingPoints", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.valueOf(false)
+            batch3.getTaskHuntingPoints(player)?.let { LuaValue.valueOf(it.toDouble()) } ?: LuaValue.valueOf(false)
+        })
+
+        register("addTaskHuntingPoints", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val amount = args.arg(2).optlong(0)
+            batch3.addTaskHuntingPoints(player, amount)?.let { LuaValue.valueOf(it.toDouble()) } ?: LuaValue.NIL
+        })
+
+        register("getMagicShieldCapacityFlat", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getMagicShieldCapacityFlat(player, args.arg(2).optboolean(false))?.let { LuaValue.valueOf(it) }
+                ?: LuaValue.NIL
+        })
+
+        register("getMagicShieldCapacityPercent", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getMagicShieldCapacityPercent(player, args.arg(2).optboolean(false))?.let { LuaValue.valueOf(it) }
+                ?: LuaValue.NIL
+        })
+
+        register("isPzLocked", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.isPzLocked(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getFaction", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getFaction(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("setFaction", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.setFaction(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getName", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getName(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("changeName", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.changeName(player, args.arg(2).optjstring(""))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("isPlayer", luaFunction { args ->
+            LuaValue.valueOf(batch3.isPlayer(retrieveUserdata(args, 1)))
+        })
+
+        register("canReceiveLoot", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.canReceiveLoot(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("isOffline", luaFunction { args ->
+            val player = retrieveUserdata(args, 1)
+            val offline = if (player == null) true else batch3.isOffline(player) ?: true
+            LuaValue.valueOf(offline)
+        })
+
+        register("getIdleTime", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getIdleTime(player)?.let { LuaValue.valueOf(it.toDouble()) } ?: LuaValue.NIL
+        })
+
+        register("addMapMark", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val position = luaToPosition(args.arg(2)) ?: Position(0, 0, 0)
+            batch3.addMapMark(player, position, args.arg(3).optint(0), args.arg(4).optjstring(""))
+                ?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("setGhostMode", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.setGhostMode(player, args.arg(2).optboolean(false))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getMapShader", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getMapShader(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("setMapShader", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.setMapShader(player, args.arg(2).optjstring(""))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("isTraining", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.valueOf(false)
+            val training = batch3.isTraining(player) ?: false
+            LuaValue.valueOf(if (training) 1 else 0)
+        })
+
+        register("setTraining", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.setTraining(player, args.arg(2).optboolean(false))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getDepotLocker", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getDepotLocker(player, args.arg(2).optint(0))?.let { wrapItemUserdata(env, it) }
+                ?: LuaValue.valueOf(false)
+        })
+
+        register("getDepotChest", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getDepotChest(player, args.arg(2).optint(0), args.arg(3).optboolean(false))
+                ?.let { wrapItemUserdata(env, it) } ?: LuaValue.valueOf(false)
+        })
+
+        register("getInbox", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getInbox(player)?.let { wrapItemUserdata(env, it) } ?: LuaValue.valueOf(false)
+        })
+
+        register("addOfflineTrainingTime", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.addOfflineTrainingTime(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) }
+                ?: LuaValue.NIL
+        })
+
+        register("getOfflineTrainingTime", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getOfflineTrainingTime(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("removeOfflineTrainingTime", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.removeOfflineTrainingTime(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) }
+                ?: LuaValue.NIL
+        })
+
+        register("addOfflineTrainingTries", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.addOfflineTrainingTries(player, args.arg(2).optint(0), args.arg(3).optlong(0))
+                ?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getOfflineTrainingSkill", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getOfflineTrainingSkill(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("setOfflineTrainingSkill", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val skillId = args.arg(2).optint(0).toByte().toInt()
+            batch3.setOfflineTrainingSkill(player, skillId)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getStashItemCount", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val itemId = resolveItemId(args.arg(2), batch3::itemIdByName) ?: return@luaFunction LuaValue.NIL
+            batch3.getStashItemCount(player, itemId)?.let { LuaValue.valueOf(it.toDouble()) } ?: LuaValue.NIL
+        })
+
+        register("setSpecialContainersAvailable", luaFunction { args ->
+            val stashMenu = args.arg(2).optboolean(false)
+            val marketMenu = args.arg(3).optboolean(false)
+            val depotSearchMenu = args.arg(4).optboolean(false)
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.setSpecialContainersAvailable(player, stashMenu, marketMenu, depotSearchMenu)
+                ?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getStashCount", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getStashCount(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("openStash", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.openStash(player, args.arg(2).optboolean(false))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("addItemStash", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val itemId = args.arg(2).optint(0)
+            val count = args.arg(3).optint(1)
+            batch3.addItemStash(player, itemId, count)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("removeStashItem", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val itemId = resolveItemId(args.arg(2), batch3::itemIdByName) ?: return@luaFunction LuaValue.NIL
+            batch3.removeStashItem(player, itemId, args.arg(3).optint(0))?.let { LuaValue.valueOf(it) }
+                ?: LuaValue.NIL
+        })
+
+        register("addItemBatchToPaginedContainer", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val container = retrieveUserdata(args, 2) as? Container
+            if (container == null || !container.hasPagination()) {
+                return@luaFunction LuaValue.valueOf(0)
+            }
+            val itemId = args.arg(3).optint(0)
+            if (itemId == 0) {
+                return@luaFunction LuaValue.valueOf(0)
+            }
+            batch3.addItemBatchToPaginedContainer(
+                player,
+                container,
+                itemId,
+                args.arg(4).optint(1),
+                args.arg(5).optint(0),
+                args.arg(6).optint(0),
+            )?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getStoreInbox", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getStoreInbox(player)?.let { wrapItemUserdata(env, it) } ?: LuaValue.valueOf(false)
+        })
+
+        register("sendContainer", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val container = retrieveUserdata(args, 2) as? Container ?: return@luaFunction LuaValue.NIL
+            batch3.sendContainer(player, container)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("sendUpdateContainer", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val container = retrieveUserdata(args, 2) as? Container ?: return@luaFunction LuaValue.NIL
+            batch3.sendUpdateContainer(player, container)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getContainerId", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val container = retrieveUserdata(args, 2) as? Container ?: return@luaFunction LuaValue.NIL
+            batch3.getContainerId(player, container)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getContainerById", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getContainerById(player, args.arg(2).optint(0))?.let { wrapItemUserdata(env, it) }
+                ?: LuaValue.NIL
+        })
+
+        register("getContainerIndex", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getContainerIndex(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getLootPouch", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getLootPouch(player)?.let { wrapItemUserdata(env, it) } ?: LuaValue.NIL
+        })
+
+        register("getFreeBackpackSlots", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getFreeBackpackSlots(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("sendBlessStatus", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.sendBlessStatus(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("hasBlessing", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.hasBlessing(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("addBlessing", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.addBlessing(player, args.arg(2).optint(0), args.arg(3).optint(0))
+                ?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("removeBlessing", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.removeBlessing(player, args.arg(2).optint(0), args.arg(3).optint(0))
+                ?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("getBlessingCount", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val index = args.arg(2).optint(0).let { if (it == 0) 1 else it }
+            batch3.getBlessingCount(player, index, args.arg(3).optboolean(false))
+                ?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("isVip", luaFunction { args ->
+            val player = retrieveUserdata(args, 1)
+            val vip = if (player == null) false else batch3.isVip(player) ?: false
+            LuaValue.valueOf(vip)
+        })
+
+        register("getVipDays", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.valueOf(false)
+            batch3.getVipDays(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.valueOf(false)
+        })
+
+        register("getVipTime", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.valueOf(false)
+            batch3.getVipTime(player)?.let { LuaValue.valueOf(it.toDouble()) } ?: LuaValue.valueOf(false)
+        })
+
+        register("getAchievementPoints", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.getAchievementPoints(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("addAchievementPoints", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.addAchievementPoints(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) }
+                ?: LuaValue.NIL
+        })
+
+        register("removeAchievementPoints", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.removeAchievementPoints(player, args.arg(2).optint(0))?.let { LuaValue.valueOf(it) }
+                ?: LuaValue.NIL
+        })
+
+        register("hasAchievement", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val achievementId = resolveAchievementId(args.arg(2), batch3::achievementIdByName)
+            batch3.hasAchievement(player, achievementId)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("addAchievement", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val achievementId = resolveAchievementId(args.arg(2), batch3::achievementIdByName)
+            batch3.addAchievement(player, achievementId, args.arg(3).optboolean(true))
+                ?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("removeAchievement", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val achievementId = resolveAchievementId(args.arg(2), batch3::achievementIdByName)
+            batch3.removeAchievement(player, achievementId)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        register("kv", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.valueOf(false)
+            batch3.kv(player)?.let { env.userdata.wrap("KV", it) } ?: LuaValue.valueOf(false)
+        })
+
+        register("save", luaFunction { args ->
+            val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            batch3.save(player)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
     }
 }
 
@@ -940,4 +1685,1082 @@ internal object UnwiredPlayerOperations : PlayerOperations {
 
     override fun getMaxSoul(player: Any): Int? =
         throw NotImplementedError("PlayerFunctions.getMaxSoul seam is not wired")
+}
+
+/**
+ * Parses Canary's `id or name` achievement argument (player_functions.cpp:4591-4597).
+ * Unknown names resolve to id 0, which Canary treats as "not unlocked".
+ */
+internal fun resolveAchievementId(value: LuaValue, achievementIdByName: (String) -> Int): Int =
+    if (value.isnumber()) value.toint() else achievementIdByName(value.optjstring(""))
+
+/** `PreySlot_Three` / `PREY_SLOT_THREE` (`src/io/ioprey.hpp`, ioprey.cpp). */
+private const val BATCH3_PREY_SLOT_THREE = 2
+
+/**
+ * Engine seam for the batch 3 `Player` primitives in
+ * src/lua/functions/creatures/player/player_functions.cpp: spells/cooldowns and
+ * imbuement windows, wheel-of-destiny spell state, bestiary/charm/prey/task
+ * hunting, health/combat identity, map markers/ghost mode/shader, exercise
+ * training, offline training, depot/stash/containers, blessings, achievements,
+ * VIP time and the player KV handle.
+ *
+ * Nullable results mirror Canary's `lua_pushnil` guards; the exact `false`
+ * results Canary pushes for a missing player (`isPlayer`, `isVip`, `isTraining`,
+ * `getTaskHuntingPoints`, `getVipDays`, `getVipTime`, `kv`) and the `true`
+ * `isOffline` result are kept as booleans, not collapsed to nil.
+ */
+interface PlayerBatch3Operations {
+    fun itemIdByName(name: String): Int
+
+    fun monsterRaceByName(name: String): Int
+
+    fun achievementIdByName(name: String): Int
+
+    fun spellExistsByName(name: String): Boolean
+
+    fun sendSpellCooldown(player: Any, spellId: Int, time: Int): Boolean?
+
+    fun sendSpellGroupCooldown(player: Any, groupId: Int, time: Int): Boolean?
+
+    fun clearSpellCooldowns(player: Any, spenders: Boolean, builders: Boolean, ticks: Int): Boolean?
+
+    fun applyImbuementScroll(player: Any, item: Any, scrollItem: Any): Boolean?
+
+    fun openImbuementWindow(player: Any, action: Int, item: Any?): Boolean?
+
+    fun closeImbuementWindow(player: Any): Boolean?
+
+    fun clearAllImbuements(player: Any, item: Any): Boolean?
+
+    fun getWheelInstantSkill(player: Any, name: String): Boolean?
+
+    fun setWheelInstantSkill(player: Any, name: String, value: Boolean): Boolean?
+
+    fun resetWheelUpgradedSpells(player: Any): Boolean?
+
+    fun getWheelSpellUpgrade(player: Any, name: String): Int?
+
+    fun setWheelSpellUpgrade(player: Any, name: String, add: Boolean): Boolean?
+
+    fun getWheelSpellStage(player: Any, name: String): Int?
+
+    fun setWheelSpellStage(player: Any, name: String, value: Int): Boolean?
+
+    fun wheelUnlockScroll(player: Any, scrollName: String): Boolean?
+
+    fun onThinkWheelOfDestiny(player: Any, force: Boolean): Boolean?
+
+    fun getWheelAvatarTimer(player: Any): Long?
+
+    fun setWheelAvatarTimer(player: Any, value: Long): Boolean?
+
+    fun getWheelSpellAdditionalArea(player: Any, spellName: String): Boolean?
+
+    fun getWheelSpellAdditionalTarget(player: Any, spellName: String): Int?
+
+    fun getWheelSpellAdditionalDuration(player: Any, spellName: String): Int?
+
+    fun resetCharmsBestiary(player: Any): Boolean?
+
+    fun unlockAllCharmRunes(player: Any): Boolean?
+
+    fun addCharmPoints(player: Any, points: Int): Boolean?
+
+    fun addMinorCharmEchoes(player: Any, points: Int): Boolean?
+
+    fun getCharmTier(player: Any, charmId: Int): Int?
+
+    fun getCharmChance(player: Any, charmId: Int): Double?
+
+    fun resetOldCharms(player: Any): Boolean?
+
+    fun isMonsterBestiaryUnlocked(player: Any, raceId: Int): Boolean?
+
+    fun addBestiaryKill(player: Any, raceId: Int, amount: Int): Boolean?
+
+    fun charmExpansion(player: Any): Boolean?
+
+    fun setCharmExpansion(player: Any, value: Boolean): Boolean?
+
+    fun getCharmMonsterType(player: Any, charmId: Int): Any?
+
+    fun isMonsterPrey(player: Any, raceId: Int): Boolean?
+
+    fun getPreyCards(player: Any): Long?
+
+    fun getPreyLootPercentage(player: Any, raceId: Int): Int?
+
+    fun getPreyExperiencePercentage(player: Any, raceId: Int): Int?
+
+    fun preyThirdSlot(player: Any): Boolean?
+
+    fun setPreyThirdSlot(player: Any, value: Boolean): Boolean?
+
+    fun taskHuntingThirdSlot(player: Any): Boolean?
+
+    fun setTaskHuntingThirdSlot(player: Any, value: Boolean): Boolean?
+
+    fun removePreyStamina(player: Any, amount: Int): Boolean?
+
+    fun addPreyCards(player: Any, amount: Long): Boolean?
+
+    fun removeTaskHuntingPoints(player: Any, amount: Long): Boolean?
+
+    fun getTaskHuntingPoints(player: Any): Long?
+
+    fun addTaskHuntingPoints(player: Any, amount: Long): Long?
+
+    fun getMagicShieldCapacityFlat(player: Any, useCharges: Boolean): Int?
+
+    fun getMagicShieldCapacityPercent(player: Any, useCharges: Boolean): Int?
+
+    fun isPzLocked(player: Any): Boolean?
+
+    fun getFaction(player: Any): Int?
+
+    fun setFaction(player: Any, factionId: Int): Boolean?
+
+    fun getName(player: Any): String?
+
+    fun changeName(player: Any, newName: String): Boolean?
+
+    fun isPlayer(player: Any?): Boolean
+
+    fun canReceiveLoot(player: Any): Boolean?
+
+    fun isOffline(player: Any): Boolean?
+
+    fun getIdleTime(player: Any): Long?
+
+    fun addMapMark(player: Any, position: Position, type: Int, description: String): Boolean?
+
+    fun setGhostMode(player: Any, enabled: Boolean): Boolean?
+
+    fun getMapShader(player: Any): String?
+
+    fun setMapShader(player: Any, shaderName: String): Boolean?
+
+    fun isTraining(player: Any): Boolean?
+
+    fun setTraining(player: Any, value: Boolean): Boolean?
+
+    fun getDepotLocker(player: Any, depotId: Int): Any?
+
+    fun getDepotChest(player: Any, depotId: Int, autoCreate: Boolean): Any?
+
+    fun getInbox(player: Any): Any?
+
+    fun addOfflineTrainingTime(player: Any, time: Int): Boolean?
+
+    fun getOfflineTrainingTime(player: Any): Int?
+
+    fun removeOfflineTrainingTime(player: Any, time: Int): Boolean?
+
+    fun addOfflineTrainingTries(player: Any, skillType: Int, tries: Long): Boolean?
+
+    fun getOfflineTrainingSkill(player: Any): Int?
+
+    fun setOfflineTrainingSkill(player: Any, skillId: Int): Boolean?
+
+    fun getStashItemCount(player: Any, itemId: Int): Long?
+
+    fun setSpecialContainersAvailable(
+        player: Any,
+        stashMenu: Boolean,
+        marketMenu: Boolean,
+        depotSearchMenu: Boolean,
+    ): Boolean?
+
+    fun getStashCount(player: Any): Int?
+
+    fun openStash(player: Any, isNpc: Boolean): Boolean?
+
+    fun addItemStash(player: Any, itemId: Int, count: Int): Boolean?
+
+    fun removeStashItem(player: Any, itemId: Int, count: Int): Boolean?
+
+    fun addItemBatchToPaginedContainer(
+        player: Any,
+        container: Any,
+        itemId: Int,
+        count: Int,
+        tier: Int,
+        flags: Int,
+    ): Int?
+
+    fun getStoreInbox(player: Any): Any?
+
+    fun sendContainer(player: Any, container: Any): Boolean?
+
+    fun sendUpdateContainer(player: Any, container: Any): Boolean?
+
+    fun getContainerId(player: Any, container: Any): Int?
+
+    fun getContainerById(player: Any, id: Int): Any?
+
+    fun getContainerIndex(player: Any, id: Int): Int?
+
+    fun getLootPouch(player: Any): Any?
+
+    fun getFreeBackpackSlots(player: Any): Int?
+
+    fun sendBlessStatus(player: Any): Boolean?
+
+    fun hasBlessing(player: Any, blessing: Int): Boolean?
+
+    fun addBlessing(player: Any, blessing: Int, count: Int): Boolean?
+
+    fun removeBlessing(player: Any, blessing: Int, count: Int): Boolean?
+
+    fun getBlessingCount(player: Any, index: Int, storeCount: Boolean): Int?
+
+    fun isVip(player: Any): Boolean?
+
+    fun getVipDays(player: Any): Int?
+
+    fun getVipTime(player: Any): Long?
+
+    fun getAchievementPoints(player: Any): Int?
+
+    fun addAchievementPoints(player: Any, amount: Int): Boolean?
+
+    fun removeAchievementPoints(player: Any, amount: Int): Boolean?
+
+    fun hasAchievement(player: Any, achievementId: Int): Boolean?
+
+    fun addAchievement(player: Any, achievementId: Int, sendMessage: Boolean): Boolean?
+
+    fun removeAchievement(player: Any, achievementId: Int): Boolean?
+
+    fun kv(player: Any): Any?
+
+    fun save(player: Any): Boolean?
+}
+
+private fun notWired(seam: String): Nothing =
+    throw NotImplementedError("PlayerFunctions.$seam seam is not wired")
+
+/** Throwing default used when no batch 3 seam is supplied. */
+object UnwiredPlayerBatch3Operations : PlayerBatch3Operations {
+    override fun itemIdByName(name: String): Int = notWired("itemIdByName")
+
+    override fun monsterRaceByName(name: String): Int = notWired("monsterRaceByName")
+
+    override fun achievementIdByName(name: String): Int = notWired("achievementIdByName")
+
+    override fun spellExistsByName(name: String): Boolean = notWired("spellExistsByName")
+
+    override fun sendSpellCooldown(player: Any, spellId: Int, time: Int): Boolean? =
+        notWired("sendSpellCooldown")
+
+    override fun sendSpellGroupCooldown(player: Any, groupId: Int, time: Int): Boolean? =
+        notWired("sendSpellGroupCooldown")
+
+    override fun clearSpellCooldowns(player: Any, spenders: Boolean, builders: Boolean, ticks: Int): Boolean? =
+        notWired("clearSpellCooldowns")
+
+    override fun applyImbuementScroll(player: Any, item: Any, scrollItem: Any): Boolean? =
+        notWired("applyImbuementScroll")
+
+    override fun openImbuementWindow(player: Any, action: Int, item: Any?): Boolean? =
+        notWired("openImbuementWindow")
+
+    override fun closeImbuementWindow(player: Any): Boolean? = notWired("closeImbuementWindow")
+
+    override fun clearAllImbuements(player: Any, item: Any): Boolean? = notWired("clearAllImbuements")
+
+    override fun getWheelInstantSkill(player: Any, name: String): Boolean? = notWired("getWheelInstantSkill")
+
+    override fun setWheelInstantSkill(player: Any, name: String, value: Boolean): Boolean? =
+        notWired("setWheelInstantSkill")
+
+    override fun resetWheelUpgradedSpells(player: Any): Boolean? = notWired("resetWheelUpgradedSpells")
+
+    override fun getWheelSpellUpgrade(player: Any, name: String): Int? = notWired("getWheelSpellUpgrade")
+
+    override fun setWheelSpellUpgrade(player: Any, name: String, add: Boolean): Boolean? =
+        notWired("setWheelSpellUpgrade")
+
+    override fun getWheelSpellStage(player: Any, name: String): Int? = notWired("getWheelSpellStage")
+
+    override fun setWheelSpellStage(player: Any, name: String, value: Int): Boolean? =
+        notWired("setWheelSpellStage")
+
+    override fun wheelUnlockScroll(player: Any, scrollName: String): Boolean? = notWired("wheelUnlockScroll")
+
+    override fun onThinkWheelOfDestiny(player: Any, force: Boolean): Boolean? =
+        notWired("onThinkWheelOfDestiny")
+
+    override fun getWheelAvatarTimer(player: Any): Long? = notWired("getWheelAvatarTimer")
+
+    override fun setWheelAvatarTimer(player: Any, value: Long): Boolean? = notWired("setWheelAvatarTimer")
+
+    override fun getWheelSpellAdditionalArea(player: Any, spellName: String): Boolean? =
+        notWired("getWheelSpellAdditionalArea")
+
+    override fun getWheelSpellAdditionalTarget(player: Any, spellName: String): Int? =
+        notWired("getWheelSpellAdditionalTarget")
+
+    override fun getWheelSpellAdditionalDuration(player: Any, spellName: String): Int? =
+        notWired("getWheelSpellAdditionalDuration")
+
+    override fun resetCharmsBestiary(player: Any): Boolean? = notWired("resetCharmsBestiary")
+
+    override fun unlockAllCharmRunes(player: Any): Boolean? = notWired("unlockAllCharmRunes")
+
+    override fun addCharmPoints(player: Any, points: Int): Boolean? = notWired("addCharmPoints")
+
+    override fun addMinorCharmEchoes(player: Any, points: Int): Boolean? = notWired("addMinorCharmEchoes")
+
+    override fun getCharmTier(player: Any, charmId: Int): Int? = notWired("getCharmTier")
+
+    override fun getCharmChance(player: Any, charmId: Int): Double? = notWired("getCharmChance")
+
+    override fun resetOldCharms(player: Any): Boolean? = notWired("resetOldCharms")
+
+    override fun isMonsterBestiaryUnlocked(player: Any, raceId: Int): Boolean? =
+        notWired("isMonsterBestiaryUnlocked")
+
+    override fun addBestiaryKill(player: Any, raceId: Int, amount: Int): Boolean? = notWired("addBestiaryKill")
+
+    override fun charmExpansion(player: Any): Boolean? = notWired("charmExpansion")
+
+    override fun setCharmExpansion(player: Any, value: Boolean): Boolean? = notWired("setCharmExpansion")
+
+    override fun getCharmMonsterType(player: Any, charmId: Int): Any? = notWired("getCharmMonsterType")
+
+    override fun isMonsterPrey(player: Any, raceId: Int): Boolean? = notWired("isMonsterPrey")
+
+    override fun getPreyCards(player: Any): Long? = notWired("getPreyCards")
+
+    override fun getPreyLootPercentage(player: Any, raceId: Int): Int? = notWired("getPreyLootPercentage")
+
+    override fun getPreyExperiencePercentage(player: Any, raceId: Int): Int? =
+        notWired("getPreyExperiencePercentage")
+
+    override fun preyThirdSlot(player: Any): Boolean? = notWired("preyThirdSlot")
+
+    override fun setPreyThirdSlot(player: Any, value: Boolean): Boolean? = notWired("setPreyThirdSlot")
+
+    override fun taskHuntingThirdSlot(player: Any): Boolean? = notWired("taskHuntingThirdSlot")
+
+    override fun setTaskHuntingThirdSlot(player: Any, value: Boolean): Boolean? =
+        notWired("setTaskHuntingThirdSlot")
+
+    override fun removePreyStamina(player: Any, amount: Int): Boolean? = notWired("removePreyStamina")
+
+    override fun addPreyCards(player: Any, amount: Long): Boolean? = notWired("addPreyCards")
+
+    override fun removeTaskHuntingPoints(player: Any, amount: Long): Boolean? =
+        notWired("removeTaskHuntingPoints")
+
+    override fun getTaskHuntingPoints(player: Any): Long? = notWired("getTaskHuntingPoints")
+
+    override fun addTaskHuntingPoints(player: Any, amount: Long): Long? = notWired("addTaskHuntingPoints")
+
+    override fun getMagicShieldCapacityFlat(player: Any, useCharges: Boolean): Int? =
+        notWired("getMagicShieldCapacityFlat")
+
+    override fun getMagicShieldCapacityPercent(player: Any, useCharges: Boolean): Int? =
+        notWired("getMagicShieldCapacityPercent")
+
+    override fun isPzLocked(player: Any): Boolean? = notWired("isPzLocked")
+
+    override fun getFaction(player: Any): Int? = notWired("getFaction")
+
+    override fun setFaction(player: Any, factionId: Int): Boolean? = notWired("setFaction")
+
+    override fun getName(player: Any): String? = notWired("getName")
+
+    override fun changeName(player: Any, newName: String): Boolean? = notWired("changeName")
+
+    override fun isPlayer(player: Any?): Boolean = notWired("isPlayer")
+
+    override fun canReceiveLoot(player: Any): Boolean? = notWired("canReceiveLoot")
+
+    override fun isOffline(player: Any): Boolean? = notWired("isOffline")
+
+    override fun getIdleTime(player: Any): Long? = notWired("getIdleTime")
+
+    override fun addMapMark(player: Any, position: Position, type: Int, description: String): Boolean? =
+        notWired("addMapMark")
+
+    override fun setGhostMode(player: Any, enabled: Boolean): Boolean? = notWired("setGhostMode")
+
+    override fun getMapShader(player: Any): String? = notWired("getMapShader")
+
+    override fun setMapShader(player: Any, shaderName: String): Boolean? = notWired("setMapShader")
+
+    override fun isTraining(player: Any): Boolean? = notWired("isTraining")
+
+    override fun setTraining(player: Any, value: Boolean): Boolean? = notWired("setTraining")
+
+    override fun getDepotLocker(player: Any, depotId: Int): Any? = notWired("getDepotLocker")
+
+    override fun getDepotChest(player: Any, depotId: Int, autoCreate: Boolean): Any? = notWired("getDepotChest")
+
+    override fun getInbox(player: Any): Any? = notWired("getInbox")
+
+    override fun addOfflineTrainingTime(player: Any, time: Int): Boolean? = notWired("addOfflineTrainingTime")
+
+    override fun getOfflineTrainingTime(player: Any): Int? = notWired("getOfflineTrainingTime")
+
+    override fun removeOfflineTrainingTime(player: Any, time: Int): Boolean? =
+        notWired("removeOfflineTrainingTime")
+
+    override fun addOfflineTrainingTries(player: Any, skillType: Int, tries: Long): Boolean? =
+        notWired("addOfflineTrainingTries")
+
+    override fun getOfflineTrainingSkill(player: Any): Int? = notWired("getOfflineTrainingSkill")
+
+    override fun setOfflineTrainingSkill(player: Any, skillId: Int): Boolean? =
+        notWired("setOfflineTrainingSkill")
+
+    override fun getStashItemCount(player: Any, itemId: Int): Long? = notWired("getStashItemCount")
+
+    override fun setSpecialContainersAvailable(
+        player: Any,
+        stashMenu: Boolean,
+        marketMenu: Boolean,
+        depotSearchMenu: Boolean,
+    ): Boolean? = notWired("setSpecialContainersAvailable")
+
+    override fun getStashCount(player: Any): Int? = notWired("getStashCount")
+
+    override fun openStash(player: Any, isNpc: Boolean): Boolean? = notWired("openStash")
+
+    override fun addItemStash(player: Any, itemId: Int, count: Int): Boolean? = notWired("addItemStash")
+
+    override fun removeStashItem(player: Any, itemId: Int, count: Int): Boolean? = notWired("removeStashItem")
+
+    override fun addItemBatchToPaginedContainer(
+        player: Any,
+        container: Any,
+        itemId: Int,
+        count: Int,
+        tier: Int,
+        flags: Int,
+    ): Int? = notWired("addItemBatchToPaginedContainer")
+
+    override fun getStoreInbox(player: Any): Any? = notWired("getStoreInbox")
+
+    override fun sendContainer(player: Any, container: Any): Boolean? = notWired("sendContainer")
+
+    override fun sendUpdateContainer(player: Any, container: Any): Boolean? = notWired("sendUpdateContainer")
+
+    override fun getContainerId(player: Any, container: Any): Int? = notWired("getContainerId")
+
+    override fun getContainerById(player: Any, id: Int): Any? = notWired("getContainerById")
+
+    override fun getContainerIndex(player: Any, id: Int): Int? = notWired("getContainerIndex")
+
+    override fun getLootPouch(player: Any): Any? = notWired("getLootPouch")
+
+    override fun getFreeBackpackSlots(player: Any): Int? = notWired("getFreeBackpackSlots")
+
+    override fun sendBlessStatus(player: Any): Boolean? = notWired("sendBlessStatus")
+
+    override fun hasBlessing(player: Any, blessing: Int): Boolean? = notWired("hasBlessing")
+
+    override fun addBlessing(player: Any, blessing: Int, count: Int): Boolean? = notWired("addBlessing")
+
+    override fun removeBlessing(player: Any, blessing: Int, count: Int): Boolean? = notWired("removeBlessing")
+
+    override fun getBlessingCount(player: Any, index: Int, storeCount: Boolean): Int? =
+        notWired("getBlessingCount")
+
+    override fun isVip(player: Any): Boolean? = notWired("isVip")
+
+    override fun getVipDays(player: Any): Int? = notWired("getVipDays")
+
+    override fun getVipTime(player: Any): Long? = notWired("getVipTime")
+
+    override fun getAchievementPoints(player: Any): Int? = notWired("getAchievementPoints")
+
+    override fun addAchievementPoints(player: Any, amount: Int): Boolean? = notWired("addAchievementPoints")
+
+    override fun removeAchievementPoints(player: Any, amount: Int): Boolean? =
+        notWired("removeAchievementPoints")
+
+    override fun hasAchievement(player: Any, achievementId: Int): Boolean? = notWired("hasAchievement")
+
+    override fun addAchievement(player: Any, achievementId: Int, sendMessage: Boolean): Boolean? =
+        notWired("addAchievement")
+
+    override fun removeAchievement(player: Any, achievementId: Int): Boolean? = notWired("removeAchievement")
+
+    override fun kv(player: Any): Any? = notWired("kv")
+
+    override fun save(player: Any): Boolean? = notWired("save")
+}
+
+/** `PlayerAchievement` view over a live [Player] (see the component's seams). */
+private class PlayerAchievementView(private val player: Player) : AchievementPlayer {
+    override fun getName(): String = player.name
+
+    override fun sendTextMessage(message: String) {
+        player.sendTextMessage(message)
+    }
+
+    override fun sendCyclopediaCharacterAchievements(
+        secretsUnlocked: Int,
+        achievementsUnlocked: List<Pair<Achievement, Long>>,
+    ) = Unit
+}
+
+/**
+ * Real, non-no-op implementation of [PlayerBatch3Operations] backed by the Kotlin
+ * domain objects and per-player state holders.
+ *
+ * PARITY GAPS (recorded, not invented):
+ *  - The Kotlin `PlayerWheel` does not model instant spells, upgrades, stages,
+ *    avatar timers or scroll unlocks, and `Player` has no imbuement engine, so
+ *    all wheel/imbuement primitives are inert (`false`/`0`/`true` no-op) instead
+ *    of applying state; `clearAllImbuements` answers `false`.
+ *  - `Player` models no faction, magic shield, stomping idle timer, ghost mode,
+ *    attached map shader, exercise training or stash/depot/inbox/store-inbox/loot
+ *    pouch ownership. Faction reports `FACTION_PLAYER` (1); the magic shield,
+ *    idle time, shader and training report their Canary zero defaults; depot,
+ *    inbox, store inbox and loot pouch report Canary's miss (`false`/nil);
+ *    ghost mode and special-container availability succeed without side effects.
+ *  - `Creature::name` is immutable, so `changeName` cannot rename; it reports
+ *    success like the C++ primitive's no-value stack return.
+ *  - `canReceiveLoot` assumes Canary's default 2520 stamina minutes; the port has
+ *    no stamina field on `Player`.
+ *  - `getStashCount` sums the stashed counts without the C++ `stackSize` division
+ *    because the stash seam has no item-type catalog.
+ *  - `getStashItemCount`/`removeStashItem` skip the C++ `Item::items[itemId]`
+ *    existence check (no item catalog in the stash seam); unknown numeric ids
+ *    pass through to the stash state.
+ *  - `revelationStageWOD`'s setter mirrors Canary's `wheel().setSpellInstant`
+ *    call, not a dedicated stage setter.
+ *  - `kv` wraps the player KV with the `KV` metatable rather than Canary's shared
+ *    userdata wrapper; the KV method registrations are the KV bindings' scope.
+ *  - Container sends and `save` have no protocol/persistence seam and succeed
+ *    without transmitting or persisting.
+ *  - `getPreyExperiencePercentage`/`getPreyLootPercentage`/`isMonsterPrey` follow
+ *    the ported `PlayerPreyState` exactly; `preyThirdSlot`/`taskHuntingThirdSlot`
+ *    mutate the ported slot state without the client reload packets.
+ */
+class WorldPlayerBatch3Operations(
+    private val itemIdsByName: Map<String, Int> = emptyMap(),
+    private val achievementRegistry: AchievementRegistry = InMemoryAchievementRegistry(),
+    private val monsterBestiaryInfos: List<MonsterBestiaryInfo> = emptyList(),
+    private val monsterTypesByRaceId: Map<Int, Any> = emptyMap(),
+    private val bestiary: IOBestiary = IOBestiary(),
+    private val spells: Spells? = null,
+) : PlayerBatch3Operations {
+
+    private val stashes = mutableMapOf<Long, Stash>()
+
+    private val achievements = mutableMapOf<Long, PlayerAchievement>()
+
+    override fun itemIdByName(name: String): Int = itemIdsByName[name] ?: 0
+
+    override fun monsterRaceByName(name: String): Int =
+        monsterBestiaryInfos.firstOrNull { it.name.equals(name, ignoreCase = true) }?.raceid ?: 0
+
+    override fun achievementIdByName(name: String): Int = achievementRegistry.getAchievementByName(name).id
+
+    override fun spellExistsByName(name: String): Boolean = spells?.getInstantSpellByName(name) != null
+
+    override fun sendSpellCooldown(player: Any, spellId: Int, time: Int): Boolean? {
+        val target = player as? Player ?: return null
+        target.sendSpellCooldown(spellId, time)
+        return true
+    }
+
+    override fun sendSpellGroupCooldown(player: Any, groupId: Int, time: Int): Boolean? {
+        val target = player as? Player ?: return null
+        val group = SpellGroup.entries.firstOrNull { it.value == groupId } ?: SpellGroup.SPELLGROUP_NONE
+        target.sendSpellGroupCooldown(group, time)
+        return true
+    }
+
+    /** PARITY GAP: the Kotlin `Player` has no `clearCooldowns`; reports success inertly. */
+    override fun clearSpellCooldowns(player: Any, spenders: Boolean, builders: Boolean, ticks: Int): Boolean? =
+        (player as? Player)?.let { true }
+
+    /** PARITY GAP: no imbuement engine on the Kotlin `Player`; normalized no-op. */
+    override fun applyImbuementScroll(player: Any, item: Any, scrollItem: Any): Boolean? =
+        (player as? Player)?.let { true }
+
+    override fun openImbuementWindow(player: Any, action: Int, item: Any?): Boolean? =
+        (player as? Player)?.let { true }
+
+    override fun closeImbuementWindow(player: Any): Boolean? = (player as? Player)?.let { true }
+
+    override fun clearAllImbuements(player: Any, item: Any): Boolean? =
+        (player as? Player)?.let { false }
+
+    override fun getWheelInstantSkill(player: Any, name: String): Boolean? =
+        (player as? Player)?.let { false }
+
+    override fun setWheelInstantSkill(player: Any, name: String, value: Boolean): Boolean? =
+        (player as? Player)?.let { true }
+
+    override fun resetWheelUpgradedSpells(player: Any): Boolean? = (player as? Player)?.let { true }
+
+    override fun getWheelSpellUpgrade(player: Any, name: String): Int? = (player as? Player)?.let { 0 }
+
+    override fun setWheelSpellUpgrade(player: Any, name: String, add: Boolean): Boolean? =
+        (player as? Player)?.let { true }
+
+    override fun getWheelSpellStage(player: Any, name: String): Int? = (player as? Player)?.let { 0 }
+
+    override fun setWheelSpellStage(player: Any, name: String, value: Int): Boolean? =
+        (player as? Player)?.let { true }
+
+    override fun wheelUnlockScroll(player: Any, scrollName: String): Boolean? =
+        (player as? Player)?.let { false }
+
+    override fun onThinkWheelOfDestiny(player: Any, force: Boolean): Boolean? = (player as? Player)?.let { true }
+
+    override fun getWheelAvatarTimer(player: Any): Long? = (player as? Player)?.let { 0L }
+
+    override fun setWheelAvatarTimer(player: Any, value: Long): Boolean? = (player as? Player)?.let { true }
+
+    override fun getWheelSpellAdditionalArea(player: Any, spellName: String): Boolean? =
+        (player as? Player)?.let { false }
+
+    override fun getWheelSpellAdditionalTarget(player: Any, spellName: String): Int? =
+        (player as? Player)?.let { 0 }
+
+    override fun getWheelSpellAdditionalDuration(player: Any, spellName: String): Int? =
+        (player as? Player)?.let { 0 }
+
+    override fun resetCharmsBestiary(player: Any): Boolean? {
+        val target = player as? Player ?: return null
+        val state = target.features.bestiary
+        state.setCharmPoints(0)
+        state.hasCharmExpansion = false
+        state.setUsedRunesBit(0)
+        state.setUnlockedRunesBit(0)
+        for (rune in CharmRune.entries) {
+            if (rune == CharmRune.CHARM_NONE) {
+                continue
+            }
+            state.parseRacebyCharm(rune, set = true, newRaceid = 0)
+        }
+        return true
+    }
+
+    override fun unlockAllCharmRunes(player: Any): Boolean? {
+        val target = player as? Player ?: return null
+        val state = target.features.bestiary
+        for (rune in CharmRune.entries) {
+            if (rune == CharmRune.CHARM_NONE) {
+                continue
+            }
+            val charm = bestiary.getBestiaryCharm(rune) ?: continue
+            state.setUnlockedRunesBit(bestiary.bitToggle(state.getUnlockedRunesBit(), charm, true))
+        }
+        return true
+    }
+
+    override fun addCharmPoints(player: Any, points: Int): Boolean? {
+        val target = player as? Player ?: return null
+        val magnitude = if (points >= 0) points else -points
+        bestiary.addCharmPoints(target.features.bestiary, magnitude, negative = points < 0)
+        return true
+    }
+
+    override fun addMinorCharmEchoes(player: Any, points: Int): Boolean? {
+        val target = player as? Player ?: return null
+        val magnitude = if (points >= 0) points else -points
+        bestiary.addMinorCharmEchoes(target.features.bestiary, magnitude, negative = points < 0)
+        return true
+    }
+
+    override fun getCharmTier(player: Any, charmId: Int): Int? {
+        val target = player as? Player ?: return null
+        return target.features.bestiary.getCharmTier(CharmRune.fromValue(charmId) ?: CharmRune.CHARM_NONE)
+    }
+
+    override fun getCharmChance(player: Any, charmId: Int): Double? {
+        val target = player as? Player ?: return null
+        val rune = CharmRune.fromValue(charmId) ?: return 0.0
+        val charm = bestiary.getBestiaryCharm(rune) ?: return 0.0
+        return charm.getChance(target.features.bestiary.getCharmTier(rune))
+    }
+
+    /** PARITY GAP: `Player::resetOldCharms` is not ported; reports success inertly. */
+    override fun resetOldCharms(player: Any): Boolean? = (player as? Player)?.let { true }
+
+    override fun isMonsterBestiaryUnlocked(player: Any, raceId: Int): Boolean? {
+        val target = player as? Player ?: return null
+        if (monsterBestiaryInfos.none { it.raceid == raceId }) {
+            return null
+        }
+        val finished = bestiary.getBestiaryFinished(target.features.bestiary, monsterBestiaryInfos)
+        return if (raceId in finished) true else null
+    }
+
+    override fun addBestiaryKill(player: Any, raceId: Int, amount: Int): Boolean? {
+        val target = player as? Player ?: return null
+        val info = monsterBestiaryInfos.firstOrNull { it.raceid == raceId } ?: return null
+        bestiary.addBestiaryKill(target.features.bestiary, info, amount)
+        return true
+    }
+
+    override fun charmExpansion(player: Any): Boolean? =
+        (player as? Player)?.features?.bestiary?.hasCharmExpansion
+
+    override fun setCharmExpansion(player: Any, value: Boolean): Boolean? {
+        val target = player as? Player ?: return null
+        target.features.bestiary.hasCharmExpansion = value
+        return true
+    }
+
+    override fun getCharmMonsterType(player: Any, charmId: Int): Any? {
+        val target = player as? Player ?: return null
+        val rune = CharmRune.fromValue(charmId) ?: return null
+        val raceId = target.features.bestiary.parseRacebyCharm(rune)
+        if (raceId <= 0) {
+            return null
+        }
+        return monsterTypesByRaceId[raceId]
+    }
+
+    override fun isMonsterPrey(player: Any, raceId: Int): Boolean? {
+        val target = player as? Player ?: return null
+        return target.getPreyWithMonster(raceId)?.isOccupied() ?: false
+    }
+
+    override fun getPreyCards(player: Any): Long? = (player as? Player)?.getPreyCards()
+
+    override fun getPreyLootPercentage(player: Any, raceId: Int): Int? {
+        val target = player as? Player ?: return null
+        val slot = target.getPreyWithMonster(raceId)
+        return if (slot != null && slot.isOccupied() && slot.bonus == PreyBonus.Loot) slot.bonusPercentage else 0
+    }
+
+    override fun getPreyExperiencePercentage(player: Any, raceId: Int): Int? {
+        val target = player as? Player ?: return null
+        val slot = target.getPreyWithMonster(raceId)
+        return if (slot != null && slot.isOccupied() && slot.bonus == PreyBonus.Experience && slot.bonusTimeLeft > 0) {
+            100 + slot.bonusPercentage
+        } else {
+            100
+        }
+    }
+
+    override fun preyThirdSlot(player: Any): Boolean? {
+        val target = player as? Player ?: return null
+        val slot = target.getPreySlotById(BATCH3_PREY_SLOT_THREE) ?: return null
+        return slot.state != PreyDataState.Locked
+    }
+
+    override fun setPreyThirdSlot(player: Any, value: Boolean): Boolean? {
+        val target = player as? Player ?: return null
+        val slot = target.getPreySlotById(BATCH3_PREY_SLOT_THREE) ?: return null
+        if (value) {
+            slot.eraseBonus()
+            slot.state = PreyDataState.Selection
+            slot.reloadMonsterGrid(target.getPreyBlackList(), target.level)
+            target.reloadPreySlot(BATCH3_PREY_SLOT_THREE)
+        } else {
+            slot.state = PreyDataState.Locked
+        }
+        return true
+    }
+
+    override fun taskHuntingThirdSlot(player: Any): Boolean? {
+        val target = player as? Player ?: return null
+        val slot = target.getTaskHuntingSlotById(BATCH3_PREY_SLOT_THREE) ?: return null
+        return slot.state != PreyTaskDataState.Locked
+    }
+
+    override fun setTaskHuntingThirdSlot(player: Any, value: Boolean): Boolean? {
+        val target = player as? Player ?: return null
+        val slot = target.getTaskHuntingSlotById(BATCH3_PREY_SLOT_THREE) ?: return null
+        if (value) {
+            slot.eraseTask()
+            slot.reloadReward()
+            slot.state = PreyTaskDataState.Selection
+            slot.reloadMonsterGrid(target.getTaskHuntingBlackList(), target.level)
+            target.reloadTaskSlot(BATCH3_PREY_SLOT_THREE)
+        } else {
+            slot.state = PreyTaskDataState.Locked
+        }
+        return true
+    }
+
+    override fun removePreyStamina(player: Any, amount: Int): Boolean? {
+        val target = player as? Player ?: return null
+        target.features.preyEngine.checkPlayerPreys(target.features.prey, amount)
+        return true
+    }
+
+    override fun addPreyCards(player: Any, amount: Long): Boolean? {
+        val target = player as? Player ?: return null
+        target.addPreyCards(amount)
+        return true
+    }
+
+    override fun removeTaskHuntingPoints(player: Any, amount: Long): Boolean? =
+        (player as? Player)?.useTaskHuntingPoints(amount)
+
+    override fun getTaskHuntingPoints(player: Any): Long? = (player as? Player)?.getTaskHuntingPoints()
+
+    override fun addTaskHuntingPoints(player: Any, amount: Long): Long? {
+        val target = player as? Player ?: return null
+        target.addTaskHuntingPoints(amount)
+        return amount
+    }
+
+    /** PARITY GAP: no magic shield model on the Kotlin `Player`; Canary's zero default. */
+    override fun getMagicShieldCapacityFlat(player: Any, useCharges: Boolean): Int? =
+        (player as? Player)?.let { 0 }
+
+    /** PARITY GAP: see [getMagicShieldCapacityFlat]. */
+    override fun getMagicShieldCapacityPercent(player: Any, useCharges: Boolean): Int? =
+        (player as? Player)?.let { 0 }
+
+    override fun isPzLocked(player: Any): Boolean? = (player as? Player)?.isPzLocked()
+
+    /** PARITY GAP: `Player` models no faction; `FACTION_PLAYER` (game_definitions.hpp:45). */
+    override fun getFaction(player: Any): Int? = (player as? Player)?.let { FACTION_PLAYER }
+
+    /** PARITY GAP: `Player` models no faction field; succeeds inertly. */
+    override fun setFaction(player: Any, factionId: Int): Boolean? = (player as? Player)?.let { true }
+
+    override fun getName(player: Any): String? = (player as? Player)?.name
+
+    /** PARITY GAP: `Creature::name` is immutable; reports the C++ no-value success. */
+    override fun changeName(player: Any, newName: String): Boolean? = (player as? Player)?.let { true }
+
+    override fun isPlayer(player: Any?): Boolean = player is Player
+
+    /** PARITY GAP: `Player` has no stamina field; Canary's default 2520 minutes always allow loot. */
+    override fun canReceiveLoot(player: Any): Boolean? = (player as? Player)?.let { true }
+
+    /** PARITY GAP: `Player` has no online flag; a live Kotlin player is treated as online. */
+    override fun isOffline(player: Any): Boolean? = (player as? Player)?.let { false }
+
+    /** PARITY GAP: `Player` has no idle timer; Canary's zero default. */
+    override fun getIdleTime(player: Any): Long? = (player as? Player)?.let { 0L }
+
+    /** PARITY GAP: no marker protocol sink; succeeds inertly. */
+    override fun addMapMark(player: Any, position: Position, type: Int, description: String): Boolean? =
+        (player as? Player)?.let { true }
+
+    /** PARITY GAP: no ghost-mode state; succeeds inertly. */
+    override fun setGhostMode(player: Any, enabled: Boolean): Boolean? = (player as? Player)?.let { true }
+
+    /** PARITY GAP: no attached-effect shader state; Canary's empty default. */
+    override fun getMapShader(player: Any): String? = (player as? Player)?.let { "" }
+
+    /** PARITY GAP: no attached-effect shader state; succeeds inertly. */
+    override fun setMapShader(player: Any, shaderName: String): Boolean? = (player as? Player)?.let { true }
+
+    /** PARITY GAP: no exercise-training state; Canary's false default. */
+    override fun isTraining(player: Any): Boolean? = (player as? Player)?.let { false }
+
+    /** PARITY GAP: no exercise-training state; succeeds inertly. */
+    override fun setTraining(player: Any, value: Boolean): Boolean? = (player as? Player)?.let { true }
+
+    /** PARITY GAP: the Kotlin `Player` owns no depot; Canary's miss. */
+    override fun getDepotLocker(player: Any, depotId: Int): Any? = (player as? Player)?.let { null }
+
+    /** PARITY GAP: see [getDepotLocker]. */
+    override fun getDepotChest(player: Any, depotId: Int, autoCreate: Boolean): Any? =
+        (player as? Player)?.let { null }
+
+    /** PARITY GAP: the Kotlin `Player` owns no inbox; Canary's miss. */
+    override fun getInbox(player: Any): Any? = (player as? Player)?.let { null }
+
+    override fun addOfflineTrainingTime(player: Any, time: Int): Boolean? {
+        val target = player as? Player ?: return null
+        target.features.offlineTraining.addOfflineTrainingTime(time)
+        return true
+    }
+
+    override fun getOfflineTrainingTime(player: Any): Int? =
+        (player as? Player)?.features?.offlineTraining?.getOfflineTrainingTime()
+
+    override fun removeOfflineTrainingTime(player: Any, time: Int): Boolean? {
+        val target = player as? Player ?: return null
+        target.features.offlineTraining.removeOfflineTrainingTime(time)
+        return true
+    }
+
+    override fun addOfflineTrainingTries(player: Any, skillType: Int, tries: Long): Boolean? {
+        val target = player as? Player ?: return null
+        val skill = Skill.entries.firstOrNull { it.value == skillType } ?: return false
+        return target.features.offlineTraining.addOfflineTrainingTries(skill, tries)
+    }
+
+    override fun getOfflineTrainingSkill(player: Any): Int? =
+        (player as? Player)?.features?.offlineTraining?.getOfflineTrainingSkill()?.value
+
+    override fun setOfflineTrainingSkill(player: Any, skillId: Int): Boolean? {
+        val target = player as? Player ?: return null
+        val skill = Skill.entries.firstOrNull { it.value == skillId } ?: return true
+        target.features.offlineTraining.setOfflineTrainingSkill(skill)
+        return true
+    }
+
+    override fun getStashItemCount(player: Any, itemId: Int): Long? {
+        val target = player as? Player ?: return null
+        return stashOf(target).getStashItemCount(itemId).toLong()
+    }
+
+    /** PARITY GAP: no special-container menu state; succeeds inertly. */
+    override fun setSpecialContainersAvailable(
+        player: Any,
+        stashMenu: Boolean,
+        marketMenu: Boolean,
+        depotSearchMenu: Boolean,
+    ): Boolean? = (player as? Player)?.let { true }
+
+    override fun getStashCount(player: Any): Int? {
+        val target = player as? Player ?: return null
+        return stashOf(target).getStashItems().values.sum()
+    }
+
+    /** PARITY GAP: no stash-open protocol sink; succeeds inertly. */
+    override fun openStash(player: Any, isNpc: Boolean): Boolean? = (player as? Player)?.let { true }
+
+    override fun addItemStash(player: Any, itemId: Int, count: Int): Boolean? {
+        val target = player as? Player ?: return null
+        stashOf(target).addItemOnStash(itemId, count)
+        return true
+    }
+
+    override fun removeStashItem(player: Any, itemId: Int, count: Int): Boolean? {
+        val target = player as? Player ?: return null
+        return stashOf(target).withdrawItem(itemId, count)
+    }
+
+    /** PARITY GAP: no paginated-container insertion engine; Canary's zero added count. */
+    override fun addItemBatchToPaginedContainer(
+        player: Any,
+        container: Any,
+        itemId: Int,
+        count: Int,
+        tier: Int,
+        flags: Int,
+    ): Int? = (player as? Player)?.let { 0 }
+
+    /** PARITY GAP: no store inbox ownership on the Kotlin `Player`; Canary's miss. */
+    override fun getStoreInbox(player: Any): Any? = (player as? Player)?.let { null }
+
+    /** PARITY GAP: no container-send protocol sink; succeeds inertly. */
+    override fun sendContainer(player: Any, container: Any): Boolean? = (player as? Player)?.let { true }
+
+    /** PARITY GAP: no container-update protocol sink; succeeds inertly. */
+    override fun sendUpdateContainer(player: Any, container: Any): Boolean? = (player as? Player)?.let { true }
+
+    override fun getContainerId(player: Any, container: Any): Int? {
+        val target = player as? Player ?: return null
+        val resolved = container as? Container ?: return null
+        return target.getContainerID(resolved)
+    }
+
+    override fun getContainerById(player: Any, id: Int): Any? = (player as? Player)?.getContainerByID(id)
+
+    override fun getContainerIndex(player: Any, id: Int): Int? = (player as? Player)?.getContainerIndex(id)
+
+    /** PARITY GAP: no loot pouch ownership on the Kotlin `Player`; Canary's miss. */
+    override fun getLootPouch(player: Any): Any? = (player as? Player)?.let { null }
+
+    override fun getFreeBackpackSlots(player: Any): Int? {
+        val target = player as? Player ?: return null
+        val backpack = target.getBackpack() ?: return 0
+        return max(0, backpack.capacity - backpack.size())
+    }
+
+    override fun sendBlessStatus(player: Any): Boolean? {
+        val target = player as? Player ?: return null
+        target.sendBlessStatus()
+        return true
+    }
+
+    override fun hasBlessing(player: Any, blessing: Int): Boolean? = (player as? Player)?.hasBlessing(blessing)
+
+    override fun addBlessing(player: Any, blessing: Int, count: Int): Boolean? {
+        val target = player as? Player ?: return null
+        target.addBlessing(blessing, count)
+        target.sendBlessStatus()
+        return true
+    }
+
+    override fun removeBlessing(player: Any, blessing: Int, count: Int): Boolean? {
+        val target = player as? Player ?: return null
+        if (!target.hasBlessing(blessing)) {
+            return false
+        }
+        target.removeBlessing(blessing, count)
+        return true
+    }
+
+    override fun getBlessingCount(player: Any, index: Int, storeCount: Boolean): Int? =
+        (player as? Player)?.getBlessingCount(index, storeCount)
+
+    override fun isVip(player: Any): Boolean? = (player as? Player)?.isPremium()
+
+    override fun getVipDays(player: Any): Int? = (player as? Player)?.account?.getPremiumRemainingDays()
+
+    override fun getVipTime(player: Any): Long? {
+        val target = player as? Player ?: return null
+        return target.account?.getPremiumLastDay() ?: 0L
+    }
+
+    override fun getAchievementPoints(player: Any): Int? {
+        val target = player as? Player ?: return null
+        return achievementsOf(target).getPoints()
+    }
+
+    override fun addAchievementPoints(player: Any, amount: Int): Boolean? {
+        val target = player as? Player ?: return null
+        if (amount > 0) {
+            achievementsOf(target).addPoints(amount)
+        }
+        return true
+    }
+
+    override fun removeAchievementPoints(player: Any, amount: Int): Boolean? {
+        val target = player as? Player ?: return null
+        if (amount > 0) {
+            achievementsOf(target).removePoints(amount)
+        }
+        return true
+    }
+
+    override fun hasAchievement(player: Any, achievementId: Int): Boolean? {
+        val target = player as? Player ?: return null
+        return achievementsOf(target).isUnlocked(achievementId)
+    }
+
+    override fun addAchievement(player: Any, achievementId: Int, sendMessage: Boolean): Boolean? {
+        val target = player as? Player ?: return null
+        return achievementsOf(target).add(achievementId, sendMessage)
+    }
+
+    override fun removeAchievement(player: Any, achievementId: Int): Boolean? {
+        val target = player as? Player ?: return null
+        return achievementsOf(target).remove(achievementId)
+    }
+
+    override fun kv(player: Any): Any? = (player as? Player)?.kv
+
+    /** PARITY GAP: no save-manager seam; reports success without persisting. */
+    override fun save(player: Any): Boolean? = (player as? Player)?.let { true }
+
+    private fun stashOf(player: Player): Stash = stashes.getOrPut(player.id) { Stash() }
+
+    private fun achievementsOf(player: Player): PlayerAchievement = achievements.getOrPut(player.id) {
+        PlayerAchievement(
+            player = PlayerAchievementView(player),
+            kv = player.kv,
+            registry = achievementRegistry,
+        )
+    }
+
+    private companion object {
+        /** `FACTION_PLAYER` (`src/game/game_definitions.hpp:45`). */
+        const val FACTION_PLAYER = 1
+    }
 }
