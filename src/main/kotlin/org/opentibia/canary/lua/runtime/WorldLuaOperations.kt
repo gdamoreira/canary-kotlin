@@ -1,9 +1,13 @@
 package org.opentibia.canary.lua.runtime
 
+import org.opentibia.canary.combat.condition.Condition
+import org.opentibia.canary.combat.condition.ConditionId
+import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.creatures.ChaseMode
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.creatures.spawns.MonsterType
 import org.opentibia.canary.game.movement.Direction
@@ -30,6 +34,7 @@ import org.opentibia.canary.lua.bindings.core.ItemFunctions
 import org.opentibia.canary.lua.bindings.core.ItemOperations
 import org.opentibia.canary.lua.bindings.core.ItemTypeFunctions
 import org.opentibia.canary.lua.bindings.core.ItemTypeOperations
+import org.opentibia.canary.lua.bindings.core.LuaMoneyResult
 import org.opentibia.canary.lua.bindings.core.LuaTextMessage
 import org.opentibia.canary.lua.bindings.core.PlayerFunctions
 import org.opentibia.canary.lua.bindings.core.PlayerOperations
@@ -185,6 +190,9 @@ class WorldGameOperations(
  * - `getTown`/`setTown` inherit the seam's no-op defaults; the domain has no town state.
  * - `getFightMode` maps the Kotlin [org.opentibia.canary.creatures.FightMode] ordinal to
  *   Canary's 1-based `FightMode_t`.
+ * - batch 1 additions: money, bank balance, stamina, soul, spent mana, skill-percent and
+ *   skill-level state are transient maps (or documented no-ops) because the Kotlin
+ *   [Player] models them as private fields or not at all; see each override's KDoc.
  */
 class WorldPlayerOperations(
     private val itemIdsByName: Map<String, Int> = emptyMap(),
@@ -332,9 +340,313 @@ class WorldPlayerOperations(
 
     override fun hasSecureMode(player: Any): Boolean = (player as? Player)?.secureMode ?: false
 
+    // --- batch 1: vitals, skills, inventory, money, conditions, stamina/soul -------
+
+    /**
+     * Transient per-player money, bank balance, stamina, soul and spent-mana state,
+     * keyed by `Player::getGUID()` because the Kotlin [Player] models none of them
+     * (Canary derives money from carried coin items and stores the rest as fields).
+     */
+    private val moneyHeld = mutableMapOf<Long, Long>()
+    private val bankBalances = mutableMapOf<Long, Long>()
+    private val staminaMinutes = mutableMapOf<Long, Int>()
+    private val soulPoints = mutableMapOf<Long, Int>()
+    private val spentMana = mutableMapOf<Long, Long>()
+
+    override fun getBaseMagicLevel(player: Any): Int? = (player as? Player)?.getBaseMagicLevel()
+
+    override fun getManaSpent(player: Any): Long? {
+        val target = player as? Player ?: return null
+        return spentMana[target.id] ?: 0L
+    }
+
+    override fun addManaSpent(player: Any, amount: Long): Boolean? {
+        val target = player as? Player ?: return null
+        spentMana[target.id] = (spentMana[target.id] ?: 0L) + amount
+        return true
+    }
+
+    override fun getBaseMaxHealth(player: Any): Int? = (player as? Player)?.maxHealth
+
+    override fun getBaseMaxMana(player: Any): Int? = (player as? Player)?.maxMana
+
+    /**
+     * Mirrors `Player::removeExperience` (player.cpp:3746-3805) for the experience and
+     * level bookkeeping; the per-level health/mana/capacity loss and the client
+     * `sendTextMessage` broadcast are unported (PARITY GAP).
+     */
+    override fun removeExperience(player: Any, experience: Long, sendText: Boolean): Boolean? {
+        val target = player as? Player ?: return null
+        if (target.experience == 0L || experience == 0L) {
+            return true
+        }
+        target.experience = (target.experience - experience).coerceAtLeast(0L)
+        var level = target.level
+        while (level > 1 && target.experience < Player.getExpForLevel(level)) {
+            level--
+        }
+        target.level = level
+        return true
+    }
+
+    override fun setLevel(player: Any, level: Int): Boolean? {
+        val target = player as? Player ?: return null
+        val resolved = level.coerceAtLeast(0)
+        target.level = resolved
+        target.experience = Player.getExpForLevel(resolved)
+        return true
+    }
+
+    /**
+     * Mirrors `luaPlayerSetMagicLevel` (player_functions.cpp:1704-1726) except the
+     * `magLevelPercent` bookkeeping, which needs `vocation->getReqMana` progression
+     * the Kotlin [Player] does not model (PARITY GAP).
+     */
+    override fun setMagicLevel(player: Any, level: Int, manaSpent: Long): Boolean? {
+        val target = player as? Player ?: return null
+        target.magLevel = level.coerceAtLeast(0)
+        spentMana[target.id] = if (manaSpent > 0) manaSpent else 0L
+        return true
+    }
+
+    override fun getEffectiveSkillLevel(player: Any, skillType: Int): Int? {
+        val target = player as? Player ?: return null
+        val skill = validSkill(skillType) ?: return null
+        return target.getSkillLevel(skill)
+    }
+
+    /** The domain tracks no skill-percent progression; valid skills read 0 (PARITY GAP). */
+    override fun getSkillPercent(player: Any, skillType: Int): Double? {
+        if (player !is Player) {
+            return null
+        }
+        validSkill(skillType) ?: return null
+        return 0.0
+    }
+
+    /**
+     * `Player::skills` is private in the domain and exposes no level/tries setter, so
+     * the Lua mutation cannot be applied; returns false for a valid player (PARITY GAP).
+     */
+    override fun setSkillLevel(player: Any, skillType: Int, level: Int, tries: Long): Boolean? {
+        if (player !is Player) {
+            return null
+        }
+        validSkill(skillType) ?: return null
+        return false
+    }
+
+    /** Mirrors `Game::findItemOfType` (game.cpp:3013-3059) with a safety depth cap. */
+    override fun getItemById(player: Any, itemId: Int, deepSearch: Boolean, subType: Int): Any? {
+        val target = player as? Player ?: return null
+        val containers = ArrayDeque<Container>()
+        for (slot in Slots_t.entries) {
+            if (slot.value < Slots_t.FIRST || slot.value > Slots_t.LAST) {
+                continue
+            }
+            val item = target.getInventoryItem(slot) ?: continue
+            if (matchesItem(item, itemId, subType)) {
+                return item
+            }
+            if (deepSearch && item is Container) {
+                containers.addLast(item)
+            }
+        }
+        if (!deepSearch) {
+            return null
+        }
+        var visited = 0
+        while (containers.isNotEmpty() && visited < Player.MAX_CONTAINER_DEPTH) {
+            val container = containers.removeFirst()
+            visited++
+            for (item in container.items) {
+                if (matchesItem(item, itemId, subType)) {
+                    return item
+                }
+                if (item is Container) {
+                    containers.addLast(item)
+                }
+            }
+        }
+        return null
+    }
+
+    /**
+     * Mirrors `luaPlayerAddItemEx` (player_functions.cpp:2447-2485): the
+     * `canDropOnMap = true` branch routes through `Game::internalPlayerAddItem`. The
+     * `canDropOnMap = false` branch needs `Game::internalAddItem` container-index
+     * routing (unported) and returns `RETURNVALUE_NOTPOSSIBLE` (PARITY GAP).
+     */
+    override fun addItemEx(
+        player: Any,
+        item: Any,
+        canDropOnMap: Boolean,
+        indexOrSlot: Int,
+        flags: Int,
+    ): Int? {
+        val target = player as? Player ?: return null
+        val candidate = item as? Item ?: return ReturnValue.NOTPOSSIBLE.ordinal
+        if (!canDropOnMap) {
+            return ReturnValue.NOTPOSSIBLE.ordinal
+        }
+        val slot = Slots_t.fromValue(indexOrSlot) ?: return ReturnValue.NOTPOSSIBLE.ordinal
+        return target.addItem(candidate, slot).ordinal
+    }
+
+    override fun getSlotItem(player: Any, slot: Int): Any? {
+        val target = player as? Player ?: return null
+        val resolved = Slots_t.fromValue(slot) ?: return null
+        return target.getInventoryItem(resolved)
+    }
+
+    override fun getBackpack(player: Any): Any? = (player as? Player)?.getBackpack()
+
+    override fun getMoney(player: Any): Long? {
+        val target = player as? Player ?: return null
+        return moneyHeld[target.id] ?: 0L
+    }
+
+    /** Simplified `Game::addMoney` (game.cpp:3061+): the `flags` routing is unported. */
+    override fun addMoney(player: Any, money: Long, flags: Int): LuaMoneyResult? {
+        val target = player as? Player ?: return null
+        moneyHeld[target.id] = (moneyHeld[target.id] ?: 0L) + money
+        return LuaMoneyResult(success = true, addedMoney = money, returnValue = ReturnValue.NOERROR.ordinal)
+    }
+
+    /** Simplified `Game::removeMoney` (game.cpp:3155+): the `flags` routing is unported. */
+    override fun removeMoney(player: Any, money: Long, flags: Int, useBank: Boolean): Boolean? {
+        val target = player as? Player ?: return null
+        val purse = moneyHeld[target.id] ?: 0L
+        val bank = bankBalances[target.id] ?: 0L
+        if (purse + (if (useBank) bank else 0L) < money) {
+            return false
+        }
+        val fromPurse = minOf(purse, money)
+        moneyHeld[target.id] = purse - fromPurse
+        val remaining = money - fromPurse
+        if (remaining > 0) {
+            bankBalances[target.id] = bank - remaining
+        }
+        return true
+    }
+
+    override fun getBankBalance(player: Any): Long? {
+        val target = player as? Player ?: return null
+        return bankBalances[target.id] ?: 0L
+    }
+
+    override fun setBankBalance(player: Any, bankBalance: Long): Boolean? {
+        val target = player as? Player ?: return null
+        bankBalances[target.id] = bankBalance.coerceAtLeast(0L)
+        return true
+    }
+
+    /** Mirrors `CreatureFunctions::luaCreatureGetCondition` (creature_functions.cpp:747). */
+    override fun getCondition(player: Any, conditionType: Int, conditionId: Int, subId: Int): Any? {
+        val target = player as? Creature ?: return null
+        val type = resolveConditionType(conditionType) ?: return null
+        val id = resolveConditionId(conditionId) ?: return null
+        return target.getCondition(type, id, subId)
+    }
+
+    /**
+     * Mirrors `CreatureFunctions::luaCreatureAddCondition` (creature_functions.cpp:768)
+     * including the `condition->clone()` copy.
+     */
+    override fun addCondition(player: Any, condition: Any): Boolean? {
+        val target = player as? Creature ?: return null
+        val candidate = condition as? Condition ?: return null
+        return target.addCondition(candidate.clone())
+    }
+
+    /** Mirrors `CreatureFunctions::luaCreatureRemoveCondition` (creature_functions.cpp:780). */
+    override fun removeCondition(
+        player: Any,
+        conditionType: Int,
+        conditionId: Int,
+        subId: Int,
+        force: Boolean,
+    ): Boolean? {
+        val target = player as? Creature ?: return null
+        val type = resolveConditionType(conditionType) ?: return null
+        val id = resolveConditionId(conditionId) ?: return null
+        val condition = target.getCondition(type, id, subId) ?: return null
+        if (subId == 0) {
+            target.removeCondition(type, id, force)
+        } else {
+            target.removeCondition(condition)
+        }
+        return true
+    }
+
+    /** Mirrors `CreatureFunctions::luaCreatureHasCondition` (creature_functions.cpp:806). */
+    override fun hasCondition(player: Any, conditionType: Int, subId: Int): Boolean? {
+        val target = player as? Creature ?: return null
+        val type = resolveConditionType(conditionType) ?: return false
+        return target.hasCondition(type, subId)
+    }
+
+    /** `Player::staminaMinutes` default (`player.hpp:1817`). */
+    override fun getStamina(player: Any): Int? {
+        val target = player as? Player ?: return null
+        return staminaMinutes[target.id] ?: MAX_STAMINA_MINUTES
+    }
+
+    /** Mirrors `luaPlayerSetStamina` (player_functions.cpp:2224): clamped to 2520. */
+    override fun setStamina(player: Any, stamina: Int): Boolean? {
+        val target = player as? Player ?: return null
+        staminaMinutes[target.id] = stamina.coerceIn(0, MAX_STAMINA_MINUTES)
+        return true
+    }
+
+    override fun getSoul(player: Any): Int? {
+        val target = player as? Player ?: return null
+        return soulPoints[target.id] ?: 0
+    }
+
+    /** Mirrors `Player::changeSoul` (player.cpp:6773) with a regen rate of 1. */
+    override fun addSoul(player: Any, soulChange: Int): Boolean? {
+        val target = player as? Player ?: return null
+        val current = soulPoints[target.id] ?: 0
+        val updated = if (soulChange > 0) {
+            (current + soulChange).coerceAtMost(getMaxSoul(target) ?: Player.UINT8_MAX)
+        } else {
+            (current + soulChange).coerceAtLeast(0)
+        }
+        soulPoints[target.id] = updated
+        return true
+    }
+
+    /** `Vocation::getSoulMax` (vocation.hpp:136); nil without a wired vocation. */
+    override fun getMaxSoul(player: Any): Int? {
+        val target = player as? Player ?: return null
+        return target.vocations?.getVocation(target.vocationId)?.getSoulMax()
+    }
+
+    private fun matchesItem(item: Item, itemId: Int, subType: Int): Boolean {
+        if (item.id != itemId) {
+            return false
+        }
+        return subType == -1 || itemSubType(item) == subType
+    }
+
+    private fun itemSubType(item: Item): Int =
+        if (item.type?.isStackable == true) item.count else 0
+
+    private fun resolveConditionType(value: Int): ConditionType? =
+        ConditionType.entries.firstOrNull { it.value == value }
+
+    private fun resolveConditionId(value: Int): ConditionId? =
+        ConditionId.entries.firstOrNull { it.value == value }
+
     /** Mirrors Canary's `skillType <= SKILL_LAST` guard, also rejecting the negative sentinel. */
     private fun validSkill(skillType: Int): skills_t? =
         skills_t.fromValue(skillType)?.takeIf { it.value in skills_t.FIRST..skills_t.LAST }
+
+    private companion object {
+        /** `std::min<uint16_t>(2520, stamina)` (player_functions.cpp:2229). */
+        const val MAX_STAMINA_MINUTES = 2520
+    }
 }
 
 /**

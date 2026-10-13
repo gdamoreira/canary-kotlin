@@ -53,7 +53,7 @@ class CoreBindingsTest {
         }
     }
 
-    private class FakePlayerOps : PlayerOperations {
+    private class FakePlayerOps : StubPlayerOperations() {
         val addItemCalls = mutableListOf<AddItemCall>()
         var lastMessage: LuaTextMessage? = null
         val storage = mutableMapOf<Int, Int>()

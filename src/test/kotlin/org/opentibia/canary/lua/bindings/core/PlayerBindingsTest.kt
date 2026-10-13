@@ -21,7 +21,7 @@ class PlayerBindingsTest {
 
     private class FakePlayer
 
-    private class FakePlayerOps : PlayerOperations {
+    private class FakePlayerOps : StubPlayerOperations() {
         var guid = 12345L
         var capacity = 500L
         var freeCapacity = 350L
