@@ -330,7 +330,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Inbound opcodes complete** — all **141/141 active** opcodes now decode; wave 35 added the final 64 across 4 batches (party analyzer/team finder, client options, extended opcode, channels, item interaction, text/house windows, bosstiary, highscores, weapon proficiency, task hunting, forge history, container browse/seek, inspection, VIP, cyclopedia, prey, hireling, resource balance, greet, object info). ~180 new tests.
 - **Outbound senders** — trade/channel/house/VIP/store/inspection/blessing/stash/cyclopedia writers added. 63 tests.
 - Verified per-module coverage percentages added to `docs/missing-features.md` §1.
-- **410 suites / 4395 tests, all green.**
+- **416 suites / 4493 tests, all green.**
 
 ---
 
@@ -340,7 +340,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **iomarket + ioprey** — offers/history/statistics/expiration + prey/task-hunting persistence. Migration V12. 36 tests.
 - **iobestiary + io_bosstiary + ioguild** — charms/kill counts/tracker/animus, boss points/slots/boosted boss, guild load/save. Migration V13. 32 tests.
 - **player_storage_repository** — typed repo (load/deleteKeys/bulk upsert). Migration V14. 14 tests.
-- **410 suites / 4395 tests, all green.**
+- **416 suites / 4493 tests, all green.**
 
 ---
 
@@ -352,7 +352,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Item functions + weapons** — custom attributes, 69 XML `parse*` methods, weapon registry/damage formulas (64 tests).
 - **Items registry** — protobuf merge, augments, loot types, reload (46 tests).
 - 6 parallel branches integrated via a dedicated semantic-merge pass (Item.kt 6-way conflict resolved).
-- **410 suites / 4395 tests, all green.**
+- **416 suites / 4493 tests, all green.**
 
 ---
 
@@ -362,12 +362,22 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Spectators** — sets, direction/multifloor filtering, cache (24 tests).
 - **Houses** — rent cycle, transfers, auctions, access lists, eviction, depot transfer (71 tests).
 - **A*/towns** — AStarNodes open/closed sets, Town/Towns registry (20 tests).
-- **410 suites / 4395 tests, all green.**
+- **416 suites / 4493 tests, all green.**
+
+---
+
+### Phase 37: `src/lua/` Part 1 — Core Bindings (18:00 – 19:30)
+- **MonsterType** — 101/101 bindings (flags, numerics, immunities, events, summons, sounds, bestiary/bosstiary fields).
+- **Game** — 59/59 (createItem/Monster/Npc/Tile/Container/Teleport, achievements, raids, guild, bestiary catalog).
+- **Item** — 55/55 (attributes, owner, tier, shader, imbuement slots, serialization).
+- **ItemType** — 58/58 + **Tile** — 32/32.
+- **Player** — 114/305 (vitals/skills/inventory/money/conditions + social/party/guild/modal/UI/house/account/kills/vocation).
+- **416 suites / 4493 tests, all green.**
 
 ---
 
 ### Current Status
-- **Automated Tests**: **410 test suites / 4395 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **416 test suites / 4493 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.

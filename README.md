@@ -104,7 +104,7 @@ canary-kotlin/
 │   │   └── resources/
 │   │       ├── db/migration/  # Flyway schema migrations (V1, V2)
 │   │       └── lua/           # LuaJ compatibility shim
-│   └── test/                  # JUnit 5 + AssertJ test suite (410 suites / 4395 tests, all green)
+│   └── test/                  # JUnit 5 + AssertJ test suite (416 suites / 4493 tests, all green)
 ├── docker-compose.yml         # Containerized PostgreSQL 16 + Server stack
 ├── Dockerfile                 # Multi-stage alpine build
 └── build.gradle.kts           # Kotlin 2.4 / Java 25 Gradle build file
@@ -157,7 +157,7 @@ The port is a faithful, incremental transcription of Canary's C++ engine. Two vi
 | **Tracked gameplay features** (`docs/game-play-features.md`) | **56 / 56 (100%)** — engine scope, tested |
 | **Inbound `ProtocolGame` opcodes** | **141 / 141 decoded (100%)**; ~46 fully applied (~33%) |
 | **Outbound `ProtocolGame` senders** | 58 / 190 (**~31%**) |
-| **Lua bindings** | 167 / 1,246 method registrations (**~13%**) |
+| **Lua bindings** | ~420 / 1,246 method registrations (**~34%**) |
 | **`Player` methods** | ~409 / 821 (**~50%** raw count) |
 | **Monster engine** | **~20%** (A* + targeting + loot + intention/relevance) |
 | **Map engine** | **~85%** |

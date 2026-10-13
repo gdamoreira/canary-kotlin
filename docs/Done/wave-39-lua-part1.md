@@ -50,3 +50,7 @@ Canary `src/lua/functions/items/item_type_functions.cpp` (57) + `src/lua/functio
 ## Post-wave (AGENTS.md §6)
 
 Update the `src/lua/` row counts in `docs/missing-features.md` (partial progress is recorded honestly); update `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/Done/`; commit the docs separately and push to `origin`.
+
+## Completion
+
+Part 1 completed: monster_type 101/101, game 59/59, item 55/55, item_type 58/58, tile 32/32, player 114/305. The `src/lua/` section continues in wave 40 (player remainder, monster/npc/weapon/spell functions, library bindings, modules).
