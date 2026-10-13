@@ -2,6 +2,11 @@ package org.opentibia.canary.game.zones
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import org.opentibia.canary.map.Position
+import org.w3c.dom.Element
+import org.w3c.dom.Node
+import java.io.ByteArrayInputStream
+import java.io.File
+import javax.xml.parsers.DocumentBuilderFactory
 
 private val logger = KotlinLogging.logger {}
 
@@ -86,6 +91,40 @@ class Zones(
 
     /** `Zone::getZones()` (`zone.cpp:244-252`), the registered (named) zones. */
     fun getZones(): List<Zone> = zones.values.toList()
+
+    /**
+     * Static `Zone::loadFromXML` (src/game/zones/zone.cpp:353-368) over this
+     * instance-owned registry: `<zones>` children register `name`/`zoneid`
+     * with the optional map shift applied to the id.
+     */
+    fun loadFromXml(fileName: String, shiftId: Int = 0): Boolean {
+        val doc = try {
+            DocumentBuilderFactory.newInstance()
+                .newDocumentBuilder()
+                .parse(ByteArrayInputStream(File(fileName).readBytes()))
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to load zones file $fileName" }
+            return false
+        }
+
+        val root = doc.documentElement ?: return true
+        if (!root.tagName.equals("zones", ignoreCase = true)) {
+            return true
+        }
+
+        val childNodes = root.childNodes
+        for (index in 0 until childNodes.length) {
+            val child = childNodes.item(index)
+            if (child.nodeType != Node.ELEMENT_NODE) {
+                continue
+            }
+            val zoneNode = child as Element
+            val name = zoneNode.getAttribute("name")
+            val zoneId = ((zoneNode.getAttribute("zoneid").toLongOrNull() ?: 0L) shl shiftId).toInt()
+            addZone(name, zoneId)
+        }
+        return true
+    }
 
     /** `Zone::refreshAll()` (`zone.hpp:168-172`). */
     fun refreshAll() {
