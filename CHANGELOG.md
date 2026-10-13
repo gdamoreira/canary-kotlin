@@ -254,10 +254,16 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Server edge** — `Webhook`, `ProtocolProfile`, `SessionHint`, 36 tests.
 - Zero-warning gate fixes (redundant `else`, unnecessary `!!`).
 
+### Phase 22: `src/` Bootstrap Section Complete (08:00 – 08:30)
+- **Service bootstrap** — `bootstrap/ServerBootstrap`/`ServerLaunch`/`Signals`/`CrashHandler`/`ShutdownDrain`; CLI (`ServerCli`: `--config`/`--data-dir`/DB flags) with CLI > file > env > defaults; idempotent ordered shutdown drain (listeners → dispatcher → SaveManager → DB).
+- **Appearances protobuf** — `io/appearances/Appearances` + dependency-free `ProtobufWireReader` parsing the real `data/items/appearances.dat` (42,107 objects / 1,443 outfits / 242 effects / 62 missiles).
+- **Database tasks** — `database/DatabaseTasks` (FIFO async queue, flush, idempotent shutdown).
+- `docs/missing-features.md`: `src/` bootstrap + `appearances.proto` rows flipped to **IMPLEMENTED**.
+
 ---
 
 ### Current Status
-- **Automated Tests**: **229 test suites / 1987 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **237 test suites / 2036 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.

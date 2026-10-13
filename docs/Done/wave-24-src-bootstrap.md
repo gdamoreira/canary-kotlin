@@ -39,3 +39,7 @@
 ## Post-wave (AGENTS.md §6)
 
 Update `docs/missing-features.md` (flip the `src/` bootstrap + protobuf rows to `IMPLEMENTED` and refresh coverage), `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/Done/`; commit the docs separately and push to `origin`.
+
+## Completion
+
+Completed. `src/` bootstrap section implemented: service bootstrap + CLI/signals/crash handler + idempotent shutdown drain, appearances protobuf loader, and `DatabaseTasks`. The `src/` bootstrap and `appearances.proto` rows are now IMPLEMENTED in `docs/missing-features.md`.

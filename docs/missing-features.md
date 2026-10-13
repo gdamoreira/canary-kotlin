@@ -31,7 +31,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 ### `src/` bootstrap
 | C++ | Status | Missing |
 |---|---|---|
-| `canary_server.*`, `main.cpp` | PARTIAL | appearance/protobuf loading, service bootstrap, CLI/signals/crash handler |
+| `canary_server.*`, `main.cpp` | **IMPLEMENTED** | `bootstrap/ServerBootstrap`/`ServerLaunch`/`Signals`/`CrashHandler`/`ShutdownDrain`, CLI (`ServerCli`), appearances load hook, `DatabaseTasks` |
 
 ### `src/account/`
 | C++ | Status | Missing |
@@ -162,7 +162,8 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 ### `src/protobuf/`
 | C++ | Status | Missing |
 |---|---|---|
-| `appearances.proto`, `kv.proto` | MISSING | appearance + typed KV loading |
+| `appearances.proto` | **IMPLEMENTED** | `io/appearances/Appearances` + dependency-free `ProtobufWireReader` (outfit/mount/effect tables from `appearances.dat`) |
+| `kv.proto` | MISSING | typed KV values (KV engine pending) |
 
 ### `src/server/`
 | C++ | Status | Missing |
