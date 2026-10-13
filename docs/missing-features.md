@@ -24,7 +24,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | Monster engine (`monster.cpp`, 4,014 lines) | — | 57 functions + `MonsterAi` + `MonsterPathfinder` | **~20%** | A* + spawn engines + targeting/loot/intention/relevance |
 | Map engine (`map.cpp`) | — | — | **~35%** | OTBM load + sectors + tiles + A*; no sight/`canWalkTo`/houses save |
 | Persistence (`iologindata*`, `iomapserialize`) | — | — | **~80%** | 24/24 iologindata, 10/10 iomapserialize, market/prey/bestiary/bosstiary/guild/storage (V10–V14) |
-| **Estimated full-parity completion** | — | — | **~55–60%** | weighted across the above |
+| **Estimated full-parity completion** | — | — | **~60–65%** | weighted across the above |
 
 ### 1.2 Module completion (by inventory rows in §2)
 
@@ -40,14 +40,14 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | `src/protobuf/` | 2 | 1 | 0 | 1 | **50%** | 50% |
 | `src/game/` | 10 | 9 | 1 | 0 | **90%** | **95%** |
 | `src/io/` | 9 | 9 | 0 | 0 | **100%** | **100%** |
-| `src/items/` | 10 | 0 | 7 | 3 | 0% | **35%** |
+| `src/items/` | 10 | 10 | 0 | 0 | **100%** | **100%** |
 | `src/map/` | 6 | 0 | 4 | 2 | 0% | **33%** |
 | `src/server/` | 5 | 0 | 3 | 2 | 0% | **30%** |
 | `src/lua/` | 12 | 0 | 5 | 7 | 0% | **21%** |
 | `src/utils/` | 3 | 0 | 1 | 2 | 0% | **17%** |
 | `src/lib/` | 5 | 0 | 1 | 4 | 0% | **10%** |
 | `src/kv/` | 1 | 0 | 0 | 1 | 0% | **0%** |
-| **All modules** | **116** | **72** | **18** | **26** | **62%** | **70%** |
+| **All modules** | **116** | **82** | **11** | **23** | **71%** | **75%** |
 
 ---
 
@@ -159,16 +159,16 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 ### `src/items/`
 | C++ | Status | Missing |
 |---|---|---|
-| `item.cpp` (71 methods) | PARTIAL | decay ticks, moveTo, description, weapon checks, serialization, imbuement/forge stats |
-| `items.cpp` | PARTIAL | appearances/protobuf merge, augment tables, loot type, reload |
-| `tile.cpp` | PARTIAL | creatures vector, flags/PZ, top/down ordering, house tile, fields |
-| `thing.cpp`, `cylinder.cpp`, `trashholder.cpp` | MISSING | Thing/Cylinder abstraction, trashholder |
-| `bed.cpp` | MISSING | sleeping/bed regen |
-| `decay/decay.cpp` | MISSING | decay engine/timer pipeline |
-| `containers/container.cpp` | PARTIAL | capacity/weight recursion, query add/remove, iterators, serialization |
-| `containers/depot/*`, `inbox/*`, `mailbox/*` | PARTIAL | locker town mapping, mail routing/letters, persistence |
-| `functions/item/attribute.cpp`, `item_parse.cpp` | PARTIAL | custom attributes, full XML item parse |
-| `weapons/weapons.cpp` | PARTIAL | weapon registry, max-damage tables, Lua events |
+| `item.cpp` (71 methods) | **IMPLEMENTED** | decay/forge/description primitives, weapon/item predicates, serialization, owner/tier/stats |
+| `items.cpp` | **IMPLEMENTED** | `Items` registry: protobuf merge, augments, loot types, XML parse, reload |
+| `tile.cpp` | **IMPLEMENTED** | `map/Tile.kt`: flags/PZ, ordering, fields, cylinder queries, notifications |
+| `thing.cpp`, `cylinder.cpp`, `trashholder.cpp` | **IMPLEMENTED** | `Thing`/`Cylinder` contracts + `TrashHolder` |
+| `bed.cpp` | **IMPLEMENTED** | `items/Bed.kt` (sleep/wake/regen, sleeper lifecycle) |
+| `decay/decay.cpp` | **IMPLEMENTED** | `items/decay/Decay.kt` (bounded intervals, generation-gated) |
+| `containers/container.cpp` | **IMPLEMENTED** | capacity/weight recursion, queries, iterators, serialization |
+| `containers/depot/*`, `inbox/*`, `mailbox/*` | **IMPLEMENTED** | DepotChest/DepotLocker/Inbox/Mailbox + town mapping, mail routing |
+| `functions/item/attribute.cpp`, `item_parse.cpp` | **IMPLEMENTED** | `ItemAttributes` + 69 `parse*` methods |
+| `weapons/weapons.cpp` | **IMPLEMENTED** | `Weapons` registry, melee/distance/wand damage formulas |
 
 ### `src/kv/`
 | C++ | Status | Missing |
@@ -242,18 +242,17 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 ## 3. Highest-Impact Gaps (ranked, verified)
 
-1. **Outbound serialization** — 132 of 190 `ProtocolGame::send*` methods have no Kotlin counterpart (remaining creature/map senders, cyclopedia computation frames).
+1. **Outbound serialization** — 132 of 190 `ProtocolGame::send*` methods have no Kotlin counterpart.
 2. **Lua bindings** — 167 of 1,246 method registrations (**~13%**); 0 of 673 enum and 8 class registrations.
 3. **`Player` domain model** — ~409 Kotlin functions vs 821 `Player::` methods (~50% raw); many C++ methods still unported.
 4. **Inbound opcode *application*** — all 141 active opcodes decode, but ~95 still stop at the WorldCommit confinement boundary because their engine (trade session, shop, houses, channels, VIP composition, inspection, cyclopedia frames) is unapplied.
-5. **`src/items/` fundamentals** — `cylinder`, `bed`, `trashholder`, decay engine, full `Tile`/`Container` behaviors.
-6. **Map engine** — `mapcache`, navigation snapshots, `canWalkTo`/sight/path, house/spawn/zone loading.
-7. **`game.cpp` remainder** — trade/shop/party/guild Game methods, houses/auctions, VIP, highscores, reports, game loop.
-8. **`src/server/`** — webhook, protocol profiles, session hints, transport variants.
-9. **`src/lib/`** — DI container, logger depth, messaging, metrics, thread pool.
-10. **`src/kv/`** — SQL-backed KV engine replaced only by ad-hoc maps.
-11. **`src/utils/`** — `tools.cpp` (2,326 lines) vs 28 Kotlin lines.
-12. **`src/protobuf/`** — `kv.proto` unported (appearances done).
+5. **Map engine** — `mapcache`, navigation snapshots, `canWalkTo`/sight/path, house/spawn/zone loading.
+6. **`game.cpp` remainder** — trade/shop/party/guild Game methods, houses/auctions, VIP, highscores, reports, game loop.
+7. **`src/server/`** — webhook, protocol profiles, session hints, transport variants.
+8. **`src/lib/`** — DI container, logger depth, messaging, metrics, thread pool.
+9. **`src/kv/`** — SQL-backed KV engine replaced only by ad-hoc maps.
+10. **`src/utils/`** — `tools.cpp` (2,326 lines) vs 28 Kotlin lines.
+11. **`src/protobuf/`** — `kv.proto` unported (appearances done).
 
 ---
 

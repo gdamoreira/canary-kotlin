@@ -43,3 +43,7 @@
 ## Post-wave (AGENTS.md §6)
 
 Flip all `src/items/` rows to `IMPLEMENTED`; update `docs/missing-features.md` §1–§3, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/Done/`; commit the docs separately and push to `origin`.
+
+## Completion
+
+Completed. All 10 `src/items/` rows IMPLEMENTED. The 6 parallel branches were integrated semantically (Item.kt 6-way merge) and the full suite is green at 395 suites / 4154 tests.
