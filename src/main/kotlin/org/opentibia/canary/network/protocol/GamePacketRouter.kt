@@ -846,6 +846,283 @@ object GamePacketRouter {
                     BossDifficultyPacketHandler.parse(buffer) != null
                 }
 
+                // Wave 35 batch B4
+                AimAtTargetPacketHandler.OPCODE_AIM_AT_TARGET -> {
+                    val command = AimAtTargetPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // ProtocolGame::parseAimAtTarget applies each pair through
+                            // Player::updateAimAtTargetSpells (player.cpp:13361); the
+                            // aimAtTargetSpellIds set is not ported, so the decoded
+                            // command only marks the confinement boundary (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
+                TransactionDetailsPacketHandler.OPCODE_GET_TRANSACTION_DETAILS -> {
+                    val command = TransactionDetailsPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Canary reads and discards the id (protocolgame.cpp:4337)
+                            // and the transaction-details sender is not ported; the
+                            // decoded command only marks the confinement boundary.
+                        }
+                        true
+                    }
+                }
+
+                in ContainerBrowsePacketHandler.OPCODE_LIVESTREAM_VIEWER_CONTAINER..ContainerBrowsePacketHandler.OPCODE_SEEK_IN_CONTAINER -> {
+                    val command = ContainerBrowsePacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerBrowseField needs the Game::browseFields
+                            // registry, Game::playerSeekInContainer needs
+                            // Container::hasPagination/isStoreInbox and the livestream
+                            // resend needs the open-container sends; none are ported, so
+                            // the decoded command only marks the confinement boundary
+                            // (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
+                in InspectionPacketHandler.OPCODE_INSPECTION_OBJECT..InspectionPacketHandler.OPCODE_INSPECT_PLAYER -> {
+                    val command = InspectionPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerInspectItem and Player::sendItemInspection
+                            // (game.cpp:1635,1652) and sendWeaponProficiencyWindow are
+                            // not ported; the decoded command only marks the
+                            // confinement boundary (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
+                BlessingWindowPacketHandler.OPCODE_BLESSING_WINDOW -> {
+                    val command = BlessingWindowPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // ProtocolGame::sendBlessingWindow (protocolgame.cpp:5899)
+                            // serializes the player blessing state through the protocol
+                            // output, which this context does not provide; the decoded
+                            // command only marks the confinement boundary (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
+                OutfitRequestPacketHandler.OPCODE_PLAYER_REQUEST_OUTFIT -> {
+                    val command = OutfitRequestPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerRequestOutfit (game.cpp:7206) gates on
+                            // ALLOW_CHANGEOUTFIT and calls Player::sendOutfitWindow,
+                            // which is not ported; the decoded command only marks the
+                            // confinement boundary (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
+                CyclopediaPacketHandler.OPCODE_CYCLOPEDIA_MAP_ACTION -> {
+                    val command = CyclopediaPacketHandler.parseMapAction(buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // ProtocolGame::parseCyclopediaMapAction (protocolgame.cpp:3332)
+                            // reads and discards its fields; the decoded command only
+                            // marks the confinement boundary.
+                        }
+                        true
+                    }
+                }
+
+                in VipPacketHandler.OPCODE_ADD_VIP..VipPacketHandler.OPCODE_VIP_GROUP_ACTIONS -> {
+                    val command = VipPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerRequestAddVip/RemoveVip/EditVip and
+                            // PlayerVIP::addGroup/editGroup/removeGroup mutate
+                            // Player::vip(); the ported PlayerVip component
+                            // (creatures/players/vip/PlayerVip.kt) is not composed into
+                            // Player, so the decoded command only marks the confinement
+                            // boundary (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
+                CyclopediaPacketHandler.OPCODE_CYCLOPEDIA_CHARACTER_INFO -> {
+                    val command = CyclopediaPacketHandler.parseCharacterInfo(buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerCyclopediaCharacterInfo (game.cpp:9823-9882):
+                            // protocolgame.cpp:3040-3042 resolves a zero character id to
+                            // the requesting player, another character yields
+                            // sendCyclopediaCharacterNoData, the recent deaths / PvP
+                            // kills types load the ported PlayerCyclopedia history, and
+                            // every other type only has unported senders (PARITY GAP).
+                            val characterId = if (command.characterId == 0L) {
+                                player.id.toInt().toLong()
+                            } else {
+                                command.characterId
+                            }
+                            if (characterId == player.id.toInt().toLong()) {
+                                when (command.infoType) {
+                                    CyclopediaPacketHandler.CYCLOPEDIA_CHARACTERINFO_RECENT_DEATHS ->
+                                        player.features.cyclopedia.loadDeathHistory(
+                                            command.page,
+                                            command.entriesPerPage,
+                                        )
+
+                                    CyclopediaPacketHandler.CYCLOPEDIA_CHARACTERINFO_RECENTPVPKILLS ->
+                                        player.features.cyclopedia.loadRecentKills(
+                                            command.page,
+                                            command.entriesPerPage,
+                                        )
+
+                                    else -> Unit
+                                }
+                            }
+                        }
+                        true
+                    }
+                }
+
+                BugReportPacketHandler.OPCODE_BUG_REPORT -> {
+                    val command = BugReportPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerReportBug (game.cpp:10193) dispatches the
+                            // playerOnReportBug Lua event; the Lua event bridge for
+                            // report-bug is not ported, so the decoded command only
+                            // marks the confinement boundary (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
+                OfferDescriptionPacketHandler.OPCODE_OFFER_DESCRIPTION -> {
+                    val command = OfferDescriptionPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Canary only logs the offer id (protocolgame.cpp:4258-4261);
+                            // the decoded command only marks the confinement boundary.
+                        }
+                        true
+                    }
+                }
+
+                PreyPacketHandler.OPCODE_PREY_ACTION -> {
+                    val command = PreyPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerPreyAction -> IOPrey::parsePreyAction
+                            // (ioprey.cpp:299) over the ported PlayerPreyState engine.
+                            // Canary's PREY_ENABLED config gate is not reachable from
+                            // the router, and an unknown action value is a no-op like
+                            // the C++ default branch.
+                            val action = PreyAction.entries.firstOrNull { it.value == command.action }
+                            if (action != null) {
+                                player.features.preyEngine.parsePreyAction(
+                                    player = player.features.prey,
+                                    slotId = command.slot,
+                                    action = action,
+                                    option = PreyOption.entries.firstOrNull { it.value == command.option }
+                                        ?: PreyOption.None,
+                                    index = command.index,
+                                    raceId = command.raceId,
+                                )
+                            }
+                        }
+                        true
+                    }
+                }
+
+                HirelingNamePacketHandler.OPCODE_SET_HIRELING_NAME -> {
+                    val command = HirelingNamePacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // ProtocolGame::parseSetHirelingName (protocolgame.cpp:3350)
+                            // reads and discards every field; no hireling rename engine
+                            // is ported, so the decoded command only marks the
+                            // confinement boundary (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
+                ResourceBalancePacketHandler.OPCODE_SEND_RESOURCE_BALANCE -> {
+                    val command = ResourceBalancePacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // ProtocolGame::parseSendResourceBalance (protocolgame.cpp:4305)
+                            // answers through the unported balance senders; the decoded
+                            // command only marks the confinement boundary (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
+                NpcGreetPacketHandler.OPCODE_GREET -> {
+                    val command = NpcGreetPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerNpcGreet (game.cpp:10236) resolves the NPC and
+                            // drives its Lua onGreet callback; neither the NPC registry
+                            // nor the greet bridge is ported, so the decoded command
+                            // only marks the confinement boundary (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
+                ObjectInfoPacketHandler.OPCODE_GET_OBJECT_INFO -> {
+                    val command = ObjectInfoPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // ProtocolGame::parseGetObjectInfo (protocolgame.cpp:4342)
+                            // answers with the unported 0xF4 object-info sender; the
+                            // decoded command only marks the confinement boundary
+                            // (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
                 else -> false
             }
 
