@@ -22,9 +22,9 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | Lua bindings (`src/lua/functions/*`) | 1,961 registrations (1,246 methods + 34 meta + 673 enums + 8 classes) | 167 `registerMethod` | **~13%** methods | 0 enum/class registrations in Kotlin |
 | `Player` methods (`player.cpp`) | 821 `Player::` methods | ~409 functions in `creatures/players/**` | **~50%** raw count | not a strict 1:1 mapping; components included |
 | Monster engine (`monster.cpp`, 4,014 lines) | — | 57 functions + `MonsterAi` + `MonsterPathfinder` | **~20%** | A* + spawn engines + targeting/loot/intention/relevance |
-| Map engine (`map.cpp`) | — | — | **~35%** | OTBM load + sectors + tiles + A*; no sight/`canWalkTo`/houses save |
+| Map engine (`map.cpp`) | — | — | **~85%** | sight/`canWalkTo`/pathing/caches/spectators/houses/towns (wave 38) |
 | Persistence (`iologindata*`, `iomapserialize`) | — | — | **~80%** | 24/24 iologindata, 10/10 iomapserialize, market/prey/bestiary/bosstiary/guild/storage (V10–V14) |
-| **Estimated full-parity completion** | — | — | **~60–65%** | weighted across the above |
+| **Estimated full-parity completion** | — | — | **~65–70%** | weighted across the above |
 
 ### 1.2 Module completion (by inventory rows in §2)
 
@@ -41,13 +41,13 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | `src/game/` | 10 | 9 | 1 | 0 | **90%** | **95%** |
 | `src/io/` | 9 | 9 | 0 | 0 | **100%** | **100%** |
 | `src/items/` | 10 | 10 | 0 | 0 | **100%** | **100%** |
-| `src/map/` | 6 | 0 | 4 | 2 | 0% | **33%** |
+| `src/map/` | 6 | 6 | 0 | 0 | **100%** | **100%** |
 | `src/server/` | 5 | 0 | 3 | 2 | 0% | **30%** |
 | `src/lua/` | 12 | 0 | 5 | 7 | 0% | **21%** |
 | `src/utils/` | 3 | 0 | 1 | 2 | 0% | **17%** |
 | `src/lib/` | 5 | 0 | 1 | 4 | 0% | **10%** |
 | `src/kv/` | 1 | 0 | 0 | 1 | 0% | **0%** |
-| **All modules** | **116** | **82** | **11** | **23** | **71%** | **75%** |
+| **All modules** | **116** | **88** | **7** | **21** | **76%** | **79%** |
 
 ---
 
@@ -203,12 +203,12 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 ### `src/map/`
 | C++ | Status | Missing |
 |---|---|---|
-| `map.cpp` (1,429) | PARTIAL | canThrowObjectTo, canWalkTo, checkSightLine/getPathMatching, placeCreature, moveCreature, houses/spawns/zones loading, save |
-| `mapcache.cpp`, `navigation_snapshot.cpp`, `map_download.cpp` | MISSING | caches/snapshots/download |
-| `spectators.cpp` | PARTIAL | spectator sets, direction filtering |
-| `house/house.cpp`, `housetile.cpp` | PARTIAL | rent/periods, transfers, auctions, access lists, eviction, persistence |
-| `utils/astarnodes.cpp` | MISSING | A* algorithm |
-| `town.hpp` | PARTIAL | Town class/temple/ID registry |
+| `map.cpp` (1,429) | **IMPLEMENTED** | canThrowObjectTo, canWalkTo, checkSightLine/isSightClear, getPathMatching, placeCreature, moveCreature, save |
+| `mapcache.cpp`, `navigation_snapshot.cpp`, `map_download.cpp` | **IMPLEMENTED** | `map/cache/**` (BasicItem/BasicTile dedup, nav snapshots, download URL/tag) |
+| `spectators.cpp` | **IMPLEMENTED** | `map/Spectators.kt` (sets, direction/multifloor filtering, cache) |
+| `house/house.cpp`, `housetile.cpp` | **IMPLEMENTED** | rent cycle, transfers, auctions, access lists, eviction, depot transfer |
+| `utils/astarnodes.cpp` | **IMPLEMENTED** | `map/pathfinding/AStarNodes.kt` (open/closed sets, exact tie-break) |
+| `town.hpp` | **IMPLEMENTED** | `map/Town.kt` (`Town`/`Towns` registry) |
 
 ### `src/protobuf/`
 | C++ | Status | Missing |
@@ -246,13 +246,12 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 2. **Lua bindings** — 167 of 1,246 method registrations (**~13%**); 0 of 673 enum and 8 class registrations.
 3. **`Player` domain model** — ~409 Kotlin functions vs 821 `Player::` methods (~50% raw); many C++ methods still unported.
 4. **Inbound opcode *application*** — all 141 active opcodes decode, but ~95 still stop at the WorldCommit confinement boundary because their engine (trade session, shop, houses, channels, VIP composition, inspection, cyclopedia frames) is unapplied.
-5. **Map engine** — `mapcache`, navigation snapshots, `canWalkTo`/sight/path, house/spawn/zone loading.
-6. **`game.cpp` remainder** — trade/shop/party/guild Game methods, houses/auctions, VIP, highscores, reports, game loop.
-7. **`src/server/`** — webhook, protocol profiles, session hints, transport variants.
-8. **`src/lib/`** — DI container, logger depth, messaging, metrics, thread pool.
-9. **`src/kv/`** — SQL-backed KV engine replaced only by ad-hoc maps.
-10. **`src/utils/`** — `tools.cpp` (2,326 lines) vs 28 Kotlin lines.
-11. **`src/protobuf/`** — `kv.proto` unported (appearances done).
+5. **`game.cpp` remainder** — trade/shop/party/guild Game methods, houses/auctions, VIP, highscores, reports, game loop.
+6. **`src/server/`** — webhook, protocol profiles, session hints, transport variants.
+7. **`src/lib/`** — DI container, logger depth, messaging, metrics, thread pool.
+8. **`src/kv/`** — SQL-backed KV engine replaced only by ad-hoc maps.
+9. **`src/utils/`** — `tools.cpp` (2,326 lines) vs 28 Kotlin lines.
+10. **`src/protobuf/`** — `kv.proto` unported (appearances done).
 
 ---
 

@@ -50,3 +50,7 @@ Do not edit another agent's files; document cross-file needs in the report.
 ## Post-wave (AGENTS.md §6)
 
 Flip all `src/map/` rows to `IMPLEMENTED`; update `docs/missing-features.md` §1–§3, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/Done/`; commit the docs separately and push to `origin`.
+
+## Completion
+
+Completed. All 6 `src/map/` rows IMPLEMENTED (map core, caches/navigation, spectators, houses, AStarNodes, towns); full suite green at 410 suites / 4395 tests.
