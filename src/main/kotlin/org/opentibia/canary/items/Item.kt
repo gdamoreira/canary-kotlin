@@ -6,6 +6,7 @@ import org.opentibia.canary.combat.condition.LightInfo
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.WeaponType_t
+import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.game.movement.Teleport
 import org.opentibia.canary.io.PropStream
 import org.opentibia.canary.io.PropWriteStream
@@ -104,6 +105,14 @@ data class ItemType(
     val stopTime: Boolean = false,
     val transformEquipTo: Int = 0,
     val transformDeEquipTo: Int = 0,
+    /** `ItemType::transformToOnUse[2]` (src/items/items.hpp:304), indexed by `PlayerSex_t`. */
+    val transformToOnUse: List<Int> = listOf(0, 0),
+    /** `ItemType::transformToFree` (src/items/items.hpp:305). */
+    val transformToFree: Int = 0,
+    /** `ItemType::bedPartnerDir` (src/items/items.hpp:319); `null` is `DIRECTION_NONE`. */
+    val bedPartnerDir: Direction? = null,
+    /** `ItemType::bedPart` (src/items/items.hpp:320). */
+    val bedPart: BedItemPart = BedItemPart.BED_NONE_PART,
     val hasDeEquipEvent: Boolean = false,
     /** `ItemType::maxItems` (src/items/items.hpp:311), C++ default 8. */
     val maxItems: Int = 8,
@@ -1024,6 +1033,12 @@ open class Item(
     fun getDecaying(): ItemDecayState =
         ItemDecayState.fromValue((attributes[ItemAttribute.DECAYSTATE] as? Long ?: 0L).toInt())
 
+    /** `Item::loadedFromMap` (src/items/item.hpp:777). */
+    var loadedFromMap: Boolean = false
+
+    /** `Item::isLoadedFromMap` (src/items/item.hpp:671-673). */
+    fun isLoadedFromMap(): Boolean = loadedFromMap
+
     /** `Item::getSubType` (src/items/item.cpp:867-877). */
     fun getSubType(): Int {
         val itemType = type
@@ -1641,6 +1656,7 @@ class Container(
     fun addItem(item: Item): Boolean {
         if (_items.size >= capacity) return false
         _items.add(item)
+        item.setParent(this)
         return true
     }
 
