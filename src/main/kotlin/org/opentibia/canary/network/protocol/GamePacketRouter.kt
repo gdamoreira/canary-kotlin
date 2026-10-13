@@ -683,6 +683,169 @@ object GamePacketRouter {
                     }
                 }
 
+                // Wave 35 batch B3
+                // Private channels: 0xAA playerCreatePrivateChannel /
+                // 0xAB parseChannelInvite / 0xAC parseChannelExclude
+                ChannelPacketHandler.OPCODE_CREATE_PRIVATE_CHANNEL,
+                ChannelPacketHandler.OPCODE_CHANNEL_INVITE,
+                ChannelPacketHandler.OPCODE_CHANNEL_EXCLUDE -> {
+                    val command = ChannelPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerCreatePrivateChannel/playerChannelInvite/
+                            // playerChannelExclude (game.cpp:4324-4382) are ported in
+                            // chat/ChatManager.kt, but no ChatManager instance is reachable
+                            // from GamePacketContext, so the decoded command only marks the
+                            // confinement boundary (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
+                // Cyclopedia house auction: 0xAD parseCyclopediaHouseAuction
+                CyclopediaHouseAuctionPacketHandler.OPCODE_CYCLOPEDIA_HOUSE_AUCTION -> {
+                    val command = CyclopediaHouseAuctionPacketHandler.parse(buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerCyclopediaHousesByTown/HouseBid/HouseMoveOut/
+                            // HouseTransfer/HouseCancelMoveOut/HouseCancelTransfer/
+                            // HouseAcceptTransfer/HouseRejectTransfer (game.cpp:12762-12925)
+                            // are not ported (the House model carries no auction state), so
+                            // the decoded command only marks the confinement boundary
+                            // (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
+                // Bosstiary: 0xAE parseSendBosstiary / 0xAF parseSendBosstiarySlots /
+                // 0xB0 parseBosstiarySlot
+                BosstiaryPacketHandler.OPCODE_SEND_BOSSTIARY,
+                BosstiaryPacketHandler.OPCODE_SEND_BOSSTIARY_SLOTS,
+                BosstiaryPacketHandler.OPCODE_BOSSTIARY_SLOT -> {
+                    val command = BosstiaryPacketHandler.parse(opcode, buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // BosstiaryWindowWriter ports the 0xAE/0xAF replies and
+                            // Game::playerBosstiarySlot (game.cpp:11256) mutates the player
+                            // slot state, but the player-bosstiary store and the IO
+                            // bosstiary map are not ported and no session sink is reachable
+                            // here, so the decoded command only marks the confinement
+                            // boundary (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
+                // Highscores: 0xB1 parseHighscores
+                HighscoresPacketHandler.OPCODE_HIGHSCORES -> {
+                    val command = HighscoresPacketHandler.parse(buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerHighscores (game.cpp:10124) runs the async
+                            // highscore query and HighscoresWindowSerializer ports the 0xB1
+                            // reply, but the query repository and the async-task bookkeeping
+                            // are not ported, so the decoded command only marks the
+                            // confinement boundary (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
+                // Weapon proficiency: 0xB3 parseWeaponProficiency
+                WeaponProficiencyPacketHandler.OPCODE_WEAPON_PROFICIENCY -> {
+                    val command = WeaponProficiencyPacketHandler.parse(buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Player::weaponProficiency()'s getTrackedWeaponIds,
+                            // clearSelectedPerks, setSelectedPerk, applyPerks and
+                            // clearAllStats surface (weapon_proficiency.cpp:320-595, 1488)
+                            // is not ported, so the decoded command only marks the
+                            // confinement boundary (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
+                // Task hunting: 0xBA parseTaskHuntingAction
+                TaskHuntingPacketHandler.OPCODE_TASK_HUNTING_ACTION -> {
+                    val command = TaskHuntingPacketHandler.parse(buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerTaskHuntingAction -> IOPrey::parseTaskHuntingAction
+                            // (game.cpp:10227, ioprey.cpp:405) is ported as
+                            // TaskHuntingEngine.parseTaskHuntingAction. The parse-time
+                            // TASK_HUNTING_ENABLED gate (protocolgame.cpp:3214) is not
+                            // observable through the injected engine config (PARITY GAP).
+                            val action = command.action
+                            if (action != null) {
+                                player.features.taskHuntingEngine.parseTaskHuntingAction(
+                                    player = player.features.taskHunting,
+                                    slotId = command.slot,
+                                    action = action,
+                                    upgrade = command.upgrade,
+                                    raceId = command.raceId,
+                                )
+                            }
+                        }
+                        true
+                    }
+                }
+
+                // Cancel attack and follow: 0xBE playerCancelAttackAndFollow
+                CancelAttackAndFollowPacketHandler.OPCODE_CANCEL_ATTACK_AND_FOLLOW -> {
+                    CancelAttackAndFollowPacketHandler.parse()
+                    context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                        // Game::playerCancelAttackAndFollow calls playerSetAttackedCreature(id, 0),
+                        // playerFollowCreature(id, 0) and Player::stopWalk (game.cpp:6990-6997,
+                        // 7001-7031, 7033-7042). Only the attacked-creature clear is ported;
+                        // Player::resetLoginProtection, the follow state machine, stopWalk and
+                        // the cancel-target send are not ported (PARITY GAP).
+                        player.setAttackedCreature(null)
+                    }
+                    true
+                }
+
+                // Forge browse history: 0xC0 parseForgeBrowseHistory
+                ForgeHistoryPacketHandler.OPCODE_FORGE_BROWSE_HISTORY -> {
+                    val command = ForgeHistoryPacketHandler.parse(buffer)
+                    if (command == null) {
+                        false
+                    } else {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            // Game::playerBrowseForgeHistory (game.cpp:11241) sends the
+                            // stored history page through Player::forgeHistory;
+                            // PlayerForgeHistory and ForgeHistorySerializer are ported, but
+                            // the outbound session send is not reachable here, so the decoded
+                            // command only marks the confinement boundary (PARITY GAP).
+                        }
+                        true
+                    }
+                }
+
+                // Client details: 0xC1 parseClientDetails (read and discarded)
+                ClientDetailsPacketHandler.OPCODE_CLIENT_DETAILS -> {
+                    ClientDetailsPacketHandler.parse(buffer) != null
+                }
+
+                // Boss difficulty selection: 0xC2 parseBossDifficultySelection
+                // (read and discarded; protocolgame.cpp:3317-3323)
+                BossDifficultyPacketHandler.OPCODE_BOSS_DIFFICULTY_SELECTION -> {
+                    BossDifficultyPacketHandler.parse(buffer) != null
+                }
+
                 else -> false
             }
 

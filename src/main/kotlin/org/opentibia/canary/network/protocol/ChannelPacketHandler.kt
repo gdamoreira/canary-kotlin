@@ -64,6 +64,25 @@ object CloseNpcChannelCommand : ChannelCommand {
     override val opcode: Int get() = ChannelPacketHandler.OPCODE_CLOSE_NPC_CHANNEL
 }
 
+/** `0xAA`: creates the sender's `CHANNEL_PRIVATE` channel; Canary reads no payload. */
+object CreatePrivateChannelCommand : ChannelCommand {
+    override val opcode: Int get() = ChannelPacketHandler.OPCODE_CREATE_PRIVATE_CHANNEL
+}
+
+/** `0xAB`: invites the named player to the sender's private channel. */
+data class ChannelInviteCommand(
+    val name: String,
+) : ChannelCommand {
+    override val opcode: Int get() = ChannelPacketHandler.OPCODE_CHANNEL_INVITE
+}
+
+/** `0xAC`: excludes the named player from the sender's private channel. */
+data class ChannelExcludeCommand(
+    val name: String,
+) : ChannelCommand {
+    override val opcode: Int get() = ChannelPacketHandler.OPCODE_CHANNEL_EXCLUDE
+}
+
 /**
  * Decoder for the channel client opcodes. Multi-byte fields are Little-Endian,
  * matching `NetworkMessage::get<T>()` on the native wire order.
@@ -73,6 +92,9 @@ object CloseNpcChannelCommand : ChannelCommand {
  *  - `0x99` `ProtocolGame::parseCloseChannel`      (protocolgame.cpp:2439)
  *  - `0x9A` `ProtocolGame::parseOpenPrivateChannel` (protocolgame.cpp:2444)
  *  - `0x9E` `Game::playerCloseNpcChannel`          (protocolgame.cpp:1905)
+ *  - `0xAA` `Game::playerCreatePrivateChannel`     (game.cpp:4324)
+ *  - `0xAB` `Game::playerChannelInvite`            (game.cpp:4338)
+ *  - `0xAC` `Game::playerChannelExclude`           (game.cpp:4361)
  */
 object ChannelPacketHandler {
 
@@ -82,12 +104,24 @@ object ChannelPacketHandler {
     const val OPCODE_OPEN_PRIVATE_CHANNEL: Int = 0x9A
     const val OPCODE_CLOSE_NPC_CHANNEL: Int = 0x9E
 
+    /** protocolgame.cpp:1938-1940 dispatches this opcode to `playerCreatePrivateChannel`. */
+    const val OPCODE_CREATE_PRIVATE_CHANNEL: Int = 0xAA
+
+    /** protocolgame.cpp:1941-1943 dispatches this opcode to `parseChannelInvite`. */
+    const val OPCODE_CHANNEL_INVITE: Int = 0xAB
+
+    /** protocolgame.cpp:1944-1946 dispatches this opcode to `parseChannelExclude`. */
+    const val OPCODE_CHANNEL_EXCLUDE: Int = 0xAC
+
     fun parse(opcode: Int, buffer: ByteBuf): ChannelCommand? = when (opcode) {
         OPCODE_REQUEST_CHANNELS -> RequestChannelsCommand
         OPCODE_OPEN_CHANNEL -> parseOpenChannel(buffer)
         OPCODE_CLOSE_CHANNEL -> parseCloseChannel(buffer)
         OPCODE_OPEN_PRIVATE_CHANNEL -> parseOpenPrivateChannel(buffer)
         OPCODE_CLOSE_NPC_CHANNEL -> CloseNpcChannelCommand
+        OPCODE_CREATE_PRIVATE_CHANNEL -> CreatePrivateChannelCommand
+        OPCODE_CHANNEL_INVITE -> readTargetName(buffer)?.let { ChannelInviteCommand(it) }
+        OPCODE_CHANNEL_EXCLUDE -> readTargetName(buffer)?.let { ChannelExcludeCommand(it) }
         else -> null
     }
 
@@ -119,6 +153,21 @@ object ChannelPacketHandler {
     fun parseOpenPrivateChannel(buffer: ByteBuf): OpenPrivateChannelCommand? {
         val receiver = readString(buffer) ?: return null
         return OpenPrivateChannelCommand(receiver = receiver)
+    }
+
+    /**
+     * Reads `msg.getString()` plus the optional current-payload trailing
+     * `uint16_t` (protocolgame.cpp:2419-2422).
+     *
+     * @return the decoded name, or `null` when the length prefix or the declared
+     *   payload is not fully readable.
+     */
+    private fun readTargetName(buffer: ByteBuf): String? {
+        val name = readString(buffer) ?: return null
+        if (buffer.readableBytes() >= 2) {
+            buffer.skipBytes(2)
+        }
+        return name
     }
 
     private fun readShort(buffer: ByteBuf): Int? =
