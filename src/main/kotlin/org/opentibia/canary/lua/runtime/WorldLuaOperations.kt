@@ -75,6 +75,11 @@ import org.opentibia.canary.lua.bindings.core.PositionFunctions
 import org.opentibia.canary.lua.bindings.core.PositionOperations
 import org.opentibia.canary.lua.bindings.core.TileFunctions
 import org.opentibia.canary.lua.bindings.core.TileOperations
+import org.opentibia.canary.lua.bindings.creatures.GroupFunctions
+import org.opentibia.canary.lua.bindings.creatures.GuildFunctions
+import org.opentibia.canary.lua.bindings.creatures.MountFunctions
+import org.opentibia.canary.lua.bindings.creatures.PartyFunctions
+import org.opentibia.canary.lua.bindings.creatures.VocationFunctions
 import org.opentibia.canary.lua.bindings.items.ImbuementFunctions
 import org.opentibia.canary.lua.bindings.items.ImbuementOperations
 import org.opentibia.canary.lua.bindings.library.BankFunctions
@@ -231,6 +236,12 @@ class WorldLuaOperations(
         PlayerFunctions.install(env, player)
         PlayerSocialFunctions.install(env) // Wave 39 lua-player-2
         PlayerFunctionsExtra.install(env) // Wave 40 lua-player-4
+        // Wave 40 lua-creatures
+        GroupFunctions.install(env)
+        GuildFunctions.install(env)
+        MountFunctions.install(env)
+        PartyFunctions.install(env)
+        VocationFunctions.install(env)
         CreatureFunctions.install(env, creature)
         ItemFunctions.install(env, item)
         ItemTypeFunctions.install(env, itemType)
