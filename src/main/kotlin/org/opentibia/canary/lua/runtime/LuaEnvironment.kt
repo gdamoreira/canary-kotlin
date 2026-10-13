@@ -22,13 +22,28 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * Mirrors Canary's LuaScriptInterface: owns a single LuaJ [Globals], preloads the
+ * Mirrors Canary's LuaScriptInterface: owns the shared LuaJ [Globals], preloads the
  * compatibility shim, and installs the Canary-named binding libraries.
+ *
+ * The lifecycle follows `LuaEnvironment` (`src/lua/scripts/lua_environment.cpp`):
+ * [initState] creates the state (the LuaJ standard libraries plus `debug`, matching
+ * `Lua::load`'s `luaL_openlibs`), [closeState] drops it, and [reInitState] reloads by
+ * closing and re-initializing. Unlike `lua_close`, the JVM reclaims the replaced tables
+ * through the garbage collector; [getLuaState] reports null while closed like the C++
+ * `luaState == nullptr`.
  */
 class LuaEnvironment {
-    val globals: Globals = JsePlatform.standardGlobals()
+    private var state: Globals? = null
+
+    /** The shared state; accessing it while closed is a programming error. */
+    val globals: Globals
+        get() = state ?: error("LuaEnvironment state is closed")
 
     lateinit var userdata: UserdataRegistry
+        private set
+
+    /** Port of `Lua::registerClass` and friends (`LuaClassRegistry`). */
+    lateinit var classes: LuaClassRegistry
         private set
 
     val actions = Actions()
@@ -64,9 +79,14 @@ class LuaEnvironment {
         spells = registry
     }
 
+    /** `LuaEnvironment::getLuaState` (lua_environment.cpp:37-47); null while closed. */
+    fun getLuaState(): Globals? = state
+
     fun initState() {
+        state = JsePlatform.debugGlobals()
         loadCompatShim()
         userdata = UserdataRegistry(globals)
+        classes = LuaClassRegistry(globals)
 
         // Install the Canary-named engine primitives backed by the world domain objects.
         WorldLuaOperations.forEnvironment(this).install(this)
@@ -78,6 +98,26 @@ class LuaEnvironment {
         globalEvents = GlobalEventBindings.install(this)
         moveEvents = MoveEventBindings.install(this)
         libraries.forEach { it() }
+    }
+
+    /**
+     * `LuaEnvironment::closeState` (lua_environment.cpp:63-87): drop the state after
+     * clearing the interface caches. The JVM releases the replaced tables through the
+     * garbage collector; the C++ timer/area registries are not modelled here.
+     */
+    fun closeState(): Boolean {
+        if (state == null) {
+            return false
+        }
+        state = null
+        return true
+    }
+
+    /** `LuaEnvironment::reInitState` (lua_environment.cpp:57-61): close, then init. */
+    fun reInitState(): Boolean {
+        closeState()
+        initState()
+        return true
     }
 
     fun loadChunk(chunk: String, chunkName: String = "=(chunk)"): LuaValue {
