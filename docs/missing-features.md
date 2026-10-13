@@ -54,6 +54,22 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | `databasemanager.cpp`/`databasetasks` | **IMPLEMENTED** | `DatabaseTasks` (FIFO async queue, flush, shutdown) |
 | `database_definitions.hpp` | **IMPLEMENTED** | `TransactionStates_t` (only enum in the header) |
 
+### `src/enums/`
+| C++ | Status | Missing |
+|---|---|---|
+| `item_attribute.hpp` | **IMPLEMENTED** | `items/Item.kt` (`ItemAttribute`) |
+| `player_wheel.hpp` | **IMPLEMENTED** | `systems/wheel/WheelEnums.kt` |
+| `weapon_proficiency.hpp` | **IMPLEMENTED** | `systems/proficiency/WeaponProficiencyEnums.kt` |
+| `imbuement.hpp` | **IMPLEMENTED** | `systems/imbuement/Imbuements.kt` |
+| `forge_conversion.hpp` | **IMPLEMENTED** | `systems/forge/ForgeEnums.kt` |
+| `account_coins.hpp` | **IMPLEMENTED** | `systems/gamestore/AccountCoins.kt` |
+| `account_errors.hpp`, `account_group_type.hpp`, `account_type.hpp` | **IMPLEMENTED** | `account/AccountInfo.kt` (`AccountErrors`, `AccountType`) |
+| `container_type.hpp`, `object_category.hpp` | MISSING | container/object categories used by depot/market/stash |
+| `lua_variant_type.hpp` | **IMPLEMENTED** | `spells/SpellValues.kt` (`LuaVariantType`) |
+| `player_blessings.hpp` | **IMPLEMENTED** | `creatures/Creature.kt` (`Blessings`) |
+| `player_cyclopedia.hpp` | **IMPLEMENTED** | `creatures/players/components/PlayerCyclopedia.kt` |
+| `player_icons.hpp` | **IMPLEMENTED** | `combat/condition/*` (`PlayerIcon`) |
+
 ### `src/creatures/`
 | C++ | Status | Missing |
 |---|---|---|
