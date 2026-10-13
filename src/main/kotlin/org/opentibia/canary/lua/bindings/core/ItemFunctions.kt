@@ -1,6 +1,10 @@
 package org.opentibia.canary.lua.bindings.core
 
+import org.luaj.vm2.LuaString
+import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
+import org.opentibia.canary.creatures.Creature
+import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
 
@@ -9,8 +13,8 @@ import org.opentibia.canary.map.Position
  * src/lua/functions/items/item_functions.cpp.
  *
  * Members whose state the Kotlin domain does not model yet (parent links, cloning,
- * custom attribute bags, tile residence) carry a documented default so scripts keep
- * running instead of failing.
+ * custom attribute bags, owner names, imbuement payloads, tile residence) carry a
+ * documented default so scripts keep running instead of failing.
  */
 interface ItemOperations {
     /** Resolves an item name to its id, returning 0 when unknown. */
@@ -102,10 +106,91 @@ interface ItemOperations {
 
     /** Mirrors `item:isContainer()`; false when container status is not modeled. */
     fun isContainer(item: Any): Boolean = false
+
+    /** Mirrors `item:setExpertPvpFieldContext(owner)`; false when no expert-PvP engine is wired. */
+    fun setExpertPvpFieldContext(item: Any, owner: Any): Boolean = false
+
+    /**
+     * Mirrors `item:setOwner(creature or creatureId)`; [owner] is the resolved creature
+     * userdata or the numeric creature id. False when no ownership store is modeled.
+     */
+    fun setOwner(item: Any, owner: Any): Boolean = false
+
+    /** Mirrors `item:getOwnerId()`; 0 means Canary's `nil`. */
+    fun getOwnerId(item: Any): Long = 0L
+
+    /** Mirrors `item:isOwner(creature or creatureId)`; [owner] is a creature or numeric id. */
+    fun isOwner(item: Any, owner: Any): Boolean = false
+
+    /** Mirrors `item:getOwnerName()`; null means Canary's `nil`. */
+    fun getOwnerName(item: Any): String? = null
+
+    /** Mirrors `item:hasOwner()`; false when the owner attribute is absent. */
+    fun hasOwner(item: Any): Boolean = false
+
+    /** Mirrors `item:actor()`; false when no actor state is modeled. */
+    fun hasActor(item: Any): Boolean = false
+
+    /** Mirrors `item:actor(value)`'s setter branch; false when no actor state is modeled. */
+    fun setActor(item: Any, actor: Boolean): Boolean = false
+
+    /** Mirrors `item:serializeAttributes()`; null when serialization is not modeled. */
+    fun serializeAttributes(item: Any): ByteArray? = null
+
+    /** Mirrors `item:moveToSlot(player, slot = 0)`; false when slot movement is not modeled. */
+    fun moveToSlot(item: Any, player: Any, slot: Int): Boolean = false
+
+    /** Mirrors `item:hasProperty(property)`; false when the property is absent. */
+    fun hasProperty(item: Any, property: Int): Boolean = false
+
+    /** Mirrors `item:getImbuementSlot()`; 0 when no imbuement slots are modeled. */
+    fun getImbuementSlot(item: Any): Int = 0
+
+    /**
+     * Mirrors the imbuement payloads `item:getImbuement()` can push: one map with the
+     * `id`, `name` and `duration` fields per imbuement slot, in slot order.
+     */
+    fun getImbuements(item: Any): List<Map<String, Any>> = emptyList()
+
+    /**
+     * Mirrors `item:setDuration(minDuration[, maxDuration[, decayTo[, showDuration]]])`;
+     * [maxDuration] is null when the call omits it. False when no type/decay store is wired.
+     */
+    fun setDuration(
+        item: Any,
+        minDuration: Long,
+        maxDuration: Long?,
+        decayTo: Int,
+        showDuration: Boolean,
+    ): Boolean = false
+
+    /** Mirrors `item:isInsideDepot([includeInbox = false])`; false when depot containment is not modeled. */
+    fun isInsideDepot(item: Any, includeInbox: Boolean): Boolean = false
+
+    /** Mirrors `item:getTier()`; 0 when the tier attribute is absent. */
+    fun getTier(item: Any): Int = 0
+
+    /** Mirrors `item:setTier(tier)`; false when no tier store is wired. */
+    fun setTier(item: Any, tier: Int): Boolean = false
+
+    /** Mirrors `item:getClassification()`; 0 when the item has no upgrade classification. */
+    fun getClassification(item: Any): Int = 0
+
+    /** Mirrors `item:canReceiveAutoCarpet()`; false when carpet rules are not modeled. */
+    fun canReceiveAutoCarpet(item: Any): Boolean = false
+
+    /** Mirrors `item:setShader(shaderName)`; false when no shader store is wired. */
+    fun setShader(item: Any, shader: String): Boolean = false
+
+    /** Mirrors `item:getShader()`; empty when no shader is modeled. */
+    fun getShader(item: Any): String = ""
+
+    /** Mirrors `item:hasShader()`; false when no shader is modeled. */
+    fun hasShader(item: Any): Boolean = false
 }
 
 /**
- * Registers the Canary `Item` userdata methods:
+ * Registers the Canary `Item` userdata methods (src/lua/functions/items/item_functions.cpp:22):
  *
  *   item:isItem()
  *   item:getContainer()
@@ -135,15 +220,42 @@ interface ItemOperations {
  *   item:getCustomAttribute(key)
  *   item:setCustomAttribute(key, value)
  *   item:removeCustomAttribute(key)
+ *   item:setExpertPvpFieldContext(owner)
  *   item:canBeMoved()
+ *   item:setOwner(creature or creatureId)
+ *   item:getOwnerId()
+ *   item:isOwner(creature or creatureId)
+ *   item:getOwnerName()
+ *   item:hasOwner()
+ *   item:actor([value])
  *   item:moveTo(position or cylinder[, flags])
  *   item:transform(itemId or name[, count/subType = -1])
  *   item:decay(decayId)
+ *   item:serializeAttributes()
+ *   item:moveToSlot(player[, slot = 0])
  *   item:getDescription(distance)
+ *   item:hasProperty(property)
+ *   item:getImbuementSlot()
+ *   item:getImbuement()
+ *   item:setDuration(minDuration[, maxDuration[, decayTo[, showDuration]]])
+ *   item:isInsideDepot([includeInbox = false])
  *   item:isContainer()
+ *   item:getTier()
+ *   item:setTier(tier)
+ *   item:getClassification()
+ *   item:canReceiveAutoCarpet()
+ *   item:setShader(shaderName)
+ *   item:getShader()
+ *   item:hasShader()
  *
  * The same methods are registered on `Container`, mirroring Canary's shared `Item`
- * class hierarchy.
+ * class hierarchy. Canary's `Item(uid)` constructor stays Lua-side script environment
+ * bookkeeping, which the Kotlin domain does not model.
+ *
+ * Canary's missing-item branches mix `return 0` (no values), `return 1` without a push
+ * (an uninitialized Lua stack slot) and an explicit `false`/`nil`; this binding
+ * normalizes the uninitialized-stack branches to `nil` and preserves the explicit
+ * `false`/`nil`/zero-result conventions.
  */
 object ItemFunctions {
     const val ITEM_TYPE = "Item"
@@ -151,6 +263,9 @@ object ItemFunctions {
 
     /** Mirrors Canary `CylinderFlags_t` defaults used by `ItemFunctions::luaItemMoveTo`. */
     private const val DEFAULT_MOVE_TO_FLAGS = (1L shl 0) or (1L shl 1) or (1L shl 2) or (1L shl 6)
+
+    /** `Slots_t::CONST_SLOT_WHEREEVER` (src/creatures/creatures_definitions.hpp:374). */
+    private const val SLOT_WHEREEVER = 0
 
     fun install(env: LuaEnvironment, operations: ItemOperations = UnwiredItemOperations) {
         val registry = env.userdata
@@ -297,9 +412,77 @@ object ItemFunctions {
                 LuaValue.valueOf(operations.removeCustomAttribute(item, key))
             })
 
+            registry.registerMethod(type, "setExpertPvpFieldContext", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+                val owner = retrieveUserdata(args, 2) ?: return@luaFunction LuaValue.FALSE
+                LuaValue.valueOf(operations.setExpertPvpFieldContext(item, owner))
+            })
+
             registry.registerMethod(type, "canBeMoved", luaFunction { args ->
                 val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
                 LuaValue.valueOf(operations.canBeMoved(item))
+            })
+
+            registry.registerMethod(type, "setOwner", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NONE
+                if (args.arg(2).isuserdata()) {
+                    val creature = retrieveUserdata(args, 2)
+                    if (creature !is Creature) {
+                        return@luaFunction LuaValue.NONE
+                    }
+                    LuaValue.valueOf(operations.setOwner(item, creature))
+                } else {
+                    val creatureId = args.arg(2).optlong(0)
+                    if (creatureId == 0L) {
+                        LuaValue.FALSE
+                    } else {
+                        LuaValue.valueOf(operations.setOwner(item, creatureId))
+                    }
+                }
+            })
+
+            registry.registerMethod(type, "getOwnerId", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NONE
+                val ownerId = operations.getOwnerId(item)
+                if (ownerId == 0L) LuaValue.NIL else LuaValue.valueOf(ownerId.toDouble())
+            })
+
+            registry.registerMethod(type, "isOwner", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NONE
+                if (args.arg(2).isuserdata()) {
+                    val creature = retrieveUserdata(args, 2)
+                    if (creature !is Creature) {
+                        return@luaFunction LuaValue.NONE
+                    }
+                    LuaValue.valueOf(operations.isOwner(item, creature))
+                } else {
+                    val creatureId = args.arg(2).optlong(0)
+                    if (creatureId == 0L) {
+                        LuaValue.FALSE
+                    } else {
+                        LuaValue.valueOf(operations.isOwner(item, creatureId))
+                    }
+                }
+            })
+
+            registry.registerMethod(type, "getOwnerName", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NONE
+                val ownerName = operations.getOwnerName(item)
+                if (ownerName.isNullOrEmpty()) LuaValue.NIL else LuaValue.valueOf(ownerName)
+            })
+
+            registry.registerMethod(type, "hasOwner", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+                LuaValue.valueOf(operations.hasOwner(item))
+            })
+
+            registry.registerMethod(type, "actor", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+                if (args.narg() == 1) {
+                    LuaValue.valueOf(operations.hasActor(item))
+                } else {
+                    LuaValue.valueOf(operations.setActor(item, luaBoolean(args.arg(2), false)))
+                }
             })
 
             registry.registerMethod(type, "moveTo", luaFunction { args ->
@@ -329,15 +512,100 @@ object ItemFunctions {
                 LuaValue.valueOf(operations.decay(item, decayId))
             })
 
+            registry.registerMethod(type, "serializeAttributes", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+                val attributes = operations.serializeAttributes(item) ?: return@luaFunction LuaValue.NIL
+                LuaString.valueOf(attributes)
+            })
+
+            registry.registerMethod(type, "moveToSlot", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+                val player = retrieveUserdata(args, 2)
+                if (player !is Player) {
+                    return@luaFunction LuaValue.NIL
+                }
+                val slot = args.arg(3).optint(SLOT_WHEREEVER)
+                LuaValue.valueOf(operations.moveToSlot(item, player, slot))
+            })
+
             registry.registerMethod(type, "getDescription", luaFunction { args ->
                 val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
                 val distance = args.arg(2).toint()
                 LuaValue.valueOf(operations.getDescription(item, distance))
             })
 
+            registry.registerMethod(type, "hasProperty", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+                LuaValue.valueOf(operations.hasProperty(item, args.arg(2).toint()))
+            })
+
+            registry.registerMethod(type, "getImbuementSlot", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+                LuaValue.valueOf(operations.getImbuementSlot(item))
+            })
+
+            registry.registerMethod(type, "getImbuement", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+                val imbuement = operations.getImbuements(item).lastOrNull() ?: return@luaFunction LuaValue.NIL
+                imbuementTable(imbuement)
+            })
+
+            registry.registerMethod(type, "setDuration", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+                LuaValue.valueOf(
+                    operations.setDuration(
+                        item = item,
+                        minDuration = args.arg(2).optlong(0),
+                        maxDuration = if (args.narg() > 2) args.arg(3).optlong(0) else null,
+                        decayTo = if (args.narg() > 3) args.arg(4).optint(0) else 0,
+                        showDuration = if (args.narg() > 4) luaBoolean(args.arg(5), true) else true,
+                    ),
+                )
+            })
+
+            registry.registerMethod(type, "isInsideDepot", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+                LuaValue.valueOf(operations.isInsideDepot(item, args.arg(2).optboolean(false)))
+            })
+
             registry.registerMethod(type, "isContainer", luaFunction { args ->
                 val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
                 LuaValue.valueOf(operations.isContainer(item))
+            })
+
+            registry.registerMethod(type, "getTier", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+                LuaValue.valueOf(operations.getTier(item))
+            })
+
+            registry.registerMethod(type, "setTier", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+                LuaValue.valueOf(operations.setTier(item, args.arg(2).toint()))
+            })
+
+            registry.registerMethod(type, "getClassification", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+                LuaValue.valueOf(operations.getClassification(item))
+            })
+
+            registry.registerMethod(type, "canReceiveAutoCarpet", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+                LuaValue.valueOf(operations.canReceiveAutoCarpet(item))
+            })
+
+            registry.registerMethod(type, "setShader", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+                LuaValue.valueOf(operations.setShader(item, args.arg(2).optjstring("")))
+            })
+
+            registry.registerMethod(type, "getShader", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+                LuaValue.valueOf(operations.getShader(item))
+            })
+
+            registry.registerMethod(type, "hasShader", luaFunction { args ->
+                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+                LuaValue.valueOf(operations.hasShader(item))
             })
 
             registry.registerMethod(type, "getActionId", luaFunction { args ->
@@ -378,6 +646,18 @@ object ItemFunctions {
         value.isstring() -> value.tojstring()
         else -> null
     }
+
+    /** Mirrors `Lua::getBoolean` (lua_toboolean: only nil and false are false). */
+    private fun luaBoolean(value: LuaValue, defaultValue: Boolean): Boolean =
+        if (value.isnil()) defaultValue else value.toboolean()
+
+    /** Mirrors the `Lua::setField` payload of `ItemFunctions::luaItemGetImbuement`. */
+    private fun imbuementTable(imbuement: Map<String, Any>): LuaTable =
+        LuaTable().also { table ->
+            table.set("id", LuaValue.valueOf((imbuement["id"] as? Number)?.toInt() ?: 0))
+            table.set("name", LuaValue.valueOf(imbuement["name"] as? String ?: ""))
+            table.set("duration", LuaValue.valueOf((imbuement["duration"] as? Number)?.toDouble() ?: 0.0))
+        }
 }
 
 internal object UnwiredItemOperations : ItemOperations {
