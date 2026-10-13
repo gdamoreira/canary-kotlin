@@ -84,7 +84,7 @@ This document establishes the master inventory of all gameplay features from Can
 
 - **Implemented & Verified Gameplay Systems**: **56 / 56** ($100\%$)
 - **Advanced Gameplay Systems**: **15 / 15** implemented (engine scope); residual parity gaps per feature above.
-- **Automated Test Coverage**: 151 test suites / 958 tests passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered).
+- **Automated Test Coverage**: 156 test suites / 1005 tests passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered).
 - **Combat stack**: `combat/CombatDamage` + `Combat` (damage/armor/mitigation/crit), `combat/condition/*` (Condition engine core + outfit/light/invisible/cooldown/serene).
 - **Combat consumers**: bestiary charm procs, weapon-proficiency combat application, and hazard `CombatDamage` bridge.
 - **Lua engine**: bindings installed at `LuaEnvironment.initState()`; core primitive bindings (Game/Player/Creature/Item/Container/Position) + Spell/CreatureEvent/GlobalEvent/MoveEvent registries; `LuaEventDispatcher`/`ScriptingDispatch`; best-effort `data/libs` load.

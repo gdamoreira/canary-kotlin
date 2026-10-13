@@ -206,7 +206,7 @@ All notable technical milestones, architectural transformations, feature impleme
 ---
 
 ### Current Status
-- **Automated Tests**: **151 test suites / 958 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **156 test suites / 1005 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.
