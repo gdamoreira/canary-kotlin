@@ -13,6 +13,7 @@ import org.opentibia.canary.creatures.FightMode
 import org.opentibia.canary.creatures.Npc
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerFlags_t
+import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.grouping.Party
 import org.opentibia.canary.creatures.players.components.CyclopediaDatabaseTasks
 import org.opentibia.canary.creatures.players.components.CyclopediaQueryResult
@@ -38,6 +39,7 @@ import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.game.zones.Zone
 import org.opentibia.canary.game.zones.ZoneType
 import org.opentibia.canary.io.HistoryMarketOffer
+import org.opentibia.canary.io.IOBosstiary
 import org.opentibia.canary.io.IOMarket
 import org.opentibia.canary.io.MarketOffer
 import org.opentibia.canary.items.BedItem
@@ -68,7 +70,13 @@ import org.opentibia.canary.persistence.PlayerStorage
 import org.opentibia.canary.social.guild.Guild
 import org.opentibia.canary.social.guild.GuildRepository
 import org.opentibia.canary.spells.SoundEffect
+import org.opentibia.canary.systems.forge.ForgeAction_t
+import org.opentibia.canary.systems.imbuement.Imbuement
+import org.opentibia.canary.systems.imbuement.Imbuements
+import org.opentibia.canary.systems.prey.PreyAction
+import org.opentibia.canary.systems.prey.PreyOption
 import org.opentibia.canary.systems.rewardchest.ReturnValue
+import org.opentibia.canary.systems.taskhunting.PreyTaskAction
 import org.opentibia.canary.utils.Tools
 import java.lang.ref.WeakReference
 import java.util.IdentityHashMap
@@ -210,6 +218,28 @@ data class HighscoreSkillName(
  *  - MOTD counter (`saveMotdNum` game.cpp:9613, `getMotdNum`/`getMotdHash`/
  *    `incrementMotdNum` game.hpp:559-567)
  *  - `beforeCreatureZoneChange` (game.cpp:12417) / `afterCreatureZoneChange` (game.cpp:12447)
+ *  - movement/targeting (`internalCreatureTurn` game.cpp:7599, `playerTurn` game.cpp:7187,
+ *    `internalMoveCreature` game.cpp:1909/1963, `playerMove` game.cpp:4282,
+ *    `forcePlayerMove` game.cpp:4296, `playerTeleport` game.cpp:1622,
+ *    `internalTeleport` game.cpp:3540, `playerSetAttackedCreature` game.cpp:7001,
+ *    `playerCancelAttackAndFollow` game.cpp:6990, `playerFollowCreature` game.cpp:7033,
+ *    `playerSetFightModes` game.cpp:7044, `playerLookAt` game.cpp:6358,
+ *    `playerLookInBattleList` game.cpp:6393, `canThrowObjectTo` game.cpp:7591,
+ *    `isSightClear` game.cpp:7595, `changeSpeed` game.cpp:7747,
+ *    `setCreatureSpeed` game.cpp:7759, `changePlayerSpeed` game.cpp:7768)
+ *  - market (`playerBrowseMarket` game.cpp:10282, `playerBrowseMarketOwnOffers` game.cpp:10307,
+ *    `playerBrowseMarketOwnHistory` game.cpp:10322, `getItemMarketPrice` game.cpp:4027,
+ *    `getItemMarketAveragePrice` game.cpp:4078)
+ *  - quest/forge/bosstiary/task (`playerShowQuestLog` game.cpp:7391,
+ *    `playerShowQuestLine` game.cpp:7401, `playerPreyAction` game.cpp:10218,
+ *    `playerTaskHuntingAction` game.cpp:10227, `playerBosstiarySlot` game.cpp:11256,
+ *    `playerForgeResourceConversion` game.cpp:11226, `playerBrowseForgeHistory` game.cpp:11241,
+ *    `playerForgeTransferItemTier` game.cpp:11211)
+ *  - remaining player handlers (`playerApplyImbuement` game.cpp:7116,
+ *    `playerClearImbuement` game.cpp:7153, `playerRequestInventoryImbuements` game.cpp:11487,
+ *    `playerToggleMount` game.cpp:7219, `playerRequestOutfit` game.cpp:7206,
+ *    `playerReceivePing` game.cpp:4454, `playerReceivePingBack` game.cpp:4463,
+ *    `playerCloseNpcChannel` game.cpp:4443, `playerBroadcastMessage` game.cpp:4310)
  *
  * All state is thread-confined: mutating methods must run inside the injected
  * [dispatcher]'s single-threaded `WorldCommit` lane (AGENTS.md 1.2).
@@ -255,6 +285,10 @@ class Game(
      * browse handlers and the average-price query.
      */
     private val ioMarket: IOMarket? = null,
+    /** `g_ioBosstiary()` (game.cpp:11270) seam for the bosstiary slot handler. */
+    private val ioBosstiary: IOBosstiary? = null,
+    /** `g_imbuements()` (game.cpp:7124) seam for the imbuement handlers. */
+    private val imbuements: Imbuements? = null,
 ) {
     private val players = mutableMapOf<Long, Player>()
 
@@ -307,6 +341,13 @@ class Game(
     private val tradeStates = IdentityHashMap<Player, TradeState_t>()
     private val tradeItemByPlayer = IdentityHashMap<Player, Item?>()
     private val tradePartnerByPlayer = IdentityHashMap<Player, Player?>()
+
+    /**
+     * Facade storage for `Player::imbuementTrackerWindowOpen` (player.hpp).
+     * The Kotlin [Player] does not carry the member yet (PARITY GAP);
+     * [playerRequestInventoryImbuements] is the only writer.
+     */
+    private val imbuementTrackerWindowOpen = IdentityHashMap<Player, Boolean>()
 
     /** `Creature::getParent()` equivalent (src/creatures/creature.hpp): the tile each placed creature lives on. */
     private val placedCreatures = IdentityHashMap<Creature, Tile>()
@@ -607,6 +648,88 @@ class Game(
 
     /** `ExpertPvp::isEnabled()` gate of [playerSetFightModes] (game.cpp:7052). */
     var expertPvpEnabled: Boolean = false
+
+    // --- quest/forge/bosstiary seams (game.cpp:7391-11256) --------------------
+
+    /** `g_events().eventPlayerOnRequestQuestLog` dispatch seam (game.cpp:7396). */
+    var eventPlayerOnRequestQuestLog: (Player) -> Unit = { _ -> }
+
+    /** `g_callbacks().executeCallback(playerOnRequestQuestLog, ...)` seam (game.cpp:7397). */
+    var callbackPlayerOnRequestQuestLog: (Player) -> Unit = { _ -> }
+
+    /** `g_events().eventPlayerOnRequestQuestLine` dispatch seam (game.cpp:7406). */
+    var eventPlayerOnRequestQuestLine: (Player, Int) -> Unit = { _, _ -> }
+
+    /** `g_callbacks().executeCallback(playerOnRequestQuestLine, ...)` seam (game.cpp:7407). */
+    var callbackPlayerOnRequestQuestLine: (Player, Int) -> Unit = { _, _ -> }
+
+    /**
+     * `Game::removeMoney(player, money, flags, useBalance)` seam (game.cpp:3299)
+     * used by [playerBosstiarySlot]. The full coin-collection body over
+     * `Cylinder` containers is not ported (PARITY GAP), so hosts inject it.
+     */
+    var removeMoney: (Player, Long, Int, Boolean) -> Boolean = { _, _, _, _ -> false }
+
+    /** `Player::getSlotBossId(slotId)` (player.cpp:12706) seam; the Kotlin `Player` does not model the boss slots yet. */
+    var getSlotBossId: (Player, Int) -> Long = { _, _ -> 0 }
+
+    /** `Player::setSlotBossId(slotId, bossId)` (player.cpp:12695) seam. */
+    var setSlotBossId: (Player, Int, Long) -> Unit = { _, _, _ -> }
+
+    /** `Player::getRemoveTimes()` (player.cpp:12722) seam. */
+    var getRemoveTimes: (Player) -> Int = { 1 }
+
+    /** `Player::addRemoveTime()` (player.cpp:12714) seam. */
+    var addRemoveTime: (Player) -> Unit = { _ -> }
+
+    /** `Player::forgeResourceConversion(actionType)` (player.cpp:11709) seam. */
+    var forgeResourceConversion: (Player, ForgeAction_t) -> Unit = { _, _ -> }
+
+    /** `Player::forgeTransferItemTier(actionType, donorItemId, tier, receiveItemId, convergence)` (player.cpp:11542) seam. */
+    var forgeTransferItemTier: (Player, ForgeAction_t, Int, Int, Int, Boolean) -> Unit = { _, _, _, _, _, _ -> }
+
+    /** `Player::forgeHistory(page)` (player.cpp:12794) seam. */
+    var forgeHistory: (Player, Int) -> Unit = { _, _ -> }
+
+    // --- remaining player handler seams (game.cpp:4310-11487) -----------------
+
+    /** `Player::imbuingItem` accessor (player.hpp:1761) seam; the Kotlin `Player` only exposes `hasImbuingItem`/`setImbuingItem`. */
+    var getImbuingItem: (Player) -> Item? = { null }
+
+    /**
+     * `item->getTopParent() != player` guard of [playerApplyImbuement]
+     * (game.cpp:7137). The Kotlin `Player` is not a `Cylinder`, so the inventory
+     * parent chain cannot be resolved (PARITY GAP); the default assumes the
+     * imbuing item is carried by the player.
+     */
+    var isImbuingItemCarriedByPlayer: (Player, Item) -> Boolean = { _, _ -> true }
+
+    /** `Player::createScrollImbuement(imbuement)` (player.cpp:2602) seam. */
+    var createScrollImbuement: (Player, Imbuement) -> Unit = { _, _ -> }
+
+    /** `Player::onApplyImbuement(imbuement, item, slot)` (player.cpp:2711) seam. */
+    var onApplyImbuement: (Player, Imbuement, Item, Int) -> Unit = { _, _, _, _ -> }
+
+    /** `Player::sendImbuementResult(message)` protocol seam (game.cpp:7145). */
+    var sendImbuementResult: (Player, String) -> Unit = { _, _ -> }
+
+    /** `Player::onClearImbuement(item, slot)` (player.cpp:2798) seam. */
+    var onClearImbuement: (Player, Item, Int) -> Unit = { _, _, _ -> }
+
+    /** `Player::sendInventoryImbuements(itemsWithImbueSlotMap)` protocol seam (game.cpp:11515). */
+    var sendInventoryImbuements: (Player, Map<Slots_t, Item>) -> Unit = { _, _ -> }
+
+    /** `Player::toggleMount(mount)` (player.cpp) seam. */
+    var toggleMount: (Player, Boolean) -> Unit = { _, _ -> }
+
+    /** `Player::sendOutfitWindow()` (player.cpp) protocol seam used by [playerRequestOutfit]. */
+    var sendOutfitWindow: (Player) -> Unit = { _ -> }
+
+    /** `Player::sendPrivateMessage(speaker, type, text)` protocol seam used by [playerBroadcastMessage]. */
+    var sendPrivateMessage: (Player, Player, SpeakClasses, String) -> Unit = { _, _, _, _ -> }
+
+    /** `g_configManager().getBoolean(ALLOW_CHANGEOUTFIT)` default (configmanager.cpp:83). */
+    var allowChangeOutfit: Boolean = true
 
     /** `Game::transferHouseItemsToPlayer` (game.hpp:905): house id -> owner GUID. */
     private val transferHouseItemsToPlayer = sortedMapOf<Int, Long>()
@@ -4217,6 +4340,300 @@ class Game(
     fun playerCloseImbuementWindow(playerId: Long) {
         val player = getPlayerByID(playerId) ?: return
         player.setImbuingItem(null)
+    }
+
+    /** `Game::playerShowQuestLog` (src/game/game.cpp:7391): dispatch the request to the event and callback buckets. */
+    fun playerShowQuestLog(playerId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+
+        eventPlayerOnRequestQuestLog(player)
+        callbackPlayerOnRequestQuestLog(player)
+    }
+
+    /** `Game::playerShowQuestLine` (src/game/game.cpp:7401): dispatch the quest id to the event and callback buckets. */
+    fun playerShowQuestLine(playerId: Long, questId: Int) {
+        val player = getPlayerByID(playerId) ?: return
+
+        eventPlayerOnRequestQuestLine(player, questId)
+        callbackPlayerOnRequestQuestLine(player, questId)
+    }
+
+    /**
+     * `Game::playerPreyAction` (src/game/game.cpp:10218): `IOPrey::parsePreyAction`
+     * over the player's prey state. Unknown action/option bytes cannot be cast to
+     * the C++ enum and are ignored.
+     */
+    fun playerPreyAction(playerId: Long, slot: Int, action: Int, option: Int, index: Int, raceId: Int) {
+        val player = getPlayerByID(playerId) ?: return
+
+        val preyAction = PreyAction.entries.firstOrNull { it.value == action } ?: return
+        val preyOption = PreyOption.entries.firstOrNull { it.value == option } ?: return
+
+        player.features.preyEngine.parsePreyAction(
+            player = player.features.prey,
+            slotId = slot,
+            action = preyAction,
+            option = preyOption,
+            index = index,
+            raceId = raceId,
+        )
+    }
+
+    /**
+     * `Game::playerTaskHuntingAction` (src/game/game.cpp:10227):
+     * `IOPrey::parseTaskHuntingAction` over the player's task-hunting state.
+     */
+    fun playerTaskHuntingAction(playerId: Long, slot: Int, action: Int, upgrade: Boolean, raceId: Int) {
+        val player = getPlayerByID(playerId) ?: return
+
+        val taskAction = PreyTaskAction.entries.firstOrNull { it.value == action } ?: return
+
+        player.features.taskHuntingEngine.parseTaskHuntingAction(
+            player = player.features.taskHunting,
+            slotId = slot,
+            action = taskAction,
+            upgrade = upgrade,
+            raceId = raceId,
+        )
+    }
+
+    /**
+     * `Game::playerBosstiarySlot` (src/game/game.cpp:11256): an exhausted player
+     * is rejected; clearing a slot (`selectedBossId == 0`) that does not hold
+     * the boosted boss charges `IOBosstiary::calculteRemoveBoss` through
+     * `Game::removeMoney(..., useBalance = true)` and advances the removal
+     * counter; the requested boss id is stored either way.
+     */
+    fun playerBosstiarySlot(playerId: Long, slotId: Int, selectedBossId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+
+        if (isUIExhausted(player)) {
+            sendCancelMessage(player, ReturnValue.YOUAREEXHAUSTED)
+            return
+        }
+
+        updateUIExhausted(player)
+
+        val bossIdSlot = getSlotBossId(player, slotId)
+
+        val boostedBossId = ioBosstiary?.getBoostedBossId()?.toLong() ?: 0L
+        if (selectedBossId == 0L && bossIdSlot != boostedBossId) {
+            val removeTimes = getRemoveTimes(player)
+            val removePrice = ioBosstiary?.calculteRemoveBoss(removeTimes)?.toLong() ?: 0L
+            removeMoney(player, removePrice, 0, true)
+            addRemoveTime(player)
+        }
+
+        setSlotBossId(player, slotId, selectedBossId)
+    }
+
+    /**
+     * `Game::playerForgeResourceConversion` (src/game/game.cpp:11226): the
+     * exhaustion gate runs before `Player::forgeResourceConversion`.
+     */
+    fun playerForgeResourceConversion(playerId: Long, actionType: ForgeAction_t) {
+        val player = getPlayerByID(playerId) ?: return
+
+        if (isUIExhausted(player)) {
+            sendCancelMessage(player, ReturnValue.YOUAREEXHAUSTED)
+            return
+        }
+
+        updateUIExhausted(player)
+        forgeResourceConversion(player, actionType)
+    }
+
+    /** `Game::playerBrowseForgeHistory` (src/game/game.cpp:11241): the exhaustion gate runs before `Player::forgeHistory`. */
+    fun playerBrowseForgeHistory(playerId: Long, page: Int) {
+        val player = getPlayerByID(playerId) ?: return
+
+        if (isUIExhausted(player)) {
+            sendCancelMessage(player, ReturnValue.YOUAREEXHAUSTED)
+            return
+        }
+
+        updateUIExhausted(player)
+        forgeHistory(player, page)
+    }
+
+    /**
+     * `Game::playerForgeTransferItemTier` (src/game/game.cpp:11211): the
+     * exhaustion gate runs before `Player::forgeTransferItemTier`.
+     */
+    fun playerForgeTransferItemTier(
+        playerId: Long,
+        actionType: ForgeAction_t,
+        donorItemId: Int,
+        tier: Int,
+        receiveItemId: Int,
+        convergence: Boolean,
+    ) {
+        val player = getPlayerByID(playerId) ?: return
+
+        if (isUIExhausted(player)) {
+            sendCancelMessage(player, ReturnValue.YOUAREEXHAUSTED)
+            return
+        }
+
+        updateUIExhausted(player)
+        forgeTransferItemTier(player, actionType, donorItemId, tier, receiveItemId, convergence)
+    }
+
+    /**
+     * `Game::playerApplyImbuement` (src/game/game.cpp:7116): the exhaustion gate
+     * runs first, unknown imbuements are ignored, a player without an imbuing
+     * item receives the scroll imbuement, and an imbuing item that left the
+     * player reports the protocol error instead of applying.
+     */
+    fun playerApplyImbuement(playerId: Long, imbuementid: Int, slot: Int) {
+        val player = getPlayerByID(playerId) ?: return
+
+        if (isUIExhausted(player)) {
+            sendCancelMessage(player, ReturnValue.YOUAREEXHAUSTED)
+            return
+        }
+
+        updateUIExhausted(player)
+
+        val imbuement = imbuements?.getImbuement(imbuementid) ?: return
+
+        if (!player.hasImbuingItem()) {
+            createScrollImbuement(player, imbuement)
+            return
+        }
+
+        val item = getImbuingItem(player) ?: return
+
+        if (!isImbuingItemCarriedByPlayer(player, item)) {
+            logger.error {
+                "[playerApplyImbuement] - An error occurred while player with name ${player.name} try to apply imbuement"
+            }
+            sendImbuementResult(
+                player,
+                "An error has occurred, reopen the imbuement window. If the problem persists, contact your administrator.",
+            )
+            return
+        }
+
+        onApplyImbuement(player, imbuement, item, slot)
+    }
+
+    /**
+     * `Game::playerClearImbuement` (src/game/game.cpp:7153): the exhaustion gate
+     * runs first and the carried imbuing item must exist before
+     * `Player::onClearImbuement` clears the slot.
+     */
+    fun playerClearImbuement(playerid: Long, slot: Int) {
+        val player = getPlayerByID(playerid) ?: return
+
+        if (isUIExhausted(player)) {
+            sendCancelMessage(player, ReturnValue.YOUAREEXHAUSTED)
+            return
+        }
+
+        updateUIExhausted(player)
+
+        if (!player.hasImbuingItem()) {
+            return
+        }
+
+        val item = getImbuingItem(player) ?: return
+
+        onClearImbuement(player, item, slot)
+    }
+
+    /**
+     * `Game::playerRequestInventoryImbuements` (src/game/game.cpp:11487): the
+     * tracker flag is stored first, a closed tracker sends nothing, and an open
+     * tracker collects every equipped inventory item. The C++
+     * `Item::getImbuementInfo` validation loop has no observable effect on the
+     * collected map.
+     */
+    fun playerRequestInventoryImbuements(playerId: Long, isTrackerOpen: Boolean) {
+        val player = getPlayerByID(playerId) ?: return
+        if (player.isRemoved()) {
+            return
+        }
+
+        imbuementTrackerWindowOpen[player] = isTrackerOpen
+        if (!isTrackerOpen) {
+            return
+        }
+
+        val itemsWithImbueSlotMap = linkedMapOf<Slots_t, Item>()
+        for (inventorySlotValue in Slots_t.FIRST..Slots_t.LAST) {
+            val inventorySlot = Slots_t.fromValue(inventorySlotValue) ?: continue
+            val item = player.getInventoryItem(inventorySlot) ?: continue
+            itemsWithImbueSlotMap[inventorySlot] = item
+        }
+
+        sendInventoryImbuements(player, itemsWithImbueSlotMap)
+    }
+
+    /** `Game::playerToggleMount` (src/game/game.cpp:7219): direct `Player::toggleMount` delegate. */
+    fun playerToggleMount(playerId: Long, mount: Boolean) {
+        val player = getPlayerByID(playerId) ?: return
+
+        toggleMount(player, mount)
+    }
+
+    /**
+     * `Game::playerRequestOutfit` (src/game/game.cpp:7206): gated by
+     * `ALLOW_CHANGEOUTFIT`, otherwise the outfit window is sent.
+     */
+    fun playerRequestOutfit(playerId: Long) {
+        if (!allowChangeOutfit) {
+            return
+        }
+
+        val player = getPlayerByID(playerId) ?: return
+
+        sendOutfitWindow(player)
+    }
+
+    /** `Game::playerReceivePing` (src/game/game.cpp:4454): direct `Player::receivePing` delegate. */
+    fun playerReceivePing(playerId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+
+        receivePing(player)
+    }
+
+    /** `Game::playerReceivePingBack` (src/game/game.cpp:4463): direct `Player::sendPingBack` delegate. */
+    fun playerReceivePingBack(playerId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+
+        sendPingBack(player)
+    }
+
+    /**
+     * `Game::playerCloseNpcChannel` (src/game/game.cpp:4443): every NPC on the
+     * player's floor receives `Npc::onPlayerCloseChannel`.
+     */
+    fun playerCloseNpcChannel(playerId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+
+        for (spectator in spectatorsOf(player.position, multifloor = false)) {
+            val npc = spectator as? Npc ?: continue
+            npc.onPlayerCloseChannel(player)
+        }
+    }
+
+    /**
+     * `Game::playerBroadcastMessage` (src/game/game.cpp:4310): requires
+     * `CanBroadcast` and sends `TALKTYPE_BROADCAST` to every registered player.
+     */
+    fun playerBroadcastMessage(player: Player, text: String): Boolean {
+        if (!player.hasFlag(PlayerFlags_t.CanBroadcast)) {
+            return false
+        }
+
+        logger.info { "${player.name} broadcasted: $text" }
+
+        for (target in players.values) {
+            sendPrivateMessage(target, player, SpeakClasses.TALKTYPE_BROADCAST, text)
+        }
+
+        return true
     }
 
     companion object {
