@@ -39,3 +39,7 @@
 ## Post-wave (AGENTS.md §6)
 
 Flip the `src/database/` rows to `IMPLEMENTED` in `docs/missing-features.md`; update `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/Done/`; commit the docs separately and push to `origin`.
+
+## Completion
+
+Completed. Database core (transactions/escaping/retry/size limits), manager (pool lifecycle + executeQuery/storeQuery parity), and definitions. Rows flipped.

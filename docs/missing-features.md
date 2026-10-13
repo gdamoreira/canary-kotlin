@@ -49,10 +49,10 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 ### `src/database/`
 | C++ | Status | Missing |
 |---|---|---|
-| `database.cpp/.hpp` (`Database`) | PARTIAL | transactions, escaping, retry, recoverable errors, query size limits |
-| `databasemanager.cpp` | PARTIAL | pool lifecycle/reconnect, `executeQuery`/`storeQuery` parity |
+| `database.cpp/.hpp` (`Database`) | **IMPLEMENTED** | transactions, escaping, retry, recoverable errors, query-size limits, `DBInsert` |
+| `databasemanager.cpp` | **IMPLEMENTED** | pool lifecycle/reconnect, `executeQuery`/`storeQuery` parity |
 | `databasemanager.cpp`/`databasetasks` | **IMPLEMENTED** | `DatabaseTasks` (FIFO async queue, flush, shutdown) |
-| `database_definitions.hpp` | PARTIAL | protocol/result enums |
+| `database_definitions.hpp` | **IMPLEMENTED** | `TransactionStates_t` (only enum in the header) |
 
 ### `src/creatures/`
 | C++ | Status | Missing |

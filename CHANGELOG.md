@@ -310,10 +310,16 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Player feature hooks** — `Player` now exposes wheel/forge/prey/task-hunting/cyclopedia hooks delegating to `PlayerFeatures`; prey/task state + engines, cyclopedia adapter, tracker seams. 16 tests.
 - `docs/missing-features.md`: `player.cpp` flipped to **IMPLEMENTED** — the entire **`src/creatures/` section is now IMPLEMENTED** (0 PARTIAL/MISSING).
 
+### Phase 31: `src/database/` Section Complete (12:15 – 12:45)
+- **Database core** — `Database` (transactions, escaping, retry, recoverable errors, `MAX_QUERY_SIZE`, `DBInsert`). 27 tests.
+- **Database manager** — pool lifecycle/reconnect + `executeQuery`/`storeQuery` parity + `DBResult`. 17 tests.
+- **Definitions** — `TransactionStates_t`. 2 tests.
+- `docs/missing-features.md`: `src/database/` section added and flipped to **IMPLEMENTED**.
+
 ---
 
 ### Current Status
-- **Automated Tests**: **297 test suites / 3053 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **302 test suites / 3099 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.
