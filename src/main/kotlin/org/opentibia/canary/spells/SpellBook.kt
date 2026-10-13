@@ -4,10 +4,11 @@ package org.opentibia.canary.spells
  * Learned instant-spell names owned by a player.
  *
  * Transcribes `Player::learnedInstantSpellList` and its three operations
- * (`player.cpp:3122-3145`). In Canary the list lives on `Player`; since the
- * port may not touch `Player` for this task, it is a standalone state holder
- * the [SpellCaster] seam exposes. The flag short-circuits of
- * `Player::hasLearnedInstantSpell` live in [SpellEngine.hasLearnedInstantSpell].
+ * (`player.cpp:3122-3145`). In Canary the list lives on `Player`; the
+ * [Player][org.opentibia.canary.creatures.Player] exposes this holder as its
+ * `spellBook` and the [SpellCaster] seam reads it, so both paths share the same
+ * state. The flag short-circuits of `Player::hasLearnedInstantSpell` live in
+ * [SpellEngine.hasLearnedInstantSpell] and on the player itself.
  */
 class SpellBook {
 

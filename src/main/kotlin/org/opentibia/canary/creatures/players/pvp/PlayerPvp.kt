@@ -87,11 +87,13 @@ interface PvpClient {
  *
  * Mirror of Canary `PlayerPvp`
  * (`src/creatures/players/components/pvp/player_pvp.hpp:14-27`,
- * player_pvp.cpp:14-38) for the mode state, plus the player-side PvP state that
- * Canary keeps on `Player` and that the wave-29 constraints require in this
- * package: the attacked/attacker situation ledgers (player.cpp:7207-7261), the
- * unjustified-kill ledger (player.cpp:7263-7301), the skull tick transitions
- * (player.cpp:7153-7205, 7318-7329) and the PZ lock window (player.cpp:4442-4483).
+ * player_pvp.cpp:14-38) for the mode state, plus the player-side PvP methods
+ * that Canary keeps on `Player`: the attacked/attacker situation ledgers
+ * (player.cpp:7207-7261), the unjustified-kill ledger (player.cpp:7263-7301),
+ * the skull tick transitions (player.cpp:7153-7205, 7318-7329) and the PZ lock
+ * window (player.cpp:4442-4483). The PZ lock fields themselves
+ * (`pzLocked`/`pzLockOnlyUntil`/`pzLockEventId`) live on [Player] exactly as in
+ * Canary (player.hpp:1869-1871).
  * The class is intentionally *not* `Player.kt` (task constraint); global and
  * player dependencies are constructor-injected seams (AGENTS.md 1.1):
  * [playerByGuid] replaces `g_game().getPlayerByGUID`, [configuredWorldType]
@@ -153,12 +155,8 @@ class PlayerPvp(
     private var lastKillTimeCache: Long = 0
     private var lastKillTimeCached: Boolean = false
 
-    /** `Player::pzLockOnlyUntil`/`pzLocked` (player.hpp:1870, 888). */
-    private var pzLockOnlyUntil: Long = 0
-    private var pzLocked: Boolean = false
-
-    /** `Player::pzLockEventId`. */
-    private var pzLockEventId: Long = 0
+    // `Player::pzLockOnlyUntil`/`pzLocked`/`pzLockEventId` (player.hpp:1869-1871)
+    // live on [Player]; Canary keeps them on the player, not on the component.
 
     /** `Player::guildWarVector` (player.hpp); populated by the guild-war subsystem. */
     internal val guildWarVector = mutableListOf<Long>()
@@ -525,11 +523,11 @@ class PlayerPvp(
 
     // --- pz lock ---------------------------------------------------------------------
 
-    /** `Player::isPzLocked`; read view of `pzLocked`. */
-    fun isPzLocked(): Boolean = pzLocked
+    /** `Player::isPzLocked`; read view of the player's `pzLocked`. */
+    fun isPzLocked(): Boolean = player.pzLocked
 
     /** `Player::pzLockOnlyUntil`; exposed for inspecting systems. */
-    internal fun getPzLockOnlyUntil(): Long = pzLockOnlyUntil
+    internal fun getPzLockOnlyUntil(): Long = player.pzLockOnlyUntil
 
     /** `Player::addPzLockTicks` (player.cpp:4442-4483). */
     fun addPzLockTicks() {
@@ -539,23 +537,23 @@ class PlayerPvp(
 
         val duration = config.pzLocked.toLong()
         val expiresAt = otsysTime() + duration
-        if (pzLockOnlyUntil >= expiresAt) {
+        if (player.pzLockOnlyUntil >= expiresAt) {
             return
         }
 
-        pzLockOnlyUntil = expiresAt
-        pzLocked = true
+        player.pzLockOnlyUntil = expiresAt
+        player.pzLocked = true
         sendIcons()
-        if (pzLockEventId != 0L) {
-            stopEvent(pzLockEventId)
+        if (player.pzLockEventId != 0L) {
+            stopEvent(player.pzLockEventId)
         }
 
         val task = {
-            pzLockEventId = 0
-            if (!player.hasCondition(ConditionType.CONDITION_INFIGHT) && pzLockOnlyUntil <= otsysTime()) {
-                pzLockOnlyUntil = 0
-                if (pzLocked) {
-                    pzLocked = false
+            player.pzLockEventId = 0
+            if (!player.hasCondition(ConditionType.CONDITION_INFIGHT) && player.pzLockOnlyUntil <= otsysTime()) {
+                player.pzLockOnlyUntil = 0
+                if (player.pzLocked) {
+                    player.pzLocked = false
                     sendIcons()
                 }
                 if (player.getSkull() != Skulls_t.SKULL_RED && player.getSkull() != Skulls_t.SKULL_BLACK) {
@@ -563,6 +561,6 @@ class PlayerPvp(
                 }
             }
         }
-        pzLockEventId = scheduleEvent(duration, task)
+        player.pzLockEventId = scheduleEvent(duration, task)
     }
 }

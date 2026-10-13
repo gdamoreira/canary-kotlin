@@ -5,15 +5,18 @@ import org.opentibia.canary.account.AccountType
 import org.opentibia.canary.account.getTimeNow
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionId
+import org.opentibia.canary.combat.condition.ConditionSuppression
 import org.opentibia.canary.combat.condition.ConditionTarget
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.LightInfo
 import org.opentibia.canary.combat.condition.Outfit
+import org.opentibia.canary.combat.condition.SpellGroup
 import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.grouping.Group
 import org.opentibia.canary.creatures.grouping.Party
 import org.opentibia.canary.creatures.grouping.PartyShields_t
 import org.opentibia.canary.creatures.players.components.PlayerSex_t
+import org.opentibia.canary.creatures.players.pvp.PlayerPvp
 import org.opentibia.canary.social.guild.Guild
 import org.opentibia.canary.social.guild.GuildRank
 import org.opentibia.canary.items.Container
@@ -23,7 +26,33 @@ import org.opentibia.canary.creatures.vocations.VocationRequirementsAdapter
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.systems.rewardchest.ReturnValue
+import org.opentibia.canary.spells.SpellBook
+import org.opentibia.canary.spells.Spells
 import kotlin.math.max
+
+/** `Creature::FlagAsyncClass_t` (`src/creatures/creature.hpp:819-827`). */
+enum class FlagAsyncClass_t(val value: Int) {
+    AsyncTaskRunning(1 shl 0),
+    UpdateTargetList(1 shl 1),
+    UpdateIdleStatus(1 shl 2),
+    Pathfinder(1 shl 3),
+    OnThink(1 shl 4),
+    TargetRanking(1 shl 5),
+    CombatIntention(1 shl 6),
+}
+
+/**
+ * `ProtocolGame` cooldown senders the `Player` forwards to
+ * (`src/server/network/protocol/protocolgame.hpp:469-470`,
+ * player.cpp:8997-9007). A `null` client models `Player::client == nullptr`.
+ */
+interface SpellCooldownClient {
+    /** `ProtocolGame::sendSpellCooldown` (player.cpp:8999). */
+    fun sendSpellCooldown(spellId: Int, time: Int)
+
+    /** `ProtocolGame::sendSpellGroupCooldown` (player.cpp:9005). */
+    fun sendSpellGroupCooldown(groupId: SpellGroup, time: Int)
+}
 
 abstract class Creature(
     val id: Long,
@@ -38,6 +67,9 @@ abstract class Creature(
 ) {
     val isDead: Boolean get() = health <= 0
 
+    /** `Creature::isAlive` (creature.hpp:275-277): `!isLifeless()`. */
+    fun isAlive(): Boolean = health > 0
+
     private var internalRemoved = false
 
     /** `Creature::setRemoved()` (src/creatures/creature.hpp:152). */
@@ -47,6 +79,126 @@ abstract class Creature(
 
     /** `Creature::isRemoved()` (src/creatures/creature.hpp:210). */
     fun isRemoved(): Boolean = internalRemoved
+
+    // --- async task queue (creature.hpp:977-1076, creature.cpp:2148-2217) --------
+
+    /** `Creature::asyncTasks` (creature.hpp:1040). */
+    private val asyncTasks = mutableListOf<() -> Unit>()
+
+    /** `Creature::m_flagAsyncTask` (creature.hpp:1071). */
+    private var flagAsyncTask: Int = 0
+
+    /** `Creature::m_deferredAsyncTaskFlags` (creature.hpp:1073). */
+    private var deferredAsyncTaskFlags: Int = 0
+
+    /** `Creature::m_isExecutingAsyncTasks` (creature.hpp:1076). */
+    private var isExecutingAsyncTasks: Boolean = false
+
+    /**
+     * `g_dispatcher().addCreatureAsyncEvent` admission seam
+     * (`creature.cpp:2048-2054`). The port runs world work confined to the
+     * single world lane (AGENTS.md 1.2), so the default pumps the scheduled
+     * batch synchronously; a host can inject the dispatcher hop.
+     */
+    var scheduleAsyncTaskBatch: (() -> Unit) -> Unit = { task -> task() }
+
+    /** `Creature::addAsyncTask` (creature.hpp:984-989). */
+    fun addAsyncTask(fnc: () -> Unit) {
+        asyncTasks.add(fnc)
+        if (!isExecutingAsyncTasks && !hasAsyncTaskFlag(FlagAsyncClass_t.AsyncTaskRunning)) {
+            sendAsyncTasks()
+        }
+    }
+
+    /** `Creature::hasAsyncTaskFlag` (creature.hpp:991-993). */
+    fun hasAsyncTaskFlag(prop: FlagAsyncClass_t): Boolean = (flagAsyncTask and prop.value) != 0
+
+    /** `Creature::setAsyncTaskFlag` (creature.hpp:995-1014). */
+    fun setAsyncTaskFlag(taskFlag: FlagAsyncClass_t, v: Boolean) {
+        if (v) {
+            val isAsyncTaskAlreadyScheduled = hasAsyncTaskFlag(FlagAsyncClass_t.AsyncTaskRunning)
+            flagAsyncTask = flagAsyncTask or taskFlag.value
+            if (isExecutingAsyncTasks && taskFlag != FlagAsyncClass_t.AsyncTaskRunning) {
+                deferredAsyncTaskFlags = deferredAsyncTaskFlags or taskFlag.value
+                return
+            }
+            if (!isAsyncTaskAlreadyScheduled) {
+                sendAsyncTasks()
+            }
+        } else {
+            flagAsyncTask = flagAsyncTask and taskFlag.value.inv()
+            if (isExecutingAsyncTasks) {
+                deferredAsyncTaskFlags = deferredAsyncTaskFlags and taskFlag.value.inv()
+            }
+        }
+    }
+
+    /** `Creature::onExecuteAsyncTasks` (creature.hpp:1016) — virtual hook. */
+    open fun onExecuteAsyncTasks() {
+        // No behaviour.
+    }
+
+    /**
+     * `Creature::executeAsyncTasks` (`creature.cpp:2148-2184`). The
+     * `goToFollowCreature()` call of the `Pathfinder` branch
+     * (`creature.cpp:2162-2164`) belongs to the follow subsystem (PARITY GAP).
+     */
+    fun executeAsyncTasks() {
+        val currentTasks = asyncTasks.toList()
+        asyncTasks.clear()
+
+        val currentFlags = flagAsyncTask and FlagAsyncClass_t.AsyncTaskRunning.value.inv()
+        deferredAsyncTaskFlags = 0
+        isExecutingAsyncTasks = true
+
+        if (!isRemoved() && isAlive()) {
+            for (task in currentTasks) {
+                task()
+            }
+
+            flagAsyncTask = FlagAsyncClass_t.AsyncTaskRunning.value or currentFlags
+            // `if ((currentFlags & Pathfinder) != 0) goToFollowCreature()`
+            // (`creature.cpp:2162-2164`) — follow subsystem (PARITY GAP).
+            onExecuteAsyncTasks()
+        }
+
+        isExecutingAsyncTasks = false
+
+        val deferredFlags = deferredAsyncTaskFlags
+        deferredAsyncTaskFlags = 0
+        flagAsyncTask = deferredFlags
+
+        if (asyncTasks.isNotEmpty() || deferredFlags != 0) {
+            sendAsyncTasks()
+        } else {
+            flagAsyncTask = 0
+        }
+    }
+
+    /** `Creature::sendAsyncTasks` (`creature.cpp:2186-2193`). */
+    fun sendAsyncTasks() {
+        if (hasAsyncTaskFlag(FlagAsyncClass_t.AsyncTaskRunning)) {
+            return
+        }
+
+        flagAsyncTask = flagAsyncTask or FlagAsyncClass_t.AsyncTaskRunning.value
+        scheduleAsyncTaskBatch { executeAsyncTasks() }
+    }
+
+    /**
+     * `Creature::safeCall` (`creature.cpp:2195-2217`) serial path: the
+     * dispatcher barrier branch (`creature.cpp:2196-2209`) is a lane concern of
+     * the eliminated `g_dispatcher()`; the port runs confined to the world lane
+     * (AGENTS.md 1.2).
+     */
+    fun safeCall(action: () -> Unit): Boolean {
+        if (isRemoved()) {
+            return false
+        }
+
+        action()
+        return true
+    }
 
     fun drainHealth(amount: Int) {
         health = max(0, health - amount)
@@ -399,6 +551,24 @@ abstract class Creature(
     }
 
     /**
+     * `Creature::addCombatCondition` (`creature.cpp:1393-1404`): a successful
+     * [addCondition] (including a refresh of an existing type) runs the combat
+     * hook afterwards.
+     */
+    fun addCombatCondition(condition: Condition?, attackerPlayer: Boolean = false): Boolean {
+        if (condition == null) {
+            return false
+        }
+
+        if (!addCondition(condition, attackerPlayer)) {
+            return false
+        }
+
+        onAddCombatCondition(condition.type)
+        return true
+    }
+
+    /**
      * `Creature::isSuppress` (creature.hpp:525-527) — the base creature never
      * suppresses. `Player::isSuppress` suppression counts and the
      * `MIN_DELAY_BETWEEN_CONDITIONS` gate (player.cpp:356-364) are not ported
@@ -418,8 +588,22 @@ abstract class Creature(
         }
     }
 
+    /** `Creature::onAddCombatCondition` (creature.cpp:1224-1226) — base no-op hook. */
+    open fun onAddCombatCondition(type: ConditionType) {
+        // No behaviour.
+    }
+
     /** `Creature::onEndCondition` (creature.cpp:1228-1230) — base no-op hook. */
     open fun onEndCondition(type: ConditionType) {
+        // No behaviour.
+    }
+
+    /**
+     * `Creature::onIdleStatus` (`creature.cpp:210-215`). The damage-map reset
+     * belongs to the unported damage-tracking subsystem (PARITY GAP); the base
+     * body is the virtual seam `Player` overrides.
+     */
+    open fun onIdleStatus() {
         // No behaviour.
     }
 
@@ -885,6 +1069,295 @@ class Player(
         return (muteTicks / 1000).toLong()
     }
 
+    // --- condition integration (player.cpp:356-394, 6291-6436) -------------------
+
+    /** `Player::sendIcons()` (player.hpp:1085) — protocol send seam. */
+    var sendIcons: () -> Unit = {}
+
+    /** `Player::sendTextMessage(MessageType, text)` (`player.cpp:6350-6407`) seam. */
+    var sendTextMessage: (String) -> Unit = {}
+
+    /**
+     * `Player::m_conditionSuppressionCount` / `Player::lastConditionTime`
+     * (player.hpp:1724, 1784) through the wave-29 [ConditionSuppression] holder.
+     * The clock follows [Creature.now] and icon broadcasts follow [sendIcons];
+     * a host may replace the holder to inject `MIN_DELAY_BETWEEN_CONDITIONS`
+     * (configmanager.cpp:321).
+     */
+    var conditionSuppression: ConditionSuppression = ConditionSuppression(
+        now = { now() },
+        sendIcons = { sendIcons() },
+    )
+
+    /** `Player::isSuppress` (`player.cpp:356-364`). */
+    override fun isSuppress(type: ConditionType, attackerPlayer: Boolean): Boolean =
+        conditionSuppression.isSuppress(type, attackerPlayer)
+
+    /** `Player::addConditionSuppressions` (`player.cpp:366-376`). */
+    fun addConditionSuppressions(addConditions: Array<ConditionType>) {
+        conditionSuppression.addConditionSuppressions(addConditions)
+    }
+
+    /** `Player::removeConditionSuppressions` (`player.cpp:378-394`). */
+    fun removeConditionSuppressions(toRemoveConditions: List<ConditionType>) {
+        conditionSuppression.removeConditionSuppressions(toRemoveConditions)
+    }
+
+    /** `Player::getLastConditionTime` (`player.cpp:1143-1149`). */
+    fun getLastConditionTime(type: ConditionType): Long =
+        conditionSuppression.getLastConditionTime(type)
+
+    /** `Player::updateLastConditionTime` (`player.cpp:1150-1152`). */
+    fun updateLastConditionTime(type: ConditionType) {
+        conditionSuppression.updateLastConditionTime(type)
+    }
+
+    /** `Player::checkLastConditionTimeWithin` (`player.cpp:1154-1160`). */
+    fun checkLastConditionTimeWithin(type: ConditionType, interval: Int): Boolean =
+        conditionSuppression.checkLastConditionTimeWithin(type, interval)
+
+    /**
+     * `Player::onAddCondition` (`player.cpp:6291-6310`). PARITY GAPS: the
+     * `CONDITION_PARALYZE` walk-exhaust refresh needs the movement subsystem's
+     * walk-delay state, and the `CONDITION_OUTFIT`/mount branch belongs to the
+     * mount subsystem.
+     */
+    override fun onAddCondition(type: ConditionType) {
+        super.onAddCondition(type)
+        sendIcons()
+    }
+
+    /**
+     * `Player::onAddCombatCondition` (`player.cpp:6342-6408`). PARITY GAP:
+     * `updateParalyzeWalkExhaust()` (movement subsystem).
+     */
+    override fun onAddCombatCondition(type: ConditionType) {
+        if (type.isSuppressible) {
+            updateLastConditionTime(type)
+        }
+
+        when (type) {
+            ConditionType.CONDITION_POISON -> sendTextMessage("You are poisoned.")
+            ConditionType.CONDITION_DROWN -> sendTextMessage("You are drowning.")
+            ConditionType.CONDITION_PARALYZE -> sendTextMessage("You are paralyzed.")
+            ConditionType.CONDITION_DRUNK -> sendTextMessage("You are drunk.")
+            ConditionType.CONDITION_LESSERHEX,
+            ConditionType.CONDITION_INTENSEHEX,
+            ConditionType.CONDITION_GREATERHEX,
+            -> sendTextMessage("You are hexed.")
+
+            ConditionType.CONDITION_ROOTED -> sendTextMessage("You are rooted.")
+            ConditionType.CONDITION_FEARED -> sendTextMessage("You are feared.")
+            ConditionType.CONDITION_CURSED -> sendTextMessage("You are cursed.")
+            ConditionType.CONDITION_FREEZING -> sendTextMessage("You are freezing.")
+            ConditionType.CONDITION_DAZZLED -> sendTextMessage("You are dazzled.")
+            ConditionType.CONDITION_BLEEDING -> sendTextMessage("You are bleeding.")
+            ConditionType.CONDITION_AGONY -> sendTextMessage("You are in agony.")
+            else -> Unit
+        }
+    }
+
+    /**
+     * `Player::onEndCondition` (`player.cpp:6411-6436`). PARITY GAP: the
+     * mounted-outfit restore (`wasMounted`/`toggleMount`) belongs to the mount
+     * subsystem.
+     */
+    override fun onEndCondition(type: ConditionType) {
+        super.onEndCondition(type)
+
+        if (type == ConditionType.CONDITION_INFIGHT &&
+            getCondition(ConditionType.CONDITION_INFIGHT) == null
+        ) {
+            onIdleStatus()
+            val hasPzLockOnly = pzLockOnlyUntil > now()
+            if (hasPzLockOnly) {
+                pzLocked = true
+            } else {
+                pzLockOnlyUntil = 0
+                pzLocked = false
+            }
+            pvpPlayer.clearAttacked()
+            pvpPlayer.sendOpenPvpSituations()
+
+            if (!hasPzLockOnly &&
+                getSkull() != Skulls_t.SKULL_RED &&
+                getSkull() != Skulls_t.SKULL_BLACK
+            ) {
+                setSkull(Skulls_t.SKULL_NONE)
+            }
+        }
+
+        sendIcons()
+    }
+
+    /** `Player::onIdleStatus` (`player.cpp:6528-6533`). */
+    override fun onIdleStatus() {
+        super.onIdleStatus()
+        mParty?.clearPlayerPoints(this)
+    }
+
+    // --- PvP state (player.hpp:1869-1871, 1960) -----------------------------------
+
+    /** `Player::pzLockOnlyUntil` (player.hpp:1870). */
+    internal var pzLockOnlyUntil: Long = 0
+
+    /** `Player::pzLocked` (player.hpp:1869). */
+    internal var pzLocked: Boolean = false
+
+    /** `Player::pzLockEventId` (player.hpp:1871). */
+    internal var pzLockEventId: Long = 0
+
+    private var pvpPlayerField: PlayerPvp? = null
+
+    /**
+     * `Player::m_pvpPlayer` (player.hpp:1960). Canary embeds the component; the
+     * port builds it on first access so a host can install a fully wired
+     * component (dispatcher/client seams) before PvP state is touched
+     * (AGENTS.md 1.1).
+     */
+    var pvpPlayer: PlayerPvp
+        get() = pvpPlayerField ?: PlayerPvp(this).also { pvpPlayerField = it }
+        set(value) {
+            pvpPlayerField = value
+        }
+
+    /** `Player::isPzLocked` (`player.cpp:3900-3902`). */
+    fun isPzLocked(): Boolean = pzLocked
+
+    /** `g_configManager().getNumber(PZ_LOCKED)` (configmanager.cpp:340). */
+    var pzLockedDuration: Int = 60_000
+
+    /**
+     * `Player::addPzLockTicks` (`player.cpp:4442-4483`); the component owns the
+     * scheduled expiry seams.
+     */
+    fun addPzLockTicks() {
+        pvpPlayer.addPzLockTicks()
+    }
+
+    /**
+     * `Player::addInFightTicks` (`player.cpp:4487-4505`). PARITY GAPS:
+     * `wheel().checkAbilities()` and `updateImbuementTrackerStats()` belong to
+     * the wheel/imbuement subsystems.
+     */
+    fun addInFightTicks(pzlock: Boolean = false) {
+        if (hasFlag(PlayerFlags_t.NotGainInFight)) {
+            return
+        }
+
+        if (pzlock) {
+            pzLockOnlyUntil = 0
+            pzLocked = true
+            sendIcons()
+        }
+
+        safeCall {
+            addCondition(
+                Condition.createCondition(
+                    ConditionId.CONDITIONID_DEFAULT,
+                    ConditionType.CONDITION_INFIGHT,
+                    pzLockedDuration,
+                    now = { now() },
+                ),
+            )
+        }
+    }
+
+    /** `Player::onAttacked` (`player.cpp:6522-6526`). */
+    override fun onAttacked() {
+        super.onAttacked()
+        addInFightTicks()
+        pvpPlayer.sendOpenPvpSituations()
+    }
+
+    // --- learned spells (player.cpp:3122-3145) -------------------------------------
+
+    /** `Player::learnedInstantSpellList` (player.hpp:1696) through the wave-29 holder. */
+    val spellBook: SpellBook = SpellBook()
+
+    /** `Player::learnedInstantSpellList` storage view (player.hpp:1696). */
+    val learnedInstantSpellList: MutableList<String> get() = spellBook.learnedInstantSpellList
+
+    /** `Player::learnInstantSpell` (`player.cpp:3122-3126`). */
+    fun learnInstantSpell(spellName: String) {
+        if (!hasLearnedInstantSpell(spellName)) {
+            spellBook.learnInstantSpell(spellName)
+        }
+    }
+
+    /** `Player::forgetInstantSpell` (`player.cpp:3128-3130`) — `std::erase`. */
+    fun forgetInstantSpell(spellName: String) {
+        spellBook.forgetInstantSpell(spellName)
+    }
+
+    /**
+     * `Player::hasLearnedInstantSpell` (`player.cpp:3132-3145`); the list
+     * membership mirrors the C++ `strcasecmp` comparison.
+     */
+    fun hasLearnedInstantSpell(spellName: String): Boolean {
+        if (hasFlag(PlayerFlags_t.CannotUseSpells)) {
+            return false
+        }
+
+        if (hasFlag(PlayerFlags_t.IgnoreSpellCheck)) {
+            return true
+        }
+
+        return spellBook.hasLearned(spellName)
+    }
+
+    // --- spell/group cooldowns (player.cpp:8997-9007, 13405-13437) ------------------
+
+    /** `Player::client` cooldown send surface (player.cpp:8997-9007). */
+    var spellCooldownClient: SpellCooldownClient? = null
+
+    /** `g_spells()` registry; injected per AGENTS.md 1.1, absent by default. */
+    var spells: Spells? = null
+
+    /** `Player::sendSpellCooldown` (`player.cpp:8997-9001`). */
+    fun sendSpellCooldown(spellId: Int, time: Int) {
+        spellCooldownClient?.sendSpellCooldown(spellId, time)
+    }
+
+    /** `Player::sendSpellGroupCooldown` (`player.cpp:9003-9007`). */
+    fun sendSpellGroupCooldown(groupId: SpellGroup, time: Int) {
+        spellCooldownClient?.sendSpellGroupCooldown(groupId, time)
+    }
+
+    /**
+     * `Player::sendSpellCooldowns` (`player.cpp:13405-13437`): resend the live
+     * `CONDITION_SPELLCOOLDOWN`/`CONDITION_SPELLGROUPCOOLDOWN` entries, skipping
+     * unknown spell ids and already elapsed windows, with the C++ uint16
+     * sub-id truncation.
+     */
+    fun sendSpellCooldowns() {
+        val client = spellCooldownClient ?: return
+
+        for (condition in conditions) {
+            val type = condition.type
+            if (type != ConditionType.CONDITION_SPELLCOOLDOWN &&
+                type != ConditionType.CONDITION_SPELLGROUPCOOLDOWN
+            ) {
+                continue
+            }
+
+            val ticks = max(0, condition.ticks)
+            if (ticks == 0) {
+                continue
+            }
+
+            if (type == ConditionType.CONDITION_SPELLGROUPCOOLDOWN) {
+                val groupId = if (condition.subId > UINT16_MAX) 0 else condition.subId
+                client.sendSpellGroupCooldown(SpellGroup.fromValue(groupId), ticks)
+                continue
+            }
+
+            val spellId = if (condition.subId > UINT16_MAX) 0 else condition.subId
+            val spell = spells?.getInstantSpellById(spellId) ?: continue
+            client.sendSpellCooldown(spellId, ticks)
+        }
+    }
+
     /** `Player::m_party` (player.hpp:1767). */
     private var mParty: Party? = null
 
@@ -1247,6 +1720,9 @@ class Player(
 
         /** `PLAYER_MIN_SPEED` (`src/creatures/players/player.hpp:127`). */
         const val PLAYER_MIN_SPEED = 10
+
+        /** `std::numeric_limits<uint16_t>::max()` (player.cpp:13406). */
+        const val UINT16_MAX = 65535
 
         /**
          * Matches Canary / OpenTibia formula:
