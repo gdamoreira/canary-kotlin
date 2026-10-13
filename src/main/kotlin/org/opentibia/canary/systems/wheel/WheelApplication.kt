@@ -56,6 +56,7 @@ sealed interface WheelSaveResult {
 
 enum class WheelSaveRejection {
     MAX_POINTS_PER_SLOT_EXCEEDED,
+    PREREQUISITES_NOT_MET,
 }
 
 sealed interface WheelGemActionResult {
@@ -98,8 +99,11 @@ class WheelApplication(
      * Validates the submitted slot points exactly like Canary: a point count
      * above the slot maximum rejects the whole request (client manipulation),
      * otherwise slots are committed highest-priority-first while they fit the
-     * unused-point budget. Slots that do not fit are retried (the C++ loop runs
-     * six passes) and reported as [WheelSaveResult.Success.unsatisfied].
+     * unused-point budget and their prerequisites are met. Slots that do not fit
+     * are retried (the C++ loop runs six passes) and reported as
+     * [WheelSaveResult.Success.unsatisfied]; a slot left unsatisfied because its
+     * prerequisite set is still not full rejects the whole request with
+     * [WheelSaveRejection.PREREQUISITES_NOT_MET] before any slot is committed.
      */
     fun applySave(wheel: PlayerWheel, command: SaveWheelCommand): WheelSaveResult {
         for (slotPoint in command.slotPoints) {
@@ -117,6 +121,7 @@ class WheelApplication(
             .sortedWith(compareBy({ it.first }, { it.second }))
             .map { it.third }
 
+        val snapshot = wheel.pointsBySlot.toMap()
         val applied = LinkedHashMap<WheelSlots, Int>()
         var retry = prioritized.toMutableList()
         repeat(SAVE_RETRY_PASSES) {
@@ -131,17 +136,30 @@ class WheelApplication(
             retry = pending
         }
 
+        val unmetPrerequisite = retry.firstOrNull {
+            it.points > 0 && !canPlayerSelectPointOnSlot(wheel, it.slot, false)
+        }
+        if (unmetPrerequisite != null) {
+            wheel.pointsBySlot.clear()
+            wheel.pointsBySlot.putAll(snapshot)
+            return WheelSaveResult.Failure(WheelSaveRejection.PREREQUISITES_NOT_MET, unmetPrerequisite.slot)
+        }
+
         applyGemVessels(wheel, command)
 
         return WheelSaveResult.Success(applied, retry.map { it.slot })
     }
 
     /**
-     * Mirror of `PlayerWheel::checkSavePointsBySlotType` (player_wheel.cpp:1611)
-     * restricted to the budget check. `canPlayerSelectPointOnSlot` prerequisites
-     * are not ported (see PARITY GAPS).
+     * Mirror of `PlayerWheel::checkSavePointsBySlotType` (player_wheel.cpp:1611):
+     * a positive point count must first satisfy the
+     * [canPlayerSelectPointOnSlot] prerequisite graph, then the slot is cleared
+     * and committed only while it fits the unused-point budget.
      */
     private fun checkSavePointsBySlotType(wheel: PlayerWheel, slot: WheelSlots, points: Int): Boolean {
+        if (points > 0 && !canPlayerSelectPointOnSlot(wheel, slot, false)) {
+            return false
+        }
         wheel.setPointsBySlotType(slot, 0)
         val unusedPoints = wheel.getUnusedPoints()
         if (points > unusedPoints) {
@@ -149,6 +167,231 @@ class WheelApplication(
         }
         wheel.setPointsBySlotType(slot, points)
         return true
+    }
+
+    /**
+     * Mirror of `PlayerWheel::canSelectSlotFullOrPartial` (player_wheel.cpp:2086):
+     * a prerequisite slot counts as satisfied only when it is filled to its
+     * maximum.
+     */
+    private fun canSelectSlotFullOrPartial(wheel: PlayerWheel, slot: WheelSlots): Boolean =
+        wheel.getPointsBySlotType(slot) == wheel.getMaxPointsPerSlot(slot)
+
+    /**
+     * Mirror of `PlayerWheel::canPlayerSelectPointOnSlot` (player_wheel.cpp:381):
+     * per-quadrant prerequisite graph. Each gated slot requires the player to own
+     * a minimum number of points and at least one listed neighbour to be full.
+     * The four 50-point slots are the tree roots and are always selectable.
+     */
+    @Suppress("CyclomaticComplexMethod", "LongMethod")
+    private fun canPlayerSelectPointOnSlot(wheel: PlayerWheel, slot: WheelSlots, recursive: Boolean): Boolean {
+        val playerPoints = wheel.getWheelPoints()
+
+        // Green quadrant
+        if (slot == WheelSlots.SLOT_GREEN_200) {
+            if (playerPoints < 375) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_TOP_150)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_BOTTOM_150)) return true
+        } else if (slot == WheelSlots.SLOT_GREEN_TOP_150) {
+            if (playerPoints < 225) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_TOP_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_BOTTOM_150)) return true
+        } else if (slot == WheelSlots.SLOT_GREEN_BOTTOM_150) {
+            if (playerPoints < 225) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_BOTTOM_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_TOP_150)) return true
+        } else if (slot == WheelSlots.SLOT_GREEN_TOP_100) {
+            if (playerPoints < 125) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_TOP_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_TOP_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_MIDDLE_100)) return true
+        } else if (slot == WheelSlots.SLOT_GREEN_MIDDLE_100) {
+            if (playerPoints < 125) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_TOP_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_TOP_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_BOTTOM_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_BOTTOM_100)) return true
+        } else if (slot == WheelSlots.SLOT_GREEN_BOTTOM_100) {
+            if (playerPoints < 125) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_BOTTOM_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_TOP_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_BOTTOM_150)) return true
+        } else if (slot == WheelSlots.SLOT_GREEN_TOP_75) {
+            if (playerPoints < 50) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_50)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_TOP_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_BOTTOM_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_TOP_100)) return true
+        } else if (slot == WheelSlots.SLOT_GREEN_BOTTOM_75) {
+            if (playerPoints < 50) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_50)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_TOP_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_BOTTOM_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_TOP_75)) return true
+        } else if (slot == WheelSlots.SLOT_GREEN_50) {
+            return (recursive && wheel.getPointsBySlotType(slot) == wheel.getMaxPointsPerSlot(slot)) || true
+        }
+
+        // Red quadrant
+        if (slot == WheelSlots.SLOT_RED_200) {
+            if (playerPoints < 375) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_TOP_150)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_BOTTOM_150)) return true
+        } else if (slot == WheelSlots.SLOT_RED_TOP_150) {
+            if (playerPoints < 225) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_TOP_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_BOTTOM_150)) return true
+        } else if (slot == WheelSlots.SLOT_RED_BOTTOM_150) {
+            if (playerPoints < 225) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_BOTTOM_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_TOP_150)) return true
+        } else if (slot == WheelSlots.SLOT_RED_TOP_100) {
+            if (playerPoints < 125) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_TOP_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_TOP_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_TOP_150)) return true
+        } else if (slot == WheelSlots.SLOT_RED_MIDDLE_100) {
+            if (playerPoints < 125) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_TOP_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_BOTTOM_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_BOTTOM_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_TOP_100)) return true
+        } else if (slot == WheelSlots.SLOT_RED_BOTTOM_100) {
+            if (playerPoints < 125) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_BOTTOM_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_TOP_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_BOTTOM_150)) return true
+        } else if (slot == WheelSlots.SLOT_RED_TOP_75) {
+            if (playerPoints < 50) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_50)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_TOP_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_TOP_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_BOTTOM_75)) return true
+        } else if (slot == WheelSlots.SLOT_RED_BOTTOM_75) {
+            if (playerPoints < 50) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_50)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_TOP_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_BOTTOM_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_TOP_75)) return true
+        } else if (slot == WheelSlots.SLOT_RED_50) {
+            return (recursive && wheel.getPointsBySlotType(slot) == wheel.getMaxPointsPerSlot(slot)) || true
+        }
+
+        // Purple quadrant
+        if (slot == WheelSlots.SLOT_PURPLE_200) {
+            if (playerPoints < 375) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_TOP_150)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_BOTTOM_150)) return true
+        } else if (slot == WheelSlots.SLOT_PURPLE_TOP_150) {
+            if (playerPoints < 225) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_TOP_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_BOTTOM_150)) return true
+        } else if (slot == WheelSlots.SLOT_PURPLE_BOTTOM_150) {
+            if (playerPoints < 225) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_BOTTOM_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_TOP_150)) return true
+        } else if (slot == WheelSlots.SLOT_PURPLE_TOP_100) {
+            if (playerPoints < 125) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_TOP_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_BOTTOM_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_TOP_150)) return true
+        } else if (slot == WheelSlots.SLOT_PURPLE_MIDDLE_100) {
+            if (playerPoints < 125) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_TOP_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_BOTTOM_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_BOTTOM_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_TOP_100)) return true
+        } else if (slot == WheelSlots.SLOT_PURPLE_BOTTOM_100) {
+            if (playerPoints < 125) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_BOTTOM_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_BOTTOM_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_BOTTOM_150)) return true
+        } else if (slot == WheelSlots.SLOT_PURPLE_TOP_75) {
+            if (playerPoints < 50) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_50)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_RED_BOTTOM_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_BOTTOM_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_TOP_100)) return true
+        } else if (slot == WheelSlots.SLOT_PURPLE_BOTTOM_75) {
+            if (playerPoints < 50) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_50)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_BOTTOM_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_TOP_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_BOTTOM_100)) return true
+        } else if (slot == WheelSlots.SLOT_PURPLE_50) {
+            return (recursive && wheel.getPointsBySlotType(slot) == wheel.getMaxPointsPerSlot(slot)) || true
+        }
+
+        // Blue quadrant
+        if (slot == WheelSlots.SLOT_BLUE_200) {
+            if (playerPoints < 375) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_TOP_150)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_BOTTOM_150)) return true
+        } else if (slot == WheelSlots.SLOT_BLUE_TOP_150) {
+            if (playerPoints < 225) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_TOP_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_BOTTOM_150)) return true
+        } else if (slot == WheelSlots.SLOT_BLUE_BOTTOM_150) {
+            if (playerPoints < 225) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_BOTTOM_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_TOP_150)) return true
+        } else if (slot == WheelSlots.SLOT_BLUE_TOP_100) {
+            if (playerPoints < 125) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_TOP_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_BOTTOM_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_TOP_150)) return true
+        } else if (slot == WheelSlots.SLOT_BLUE_MIDDLE_100) {
+            if (playerPoints < 125) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_TOP_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_BOTTOM_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_BOTTOM_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_TOP_100)) return true
+        } else if (slot == WheelSlots.SLOT_BLUE_BOTTOM_100) {
+            if (playerPoints < 125) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_BOTTOM_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_BOTTOM_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_BOTTOM_150)) return true
+        } else if (slot == WheelSlots.SLOT_BLUE_TOP_75) {
+            if (playerPoints < 50) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_50)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_GREEN_BOTTOM_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_BOTTOM_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_TOP_100)) return true
+        } else if (slot == WheelSlots.SLOT_BLUE_BOTTOM_75) {
+            if (playerPoints < 50) return false
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_50)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_PURPLE_BOTTOM_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_TOP_75)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_MIDDLE_100)) return true
+            if (canSelectSlotFullOrPartial(wheel, WheelSlots.SLOT_BLUE_BOTTOM_100)) return true
+        } else if (slot == WheelSlots.SLOT_BLUE_50) {
+            return (recursive && wheel.getPointsBySlotType(slot) == wheel.getMaxPointsPerSlot(slot)) || true
+        }
+
+        return false
     }
 
     private fun applyGemVessels(wheel: PlayerWheel, command: SaveWheelCommand) {
