@@ -3,6 +3,7 @@ package org.opentibia.canary.game
 import io.github.oshai.kotlinlogging.KotlinLogging
 import org.opentibia.canary.account.Account
 import org.opentibia.canary.account.AccountErrors
+import org.opentibia.canary.account.AccountType
 import org.opentibia.canary.account.CoinTransactionType
 import org.opentibia.canary.account.CoinType
 import org.opentibia.canary.chat.CHANNEL_GUILD
@@ -15,6 +16,8 @@ import org.opentibia.canary.combat.CombatDamage
 import org.opentibia.canary.combat.CombatOrigin
 import org.opentibia.canary.combat.CombatType
 import org.opentibia.canary.combat.condition.Buff
+import org.opentibia.canary.combat.condition.Condition
+import org.opentibia.canary.combat.condition.ConditionId
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.LightInfo
 import org.opentibia.canary.combat.condition.Outfit
@@ -28,11 +31,13 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.creatures.Skulls_t
 import org.opentibia.canary.creatures.Slots_t
+import org.opentibia.canary.creatures.WeaponType_t
 import org.opentibia.canary.creatures.players.WalkStartPolicy
 import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.creatures.appearance.outfit.Outfit as OutfitDefinition
 import org.opentibia.canary.creatures.grouping.Party
 import org.opentibia.canary.creatures.monsters.ForgeClassification
+import org.opentibia.canary.creatures.monsters.MonsterForge
 import org.opentibia.canary.creatures.monsters.MonsterPipelinesHost
 import org.opentibia.canary.creatures.players.components.CyclopediaDatabaseTasks
 import org.opentibia.canary.creatures.players.components.CyclopediaQueryResult
@@ -70,18 +75,32 @@ import org.opentibia.canary.io.MarketOfferState
 import org.opentibia.canary.io.marketTimeNow
 import org.opentibia.canary.items.BedItem
 import org.opentibia.canary.items.Container
+import org.opentibia.canary.items.ContainerIterator
+import org.opentibia.canary.items.Cylinder
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.ITEM_CRYSTAL_COIN
 import org.opentibia.canary.items.ITEM_GOLD_COIN
 import org.opentibia.canary.items.ITEM_PLATINUM_COIN
+import org.opentibia.canary.items.ItemProperty
 import org.opentibia.canary.items.ItemType
 import org.opentibia.canary.items.Items
+import org.opentibia.canary.items.ItemTypes_t
+import org.opentibia.canary.items.ObjectCategory_t
+import org.opentibia.canary.items.SLOTP_ARMOR
+import org.opentibia.canary.items.SLOTP_BACKPACK
+import org.opentibia.canary.items.SLOTP_FEET
+import org.opentibia.canary.items.SLOTP_HAND
+import org.opentibia.canary.items.SLOTP_HEAD
+import org.opentibia.canary.items.SLOTP_LEGS
+import org.opentibia.canary.items.SLOTP_NECKLACE
+import org.opentibia.canary.items.SLOTP_RING
 import org.opentibia.canary.items.Thing
 import org.opentibia.canary.items.containers.Inbox
 import org.opentibia.canary.items.containers.depot.DepotLocker
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.map.Spectators
 import org.opentibia.canary.map.Tile
 import org.opentibia.canary.map.house.CyclopediaHouseState
 import org.opentibia.canary.map.house.House
@@ -89,6 +108,7 @@ import org.opentibia.canary.map.house.TradeEvents_t
 import org.opentibia.canary.network.protocol.AcceptTransferErrorMessage
 import org.opentibia.canary.network.protocol.BidErrorMessage
 import org.opentibia.canary.network.protocol.BidSuccessMessage
+import org.opentibia.canary.network.protocol.CreatureType
 import org.opentibia.canary.network.protocol.HighscoresWindowSerializer
 import org.opentibia.canary.network.protocol.HouseAuctionType
 import org.opentibia.canary.network.protocol.MessageClass
@@ -100,7 +120,9 @@ import org.opentibia.canary.network.protocol.wheel.WheelGemActionCommand
 import org.opentibia.canary.persistence.PlayerStorage
 import org.opentibia.canary.social.guild.Guild
 import org.opentibia.canary.social.guild.GuildRepository
+import org.opentibia.canary.spells.PlayerSaySpellResult
 import org.opentibia.canary.spells.SoundEffect
+import org.opentibia.canary.spells.TalkActionResult
 import org.opentibia.canary.spells.WorldType
 import org.opentibia.canary.systems.forge.Forge
 import org.opentibia.canary.systems.forge.ForgeAction_t
@@ -121,6 +143,7 @@ import org.opentibia.canary.utils.WildcardTreeNode
 import java.lang.ref.WeakReference
 import java.util.IdentityHashMap
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.random.Random
 
 private val logger = KotlinLogging.logger {}
@@ -204,6 +227,23 @@ enum class HighscoreType_t {
     HIGHSCORE_GETENTRIES,
     HIGHSCORE_OURRANK,
 }
+
+/** `Summary_t` (`src/enums/player_cyclopedia.hpp:40-48`): the cyclopedia summary category keys. */
+enum class Summary_t(val value: Int) {
+    HOUSE_ITEMS(9),
+    BOOSTS(10),
+    PREY_CARDS(12),
+    BLESSINGS(14),
+    ALL_BLESSINGS(17),
+    INSTANT_REWARDS(18),
+    HIRELINGS(20),
+}
+
+/** `struct PlayerStats` (`src/game/game.hpp:96-99`): the public online-IP statistics. */
+data class PlayerStats(
+    var totalUniqueIPs: Int = 0,
+    var filteredOnlinePlayers: Int = 0,
+)
 
 /**
  * Kotlin carrier for the `uint8_t &skill` in/out parameter of
@@ -332,6 +372,45 @@ data class HighscoreSkillName(
  *    `getPlayerByNameWildcard` game.cpp:1454, `getPlayersByAccount`
  *    game.cpp:1480, `addDeadPlayer` game.cpp:11607, `removeDeadPlayer`
  *    game.cpp:11611, `getDeadPlayer` game.cpp:11615)
+ *  - quick loot/managed containers (`getObjectCategory` game.cpp:3946,
+ *    `playerSetManagedContainer` game.cpp:6822,
+ *    `playerClearManagedContainer` game.cpp:6867,
+ *    `playerOpenManagedContainer` game.cpp:6884,
+ *    `findManagedContainer` game.cpp:3757,
+ *    `findNextAvailableContainer` game.cpp:3774,
+ *    `handleFallbackLogic` game.cpp:3798,
+ *    `processMoveOrAddItemToLootContainer` game.cpp:3814,
+ *    `processLootItems` game.cpp:3828,
+ *    `internalCollectManagedItems` game.cpp:3850,
+ *    `playerQuickLootCorpse` game.cpp:3596, `playerQuickLoot` game.cpp:6428,
+ *    `playerLootAllCorpses` game.cpp:6575, `playerLootNearby` game.cpp:6766)
+ *  - say handlers (`playerSay` game.cpp:7411, `playerSaySpell` game.cpp:7477,
+ *    `playerWhisper` game.cpp:7497, `playerYell` game.cpp:7517,
+ *    `playerSpeakTo` game.cpp:7537, `playerSpeakToNpc` game.cpp:7563)
+ *  - world-state updaters (`changeLight` game.cpp:7808, `updateCreatureIcon`
+ *    game.cpp:7815, `reloadCreature` game.cpp:7822, `sendUpdateCreature`
+ *    game.cpp:11872, `addPlayerMana` game.cpp:9326, `addPlayerVocation`
+ *    game.cpp:9333, `removeMagicEffect` game.cpp:9365, `addDistanceEffect`
+ *    game.cpp:9378, `hasEffect` game.cpp:11825, `hasDistanceEffect`
+ *    game.cpp:11835, `updateCreatureWalkthrough` game.cpp:9535,
+ *    `updateCreatureSkull` game.cpp:9543, `updatePlayerShield`
+ *    game.cpp:9553, `updateCreatureType` game.cpp:9559,
+ *    `updatePlayerHelpers` game.cpp:9690, `sendAttachedEffect`
+ *    game.cpp:12674, `sendDetachEffect` game.cpp:12684,
+ *    `updateCreatureShader` game.cpp:12694, `refreshItem` game.cpp:12716,
+ *    `playerSetTyping` game.cpp:12704, `kickPlayer` game.cpp:9805)
+ *  - records/helpers (`checkPlayersRecord` game.cpp:9625,
+ *    `updatePlayersRecord` game.cpp:9638, `loadPlayersRecord` game.cpp:9646,
+ *    `groupPlayersByIP` game.cpp:13113, `getPlayerStats` game.cpp:13129,
+ *    `forceRemoveCondition` game.cpp:11125, `addBestiaryList`
+ *    game.cpp:9517, `getSummaryKeyByType` game.cpp:12596,
+ *    `getHirelingSkills`/`getHirelingOutfits` game.cpp:12600-12604,
+ *    `getPlayersOnline`/`getMonstersOnline` game.hpp:195-200)
+ *  - map seams: `internalPlaceCreature`/`placeCreature`/`removeCreature`
+ *    delegate to `Map::placeCreature`/`Map::removeCreature` and every
+ *    `Spectators().find` fanout resolves through the map sectors; the forge
+ *    seams read/write `MonsterPipelinesHost.typeStateOf` through
+ *    [MonsterForge]
  *
  * All state is thread-confined: mutating methods must run inside the injected
  * [dispatcher]'s single-threaded `WorldCommit` lane (AGENTS.md 1.2).
@@ -922,23 +1001,71 @@ class Game(
     /** `normal_random(min, max)` (src/utils/tools.cpp:13) seam for the influenced-monster draw. */
     var normalRandom: (Int, Int) -> Int = { minNumber, _ -> minNumber }
 
-    /** `Monster::getForgeStack()` (monster.cpp:3903) seam; the Kotlin [Monster] does not carry the forge stack yet (PARITY GAP). */
-    var getForgeStack: (Monster) -> Int = { 0 }
+    /** `Monster::getHealthMultiplier()` (monsters.cpp:332) behind `clearFiendishStatus`; the `RATE_*_HEALTH` config is host-injected. */
+    var getHealthMultiplier: () -> Double = { 1.0 }
 
-    /** `Monster::canBeForgeMonster()` (monster.cpp:3891) seam. */
-    var canBeForgeMonster: (Monster) -> Boolean = { false }
+    /**
+     * `Creature::registerCreatureEvent(eventName)` (`ForgeSystemMonster`
+     * registration, monster.cpp:3886). The event registry is Lua-side
+     * (AGENTS.md 1.4), so the dispatch stays an injected seam.
+     */
+    var registerCreatureEvent: (Monster, String) -> Unit = { _, _ -> }
 
-    /** `Monster::setMonsterForgeClassification(classification)` (monster.cpp:3916) seam. */
-    var setMonsterForgeClassification: (Monster, ForgeClassification) -> Unit = { _, _ -> }
+    /** `Monster::getForgeStack()` (monster.cpp:3903), resolved through [monsterHost]'s [MonsterTypeState]. */
+    var getForgeStack: (Monster) -> Int = { monster ->
+        monsterHost?.typeStateOf(monster.id)?.let(MonsterForge::getForgeStack) ?: 0
+    }
 
-    /** `Monster::configureForgeSystem(stack)` (monster.cpp:3866) seam. */
-    var configureForgeSystem: (Monster, Int) -> Unit = { _, _ -> }
+    /** `Monster::canBeForgeMonster()` (monster.cpp:3891), resolved through [monsterHost]'s [MonsterTypeState]. */
+    var canBeForgeMonster: (Monster) -> Boolean = { monster ->
+        monsterHost?.typeStateOf(monster.id)?.let { state ->
+            MonsterForge.canBeForgeMonster(state, monster.isSummon())
+        } ?: false
+    }
 
-    /** `Monster::setTimeToChangeFiendish(time)` (monster.cpp:3920) seam. */
-    var setTimeToChangeFiendish: (Monster, Long) -> Unit = { _, _ -> }
+    /** `Monster::setMonsterForgeClassification(classification)` (monster.cpp:3916), resolved through [monsterHost]'s [MonsterTypeState]. */
+    var setMonsterForgeClassification: (Monster, ForgeClassification) -> Unit = { monster, classification ->
+        monsterHost?.typeStateOf(monster.id)?.let { MonsterForge.setMonsterForgeClassification(it, classification) }
+    }
 
-    /** `Monster::clearFiendishStatus()` (monster.cpp:3932) seam. */
-    var clearFiendishStatus: (Monster) -> Unit = { _ -> }
+    /**
+     * `Monster::configureForgeSystem(stack)` (monster.cpp:3866), resolved
+     * through [monsterHost]'s [MonsterTypeState] and [MonsterForge]; the icon
+     * and creature-update side effects run through [updateCreatureIcon] and
+     * [sendUpdateCreature].
+     */
+    var configureForgeSystem: (Monster, Int) -> Unit = { monster, stack ->
+        monsterHost?.typeStateOf(monster.id)?.let { state ->
+            MonsterForge.configureForgeSystem(
+                state = state,
+                monster = monster,
+                stack = stack,
+                isSummon = monster.isSummon(),
+                normalRandom = normalRandom,
+                updateCreatureIcon = { updateCreatureIcon(monster) },
+                registerCreatureEvent = { event -> registerCreatureEvent(monster, event) },
+                sendUpdateCreature = { sendUpdateCreature(monster) },
+            )
+        }
+    }
+
+    /** `Monster::setTimeToChangeFiendish(time)` (monster.cpp:3920), resolved through [monsterHost]'s [MonsterTypeState]. */
+    var setTimeToChangeFiendish: (Monster, Long) -> Unit = { monster, time ->
+        monsterHost?.typeStateOf(monster.id)?.let { MonsterForge.setTimeToChangeFiendish(it, time) }
+    }
+
+    /** `Monster::clearFiendishStatus()` (monster.cpp:3932), resolved through [monsterHost]'s [MonsterTypeState]. */
+    var clearFiendishStatus: (Monster) -> Unit = { monster ->
+        monsterHost?.typeStateOf(monster.id)?.let { state ->
+            MonsterForge.clearFiendishStatus(
+                state = state,
+                monster = monster,
+                healthMultiplier = getHealthMultiplier(),
+                updateCreatureIcon = { updateCreatureIcon(monster) },
+                sendUpdateCreature = { sendUpdateCreature(monster) },
+            )
+        }
+    }
 
     // --- wheel combat seams (game.cpp:8264-8287) -------------------------------
 
@@ -1396,6 +1523,154 @@ class Game(
     /** `Game::getHighscoreCategories` (src/game/game.cpp:12477). */
     fun getHighscoreCategories(): List<HighscoreCategory> = highscoreCategories
 
+    /** `Game::getPlayersOnline` (src/game/game.hpp:195). */
+    fun getPlayersOnline(): Int = players.size
+
+    /** `Game::getMonstersOnline` (src/game/game.hpp:198). */
+    fun getMonstersOnline(): Int = monsters.size
+
+    // --- records / online helpers (game.cpp:9517, 9625-9700, 12608, 13113) -----
+
+    /** `Game::playersRecord` (game.hpp:928). */
+    var playersRecord: Int = 0
+
+    /** `g_globalEvents().getEventMap(GLOBALEVENT_RECORD)` dispatch seam (game.cpp:9631). */
+    var executeRecord: (Int, Int) -> Unit = { _, _ -> }
+
+    /** `g_database().executeQuery("UPDATE server_config ... players_record")` persistence seam (game.cpp:9638-9644). */
+    var savePlayersRecord: (Int) -> Unit = { }
+
+    /** `g_database().executeQuery("INSERT INTO server_config ...")` persistence seam (game.cpp:9653). */
+    var createPlayersRecord: () -> Unit = { }
+
+    /** `g_database().storeQuery("SELECT value ... players_record")` persistence seam (game.cpp:9649). */
+    var loadPlayersRecordValue: () -> Int? = { null }
+
+    /** `Player::getIP()` (player.hpp) seam behind [groupPlayersByIP]. */
+    var getPlayerIP: (Player) -> Long = { 0L }
+
+    /** `Player::getIdleTime()` (player.hpp) seam behind [groupPlayersByIP]. */
+    var getPlayerIdleTime: (Player) -> Long = { 0L }
+
+    /**
+     * `Game::checkPlayersRecord` (src/game/game.cpp:9625): a new online peak
+     * fires the `GLOBALEVENT_RECORD` dispatch and persists the value.
+     */
+    fun checkPlayersRecord() {
+        val playersOnline = getPlayersOnline()
+        if (playersOnline > playersRecord) {
+            val previousRecord = playersRecord
+            playersRecord = playersOnline
+            executeRecord(playersRecord, previousRecord)
+            updatePlayersRecord()
+        }
+    }
+
+    /** `Game::updatePlayersRecord` (src/game/game.cpp:9638). */
+    fun updatePlayersRecord() {
+        savePlayersRecord(playersRecord)
+    }
+
+    /** `Game::loadPlayersRecord` (src/game/game.cpp:9646): a missing row is created with `0`. */
+    fun loadPlayersRecord() {
+        val value = loadPlayersRecordValue()
+        if (value != null) {
+            playersRecord = value
+        } else {
+            createPlayersRecord()
+        }
+    }
+
+    /**
+     * `Game::groupPlayersByIP` (src/game/game.cpp:13113): players idle for
+     * more than 15 minutes and address-less players are excluded.
+     */
+    fun groupPlayersByIP(): Map<Long, List<Player>> {
+        val groupedPlayers = linkedMapOf<Long, MutableList<Player>>()
+        for (player in players.values) {
+            val ip = getPlayerIP(player)
+            if (ip != 0L && getPlayerIdleTime(player) <= IDLE_THRESHOLD_MS) {
+                groupedPlayers.getOrPut(ip) { mutableListOf() }.add(player)
+            }
+        }
+        return groupedPlayers
+    }
+
+    /** `Game::getPlayerStats` (src/game/game.cpp:13129): the otservlist 4-per-IP cap. */
+    fun getPlayerStats(): PlayerStats {
+        val groupedPlayers = groupPlayersByIP()
+        val stats = PlayerStats()
+        stats.totalUniqueIPs = groupedPlayers.size
+        for (group in groupedPlayers.values) {
+            stats.filteredOnlinePlayers += minOf(group.size, 4)
+        }
+        return stats
+    }
+
+    /**
+     * `Game::forceRemoveCondition` (src/game/game.cpp:11125): the online
+     * creature's condition is force-removed, unknown ids are ignored.
+     */
+    fun forceRemoveCondition(creatureId: Long, conditionType: ConditionType, conditionId: ConditionId) {
+        val creature = getCreatureByID(creatureId) ?: return
+        creature.removeCondition(conditionType, conditionId, true)
+    }
+
+    /** `Game::addBestiaryList` (src/game/game.cpp:9517): first registration wins. */
+    fun addBestiaryList(raceid: Int, name: String) {
+        if (bestiaryList.containsKey(raceid)) {
+            return
+        }
+
+        bestiaryList[raceid] = name
+    }
+
+    /** `Game::getBestiaryList` (src/game/game.hpp:459). */
+    fun getBestiaryList(): Map<Int, String> = bestiaryList
+
+    /** `Game::getSummaryKeyByType` (src/game/game.cpp:12596). */
+    fun getSummaryKeyByType(type: Int): String = summaryCategories[type] ?: ""
+
+    /** `Game::getHirelingSkills` (src/game/game.cpp:12600). */
+    fun getHirelingSkills(): Map<Int, String> = hirelingSkills
+
+    /** `Game::getHirelingOutfits` (src/game/game.cpp:12604). */
+    fun getHirelingOutfits(): Map<Int, String> = hirelingOutfits
+
+    /** `Game::BestiaryList` (game.hpp:876): race id -> lowercase bestiary name. */
+    private val bestiaryList = sortedMapOf<Int, String>()
+
+    /** `Game::m_summaryCategories` (game.cpp:735-742). */
+    private val summaryCategories: Map<Int, String> = linkedMapOf(
+        Summary_t.HOUSE_ITEMS.value to "house-items",
+        Summary_t.BOOSTS.value to "xp-boosts",
+        Summary_t.PREY_CARDS.value to "prey-cards",
+        Summary_t.BLESSINGS.value to "blessings",
+        Summary_t.INSTANT_REWARDS.value to "instant-rewards",
+        Summary_t.HIRELINGS.value to "hirelings",
+    )
+
+    /** `Game::m_hirelingSkills` (game.cpp:744-749). */
+    private val hirelingSkills: Map<Int, String> = linkedMapOf(
+        1001 to "banker",
+        1002 to "cooker",
+        1003 to "steward",
+        1004 to "trader",
+    )
+
+    /** `Game::m_hirelingOutfits` (game.cpp:751-761). */
+    private val hirelingOutfits: Map<Int, String> = linkedMapOf(
+        2001 to "banker",
+        2002 to "cooker",
+        2003 to "steward",
+        2004 to "trader",
+        2005 to "servant",
+        2006 to "hydra",
+        2007 to "ferumbras",
+        2008 to "bonelord",
+        2009 to "dragon",
+    )
+
     /**
      * Kotlin accessor for Canary's public `Game::map` member (src/game/game.hpp:627) as
      * used at call sites such as `g_game().map.getTile(pos)` (src/game/game.cpp:1117);
@@ -1404,22 +1679,21 @@ class Game(
     fun getTile(position: Position): Tile? = map.getTile(position)
 
     /**
-     * `Game::internalPlaceCreature` (src/game/game.cpp:1495) with the placement
-     * fallback of `Map::placeCreature` (src/map/map.cpp:559).
+     * `Game::internalPlaceCreature` (src/game/game.cpp:1495) delegating the
+     * placement to `Map::placeCreature` (src/map/map.cpp:559).
      *
-     * A creature is rejected when it already has a parent tile (creature.hpp
-     * `getParent()`), and placement falls back to the surrounding tiles of
-     * `Map::placeCreature`'s `normalRelList`/`extendedRelList`. `forced` mirrors
-     * `forceLogin` and bypasses the tile `queryAdd` result. `creatureCheck` maps to
-     * `addCreatureCheck`/`onPlacedCreature` (game.cpp:1516-1519) and the tile-zone
-     * transitions run through [beforeCreatureZoneChange]/[afterCreatureZoneChange]
-     * with the [tileZones] resolver.
+     * A creature is rejected when it already has a parent tile, a missing
+     * center tile is rejected before the map call (game.cpp:1499-1502) and the
+     * center tile's zones gate the transition. The map fallback resolves the
+     * surrounding `normalRelList`/`extendedRelList` tiles, `forced` mirrors
+     * `forceLogin`, and `creatureCheck` maps to `addCreatureCheck`/
+     * `onPlacedCreature` (game.cpp:1516-1519). The facade's [placedCreatures]
+     * index mirrors the tile the creature ended up on for the zone/registry
+     * accessors.
      *
-     * Parity gaps: protection-zone, teleport and `isSightClear` checks need tile
-     * flags/raycasting that the Kotlin [Tile] does not model; monsters' push/field
-     * rules are approximated by a plain occupancy check. `Creature::setID`,
-     * `Creature::addList` and `Creature::updateCalculatedStepSpeed`
-     * (game.cpp:1512-1514) have no Kotlin counterpart.
+     * Parity gaps: `Creature::setID`, `Creature::addList` and
+     * `Creature::updateCalculatedStepSpeed` (game.cpp:1512-1514) have no Kotlin
+     * counterpart.
      */
     fun internalPlaceCreature(
         creature: Creature,
@@ -1428,28 +1702,20 @@ class Game(
         forced: Boolean = false,
         creatureCheck: Boolean = false,
     ): Boolean {
-        if (placedCreatures.containsKey(creature)) {
+        if (creature.getParent() != null) {
             return false
         }
 
-        val centerTile = map.getTile(pos)
-        val destination = if (centerTile != null && (forced || canAddCreature(centerTile))) {
-            centerTile to pos
-        } else {
-            findFallbackTile(pos, extendedPos, forced)
-        }
-        if (destination == null) {
-            return false
-        }
-
-        val toZones = tileZones(destination.second)
+        val centerTile = map.getTile(pos) ?: return false
+        val toZones = tileZones(pos)
         if (beforeCreatureZoneChange(creature, emptySet(), toZones) != ReturnValue.NOERROR) {
             return false
         }
 
-        creature.position = destination.second
-        destination.first.internalAddThing(creature)
-        placedCreatures[creature] = destination.first
+        if (!map.placeCreature(pos, creature, extendedPos, forced, centerTile)) {
+            return false
+        }
+        placedCreatures[creature] = creature.getTile() ?: centerTile
 
         // `g_game().addCreatureHealth` reach of `Creature::changeHealth`
         // (creature.cpp:859-861): bind the spectator fanout once the creature
@@ -1467,14 +1733,17 @@ class Game(
 
     /**
      * `Game::placeCreature` (src/game/game.cpp:1524): place through
-     * [internalPlaceCreature], then fan out the appear notification to every
-     * spectator. A player spectator forces [addCreatureCheck], and
-     * `Creature::onPlacedCreature` closes the placement.
+     * [internalPlaceCreature], then fan the appear notification out to every
+     * spectator. The appear frames are sent by the placement itself
+     * (`Map::placeCreature` folds in the `sendCreatureAppear`/
+     * `onCreatureAppear` fanout, GameMap.kt:240-249), so this facade only
+     * re-resolves the spectator set for the player-spectator creature check
+     * (game.cpp:1530-1541) and closes the placement with
+     * `Creature::onPlacedCreature`.
      *
      * Parity gaps: `Cylinder::postAddNotification` (game.cpp:1543-1546) and the
      * `MONSTER_PERF_TEST_FORCE_ACTIVE` creature-check arm (game.cpp:1539) are
-     * not modeled; the spectator search is the facade's [spectatorsOf] subset of
-     * `Spectators().find<Creature>(pos, multifloor = true)`.
+     * not modeled.
      */
     fun placeCreature(
         creature: Creature,
@@ -1486,16 +1755,7 @@ class Game(
             return false
         }
 
-        var hasPlayerSpectators = false
-        for (spectator in spectatorsOf(creature.position, multifloor = true)) {
-            val tmpPlayer = spectator as? Player
-            if (tmpPlayer != null) {
-                tmpPlayer.sendCreatureAppear(creature, creature.position, true)
-                hasPlayerSpectators = true
-            }
-            spectator.onCreatureAppear(creature, true)
-        }
-
+        val hasPlayerSpectators = spectatorsOf(creature.position, multifloor = true).any { it is Player }
         if (hasPlayerSpectators) {
             addCreatureCheck(creature)
         }
@@ -1506,46 +1766,29 @@ class Game(
 
     /**
      * `Game::removeCreature` (src/game/game.cpp:1551): rejected for creatures
-     * already flagged by `Creature::isRemoved()`, otherwise the tile spectators
-     * receive the removal, the master link is cleared, the zone transition and
-     * `Creature::setRemoved()` run, the creature leaves the think buckets and
-     * every summon is removed first with `setSkillLoss(false)`.
+     * already flagged by `Creature::isRemoved()`, otherwise the map layer
+     * removes the creature from its tile and notifies the tile spectators
+     * (`Map::removeCreature` ports the game.cpp:1563-1593 block), the master
+     * link is cleared, the zone transition and `Creature::setRemoved()` run,
+     * the creature leaves the think buckets and every summon is removed first
+     * with `setSkillLoss(false)`.
      *
      * Parity gaps: `Cylinder::postRemoveNotification`, `Creature::removeList`
      * and the team-finder logout cleanup (game.cpp:1599-1617) are not modeled.
-     * Canary keeps going when `getTile()` is null; the facade rejects a
-     * creature that was never placed instead.
+     * Like Canary, a missing tile keeps the creature-state tail running
+     * (game.cpp:1557-1560).
      */
     fun removeCreature(creature: Creature, isLogout: Boolean = true): Boolean {
         if (creature.isRemoved()) {
             return false
         }
-        val tile = placedCreatures[creature] ?: return false
-        val fromZones = tileZones(tile.position)
-        val spectators = spectatorsOf(tile.position, multifloor = true)
 
-        val stackPosByPlayer = IdentityHashMap<Player, Int>()
-        for (spectator in spectators) {
-            val playerSpectator = spectator as? Player ?: continue
-            stackPosByPlayer[playerSpectator] = if (playerSpectator.canSeeCreature(creature)) {
-                tile.getClientIndexOfCreature(playerSpectator, creature)
-            } else {
-                -1
-            }
+        val tile = creature.getTile()
+        val fromZones = if (tile != null) tileZones(tile.position) else emptySet()
+        if (!map.removeCreature(creature, isLogout)) {
+            return false
         }
-
         placedCreatures.remove(creature)
-        tile.removeCreature(creature)
-
-        for ((playerSpectator, stackpos) in stackPosByPlayer) {
-            if (stackpos >= 0) {
-                playerSpectator.sendRemoveTileThing(tile.position, stackpos)
-            }
-        }
-
-        for (spectator in spectators) {
-            spectator.onRemoveCreature(creature, isLogout)
-        }
 
         val master = creature.getMaster()
         if (master != null && !master.isRemoved()) {
@@ -1936,6 +2179,369 @@ class Game(
         }
     }
 
+    // --- world-state updater seams (game.cpp:7808-7831, 9326-9376, 9535-9590,
+    // 11825-11880, 12674-12760) -------------------------------------------------
+
+    /** `Player::sendCreatureLight(creature)` protocol seam (game.cpp:7811). */
+    var sendCreatureLight: (Player, Creature) -> Unit = { _, _ -> }
+
+    /** `Player::sendCreatureIcon(creature)` protocol seam (game.cpp:7818). */
+    var sendCreatureIcon: (Player, Creature) -> Unit = { _, _ -> }
+
+    /** `Player::reloadCreature(creature)` protocol seam (game.cpp:7829). */
+    var reloadCreatureClient: (Player, Creature) -> Unit = { _, _ -> }
+
+    /** `Player::sendUpdateCreature(creature)` protocol seam (game.cpp:11878). */
+    var sendUpdateCreatureClient: (Player, Creature) -> Unit = { _, _ -> }
+
+    /** `Player::sendPlayerVocation(target)` protocol seam (game.cpp:9339). */
+    var sendPlayerVocation: (Player, Player) -> Unit = { _, _ -> }
+
+    /**
+     * `Player::sendMagicEffect(pos, effect, source)` protocol seam of the
+     * `source` overload (game.cpp:9352-9363). The no-source path keeps the
+     * existing 3-argument [sendMagicEffect] seam.
+     */
+    var sendMagicEffectWithSource: (Player, Position, Int, SourceEffect) -> Unit = { _, _, _, _ -> }
+
+    /** `Player::removeMagicEffect(pos, effect)` protocol seam (game.cpp:9373). */
+    var removeMagicEffectFromClient: (Player, Position, Int) -> Unit = { _, _, _ -> }
+
+    /** `Player::sendDistanceShoot(fromPos, toPos, effect, source)` protocol seam (game.cpp:9397). */
+    var sendDistanceShoot: (Player, Position, Position, Int, SourceEffect) -> Unit = { _, _, _, _, _ -> }
+
+    /** `Player::sendCreatureWalkthrough(creature, canWalkthrough)` protocol seam (game.cpp:9539). */
+    var sendCreatureWalkthrough: (Player, Creature, Boolean) -> Unit = { _, _, _ -> }
+
+    /** `Player::sendCreatureSkull(creature)` protocol seam (game.cpp:9549). */
+    var sendCreatureSkull: (Player, Creature) -> Unit = { _, _ -> }
+
+    /** `Player::sendCreatureShield(creature)` protocol seam (game.cpp:9555). */
+    var sendCreatureShield: (Player, Creature) -> Unit = { _, _ -> }
+
+    /** `Player::sendCreatureType(creature, type)` protocol seam (game.cpp:9583-9588). */
+    var sendCreatureType: (Player, Creature, CreatureType) -> Unit = { _, _, _ -> }
+
+    /** `Player::sendCreatureHelpers(creatureId, helpers)` protocol seam (game.cpp:9697). */
+    var sendCreatureHelpers: (Player, Long, Int) -> Unit = { _, _, _ -> }
+
+    /** `Player::sendPlayerTyping(player, typing)` protocol seam (game.cpp:12711). */
+    var sendPlayerTyping: (Player, Player, Int) -> Unit = { _, _, _ -> }
+
+    /** `Player::attachedEffects().sendAttachedEffect(creature, effectId)` seam (game.cpp:12679). */
+    var sendAttachedEffectTo: (Player, Creature, Int) -> Unit = { _, _, _ -> }
+
+    /** `Player::attachedEffects().sendDetachEffect(creature, effectId)` seam (game.cpp:12689). */
+    var sendDetachEffectTo: (Player, Creature, Int) -> Unit = { _, _, _ -> }
+
+    /** `Player::attachedEffects().sendShader(creature, shaderName)` seam (game.cpp:12699). */
+    var sendCreatureShader: (Player, Creature, String) -> Unit = { _, _, _ -> }
+
+    /** `Player::sendUpdateContainerItem(container, slot, item)` protocol seam (game.cpp:12743). */
+    var sendUpdateContainerItem: (Player, Container, Int, Item) -> Unit = { _, _, _, _ -> }
+
+    /** `Creature::getType()` (`CreatureType_t`) seam used by [updateCreatureType]. */
+    var getCreatureType: (Creature) -> CreatureType = { creature ->
+        when (creature) {
+            is Player -> CreatureType.PLAYER
+            is Monster -> CreatureType.MONSTER
+            is Npc -> CreatureType.NPC
+            else -> CreatureType.MONSTER
+        }
+    }
+
+    /**
+     * `Creature::isHealthHidden()` (creature.hpp) seam; the Kotlin [Creature]
+     * does not carry the visibility flag yet (PARITY GAP).
+     */
+    var isHealthHidden: (Creature) -> Boolean = { false }
+
+    /**
+     * `Creature::getShader()` (creature.hpp) seam; the Kotlin [Creature] does
+     * not carry the attached shader yet (PARITY GAP).
+     */
+    var getCreatureShader: (Creature) -> String = { "" }
+
+    /** `Player::getHelpers()` (player.hpp) seam; the Kotlin [Player] does not model the helpers counter yet (PARITY GAP). */
+    var getPlayerHelpers: (Player) -> Int = { 0 }
+
+    /**
+     * `Player::getThingIndex(item)` (player.cpp) inventory scan backing
+     * [refreshItem]. The Kotlin [Player] is not a `Cylinder` (PARITY GAP), so
+     * the default resolves the item through the inventory slots.
+     */
+    var playerThingIndex: (Player, Item) -> Int = { player, item ->
+        Slots_t.entries.firstOrNull { player.getInventoryItem(it) === item }?.value ?: -1
+    }
+
+    // --- world-state updaters (game.cpp:7808-7831, 9326-9376, 9535-9590, 11825-11880, 12674-12760) ---
+
+    /** `Game::changeLight` (src/game/game.cpp:7808): the creature light reaches every multifloor player spectator. */
+    fun changeLight(creature: Creature) {
+        for (spectator in spectatorsOf(creature.position, multifloor = true)) {
+            val player = spectator as? Player ?: continue
+            sendCreatureLight(player, creature)
+        }
+    }
+
+    /** `Game::updateCreatureIcon` (src/game/game.cpp:7815). */
+    fun updateCreatureIcon(creature: Creature) {
+        for (spectator in spectatorsOf(creature.position, multifloor = true)) {
+            val player = spectator as? Player ?: continue
+            sendCreatureIcon(player, creature)
+        }
+    }
+
+    /**
+     * `Game::reloadCreature` (src/game/game.cpp:7822): a null creature is
+     * logged, otherwise every same-floor player spectator reloads it.
+     */
+    fun reloadCreature(creature: Creature?) {
+        if (creature == null) {
+            logger.error { "[reloadCreature] Creature is nullptr" }
+            return
+        }
+
+        for (spectator in spectatorsOf(creature.position, multifloor = false)) {
+            val player = spectator as? Player ?: continue
+            reloadCreatureClient(player, creature)
+        }
+    }
+
+    /** `Game::sendUpdateCreature` (src/game/game.cpp:11872). */
+    fun sendUpdateCreature(creature: Creature?) {
+        if (creature == null) {
+            return
+        }
+
+        for (spectator in spectatorsOf(creature.position, multifloor = true)) {
+            val player = spectator as? Player ?: continue
+            sendUpdateCreatureClient(player, creature)
+        }
+    }
+
+    /** `Party::updatePlayerMana(target, manaPercent)` (party.cpp) seam; the Kotlin [Party] does not model the update yet (PARITY GAP). */
+    var partyUpdatePlayerMana: (Party, Player, Int) -> Unit = { _, _, _ -> }
+
+    /** `Party::updatePlayerVocation(target)` (party.cpp) seam; the Kotlin [Party] does not model the update yet (PARITY GAP). */
+    var partyUpdatePlayerVocation: (Party, Player) -> Unit = { _, _ -> }
+
+    /** `Game::addPlayerMana` (src/game/game.cpp:9326): the party mana percent reaches the online party only. */
+    fun addPlayerMana(target: Player) {
+        val party = target.getParty() ?: return
+        val manaPercent = ceil((target.mana.toDouble() / maxOf(target.maxMana, 1)) * 100).toInt()
+        partyUpdatePlayerMana(party, target, manaPercent)
+    }
+
+    /** `Game::addPlayerVocation` (src/game/game.cpp:9333). */
+    fun addPlayerVocation(target: Player) {
+        target.getParty()?.let { partyUpdatePlayerVocation(it, target) }
+
+        for (spectator in spectatorsOf(target.position, multifloor = true)) {
+            val player = spectator as? Player ?: continue
+            sendPlayerVocation(player, target)
+        }
+    }
+
+    /** `Game::removeMagicEffect` (src/game/game.cpp:9365). */
+    fun removeMagicEffect(pos: Position, effect: Int) {
+        for (spectator in spectatorsOf(pos, multifloor = true)) {
+            val player = spectator as? Player ?: continue
+            removeMagicEffectFromClient(player, pos, effect)
+        }
+    }
+
+    /**
+     * `Game::addDistanceEffect` (src/game/game.cpp:9378-9400): the spectator
+     * set merges the player queries at both endpoints.
+     */
+    fun addDistanceEffect(fromPos: Position, toPos: Position, effect: Int, source: Creature? = null) {
+        val spectators = Spectators(map)
+            .find<Player>(fromPos, multifloor = false)
+            .find<Player>(toPos, multifloor = false)
+        for (spectator in spectators) {
+            val player = spectator as? Player ?: continue
+            sendDistanceShoot(player, fromPos, toPos, effect, classifyGraphicalEffectSource(source, spectator))
+        }
+    }
+
+    /** `Game::hasEffect` (src/game/game.cpp:11825): every `MagicEffectClasses` value below `CONST_ME_LAST`. */
+    fun hasEffect(effectId: Int): Boolean = effectId >= 0 && effectId < CONST_ME_LAST
+
+    /** `Game::hasDistanceEffect` (src/game/game.cpp:11835): every `ShootType_t` value up to `CONST_ANI_LAST`. */
+    fun hasDistanceEffect(effectId: Int): Boolean = effectId >= 0 && effectId <= CONST_ANI_LAST
+
+    /** `Game::updateCreatureWalkthrough` (src/game/game.cpp:9535). */
+    fun updateCreatureWalkthrough(creature: Creature) {
+        for (spectator in spectatorsOf(creature.position, multifloor = true)) {
+            val player = spectator as? Player ?: continue
+            sendCreatureWalkthrough(player, creature, player.canWalkthroughEx(creature))
+        }
+    }
+
+    /** `Game::updateCreatureSkull` (src/game/game.cpp:9543): PvP worlds only. */
+    fun updateCreatureSkull(creature: Creature) {
+        if (getWorldType() != WorldType.PVP) {
+            return
+        }
+
+        for (spectator in spectatorsOf(creature.position, multifloor = true)) {
+            val player = spectator as? Player ?: continue
+            sendCreatureSkull(player, creature)
+        }
+    }
+
+    /** `Game::updatePlayerShield` (src/game/game.cpp:9553). */
+    fun updatePlayerShield(player: Player) {
+        for (spectator in spectatorsOf(player.position, multifloor = true)) {
+            val spectatorPlayer = spectator as? Player ?: continue
+            sendCreatureShield(spectatorPlayer, player)
+        }
+    }
+
+    /**
+     * `Game::updateCreatureType` (src/game/game.cpp:9559): a player-controlled
+     * summon is `CREATURETYPE_SUMMON_OTHERS`/`CREATURETYPE_SUMMON_PLAYER`, a
+     * health-hidden creature is `CREATURETYPE_HIDDEN`.
+     */
+    fun updateCreatureType(creature: Creature?) {
+        if (creature == null) {
+            return
+        }
+
+        var masterPlayer: Player? = null
+        var creatureType = getCreatureType(creature)
+        if (creatureType == CreatureType.MONSTER) {
+            val master = creature.getMaster()
+            if (master != null) {
+                masterPlayer = master as? Player
+                if (masterPlayer != null) {
+                    creatureType = CreatureType.SUMMON_OTHERS
+                }
+            }
+        }
+        if (isHealthHidden(creature)) {
+            creatureType = CreatureType.HIDDEN
+        }
+
+        for (spectator in spectatorsOf(creature.position, multifloor = true)) {
+            val player = spectator as? Player ?: continue
+            val type = if (creatureType == CreatureType.SUMMON_OTHERS && masterPlayer === player) {
+                CreatureType.SUMMON_PLAYER
+            } else {
+                creatureType
+            }
+            sendCreatureType(player, creature, type)
+        }
+    }
+
+    /** `Game::sendAttachedEffect` (src/game/game.cpp:12674). */
+    fun sendAttachedEffect(creature: Creature, effectId: Int) {
+        for (spectator in spectatorsOf(creature.position, multifloor = true)) {
+            val player = spectator as? Player ?: continue
+            sendAttachedEffectTo(player, creature, effectId)
+        }
+    }
+
+    /** `Game::sendDetachEffect` (src/game/game.cpp:12684). */
+    fun sendDetachEffect(creature: Creature, effectId: Int) {
+        for (spectator in spectatorsOf(creature.position, multifloor = true)) {
+            val player = spectator as? Player ?: continue
+            sendDetachEffectTo(player, creature, effectId)
+        }
+    }
+
+    /** `Game::updateCreatureShader` (src/game/game.cpp:12694). */
+    fun updateCreatureShader(creature: Creature) {
+        val shader = getCreatureShader(creature)
+        for (spectator in spectatorsOf(creature.position, multifloor = true)) {
+            val player = spectator as? Player ?: continue
+            sendCreatureShader(player, creature, shader)
+        }
+    }
+
+    /** `Game::updatePlayerHelpers` (src/game/game.cpp:9690). */
+    fun updatePlayerHelpers(player: Player?) {
+        if (player == null) {
+            return
+        }
+
+        val helpers = getPlayerHelpers(player)
+        for (spectator in spectatorsOf(player.position, multifloor = true)) {
+            val spectatorPlayer = spectator as? Player ?: continue
+            sendCreatureHelpers(spectatorPlayer, player.id, helpers)
+        }
+    }
+
+    /**
+     * `Game::refreshItem` (src/game/game.cpp:12716): inventory items refresh
+     * through `sendInventoryItem`, container items through the 2x2 spectator
+     * `sendUpdateContainerItem`, tile items through every multifloor player
+     * `sendUpdateTileItem`.
+     */
+    fun refreshItem(item: Item?) {
+        if (item == null) {
+            return
+        }
+
+        val parent = item.getParent() ?: return
+        val creature = parent.getCreature()
+        if (creature != null) {
+            val player = creature as? Player ?: return
+            val index = playerThingIndex(player, item)
+            if (index > -1) {
+                val slot = Slots_t.entries.firstOrNull { it.value == index } ?: return
+                player.sendInventoryItem(slot, item)
+            }
+            return
+        }
+
+        val container = parent.getContainer()
+        if (container != null) {
+            val index = container.getThingIndex(item)
+            if (index > -1 && index <= 0xFFFF) {
+                val containerPosition = container.getTile()?.position
+                if (containerPosition != null) {
+                    val spectators = Spectators(map).find<Player>(containerPosition, false, 2, 2, 2, 2)
+                    for (spectator in spectators) {
+                        val player = spectator as? Player ?: continue
+                        sendUpdateContainerItem(player, container, index, item)
+                    }
+                }
+            }
+            return
+        }
+
+        val tile = parent.getTile() ?: return
+        for (spectator in spectatorsOf(tile.position, multifloor = true)) {
+            val player = spectator as? Player ?: continue
+            sendUpdateTileItem(player, tile, tile.position, item)
+        }
+    }
+
+    /** `Game::playerSetTyping` (src/game/game.cpp:12704). */
+    fun playerSetTyping(playerId: Long, typing: Int) {
+        val player = getPlayerByID(playerId) ?: return
+        for (spectator in spectatorsOf(player.position, multifloor = true)) {
+            val spectatorPlayer = spectator as? Player ?: continue
+            sendPlayerTyping(spectatorPlayer, player, typing)
+        }
+    }
+
+    /**
+     * `Game::kickPlayer` (src/game/game.cpp:9805): unknown ids are ignored,
+     * otherwise `Player::removePlayer(displayEffect)` disconnects the client.
+     * The Kotlin `Player` does not own its connection (PARITY GAP), so the
+     * disconnect runs through the injected [playerRemovePlayer] seam.
+     */
+    fun kickPlayer(playerId: Long, displayEffect: Boolean) {
+        val player = getPlayerByID(playerId) ?: return
+        playerRemovePlayer(player, displayEffect)
+    }
+
+    /** `Player::removePlayer(displayEffect)` (player.cpp) disconnect seam behind [kickPlayer]. */
+    var playerRemovePlayer: (Player, Boolean) -> Unit = { _, _ -> }
+
     /**
      * `Game::playerStopAutoWalk` (src/game/game.cpp:4567): unknown ids are
      * ignored, otherwise `Player::stopWalk` latches `cancelNextWalk`.
@@ -1959,6 +2565,225 @@ class Game(
         val startPolicy =
             if (listDir.size == 1) WalkStartPolicy.ImmediateWhenReady else WalkStartPolicy.RespectDelay
         player.startAutoWalk(listDir, false, startPolicy)
+    }
+
+    // --- say handlers (game.cpp:7411-7584) -------------------------------------
+
+    /** `g_talkActions().checkPlayerCanSayTalkAction(player, type, words)` (talkactions.cpp) seam. */
+    var checkPlayerCanSayTalkAction: (Player, SpeakClasses, String) -> TalkActionResult =
+        { _, _, _ -> TalkActionResult.TALKACTION_CONTINUE }
+
+    /** `g_spells().playerSaySpell(player, words)` (spells.cpp:102) seam. */
+    var spellsPlayerSaySpell: (Player, String) -> PlayerSaySpellResult =
+        { _, words -> PlayerSaySpellResult(TalkActionResult.TALKACTION_CONTINUE, words) }
+
+    /** `Player::saySpell(type, words, false)` (player.cpp:2591) protocol seam. */
+    var playerSaySpellWords: (Player, SpeakClasses, String, Boolean) -> Boolean = { _, _, _, _ -> false }
+
+    /** `g_configManager().getBoolean(PUSH_WHEN_ATTACKING)` default (configmanager.cpp) behind the spell branch. */
+    var pushWhenAttacking: Boolean = false
+
+    /** `Player::sendCreatureSay(speaker, type, text)` (player.cpp) protocol seam behind [playerWhisper]. */
+    var sendCreatureSayTo: (Player, Creature, SpeakClasses, String) -> Unit = { recipient, speaker, type, text ->
+        chatClient.sendCreatureSay(recipient, speaker, type, text)
+    }
+
+    /**
+     * `Creature::onCreatureSay(speaker, type, text)` event hook
+     * (creature.cpp:1563) behind [playerWhisper] and [playerSpeakTo]. The base
+     * [Creature] hook is not ported yet (PARITY GAP), so the default dispatches
+     * the npc dialogue engine only.
+     */
+    var onCreatureSayEvent: (Creature, Creature, SpeakClasses, String) -> Unit = { target, speaker, type, text ->
+        (target as? Npc)?.onCreatureSay(speaker, type.value, text)
+    }
+
+    /** `g_chat().talkToChannel(player, type, text, channelId)` (chat.cpp:236) seam. */
+    var talkToChannel: (Player, SpeakClasses, String, Int) -> Unit = { player, type, text, channelId ->
+        chatManager?.talkToChannel(player, type, text, channelId)
+    }
+
+    /**
+     * `Game::playerSay` (src/game/game.cpp:7411): resets the login/idle
+     * timers, lets the talk-action/spell pipeline consume the input, gates the
+     * muted speaker and dispatches on the talk type.
+     *
+     * PARITY GAP: `Player::removeMessageBuffer` (game.cpp:7437) has no Kotlin
+     * counterpart; `Game::internalCreatureSay` runs through its seam.
+     */
+    fun playerSay(playerId: Long, channelId: Int, type: SpeakClasses, receiver: String, text: String) {
+        val player = getPlayerByID(playerId) ?: return
+
+        resetLoginProtection(player)
+        resetIdleTime(player)
+
+        if (playerSaySpell(player, type, text)) {
+            return
+        }
+
+        val muteTime = player.isMuted()
+        if (muteTime > 0) {
+            sendTextMessage(player, MessageClass.MESSAGE_FAILURE, "You are still muted for $muteTime seconds.")
+            return
+        }
+
+        if (text.isNotEmpty() && text.first() == '/' && player.isAccessPlayer()) {
+            return
+        }
+
+        when (type) {
+            SpeakClasses.TALKTYPE_SAY -> internalCreatureSay(player, SpeakClasses.TALKTYPE_SAY, text, false, emptyList())
+            SpeakClasses.TALKTYPE_WHISPER -> playerWhisper(player, text)
+            SpeakClasses.TALKTYPE_YELL -> playerYell(player, text)
+            SpeakClasses.TALKTYPE_PRIVATE_TO, SpeakClasses.TALKTYPE_PRIVATE_RED_TO ->
+                playerSpeakTo(player, type, receiver, text)
+            SpeakClasses.TALKTYPE_CHANNEL_O, SpeakClasses.TALKTYPE_CHANNEL_Y, SpeakClasses.TALKTYPE_CHANNEL_R1 ->
+                talkToChannel(player, type, text, channelId)
+            SpeakClasses.TALKTYPE_PRIVATE_PN -> playerSpeakToNpc(player, text)
+            SpeakClasses.TALKTYPE_BROADCAST -> playerBroadcastMessage(player, text)
+            else -> Unit
+        }
+    }
+
+    /**
+     * `Game::playerSaySpell` (src/game/game.cpp:7477): a talk action break
+     * consumes the input, a spell break cancels the push (unless
+     * `PUSH_WHEN_ATTACKING`) and sends the spell words, a spell failure
+     * consumes the input.
+     */
+    fun playerSaySpell(player: Player, type: SpeakClasses, text: String): Boolean {
+        val talkResult = checkPlayerCanSayTalkAction(player, type, text)
+        if (talkResult == TalkActionResult.TALKACTION_BREAK) {
+            return true
+        }
+
+        val spellResult = spellsPlayerSaySpell(player, text)
+        if (spellResult.action == TalkActionResult.TALKACTION_BREAK) {
+            if (!pushWhenAttacking) {
+                cancelPush(player)
+            }
+            return playerSaySpellWords(player, type, spellResult.words, false)
+        } else if (spellResult.action == TalkActionResult.TALKACTION_FAILED) {
+            return true
+        }
+
+        return false
+    }
+
+    /**
+     * `Game::playerWhisper` (src/game/game.cpp:7497): every viewport player
+     * spectator outside the 1x1 radius receives `pspsps`, then the event hook
+     * runs on every spectator.
+     */
+    fun playerWhisper(player: Player, text: String) {
+        val spectators = Spectators(map)
+            .find<Player>(
+                player.position,
+                multifloor = false,
+                minRangeX = Creature.MAP_MAX_VIEW_PORT_X,
+                maxRangeX = Creature.MAP_MAX_VIEW_PORT_X,
+                minRangeY = Creature.MAP_MAX_VIEW_PORT_Y,
+                maxRangeY = Creature.MAP_MAX_VIEW_PORT_Y,
+            )
+
+        for (spectator in spectators) {
+            val spectatorPlayer = spectator as? Player ?: continue
+            if (!areInRange(player.position, spectatorPlayer.position, 1, 1)) {
+                sendCreatureSayTo(spectatorPlayer, player, SpeakClasses.TALKTYPE_WHISPER, "pspsps")
+            } else {
+                sendCreatureSayTo(spectatorPlayer, player, SpeakClasses.TALKTYPE_WHISPER, text)
+            }
+        }
+
+        for (spectator in spectators) {
+            onCreatureSayEvent(spectator, player, SpeakClasses.TALKTYPE_WHISPER, text)
+        }
+    }
+
+    /** `Game::playerYell` (src/game/game.cpp:7517): level 1 and an active `CONDITION_YELLTICKS` are rejected. */
+    fun playerYell(player: Player, text: String): Boolean {
+        if (player.level == 1) {
+            sendTextMessage(player, MessageClass.MESSAGE_FAILURE, "You may not yell as long as you are on level 1.")
+            return false
+        }
+
+        if (player.hasCondition(ConditionType.CONDITION_YELLTICKS)) {
+            sendCancelMessage(player, ReturnValue.YOUAREEXHAUSTED)
+            return false
+        }
+
+        if (player.getAccountType().value < AccountType.ACCOUNT_TYPE_GAMEMASTER.value) {
+            player.addCondition(
+                Condition.createCondition(
+                    id = ConditionId.CONDITIONID_DEFAULT,
+                    type = ConditionType.CONDITION_YELLTICKS,
+                    ticks = YELL_TICKS,
+                ),
+            )
+        }
+
+        internalCreatureSay(player, SpeakClasses.TALKTYPE_YELL, text.uppercase(), false, emptyList())
+        return true
+    }
+
+    /**
+     * `Game::playerSpeakTo` (src/game/game.cpp:7537): the receiver resolves
+     * online-only, the red-private speak class is rewritten to the from-side
+     * variant, and a ghost receiver is hidden from non-access speakers.
+     */
+    fun playerSpeakTo(player: Player, type: SpeakClasses, receiver: String, text: String): Boolean {
+        val toPlayer = getPlayerByName(receiver) ?: run {
+            sendTextMessage(player, MessageClass.MESSAGE_FAILURE, "A player with this name is not online.")
+            return false
+        }
+
+        val fromType = if (type == SpeakClasses.TALKTYPE_PRIVATE_RED_TO &&
+            (player.hasFlag(PlayerFlags_t.CanTalkRedPrivate) ||
+                player.getAccountType().value >= AccountType.ACCOUNT_TYPE_GAMEMASTER.value)
+        ) {
+            SpeakClasses.TALKTYPE_PRIVATE_RED_FROM
+        } else {
+            SpeakClasses.TALKTYPE_PRIVATE_FROM
+        }
+
+        sendPrivateMessage(toPlayer, player, fromType, text)
+        onCreatureSayEvent(toPlayer, player, fromType, text)
+
+        if (isInGhostMode(toPlayer) && !player.isAccessPlayer()) {
+            sendTextMessage(player, MessageClass.MESSAGE_FAILURE, "A player with this name is not online.")
+        } else {
+            sendTextMessage(player, MessageClass.MESSAGE_FAILURE, "Message sent to ${toPlayer.name}.")
+        }
+        return true
+    }
+
+    /**
+     * `Game::playerSpeakToNpc` (src/game/game.cpp:7563): exhausted speakers
+     * are rejected, every nearby npc the player may speak with receives the
+     * private-npc say, then the UI exhaust timer is refreshed.
+     */
+    fun playerSpeakToNpc(player: Player?, text: String) {
+        if (player == null) {
+            logger.error { "[playerSpeakToNpc] Player is nullptr" }
+            return
+        }
+
+        if (isUIExhausted(player)) {
+            sendCancelMessage(player, ReturnValue.YOUAREEXHAUSTED)
+            return
+        }
+
+        val npcs = Spectators(map).find<Creature>(player.position).filter<Npc>()
+        for (spectator in npcs) {
+            val npc = spectator as? Npc ?: continue
+            if (!canSpeakWithHireling(player, getNpcSpeechBubble(npc))) {
+                continue
+            }
+
+            npc.onCreatureSay(player, SpeakClasses.TALKTYPE_PRIVATE_PN.value, text)
+        }
+
+        updateUIExhausted(player)
     }
 
     // --- channel handlers (game.cpp:4324-4441) ---------------------------------
@@ -3342,13 +4167,61 @@ class Game(
      * the look/move/use/find stack-pos branches, containers, depot search and
      * inventory targets are not modeled.
      */
+    /**
+     * `Game::internalGetThing` (src/game/game.cpp:1130) reduced to the item
+     * selectors: the container/inventory `0xFFFF` branches and the tile
+     * `STACKPOS_USEITEM`/`STACKPOS_FIND_THING`/`STACKPOS_TOPDOWN_ITEM` picks
+     * with the supports-hangable veto.
+     *
+     * PARITY GAPS: `STACKPOS_LOOK`/`MOVE`/`USETARGET` (creature picks) have
+     * separate call sites, the browse-field container veto, the depot-search
+     * positions (`0x20`/`0x21`), the `pos.y == 0 && pos.z == 0`
+     * `findItemOfType` branch and the held-item checks are not ported.
+     */
     private fun internalGetThing(player: Player, pos: Position, index: Int, itemId: Int, type: StackPosType_t): Item? {
-        if (pos.x == 0xFFFF || type != StackPosType_t.STACKPOS_TOPDOWN_ITEM) {
-            return null
+        if (pos.x == 0xFFFF) {
+            // container
+            if ((pos.y and 0x40) != 0) {
+                val fromCid = pos.y and 0x0F
+                val parentContainer = player.getContainerByID(fromCid) ?: return null
+                val containerIndex = player.getContainerIndex(fromCid) + pos.z
+                if (parentContainer.isStoreInboxFiltered()) {
+                    return parentContainer.getFilteredItemByIndex(containerIndex)
+                }
+                return parentContainer.getItemByIndex(containerIndex)
+            }
+
+            if (pos.y == 0x20 || pos.y == 0x21) {
+                return null
+            }
+
+            if (pos.y == 0 && pos.z == 0) {
+                return null
+            }
+
+            val slot = Slots_t.fromValue(pos.y) ?: return null
+            return player.getInventoryItem(slot)
         }
 
         val tile = map.getTile(pos) ?: return null
-        return topDownItem(tile)
+        val thing = when (type) {
+            StackPosType_t.STACKPOS_USEITEM -> tile.getUseItem(index)?.getItem()
+            StackPosType_t.STACKPOS_FIND_THING ->
+                tile.getUseItem(index)?.getItem() ?: tile.getDoorItem() ?: tile.getTopDownItem()
+            StackPosType_t.STACKPOS_TOPDOWN_ITEM -> topDownItem(tile)
+            else -> null
+        } ?: return null
+
+        if (tile.hasFlag(TileFlags.TILESTATE_SUPPORTS_HANGABLE.value)) {
+            if (tile.hasProperty(ItemProperty.CONST_PROP_ISVERTICAL)) {
+                if (player.position.x + 1 == tile.position.x && thing.isHangable()) {
+                    return null
+                }
+            } else if (player.position.y + 1 == tile.position.y && thing.isHangable()) {
+                return null
+            }
+        }
+        return thing
     }
 
     /**
@@ -4630,72 +5503,12 @@ class Game(
      * inside the default viewport rectangle (`MAP_MAX_VIEW_PORT_X/Y`) of
      * `Spectators::find` (spectators.cpp:205-212), honouring the `multifloor`
      * z-range and the per-floor offset shift (spectators.cpp:122-138, 182-185).
-     * Canary reads the map-sector creature lists; the port indexes the facade's
-     * own [placedCreatures] until the sector lists are modeled.
+     * The map-sector creature lists are the source of truth (`Spectators`
+     * queries the [map] sectors), exactly like every `Spectators().find<...>`
+     * call in game.cpp.
      */
-    private fun spectatorsOf(centerPos: Position, multifloor: Boolean): List<Creature> {
-        val minRangeZ: Int
-        val maxRangeZ: Int
-        if (!multifloor) {
-            minRangeZ = centerPos.z
-            maxRangeZ = centerPos.z
-        } else if (centerPos.z > Creature.MAP_INIT_SURFACE_LAYER) {
-            minRangeZ = maxOf(centerPos.z - Creature.MAP_LAYER_VIEW_LIMIT, 0)
-            maxRangeZ = minOf(centerPos.z + Creature.MAP_LAYER_VIEW_LIMIT, MAP_MAX_LAYERS - 1)
-        } else if (centerPos.z == Creature.MAP_INIT_SURFACE_LAYER - 1) {
-            minRangeZ = 0
-            maxRangeZ = Creature.MAP_INIT_SURFACE_LAYER - 1 + Creature.MAP_LAYER_VIEW_LIMIT
-        } else if (centerPos.z == Creature.MAP_INIT_SURFACE_LAYER) {
-            minRangeZ = 0
-            maxRangeZ = Creature.MAP_INIT_SURFACE_LAYER + Creature.MAP_LAYER_VIEW_LIMIT
-        } else {
-            minRangeZ = 0
-            maxRangeZ = Creature.MAP_INIT_SURFACE_LAYER
-        }
-
-        val minX = centerPos.x - Creature.MAP_MAX_VIEW_PORT_X
-        val maxX = centerPos.x + Creature.MAP_MAX_VIEW_PORT_X
-        val minY = centerPos.y - Creature.MAP_MAX_VIEW_PORT_Y
-        val maxY = centerPos.y + Creature.MAP_MAX_VIEW_PORT_Y
-
-        val spectators = mutableListOf<Creature>()
-        for (creature in placedCreatures.keys) {
-            val pos = creature.position
-            if (pos.z - minRangeZ !in 0..(maxRangeZ - minRangeZ)) {
-                continue
-            }
-            val offsetZ = centerPos.z - pos.z
-            if (pos.x - offsetZ < minX || pos.x - offsetZ > maxX) {
-                continue
-            }
-            if (pos.y - offsetZ < minY || pos.y - offsetZ > maxY) {
-                continue
-            }
-            spectators.add(creature)
-        }
-        return spectators
-    }
-
-    /** `Tile::queryAdd` creature branch (src/items/tile.cpp:700-854). */
-    private fun canAddCreature(tile: Tile): Boolean {
-        if (tile.ground == null) {
-            return false
-        }
-        return placedCreatures.values.none { it === tile }
-    }
-
-    /** `Map::placeCreature` fallback search (src/map/map.cpp:587-663). */
-    private fun findFallbackTile(centerPos: Position, extendedPos: Boolean, forced: Boolean): Pair<Tile, Position>? {
-        val relList = if (extendedPos) EXTENDED_REL_LIST else NORMAL_REL_LIST
-        for ((dx, dy) in relList.shuffled()) {
-            val tryPos = Position(centerPos.x + dx, centerPos.y + dy, centerPos.z)
-            val tile = map.getTile(tryPos) ?: continue
-            if (forced || canAddCreature(tile)) {
-                return tile to tryPos
-            }
-        }
-        return null
-    }
+    private fun spectatorsOf(centerPos: Position, multifloor: Boolean): List<Creature> =
+        Spectators(map).find<Creature>(centerPos, multifloor).data()
 
     /**
      * `Game::getCreatureByID` (src/game/game.cpp:1296). The port resolves online
@@ -4759,6 +5572,972 @@ class Game(
         val player = getPlayerByID(playerId) ?: return
         player.quickLootFilter = filter
         player.quickLootListItemIds = itemIds
+    }
+
+    // --- quick loot / managed containers (game.cpp:3596-6930) ------------------
+
+    /** `g_configManager().getBoolean(AUTOBANK)` default (configmanager.cpp:85). */
+    var autobank: Boolean = false
+
+    /** `g_configManager().getBoolean(TOGGLE_GOLD_POUCH_ALLOW_ANYTHING)` default (configmanager.cpp). */
+    var toggleGoldPouchAllowAnything: Boolean = false
+
+    /** `g_configManager().getBoolean(TOGGLE_GOLD_POUCH_QUICKLOOT_ONLY)` default (configmanager.cpp). */
+    var toggleGoldPouchQuickLootOnly: Boolean = false
+
+    /** `g_configManager().getNumber(QUICK_LOOT_MAX_CORPSES)` default (configmanager.cpp:301). */
+    var quickLootMaxCorpses: Int = 30
+
+    /** `Player::sendLootStats(item, count)` protocol seam (game.cpp:3643). */
+    var sendLootStats: (Player, Item, Int) -> Unit = { _, _, _ -> }
+
+    /** `Player::sendLootContainers()` protocol seam (game.cpp:6852). */
+    var sendLootContainers: (Player) -> Unit = { _ -> }
+
+    /** `Item::sendUpdateToClient(player)` / `Container::sendUpdateToClient(player)` protocol seam (game.cpp:3752, 6572). */
+    var sendItemUpdateToClient: (Player, Item) -> Unit = { _, _ -> }
+
+    /** `Player::getReward(rewardId, autoOpen)` (player.cpp) seam behind the reward-corpse branch (game.cpp:6559). */
+    var getRewardContainer: (Player, Long) -> Container? = { _, _ -> null }
+
+    /**
+     * `Player::canOpenCorpse(ownerId)` (player.cpp:1379) seam. The C++
+     * `m_party->canOpenCorpse(ownerId)` branch is not ported (PARITY GAP).
+     */
+    var canOpenCorpse: (Player, Long) -> Boolean = { player, ownerId -> player.id == ownerId }
+
+    /** `Player::canDoAction()` (player.cpp:3432) seam; the Kotlin [Player] has no action timer yet (PARITY GAP). */
+    var canDoAction: (Player) -> Boolean = { true }
+
+    /**
+     * `Container::getHoldingPlayer()` (container.cpp) seam. `null` models the
+     * unported holding-player bookkeeping, so the `playerSetManagedContainer`
+     * ownership gate only rejects a resolved foreign holder.
+     */
+    var containerHoldingPlayer: (Container) -> Player? = { null }
+
+    /**
+     * Facade storage for `Player::lastQuickLootNotification` (player.hpp:1876);
+     * the Kotlin [Player] does not carry the member yet (PARITY GAP).
+     */
+    private val lastQuickLootNotification = IdentityHashMap<Player, Long>()
+
+    /**
+     * `Game::getObjectCategory(item)` (src/game/game.cpp:3946): a worth makes
+     * the item gold, otherwise the item type decides.
+     */
+    fun getObjectCategory(item: Item?): ObjectCategory_t {
+        if (item == null) {
+            return ObjectCategory_t.OBJECTCATEGORY_NONE
+        }
+
+        if (item.getWorth() != 0L) {
+            return ObjectCategory_t.OBJECTCATEGORY_GOLD
+        }
+        return getObjectCategory(item.type ?: return ObjectCategory_t.OBJECTCATEGORY_OTHERS)
+    }
+
+    /** `Game::getObjectCategory(const ItemType &)` (src/game/game.cpp:3962). */
+    fun getObjectCategory(itemType: ItemType): ObjectCategory_t {
+        if (itemType.weaponType != WeaponType_t.WEAPON_NONE) {
+            return when (itemType.weaponType) {
+                WeaponType_t.WEAPON_FIST -> ObjectCategory_t.OBJECTCATEGORY_FISTWEAPONS
+                WeaponType_t.WEAPON_SWORD -> ObjectCategory_t.OBJECTCATEGORY_SWORDS
+                WeaponType_t.WEAPON_CLUB -> ObjectCategory_t.OBJECTCATEGORY_CLUBS
+                WeaponType_t.WEAPON_AXE -> ObjectCategory_t.OBJECTCATEGORY_AXES
+                WeaponType_t.WEAPON_SHIELD -> ObjectCategory_t.OBJECTCATEGORY_SHIELDS
+                WeaponType_t.WEAPON_MISSILE, WeaponType_t.WEAPON_DISTANCE -> ObjectCategory_t.OBJECTCATEGORY_DISTANCEWEAPONS
+                WeaponType_t.WEAPON_WAND -> ObjectCategory_t.OBJECTCATEGORY_WANDS
+                WeaponType_t.WEAPON_AMMO -> ObjectCategory_t.OBJECTCATEGORY_AMMO
+                else -> ObjectCategory_t.OBJECTCATEGORY_DEFAULT
+            }
+        }
+
+        if (itemType.slotPosition != SLOTP_HAND) {
+            return when {
+                itemType.slotPosition and SLOTP_HEAD != 0 -> ObjectCategory_t.OBJECTCATEGORY_HELMETS
+                itemType.slotPosition and SLOTP_NECKLACE != 0 -> ObjectCategory_t.OBJECTCATEGORY_NECKLACES
+                itemType.slotPosition and SLOTP_BACKPACK != 0 -> ObjectCategory_t.OBJECTCATEGORY_CONTAINERS
+                itemType.slotPosition and SLOTP_ARMOR != 0 -> ObjectCategory_t.OBJECTCATEGORY_ARMORS
+                itemType.slotPosition and SLOTP_LEGS != 0 -> ObjectCategory_t.OBJECTCATEGORY_LEGS
+                itemType.slotPosition and SLOTP_FEET != 0 -> ObjectCategory_t.OBJECTCATEGORY_BOOTS
+                itemType.slotPosition and SLOTP_RING != 0 -> ObjectCategory_t.OBJECTCATEGORY_RINGS
+                else -> ObjectCategory_t.OBJECTCATEGORY_DEFAULT
+            }
+        }
+
+        return when (itemType.type) {
+            ItemTypes_t.ITEM_TYPE_RUNE -> ObjectCategory_t.OBJECTCATEGORY_RUNES
+            ItemTypes_t.ITEM_TYPE_CREATUREPRODUCT -> ObjectCategory_t.OBJECTCATEGORY_CREATUREPRODUCTS
+            ItemTypes_t.ITEM_TYPE_FOOD -> ObjectCategory_t.OBJECTCATEGORY_FOOD
+            ItemTypes_t.ITEM_TYPE_VALUABLE -> ObjectCategory_t.OBJECTCATEGORY_VALUABLES
+            ItemTypes_t.ITEM_TYPE_POTION -> ObjectCategory_t.OBJECTCATEGORY_POTIONS
+            else -> ObjectCategory_t.OBJECTCATEGORY_OTHERS
+        }
+    }
+
+    /** `Player::isQuickLootListedItem(item)` (player.cpp:3420). */
+    private fun isQuickLootListedItem(player: Player, item: Item): Boolean =
+        player.quickLootListItemIds.contains(item.id)
+
+    /** `Item::getCorpseOwner()` (item.hpp:132) through the `CORPSEOWNER` attribute. */
+    private fun getCorpseOwner(item: Item): Long =
+        (item.getAttribute(ItemAttribute.CORPSEOWNER) as? Number)?.toLong() ?: 0L
+
+    /** `Item::isRewardCorpse()` (item.hpp:140): the owner is `INT32_MAX`. */
+    private fun isRewardCorpse(item: Item): Boolean = getCorpseOwner(item) == Int.MAX_VALUE.toLong()
+
+    /**
+     * `Game::playerSetManagedContainer` (src/game/game.cpp:6822): only the
+     * inventory/container `0xFFFF` position is accepted, the gold pouch is
+     * category-locked to gold and loot-only, and the resolved container is
+     * registered through `Player::refreshManagedContainer`.
+     *
+     * PARITY GAP: the `Cylinder::updateThing` refresh of the parent cylinders
+     * has no protocol sink here.
+     */
+    fun playerSetManagedContainer(
+        playerId: Long,
+        category: ObjectCategory_t,
+        pos: Position,
+        stackPosition: Int,
+        itemId: Int,
+        isLootContainer: Boolean,
+    ) {
+        val player = getPlayerByID(playerId) ?: return
+        if (pos.x != 0xFFFF) {
+            return
+        }
+
+        val thing = internalGetThing(player, pos, stackPosition, itemId, StackPosType_t.STACKPOS_USEITEM)
+        if (thing == null) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        val container = thing.getContainer()
+        val allowConfig = toggleGoldPouchAllowAnything || toggleGoldPouchQuickLootOnly
+        if (container == null || (container.id == Container.ITEM_GOLD_POUCH && category != ObjectCategory_t.OBJECTCATEGORY_GOLD && !allowConfig)) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        if (container.id == Container.ITEM_GOLD_POUCH && !isLootContainer) {
+            sendTextMessage(player, MessageClass.MESSAGE_FAILURE, "You can only set the gold pouch as a loot container.")
+            return
+        }
+
+        val holder = containerHoldingPlayer(container)
+        if (holder != null && holder !== player) {
+            sendCancelMessageText(player, "You must be holding the container to set it as a loot container.")
+            return
+        }
+
+        player.refreshManagedContainer(category, container, isLootContainer)
+        sendLootContainers(player)
+    }
+
+    /** `Game::playerClearManagedContainer` (src/game/game.cpp:6867). */
+    fun playerClearManagedContainer(playerId: Long, category: ObjectCategory_t, isLootContainer: Boolean) {
+        val player = getPlayerByID(playerId) ?: return
+
+        player.refreshManagedContainer(category, null, isLootContainer)
+        sendLootContainers(player)
+    }
+
+    /** `Game::playerOpenManagedContainer` (src/game/game.cpp:6884). */
+    fun playerOpenManagedContainer(playerId: Long, category: ObjectCategory_t, isLootContainer: Boolean) {
+        val player = getPlayerByID(playerId) ?: return
+
+        val container = player.getManagedContainer(category, isLootContainer) ?: return
+        player.sendContainer(container.id and 0xFF, container, container.hasParent(), 0)
+    }
+
+    /**
+     * `Game::findManagedContainer` (src/game/game.cpp:3757): the category
+     * container, else the main backpack once when
+     * `quickLootFallbackToMainContainer` is set. The `bool &fallbackConsumed`
+     * out parameter becomes the returned pair's second component.
+     */
+    fun findManagedContainer(
+        player: Player,
+        fallbackConsumed: Boolean,
+        category: ObjectCategory_t,
+        isLootContainer: Boolean,
+    ): Pair<Container?, Boolean> {
+        player.getManagedContainer(category, isLootContainer)?.let { return it to fallbackConsumed }
+        if (!player.quickLootFallbackToMainContainer || fallbackConsumed) {
+            return null to fallbackConsumed
+        }
+
+        val mainBackpack = player.getBackpack() ?: return null to fallbackConsumed
+        player.refreshManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, mainBackpack, isLootContainer)
+        player.sendInventoryItem(Slots_t.CONST_SLOT_BACKPACK, player.getInventoryItem(Slots_t.CONST_SLOT_BACKPACK))
+        return mainBackpack to true
+    }
+
+    /**
+     * `Game::findNextAvailableContainer` (src/game/game.cpp:3774): advances the
+     * iterator to the next container item and fixes up a last empty
+     * sub-container. The mutated `lootContainer`/`lastSubContainer` and the
+     * returned container collapse into the returned container; the caller keeps
+     * the updated [ContainerIterator].
+     */
+    fun findNextAvailableContainer(containerIterator: ContainerIterator): Container? {
+        var lastSubContainer: Container? = null
+        while (containerIterator.hasNext()) {
+            val current = containerIterator.current()
+            val subContainer = current?.getContainer()
+            containerIterator.advance()
+
+            if (subContainer != null) {
+                return subContainer
+            }
+        }
+
+        // Fix last empty sub-container
+        if (lastSubContainer != null && !lastSubContainer.empty()) {
+            val cur = lastSubContainer.getItemByIndex(lastSubContainer.size() - 1)
+            return cur?.getContainer()
+        }
+
+        return null
+    }
+
+    /**
+     * `Game::handleFallbackLogic` (src/game/game.cpp:3798): rewinds onto the
+     * main backpack when the fallback is set and not yet consumed. The mutated
+     * `lootContainer`/`containerIterator` become the returned pair; `null`
+     * models the C++ `false` return.
+     */
+    fun handleFallbackLogic(
+        player: Player,
+        containerIterator: ContainerIterator,
+        fallbackConsumed: Boolean,
+    ): Pair<Container, ContainerIterator>? {
+        if (fallbackConsumed || !player.quickLootFallbackToMainContainer) {
+            return null
+        }
+
+        val fallbackItem = player.getInventoryItem(Slots_t.CONST_SLOT_BACKPACK) ?: return null
+        val fallbackContainer = fallbackItem.getContainer() ?: return null
+        return fallbackContainer to fallbackContainer.iterator()
+    }
+
+    /**
+     * `Game::processMoveOrAddItemToLootContainer` (src/game/game.cpp:3814):
+     * move the item out of its parent when it has one, otherwise add it
+     * directly. The `uint32_t &remainderCount` in/out parameter becomes the
+     * returned pair's second component.
+     */
+    fun processMoveOrAddItemToLootContainer(
+        item: Item,
+        lootContainer: Container,
+        remainderCount: Int,
+        player: Player,
+    ): Pair<ReturnValue, Int> {
+        val parent = item.getParent()
+        if (parent != null) {
+            return internalMoveItemToCylinder(parent, lootContainer, item, item.getItemCount())
+        }
+
+        val ret = containerAddItem(lootContainer, item, INDEX_WHEREEVER)
+        return ret to remainderCount
+    }
+
+    /**
+     * `Game::processLootItems` (src/game/game.cpp:3828): move the item into the
+     * target container, descending into the container tree (or the fallback
+     * backpack) while `CONTAINERNOTENOUGHROOM` comes back and the remainder is
+     * not yet zero.
+     */
+    fun processLootItems(player: Player, lootContainer: Container, item: Item): ReturnValue {
+        var target = lootContainer
+        var remainderCount = item.getItemCount()
+        var fallbackConsumed = false
+        var containerIterator = target.iterator()
+
+        var ret: ReturnValue
+        do {
+            val outcome = processMoveOrAddItemToLootContainer(item, target, remainderCount, player)
+            ret = outcome.first
+            remainderCount = outcome.second
+            if (ret != ReturnValue.CONTAINERNOTENOUGHROOM) {
+                return ret
+            }
+
+            val nextContainer = findNextAvailableContainer(containerIterator)
+            if (nextContainer == null) {
+                val fallback = handleFallbackLogic(player, containerIterator, fallbackConsumed)
+                if (fallback == null) {
+                    break
+                }
+                target = fallback.first
+                containerIterator = fallback.second
+                fallbackConsumed = true
+            } else {
+                target = nextContainer
+            }
+        } while (remainderCount != 0)
+
+        return ret
+    }
+
+    /**
+     * `Game::internalCollectManagedItems` (src/game/game.cpp:3850): the
+     * AUTOBANK coin deposit, the quick-loot list filter, the managed
+     * container resolution and the item move.
+     */
+    fun internalCollectManagedItems(
+        player: Player?,
+        item: Item?,
+        category: ObjectCategory_t,
+        isLootContainer: Boolean = true,
+    ): ReturnValue {
+        if (player == null || item == null) {
+            return ReturnValue.NOTPOSSIBLE
+        }
+
+        if (autobank && (item.id == ITEM_GOLD_COIN || item.id == ITEM_PLATINUM_COIN || item.id == ITEM_CRYSTAL_COIN)) {
+            val money = when (item.id) {
+                ITEM_PLATINUM_COIN -> item.getItemCount().toLong() * 100
+                ITEM_CRYSTAL_COIN -> item.getItemCount().toLong() * 10000
+                else -> item.getItemCount().toLong()
+            }
+            val parent = item.getParent()
+            if (parent != null) {
+                parent.removeThing(item, item.getItemCount())
+            } else {
+                logger.debug { "Item has no parent" }
+                return ReturnValue.NOTPOSSIBLE
+            }
+            setBankBalance(player, getBankBalance(player) + money)
+            return ReturnValue.NOERROR
+        }
+
+        if (player.quickLootListItemIds.isNotEmpty()) {
+            val isInList = player.quickLootListItemIds.contains(item.id)
+            if (player.quickLootFilter == QuickLootFilter_t.QUICKLOOTFILTER_ACCEPTEDLOOT && !isInList) {
+                return ReturnValue.NOTPOSSIBLE
+            } else if (player.quickLootFilter == QuickLootFilter_t.QUICKLOOTFILTER_SKIPPEDLOOT && isInList) {
+                return ReturnValue.NOTPOSSIBLE
+            }
+        }
+
+        val found = findManagedContainer(player, false, category, isLootContainer)
+        val lootContainer = found.first ?: return ReturnValue.NOTPOSSIBLE
+        return processLootItems(player, lootContainer, item)
+    }
+
+    /**
+     * `Game::playerQuickLootCorpse` (src/game/game.cpp:3596): the quick-loot
+     * list partition, the per-item managed collection and the loot summary.
+     *
+     * PARITY GAPS: `Player::sendLootStats` runs through the [sendLootStats]
+     * seam, `Container::clearLootHighlight`/`sendUpdateToClient` have no
+     * protocol sink, and the object-category name lookup is [Tools].
+     */
+    fun playerQuickLootCorpse(player: Player?, corpse: Container?, position: Position?) {
+        if (player == null || corpse == null) {
+            return
+        }
+
+        val itemList = mutableListOf<Item>()
+        val ignoreListItems = player.quickLootFilter == QuickLootFilter_t.QUICKLOOTFILTER_SKIPPEDLOOT
+
+        var missedAnyGold = false
+        var missedAnyItem = false
+
+        val iterator = corpse.iterator()
+        while (iterator.hasNext()) {
+            val item = iterator.current() ?: break
+            iterator.advance()
+
+            val listed = isQuickLootListedItem(player, item)
+            if ((listed && ignoreListItems) || (!listed && !ignoreListItems)) {
+                if (item.getWorth() != 0L) {
+                    missedAnyGold = true
+                } else {
+                    missedAnyItem = true
+                }
+                continue
+            }
+
+            itemList.add(item)
+        }
+
+        var shouldNotifyCapacity = false
+        var shouldNotifyNotEnoughRoom = ObjectCategory_t.OBJECTCATEGORY_NONE
+
+        var totalLootedGold = 0L
+        var totalLootedItems = 0
+        for (item in itemList) {
+            val worth = item.getWorth()
+            val baseCount = item.getItemCount()
+            val category = getObjectCategory(item)
+
+            val ret = internalCollectManagedItems(player, item, category)
+            if (ret == ReturnValue.NOTENOUGHCAPACITY) {
+                shouldNotifyCapacity = true
+            } else if (ret == ReturnValue.CONTAINERNOTENOUGHROOM) {
+                shouldNotifyNotEnoughRoom = category
+            }
+
+            val success = ret == ReturnValue.NOERROR
+            if (worth != 0L) {
+                missedAnyGold = missedAnyGold || !success
+                if (success) {
+                    sendLootStats(player, item, baseCount)
+                    totalLootedGold += worth
+                } else {
+                    // item is not completely moved
+                    totalLootedGold += worth - item.getWorth()
+                }
+            } else {
+                missedAnyItem = missedAnyItem || !success
+                if (success || item.getItemCount() != baseCount) {
+                    totalLootedItems++
+                    sendLootStats(player, item, item.getItemCount())
+                }
+            }
+        }
+
+        var hasLootAvailable = false
+        val remainingIterator = corpse.iterator()
+        while (remainingIterator.hasNext()) {
+            val corpseItem = remainingIterator.current() ?: break
+            remainingIterator.advance()
+
+            val listed = isQuickLootListedItem(player, corpseItem)
+            if ((listed && ignoreListItems) || (!listed && !ignoreListItems)) {
+                continue
+            }
+
+            hasLootAvailable = true
+            break
+        }
+
+        if (!hasLootAvailable) {
+            corpse.clearLootHighlight(player)
+        }
+
+        val message = buildQuickLootSummaryMessage(
+            totalLootedGold,
+            missedAnyGold,
+            totalLootedItems,
+            missedAnyItem,
+        )
+        sendTextMessage(player, MessageClass.MESSAGE_LOOT, message)
+
+        val notification = when {
+            shouldNotifyCapacity -> "Attention! The loot you are trying to pick up is too heavy for you to carry."
+            shouldNotifyNotEnoughRoom != ObjectCategory_t.OBJECTCATEGORY_NONE ->
+                "Attention! The container assigned to category ${Tools.getObjectCategoryName(shouldNotifyNotEnoughRoom)} is full."
+            else -> null
+        } ?: return
+
+        val now = otsysTimeMs()
+        if ((lastQuickLootNotification[player] ?: 0L) + 15000L < now) {
+            sendTextMessage(player, MessageClass.MESSAGE_GAME_HIGHLIGHT, notification)
+        } else {
+            sendTextMessage(player, MessageClass.MESSAGE_EVENT_ADVANCE, notification)
+        }
+
+        sendItemUpdateToClient(player, corpse)
+        lastQuickLootNotification[player] = now
+    }
+
+    /**
+     * `Game::playerQuickLoot` (src/game/game.cpp:6428): the position gates,
+     * the item/corpse resolution and the managed-collection or
+     * corpse-looting dispatch.
+     *
+     * PARITY GAPS: the `Player::canDoAction`/`createPlayerTask` deferral and
+     * the walk-to-corpse auto-walk task scheduling are not ported; the
+     * distance gate cancels or walks immediately. The reward-corpse lookup
+     * runs through [getRewardContainer].
+     */
+    fun playerQuickLoot(
+        playerId: Long,
+        pos: Position,
+        itemId: Int,
+        stackPos: Int,
+        defaultItem: Item?,
+        lootAllCorpses: Boolean,
+        autoLoot: Boolean,
+    ) {
+        val player = getPlayerByID(playerId) ?: return
+
+        if (!autoLoot && !canDoAction(player)) {
+            return
+        }
+
+        if (!autoLoot && pos.x != 0xFFFF) {
+            if (!areInRange(pos, player.position, 1, 1, 0)) {
+                // need to walk to the corpse first before looting it
+                val listDir = getPathTo(player, pos, 0, 1, true, true)
+                if (listDir != null) {
+                    if (!queuePlayerAutoWalk(player, listDir)) {
+                        return
+                    }
+                    return
+                }
+                sendCancelMessage(player, ReturnValue.THEREISNOWAY)
+                return
+            }
+        } else if (!player.isPremium()) {
+            sendCancelMessageText(player, "You must be premium.")
+            return
+        }
+
+        if (!autoLoot) {
+            player.setNextActionTask(null)
+        }
+
+        var item = defaultItem
+        if (item == null) {
+            item = internalGetThing(player, pos, stackPos, itemId, StackPosType_t.STACKPOS_FIND_THING)
+            if (item == null) {
+                sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+                return
+            }
+        }
+
+        if (item.getParent() == null) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        var bulkLoot = lootAllCorpses
+        val corpse: Container?
+        if (pos.x == 0xFFFF) {
+            corpse = item.getParent()?.getContainer()
+            if (corpse != null && corpse.id == Container.ITEM_BROWSEFIELD) {
+                bulkLoot = true
+                item.getContainer()
+            }
+        } else {
+            corpse = item.getContainer()
+        }
+
+        if (corpse == null || corpse.hasAttribute(ItemAttribute.UNIQUEID) || corpse.hasAttribute(ItemAttribute.ACTIONID)) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        if (!isRewardCorpse(corpse)) {
+            val corpseOwner = getCorpseOwner(corpse)
+            if (corpseOwner != 0L && !canOpenCorpse(player, corpseOwner)) {
+                sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+                return
+            }
+        }
+
+        if (pos.x == 0xFFFF && !bulkLoot && !isRewardCorpse(corpse)) {
+            val worth = item.getWorth()
+            val category = getObjectCategory(item)
+            val ret = internalCollectManagedItems(player, item, category)
+
+            var message: String? = null
+            if (ret == ReturnValue.NOTENOUGHCAPACITY) {
+                message = "Attention! The loot you are trying to pick up is too heavy for you to carry."
+            } else if (ret == ReturnValue.CONTAINERNOTENOUGHROOM) {
+                message = "Attention! The container for ${Tools.getObjectCategoryName(category)} is full."
+            } else {
+                val prefix = if (ret == ReturnValue.NOERROR) {
+                    sendLootStats(player, item, item.getItemCount())
+                    "You looted "
+                } else {
+                    "You could not loot "
+                }
+
+                val suffix = if (worth != 0L) "$worth gold." else "1 item."
+                sendTextMessage(player, MessageClass.MESSAGE_LOOT, prefix + suffix)
+                sendItemUpdateToClient(player, corpse)
+                return
+            }
+
+            val now = otsysTimeMs()
+            if ((lastQuickLootNotification[player] ?: 0L) + 15000L < now) {
+                sendTextMessage(player, MessageClass.MESSAGE_GAME_HIGHLIGHT, message)
+            } else {
+                sendTextMessage(player, MessageClass.MESSAGE_EVENT_ADVANCE, message)
+            }
+
+            lastQuickLootNotification[player] = now
+        } else {
+            if (isRewardCorpse(corpse)) {
+                val rewardId = (corpse.getAttribute(ItemAttribute.DATE) as? Number)?.toLong() ?: 0L
+                val rewardContainer = getRewardContainer(player, rewardId)
+                if (rewardContainer != null) {
+                    playerQuickLootCorpse(player, rewardContainer, corpse.getTile()?.position)
+                }
+            } else {
+                if (!lootAllCorpses) {
+                    playerQuickLootCorpse(player, corpse, corpse.getTile()?.position)
+                } else {
+                    playerLootAllCorpses(player, pos, true)
+                }
+            }
+        }
+
+        sendItemUpdateToClient(player, corpse)
+    }
+
+    /**
+     * `Game::playerLootAllCorpses` (src/game/game.cpp:6575): every lootable
+     * corpse on the target tile up to `QUICK_LOOT_MAX_CORPSES`.
+     *
+     * PARITY GAP: the reward-corpse owner bypass uses [isRewardCorpse] and the
+     * `Player::canOpenCorpse` party branch is not ported.
+     */
+    fun playerLootAllCorpses(player: Player, pos: Position, lootAllCorpses: Boolean) {
+        if (!lootAllCorpses) {
+            return
+        }
+
+        val maxQuickLootCorpses = maxOf(1, quickLootMaxCorpses)
+        val tile = map.getTile(pos)
+        if (tile == null) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        var corpses = 0
+        for (tileItem in tile.items) {
+            val tileCorpse = tileItem.getContainer()
+            if (tileCorpse == null || !tileCorpse.isCorpse() ||
+                tileCorpse.hasAttribute(ItemAttribute.UNIQUEID) || tileCorpse.hasAttribute(ItemAttribute.ACTIONID)
+            ) {
+                continue
+            }
+
+            if (!isRewardCorpse(tileCorpse)) {
+                val owner = getCorpseOwner(tileCorpse)
+                if (owner != 0L && !canOpenCorpse(player, owner)) {
+                    sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+                    logger.debug {
+                        "Player ${player.name} cannot loot corpse from id ${tileItem.id} in position ${tileItem.position}"
+                    }
+                    continue
+                }
+            }
+
+            corpses++
+            playerQuickLootCorpse(player, tileCorpse, tileCorpse.getTile()?.position)
+            if (corpses >= maxQuickLootCorpses) {
+                break
+            }
+        }
+
+        if (corpses > 1) {
+            sendTextMessage(player, MessageClass.MESSAGE_LOOT, "You looted $corpses corpses.")
+        }
+    }
+
+    /**
+     * `Game::playerLootNearby` (src/game/game.cpp:6766): the 3x3 tile scan
+     * around the player, looting each corpse whose managed-collection snapshot
+     * changes, with the "found but not looted" distinction of the C++
+     * anonymous-namespace helpers.
+     */
+    fun playerLootNearby(playerId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+
+        if (!canDoAction(player)) {
+            return
+        }
+        player.setNextActionTask(null)
+
+        val maxQuickLootCorpses = maxOf(1, quickLootMaxCorpses)
+        val playerPos = player.position
+        var corpsesLooted = 0
+        var anyCorpseFound = false
+
+        var x = -1
+        while (x <= 1 && corpsesLooted < maxQuickLootCorpses) {
+            var y = -1
+            while (y <= 1 && corpsesLooted < maxQuickLootCorpses) {
+                val tileX = playerPos.x + x
+                val tileY = playerPos.y + y
+                if (tileX in 0..0xFFFF && tileY in 0..0xFFFF) {
+                    val tile = map.getTile(Position(tileX, tileY, playerPos.z))
+                    if (tile != null) {
+                        for (tileItem in tile.items) {
+                            val outcome = tryNearbyQuickLootCorpse(player, tileItem.getContainer())
+                            anyCorpseFound = anyCorpseFound || outcome.foundCorpse
+                            if (outcome.looted) {
+                                corpsesLooted++
+                            }
+                            if (corpsesLooted >= maxQuickLootCorpses) {
+                                break
+                            }
+                        }
+                    }
+                }
+                y++
+            }
+            x++
+        }
+
+        sendNearbyQuickLootSummary(player, anyCorpseFound, corpsesLooted)
+    }
+
+    /** `NearbyQuickLootSnapshot` (game.cpp:6626-6640). */
+    private class NearbyQuickLootSnapshot(
+        var goldValue: Long = 0L,
+        var stackableAmount: Long = 0L,
+        var looseItems: Int = 0,
+    ) {
+        fun hasLoot(): Boolean = goldValue != 0L || stackableAmount != 0L || looseItems != 0
+
+        fun differsFrom(other: NearbyQuickLootSnapshot): Boolean =
+            goldValue != other.goldValue || stackableAmount != other.stackableAmount || looseItems != other.looseItems
+    }
+
+    /** `NearbyQuickLootOutcome` (game.cpp:6716-6719). */
+    private class NearbyQuickLootOutcome(
+        val foundCorpse: Boolean = false,
+        val looted: Boolean = false,
+    )
+
+    /** `captureNearbyQuickLootSnapshot` (game.cpp:6642-6671). */
+    private fun captureNearbyQuickLootSnapshot(player: Player, container: Container?): NearbyQuickLootSnapshot {
+        val snapshot = NearbyQuickLootSnapshot()
+        if (container == null) {
+            return snapshot
+        }
+
+        val ignoreListItems = player.quickLootFilter == QuickLootFilter_t.QUICKLOOTFILTER_SKIPPEDLOOT
+        val iterator = container.iterator()
+        while (iterator.hasNext()) {
+            val item = iterator.current() ?: break
+            iterator.advance()
+
+            val listed = isQuickLootListedItem(player, item)
+            if ((listed && ignoreListItems) || (!listed && !ignoreListItems)) {
+                continue
+            }
+
+            val worth = item.getWorth()
+            if (worth != 0L) {
+                snapshot.goldValue += worth
+            } else if (item.isStackable() || item.hasAttribute(ItemAttribute.CHARGES)) {
+                snapshot.stackableAmount += item.getItemCount()
+            } else {
+                snapshot.looseItems++
+            }
+        }
+
+        return snapshot
+    }
+
+    /** `isNearbyLootableCorpse` (game.cpp:6692-6704). */
+    private fun isNearbyLootableCorpse(player: Player, corpse: Container?): Boolean {
+        if (corpse == null || !corpse.isCorpse() ||
+            corpse.hasAttribute(ItemAttribute.UNIQUEID) || corpse.hasAttribute(ItemAttribute.ACTIONID)
+        ) {
+            return false
+        }
+
+        if (isRewardCorpse(corpse)) {
+            return true
+        }
+
+        val owner = getCorpseOwner(corpse)
+        return owner == 0L || canOpenCorpse(player, owner)
+    }
+
+    /** `resolveNearbyLootContainer` (game.cpp:6706-6714). */
+    private fun resolveNearbyLootContainer(player: Player, corpse: Container): Container? {
+        if (!isRewardCorpse(corpse)) {
+            return corpse
+        }
+
+        val rewardId = (corpse.getAttribute(ItemAttribute.DATE) as? Number)?.toLong() ?: 0L
+        return getRewardContainer(player, rewardId)
+    }
+
+    /** `tryNearbyQuickLootCorpse` (game.cpp:6721-6741). */
+    private fun tryNearbyQuickLootCorpse(player: Player, corpse: Container?): NearbyQuickLootOutcome {
+        if (!isNearbyLootableCorpse(player, corpse)) {
+            return NearbyQuickLootOutcome()
+        }
+
+        val lootContainer = resolveNearbyLootContainer(player, corpse!!)
+        val lootSnapshotBefore = captureNearbyQuickLootSnapshot(player, lootContainer)
+        if (!lootSnapshotBefore.hasLoot()) {
+            return NearbyQuickLootOutcome(foundCorpse = true)
+        }
+
+        playerQuickLootCorpse(player, lootContainer, corpse.getTile()?.position)
+        if (lootContainer !== corpse) {
+            sendItemUpdateToClient(player, corpse)
+        }
+        return NearbyQuickLootOutcome(looted = captureNearbyQuickLootSnapshot(player, lootContainer).differsFrom(lootSnapshotBefore))
+    }
+
+    /** `sendNearbyQuickLootSummary` (game.cpp:6743-6763). */
+    private fun sendNearbyQuickLootSummary(player: Player, anyCorpseFound: Boolean, corpsesLooted: Int) {
+        if (!anyCorpseFound) {
+            sendCancelMessageText(player, "No lootable corpses nearby.")
+            return
+        }
+
+        if (corpsesLooted == 0) {
+            sendCancelMessageText(player, "You could not loot any nearby corpses.")
+            return
+        }
+
+        if (corpsesLooted > 1) {
+            sendTextMessage(player, MessageClass.MESSAGE_LOOT, "You looted $corpsesLooted corpses.")
+        }
+    }
+
+    /** The `playerQuickLootCorpse` summary text (game.cpp:3678-3734). */
+    private fun buildQuickLootSummaryMessage(
+        totalLootedGold: Long,
+        missedAnyGold: Boolean,
+        totalLootedItems: Int,
+        missedAnyItem: Boolean,
+    ): String {
+        if (totalLootedGold == 0L && !missedAnyGold && totalLootedItems == 0 && !missedAnyItem) {
+            return "No loot."
+        }
+
+        val message = StringBuilder()
+        val lootedAllGold = totalLootedGold != 0L && !missedAnyGold
+        val lootedAllItems = totalLootedItems != 0 && !missedAnyItem
+        if (lootedAllGold) {
+            if (totalLootedItems != 0 || missedAnyItem) {
+                message.append("You looted the complete $totalLootedGold gold")
+                when {
+                    lootedAllItems -> message.append(" and all dropped items")
+                    totalLootedItems != 0 -> message.append(", but you only looted some of the items")
+                    missedAnyItem -> message.append(" but none of the dropped items")
+                }
+            } else {
+                message.append("You looted $totalLootedGold gold")
+            }
+        } else if (lootedAllItems) {
+            when {
+                totalLootedItems == 1 -> message.append("You looted 1 item")
+                totalLootedGold != 0L || missedAnyGold -> message.append("You looted all of the dropped items")
+                else -> message.append("You looted all items")
+            }
+            when {
+                totalLootedGold != 0L -> message.append(", but you only looted $totalLootedGold of the dropped gold")
+                missedAnyGold -> message.append(" but none of the dropped gold")
+            }
+        } else if (totalLootedGold != 0L) {
+            message.append("You only looted $totalLootedGold of the dropped gold")
+            when {
+                totalLootedItems != 0 -> message.append(" and some of the dropped items")
+                missedAnyItem -> message.append(" but none of the dropped items")
+            }
+        } else if (totalLootedItems != 0) {
+            message.append("You looted some of the dropped items")
+            if (missedAnyGold) {
+                message.append(" but none of the dropped gold")
+            }
+        } else if (missedAnyGold) {
+            message.append("You looted none of the dropped gold")
+            if (missedAnyItem) {
+                message.append(" and none of the items")
+            }
+        } else if (missedAnyItem) {
+            message.append("You looted none of the dropped items")
+        }
+        message.append(".")
+        return message.toString()
+    }
+
+    /**
+     * Container-destination subset of `Game::internalMoveItem` (game.cpp:2436)
+     * used by the quick-loot collection: the destination resolution and
+     * `queryAdd`/`queryMaxCount` gates, the stackable merge and the source
+     * removal/insertion.
+     *
+     * PARITY GAPS: the `browseFields` remap, `RETURNVALUE_NEEDEXCHANGE`,
+     * `tradeItem`/`actor` notifications, clone attribute/decay copying and the
+     * `count == 255` client fix.
+     */
+    private fun internalMoveItemToCylinder(
+        fromCylinder: Cylinder,
+        toCylinder: Cylinder,
+        item: Item,
+        count: Int,
+    ): Pair<ReturnValue, Int> {
+        val destination = toCylinder.queryDestination(INDEX_WHEREEVER, item, null, 0)
+        val target = destination.cylinder ?: return ReturnValue.NOTPOSSIBLE to count
+        val toItem = destination.destItem
+
+        if (item === toItem) {
+            return ReturnValue.NOERROR to count
+        }
+
+        var ret = target.queryAdd(destination.index, item, count, 0)
+        if (ret != ReturnValue.NOERROR) {
+            return ret to count
+        }
+
+        if (item.isStackable() && toItem != null && toItem.id == item.id) {
+            val maxQueryCount = target.queryMaxCount(destination.index, item, count, 0, 0).maxQueryCount
+            val m = minOf(count, maxQueryCount)
+            ret = fromCylinder.queryRemove(item, m, 0)
+            if (ret != ReturnValue.NOERROR) {
+                return ret to count
+            }
+
+            fromCylinder.removeThing(item, m)
+            val stackSize = item.type?.stackSize ?: DEFAULT_STACK_SIZE
+            val n = maxOf(0, minOf(m, stackSize - toItem.count))
+            toItem.count += n
+            val newCount = m - n
+            if (newCount > 0) {
+                target.addThing(destination.index, Item(id = item.id, count = newCount, type = item.type))
+            }
+            return ReturnValue.NOERROR to n + newCount
+        }
+
+        ret = fromCylinder.queryRemove(item, count, 0)
+        if (ret != ReturnValue.NOERROR) {
+            return ret to count
+        }
+
+        fromCylinder.removeThing(item, count)
+        target.addThing(destination.index, item)
+        return ReturnValue.NOERROR to count
+    }
+
+    /**
+     * `Game::internalAddItem(toCylinder, item, index, flags, test)`
+     * (game.cpp:2693) reduced to the container destination, mirroring the
+     * facade's tile `internalAddItem` gate order.
+     */
+    private fun containerAddItem(toCylinder: Cylinder, item: Item, index: Int): ReturnValue {
+        val destination = toCylinder.queryDestination(index, item, null, 0)
+        val target = destination.cylinder ?: return ReturnValue.NOTPOSSIBLE
+        val toItem = destination.destItem
+
+        val ret = target.queryAdd(destination.index, item, item.count, 0)
+        if (ret != ReturnValue.NOERROR) {
+            return ret
+        }
+
+        if (item.isStackable() && toItem != null && toItem.id == item.id) {
+            val stackSize = item.type?.stackSize ?: DEFAULT_STACK_SIZE
+            val n = maxOf(0, minOf(item.count, stackSize - toItem.count))
+            toItem.count += n
+            val remainder = item.count - n
+            if (remainder > 0) {
+                target.addThing(destination.index, Item(id = item.id, count = remainder, type = item.type))
+            }
+        } else {
+            target.addThing(destination.index, item)
+        }
+
+        return ReturnValue.NOERROR
     }
 
     /**
@@ -7514,6 +9293,12 @@ class Game(
         addMagicEffect(spectators, pos, effect)
     }
 
+    /** `Game::addMagicEffect(pos, effect, source)` (src/game/game.cpp:9352). */
+    fun addMagicEffect(pos: Position, effect: Int, source: Creature?) {
+        val spectators = spectatorsOf(pos, multifloor = true)
+        addMagicEffect(spectators, pos, effect, source)
+    }
+
     /**
      * `Game::addMagicEffect(spectators, pos, effect)` (src/game/game.cpp:9348).
      * The `source` overload's `SourceEffect_t` classification is not carried by
@@ -7523,6 +9308,18 @@ class Game(
         for (spectator in spectators) {
             val tmpPlayer = spectator as? Player ?: continue
             sendMagicEffect(tmpPlayer, pos, effect)
+        }
+    }
+
+    /**
+     * `Game::addMagicEffect(spectators, pos, effect, source)`
+     * (src/game/game.cpp:9357): each player spectator receives the effect with
+     * the [classifyGraphicalEffectSource] classification.
+     */
+    fun addMagicEffect(spectators: List<Creature>, pos: Position, effect: Int, source: Creature?) {
+        for (spectator in spectators) {
+            val tmpPlayer = spectator as? Player ?: continue
+            sendMagicEffectWithSource(tmpPlayer, pos, effect, classifyGraphicalEffectSource(source, spectator))
         }
     }
 
@@ -8388,20 +10185,16 @@ class Game(
         /** `Tile::queryAdd` item list ceiling (src/items/tile.cpp:899). */
         private const val MAX_TILE_ITEMS = 0x3E8
 
-        /** `Map::placeCreature` extended search ring (src/map/map.cpp:588). */
-        private val EXTENDED_REL_LIST = listOf(
-            0 to -2,
-            -1 to -1, 0 to -1, 1 to -1,
-            -2 to 0, -1 to 0, 1 to 0, 2 to 0,
-            -1 to 1, 0 to 1, 1 to 1,
-            0 to 2,
-        )
+        /** `Game::playerYell` `CONDITION_YELLTICKS` duration (game.cpp:7529). */
+        private const val YELL_TICKS = 30_000
 
-        /** `Map::placeCreature` normal search ring (src/map/map.cpp:603). */
-        private val NORMAL_REL_LIST = listOf(
-            -1 to -1, 0 to -1, 1 to -1,
-            -1 to 0, 1 to 0,
-            -1 to 1, 0 to 1, 1 to 1,
-        )
+        /** `Game::groupPlayersByIP` idle threshold (game.cpp:13117). */
+        private const val IDLE_THRESHOLD_MS = 15L * 60L * 1000L
+
+        /** `CONST_ME_LAST` (src/utils/utils_definitions.hpp:271): one past the last magic effect. */
+        private const val CONST_ME_LAST = 304
+
+        /** `CONST_ANI_LAST = CONST_ANI_CHERRYBOMB` (src/utils/utils_definitions.hpp:340). */
+        private const val CONST_ANI_LAST = 62
     }
 }
