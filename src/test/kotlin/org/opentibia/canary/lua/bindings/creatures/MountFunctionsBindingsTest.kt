@@ -55,8 +55,8 @@ class MountFunctionsBindingsTest {
     fun `Mount registers the Canary global and method names`() {
         val environment = env()
         val methods = listOf("getName", "getId", "getClientId", "getSpeed")
-        val checks = methods.joinToString(" and ") { "(rawgetmetatable('Mount').$it ~= nil)" }
-        environment.loadChunk("callable = (type(Mount) == 'function')\nmethods = $checks")
+        val checks = methods.joinToString(" and ") { "(rawgetmetatable('Mount').__metatable.$it ~= nil)" }
+        environment.loadChunk("callable = (type(Mount) == 'table') and (getmetatable(Mount).__call ~= nil)\nmethods = $checks")
 
         assertThat(environment.getGlobal("callable").toboolean()).isTrue()
         assertThat(environment.getGlobal("methods").toboolean()).isTrue()

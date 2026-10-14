@@ -237,7 +237,7 @@ class PlayerBindingsTest {
     }
 
     @Test
-    fun `extended Player bindings register on the Player Monster and Npc metatables`() {
+    fun `extended Player bindings register on the Player class table`() {
         val (environment, _) = installed()
         val names = listOf(
             "getGuid", "getSpeed", "setSpeed", "getCapacity", "setCapacity",
@@ -246,9 +246,7 @@ class PlayerBindingsTest {
             "getPremiumDays", "getFightMode", "hasChaseMode", "hasSecureMode",
         )
         val checks = names.joinToString(" and ") { name ->
-            listOf("Player", "Monster", "Npc").joinToString(" and ") { type ->
-                "(rawgetmetatable('$type').$name ~= nil)"
-            }
+            "(rawgetmetatable('Player').__metatable.$name ~= nil)"
         }
         environment.loadChunk("checks = $checks")
         assertThat(environment.getGlobal("checks").toboolean()).isTrue()

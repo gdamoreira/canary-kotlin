@@ -69,17 +69,18 @@ interface ContainerOperations {
  *   container:removeAllItems(actor = nil, recursive = false)
  *   container:removeItemById(itemId, count[, subType = -1])
  *
- * The registry has no class-inheritance chain, so the shared `Item` methods continue to
- * be registered on `Container` by [ItemFunctions] while these container-only methods are
- * registered here, keeping the same Lua-visible API as Canary.
+ * `Container` inherits the shared `Item` methods through the class-table `__index`
+ * chain (`registerSharedClass(L, "Container", "Item", ...)`); only the container-only
+ * methods are registered here.
  */
 object ContainerFunctions {
     const val CONTAINER_TYPE = "Container"
 
     fun install(env: LuaEnvironment, operations: ContainerOperations = UnwiredContainerOperations) {
         val registry = env.userdata
+        registry.registerClass(CONTAINER_TYPE, ItemFunctions.ITEM_TYPE)
 
-        registry.registerMethod(CONTAINER_TYPE, "__eq", luaFunction { args ->
+        registry.registerMetaMethod(CONTAINER_TYPE, "__eq", luaFunction { args ->
             val container = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             val other = retrieveUserdata(args, 2) ?: return@luaFunction LuaValue.FALSE
             LuaValue.valueOf(container == other)

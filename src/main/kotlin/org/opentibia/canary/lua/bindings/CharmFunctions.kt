@@ -69,7 +69,7 @@ object CharmFunctions {
     fun install(env: LuaEnvironment, operations: CharmOperations = WorldCharmOperations()) {
         val registry = env.userdata
 
-        env.globals.set(CHARM_TYPE, luaFunction { args ->
+        registry.registerClass(CHARM_TYPE, "", luaFunction { args ->
             if (args.arg(1).isnumber()) {
                 operations.charmById(args.arg(1).toint())
             }

@@ -64,7 +64,7 @@ class ItemTypeBindingsTest {
         ItemTypeFunctions.install(environment, FakeItemTypeOperations())
 
         val checks = methodNames.joinToString(" and ") {
-            "(rawgetmetatable('ItemType').$it ~= nil)"
+            "(rawgetmetatable('ItemType').__metatable.$it ~= nil)"
         }
         environment.loadChunk("checks = $checks and (rawgetmetatable('ItemType').__eq ~= nil)")
 

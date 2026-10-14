@@ -23,13 +23,9 @@ object ItemClassificationFunctions {
     const val ITEM_CLASSIFICATION = "ItemClassification"
 
     fun install(env: LuaEnvironment, classifications: ItemClassifications) {
-        val metatable = env.userdata.metatable(ITEM_CLASSIFICATION)
-        if (metatable.get("__index").isnil()) {
-            metatable.set("__index", metatable)
-        }
-        env.globals.set(ITEM_CLASSIFICATION, metatable)
+        env.userdata.registerClass(ITEM_CLASSIFICATION)
 
-        metatable.set("addTier", luaFunction { args ->
+        env.userdata.registerMethod(ITEM_CLASSIFICATION, "addTier", luaFunction { args ->
             val classification = retrieveUserdata(args, 1) as? ItemClassification
             if (classification == null) {
                 return@luaFunction LuaValue.NIL

@@ -102,12 +102,12 @@ object HouseFunctions {
     fun install(env: LuaEnvironment, operations: HouseOperations = UnwiredHouseOperations) {
         val registry = env.userdata
 
-        env.globals.set(HOUSE_TYPE, luaFunction { args ->
+        env.userdata.registerClass(HOUSE_TYPE, "", luaFunction { args ->
             val house = operations.getHouse(args.arg(1).optint(0)) ?: return@luaFunction LuaValue.NIL
             env.userdata.wrap(HOUSE_TYPE, house)
         })
 
-        registry.registerMethod(HOUSE_TYPE, "__eq", luaFunction { args ->
+        registry.registerMetaMethod(HOUSE_TYPE, "__eq", luaFunction { args ->
             val house = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             val other = retrieveUserdata(args, 2) ?: return@luaFunction LuaValue.FALSE
             LuaValue.valueOf(house == other)

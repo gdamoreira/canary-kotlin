@@ -223,7 +223,7 @@ object ItemTypeFunctions {
     fun install(env: LuaEnvironment, operations: ItemTypeOperations = UnwiredItemTypeOperations) {
         val registry = env.userdata
 
-        env.globals.set(ITEM_TYPE_TYPE, luaFunction { args ->
+        registry.registerClass(ITEM_TYPE_TYPE, "", luaFunction { args ->
             val argument = args.arg(1)
             val itemType = when {
                 argument.isnumber() -> operations.create(argument.toint())
@@ -233,7 +233,7 @@ object ItemTypeFunctions {
             itemType?.let { env.userdata.wrap(ITEM_TYPE_TYPE, it) } ?: LuaValue.NIL
         })
 
-        registry.registerMethod(ITEM_TYPE_TYPE, "__eq", luaFunction { args ->
+        registry.registerMetaMethod(ITEM_TYPE_TYPE, "__eq", luaFunction { args ->
             val itemType = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             val other = retrieveUserdata(args, 2) ?: return@luaFunction LuaValue.FALSE
             LuaValue.valueOf(itemType == other)

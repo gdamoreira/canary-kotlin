@@ -64,7 +64,7 @@ object GuildFunctions {
     fun install(env: LuaEnvironment, operations: GuildOperations = WorldGuildOperations()) {
         val registry = env.userdata
 
-        env.globals.set(GUILD_TYPE, luaFunction { args ->
+        registry.registerClass(GUILD_TYPE, "", luaFunction { args ->
             operations.create(args.arg(1).tolong())?.let { registry.wrap(GUILD_TYPE, it) } ?: LuaValue.NIL
         })
 

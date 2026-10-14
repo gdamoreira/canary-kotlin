@@ -108,20 +108,13 @@ object ZoneFunctions {
     const val ZONE_TYPE = "Zone"
 
     fun install(env: LuaEnvironment, operations: ZoneOperations = WorldZoneOperations(Zones())) {
-        val zoneClass = LuaTable()
-        zoneClass.set("__call", libraryFunction { args ->
-            val zone = operations.create(luaArgString(args, 2))
+        env.userdata.registerClass(ZONE_TYPE, "", libraryFunction { args ->
+            val zone = operations.create(luaArgString(args, 1))
                 ?: return@libraryFunction LuaValue.NIL
             env.userdata.wrap(ZONE_TYPE, zone)
         })
-        zoneClass.setmetatable(LuaTable().also { meta -> meta.set("__call", zoneClass.get("__call")) })
-        env.globals.set(ZONE_TYPE, zoneClass)
 
-        val metatable = env.userdata.metatable(ZONE_TYPE)
-        if (metatable.get("__index").isnil()) {
-            metatable.set("__index", metatable)
-        }
-        metatable.set("__eq", libraryFunction { args ->
+        env.userdata.registerMetaMethod(ZONE_TYPE, "__eq", libraryFunction { args ->
             val zone1 = args.arg(1).touserdata() as? Zone
             val zone2 = args.arg(2).touserdata() as? Zone
             if (zone1 == null || zone2 == null) {
@@ -131,25 +124,25 @@ object ZoneFunctions {
             LuaValue.valueOf(zone1.name == zone2.name)
         })
 
-        metatable.set("getName", zoneFunction(operations) { args, zone ->
+        env.userdata.registerMethod(ZONE_TYPE, "getName", zoneFunction(operations) { args, zone ->
             LuaValue.valueOf(zone.name)
         })
 
-        metatable.set("addArea", zoneFunction(operations) { args, zone ->
+        env.userdata.registerMethod(ZONE_TYPE, "addArea", zoneFunction(operations) { args, zone ->
             zone.addArea(Area(luaToPosition(args.arg(2)) ?: Position(0, 0, 0), luaToPosition(args.arg(3)) ?: Position(0, 0, 0)))
             LuaValue.TRUE
         })
 
-        metatable.set("subtractArea", zoneFunction(operations) { args, zone ->
+        env.userdata.registerMethod(ZONE_TYPE, "subtractArea", zoneFunction(operations) { args, zone ->
             zone.subtractArea(Area(luaToPosition(args.arg(2)) ?: Position(0, 0, 0), luaToPosition(args.arg(3)) ?: Position(0, 0, 0)))
             LuaValue.TRUE
         })
 
-        metatable.set("getRemoveDestination", zoneFunction(operations) { _, zone ->
+        env.userdata.registerMethod(ZONE_TYPE, "getRemoveDestination", zoneFunction(operations) { _, zone ->
             env.userdata.wrap("Position", operations.getRemoveDestination(zone))
         })
 
-        metatable.set("setRemoveDestination", zoneFunction(operations) { args, zone ->
+        env.userdata.registerMethod(ZONE_TYPE, "setRemoveDestination", zoneFunction(operations) { args, zone ->
             val position = luaToPosition(args.arg(2))
             if (position != null) {
                 operations.setRemoveDestination(zone, position)
@@ -157,16 +150,16 @@ object ZoneFunctions {
             LuaValue.NIL
         })
 
-        metatable.set("getPositions", zoneFunction(operations) { _, zone ->
+        env.userdata.registerMethod(ZONE_TYPE, "getPositions", zoneFunction(operations) { _, zone ->
             luaArrayOf(zone.getPositions().map { env.userdata.wrap("Position", it) })
         })
 
-        metatable.set("refresh", zoneFunction(operations) { _, zone ->
+        env.userdata.registerMethod(ZONE_TYPE, "refresh", zoneFunction(operations) { _, zone ->
             zone.refresh()
             LuaValue.NIL
         })
 
-        metatable.set("setMonsterVariant", zoneFunction(operations) { args, zone ->
+        env.userdata.registerMethod(ZONE_TYPE, "setMonsterVariant", zoneFunction(operations) { args, zone ->
             val variant = luaArgString(args, 2)
             if (variant.isEmpty()) {
                 LuaValue.FALSE
@@ -175,19 +168,19 @@ object ZoneFunctions {
             }
         })
 
-        metatable.set("getCreatures", zoneFunction(operations) { _, zone ->
+        env.userdata.registerMethod(ZONE_TYPE, "getCreatures", zoneFunction(operations) { _, zone ->
             creatureTable(env, operations.getCreatures(zone))
         })
-        metatable.set("getPlayers", zoneFunction(operations) { _, zone ->
+        env.userdata.registerMethod(ZONE_TYPE, "getPlayers", zoneFunction(operations) { _, zone ->
             creatureTable(env, operations.getPlayers(zone))
         })
-        metatable.set("getMonsters", zoneFunction(operations) { _, zone ->
+        env.userdata.registerMethod(ZONE_TYPE, "getMonsters", zoneFunction(operations) { _, zone ->
             creatureTable(env, operations.getMonsters(zone))
         })
-        metatable.set("getNpcs", zoneFunction(operations) { _, zone ->
+        env.userdata.registerMethod(ZONE_TYPE, "getNpcs", zoneFunction(operations) { _, zone ->
             creatureTable(env, operations.getNpcs(zone))
         })
-        metatable.set("getItems", zoneFunction(operations) { _, zone ->
+        env.userdata.registerMethod(ZONE_TYPE, "getItems", zoneFunction(operations) { _, zone ->
             LuaTable().also { table ->
                 operations.getItems(zone).forEachIndexed { index, item ->
                     table.set(index + 1, env.userdata.wrap("Item", item))
@@ -195,30 +188,30 @@ object ZoneFunctions {
             }
         })
 
-        metatable.set("removePlayers", zoneFunction(operations) { _, zone ->
+        env.userdata.registerMethod(ZONE_TYPE, "removePlayers", zoneFunction(operations) { _, zone ->
             operations.removePlayers(zone)
             LuaValue.NIL
         })
-        metatable.set("removeMonsters", zoneFunction(operations) { _, zone ->
+        env.userdata.registerMethod(ZONE_TYPE, "removeMonsters", zoneFunction(operations) { _, zone ->
             operations.removeMonsters(zone)
             LuaValue.NIL
         })
-        metatable.set("removeNpcs", zoneFunction(operations) { _, zone ->
+        env.userdata.registerMethod(ZONE_TYPE, "removeNpcs", zoneFunction(operations) { _, zone ->
             operations.removeNpcs(zone)
             LuaValue.NIL
         })
 
-        zoneClass.set("getByName", libraryFunction { args ->
+        env.userdata.registerMethod(ZONE_TYPE, "getByName", libraryFunction { args ->
             operations.getByName(luaArgString(args, 1))?.let { env.userdata.wrap(ZONE_TYPE, it) } ?: LuaValue.NIL
         })
 
-        zoneClass.set("getByPosition", libraryFunction { args ->
+        env.userdata.registerMethod(ZONE_TYPE, "getByPosition", libraryFunction { args ->
             val position = luaToPosition(args.arg(1)) ?: return@libraryFunction LuaValue.NIL
             val zones = operations.getByPosition(position) ?: return@libraryFunction LuaValue.NIL
             luaArrayOf(zones.map { env.userdata.wrap(ZONE_TYPE, it) })
         })
 
-        zoneClass.set("getAll", libraryFunction {
+        env.userdata.registerMethod(ZONE_TYPE, "getAll", libraryFunction {
             luaArrayOf(operations.getAll().map { env.userdata.wrap(ZONE_TYPE, it) })
         })
     }

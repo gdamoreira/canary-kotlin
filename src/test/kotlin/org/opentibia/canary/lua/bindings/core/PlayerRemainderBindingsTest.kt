@@ -307,7 +307,7 @@ class PlayerRemainderBindingsTest {
         val (environment, _) = installed()
         environment.loadChunk(
             """
-            local m = rawgetmetatable('Player')
+            local m = rawgetmetatable('Player').__metatable
             nilChecks =
                 (m.getPronoun(nil) == nil) and
                 (m.setPronoun(nil, 1) == nil) and
@@ -340,7 +340,7 @@ class PlayerRemainderBindingsTest {
     }
 
     @Test
-    fun `remainder Player methods register on the Player Monster and Npc metatables`() {
+    fun `remainder Player methods register on the Player class table`() {
         val (environment, _) = installed()
         val names = listOf(
             "addOutfit", "addOutfitAddon", "removeOutfit", "removeOutfitAddon", "hasOutfit",
@@ -353,9 +353,7 @@ class PlayerRemainderBindingsTest {
             "setStaminaXpBoost",
         )
         val checks = names.joinToString(" and ") { name ->
-            listOf("Player", "Monster", "Npc").joinToString(" and ") { type ->
-                "(rawgetmetatable('$type').$name ~= nil)"
-            }
+            "(rawgetmetatable('Player').__metatable.$name ~= nil)"
         }
         environment.loadChunk("checks = $checks")
         assertThat(environment.getGlobal("checks").toboolean()).isTrue()

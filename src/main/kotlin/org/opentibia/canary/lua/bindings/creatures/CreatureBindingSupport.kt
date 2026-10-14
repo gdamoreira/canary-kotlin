@@ -3,6 +3,7 @@ package org.opentibia.canary.lua.bindings.creatures
 import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
 import org.opentibia.canary.lua.bindings.core.luaFunction
+import org.opentibia.canary.lua.bindings.core.luaUserdataCompare
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 
 /**
@@ -26,11 +27,7 @@ internal fun luaResult(value: Any?): LuaValue = when (value) {
  * engine instance, exactly like the C++ raw-pointer comparison.
  */
 internal fun registerUserdataEquality(env: LuaEnvironment, typeName: String) {
-    env.userdata.metatable(typeName).set("__eq", luaFunction { args ->
-        val left = args.arg(1).touserdata()
-        val right = args.arg(2).touserdata()
-        LuaValue.valueOf(left != null && right != null && left === right)
-    })
+    env.userdata.registerMetaMethod(typeName, "__eq", luaUserdataCompare)
 }
 
 /**

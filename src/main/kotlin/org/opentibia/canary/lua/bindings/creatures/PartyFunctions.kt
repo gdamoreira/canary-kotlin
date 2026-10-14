@@ -85,7 +85,7 @@ object PartyFunctions {
     fun install(env: LuaEnvironment, operations: PartyOperations = WorldPartyOperations()) {
         val registry = env.userdata
 
-        env.globals.set(PARTY_TYPE, luaFunction { args ->
+        registry.registerClass(PARTY_TYPE, "", luaFunction { args ->
             val player = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             operations.create(player)?.let { registry.wrap(PARTY_TYPE, it) } ?: LuaValue.NIL
         })

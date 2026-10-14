@@ -288,12 +288,12 @@ class WorldLuaOperationsTest {
 
         environment.loadChunk(
             "checks = (Game.createItem ~= nil) and " +
-                "(rawgetmetatable('Player').getLevel ~= nil) and " +
-                "(rawgetmetatable('Player').getHealth ~= nil) and " +
-                "(rawgetmetatable('Monster').getName ~= nil) and " +
-                "(rawgetmetatable('Item').getId ~= nil) and " +
-                "(rawgetmetatable('Container').getSize ~= nil) and " +
-                "(rawgetmetatable('Position').getDistance ~= nil)",
+                "(rawgetmetatable('Player').__metatable.getLevel ~= nil) and " +
+                "(rawgetmetatable('Player').__metatable.getHealth ~= nil) and " +
+                "(rawgetmetatable('Monster').__metatable.getName ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.getId ~= nil) and " +
+                "(rawgetmetatable('Container').__metatable.getSize ~= nil) and " +
+                "(rawgetmetatable('Position').__metatable.getDistance ~= nil)",
         )
 
         assertThat(environment.getGlobal("checks").toboolean()).isTrue()

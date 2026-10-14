@@ -62,7 +62,7 @@ object MoveEventBindings {
     fun install(env: LuaEnvironment): MoveEvents {
         val events = MoveEvents()
 
-        env.globals.set("MoveEvent", object : ZeroArgFunction() {
+        env.userdata.registerClass("MoveEvent", "", object : ZeroArgFunction() {
             override fun call(): LuaValue {
                 val self = LuaTable()
                 var explicitType = ""

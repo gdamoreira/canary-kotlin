@@ -3,6 +3,7 @@ package org.opentibia.canary.lua.bindings
 import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
 import org.opentibia.canary.creatures.monsters.RespawnType
+import org.opentibia.canary.lua.bindings.core.CreatureFunctions
 import org.opentibia.canary.lua.bindings.core.luaFunction
 import org.opentibia.canary.lua.bindings.core.luaToPosition
 import org.opentibia.canary.lua.bindings.core.retrieveUserdata
@@ -272,7 +273,7 @@ object MonsterFunctions {
 
         // --- batch 2: constructor, forge/fiendish, hazard, defense, immunity -------
 
-        env.globals.set(MONSTER_TYPE, luaFunction { args ->
+        registry.registerClass(MONSTER_TYPE, CreatureFunctions.CREATURE_TYPE, luaFunction { args ->
             val argument = args.arg(1)
             val monster = when {
                 argument.isnumber() -> operations.getMonsterById(argument.tolong())

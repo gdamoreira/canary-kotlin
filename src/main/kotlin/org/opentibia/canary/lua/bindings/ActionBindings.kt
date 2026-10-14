@@ -31,7 +31,7 @@ object ActionBindings {
     fun install(env: LuaEnvironment) {
         val actions = env.actions
 
-        env.globals.set("Action", object : ZeroArgFunction() {
+        env.userdata.registerClass("Action", "", object : ZeroArgFunction() {
             override fun call(): LuaValue {
                 val self = LuaTable()
                 val itemIds = mutableListOf<Int>()

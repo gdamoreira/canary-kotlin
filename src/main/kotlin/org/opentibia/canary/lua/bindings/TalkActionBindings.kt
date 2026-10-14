@@ -37,7 +37,7 @@ object TalkActionBindings {
     fun install(env: LuaEnvironment) {
         val registry = env.talkActions
 
-        env.globals.set("TalkAction", object : VarArgFunction() {
+        env.userdata.registerClass("TalkAction", "", object : VarArgFunction() {
             override fun invoke(args: Varargs): Varargs {
                 val wordsValue = args.arg(1)
                 if (!wordsValue.isstring()) {

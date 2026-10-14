@@ -228,7 +228,7 @@ object PlayerSocialFunctions {
     fun install(env: LuaEnvironment, operations: PlayerSocialOperations = WorldPlayerSocialOperations()) {
         val registry = env.userdata
         val register: (String, LuaValue) -> Unit = { name, fn ->
-            PlayerFunctions.PLAYER_TYPES.forEach { registry.registerMethod(it, name, fn) }
+            registry.registerMethod(PlayerFunctions.PLAYER_TYPE, name, fn)
         }
 
         register("getParty", luaFunction { args ->

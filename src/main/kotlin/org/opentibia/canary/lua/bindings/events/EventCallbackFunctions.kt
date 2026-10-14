@@ -72,7 +72,7 @@ object EventCallbackFunctions {
             }
         }
 
-        env.globals.set("EventCallback", object : VarArgFunction() {
+        env.userdata.registerClass("EventCallback", "", object : VarArgFunction() {
             override fun invoke(args: Varargs): Varargs {
                 val name = args.arg(1)
                 if (!name.isstring() || name.tojstring().isEmpty()) {

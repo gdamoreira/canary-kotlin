@@ -21,7 +21,7 @@ class LuaScriptReloadTest {
         assertThat(environment.getGlobal("reload_probe").isnil()).isTrue()
         environment.loadChunk(
             "bindings_alive = (Action ~= nil) and (Game ~= nil) and " +
-                "(rawgetmetatable('Player').addItem ~= nil)"
+                "(rawgetmetatable('Player').__metatable.addItem ~= nil)"
         )
         assertThat(environment.getGlobal("bindings_alive").toboolean()).isTrue()
     }

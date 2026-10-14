@@ -58,8 +58,8 @@ class TeleportFunctionsTest {
         val environment = environment(FakeTeleportOperations())
 
         environment.loadChunk(
-            "checks = (rawgetmetatable('Teleport').getDestination ~= nil) and " +
-                "(rawgetmetatable('Teleport').setDestination ~= nil) and " +
+            "checks = (rawgetmetatable('Teleport').__metatable.getDestination ~= nil) and " +
+                "(rawgetmetatable('Teleport').__metatable.setDestination ~= nil) and " +
                 "(rawgetmetatable('Teleport').__eq ~= nil) and " +
                 "(Teleport ~= nil)",
         )

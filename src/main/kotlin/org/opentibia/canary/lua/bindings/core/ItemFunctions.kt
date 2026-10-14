@@ -248,9 +248,9 @@ interface ItemOperations {
  *   item:getShader()
  *   item:hasShader()
  *
- * The same methods are registered on `Container`, mirroring Canary's shared `Item`
- * class hierarchy. Canary's `Item(uid)` constructor stays Lua-side script environment
- * bookkeeping, which the Kotlin domain does not model.
+ * `Container` and `Teleport` inherit these methods through the class-table `__index`
+ * chain, mirroring Canary's shared `Item` hierarchy. Canary's `Item(uid)` constructor
+ * stays Lua-side script environment bookkeeping, which the Kotlin domain does not model.
  *
  * Canary's missing-item branches mix `return 0` (no values), `return 1` without a push
  * (an uninitialized Lua stack slot) and an explicit `false`/`nil`; this binding
@@ -259,7 +259,6 @@ interface ItemOperations {
  */
 object ItemFunctions {
     const val ITEM_TYPE = "Item"
-    val ITEM_TYPES = listOf(ITEM_TYPE, "Container")
 
     /** Mirrors Canary `CylinderFlags_t` defaults used by `ItemFunctions::luaItemMoveTo`. */
     private const val DEFAULT_MOVE_TO_FLAGS = (1L shl 0) or (1L shl 1) or (1L shl 2) or (1L shl 6)
@@ -269,361 +268,361 @@ object ItemFunctions {
 
     fun install(env: LuaEnvironment, operations: ItemOperations = UnwiredItemOperations) {
         val registry = env.userdata
-        for (type in ITEM_TYPES) {
-            registry.registerMethod(type, "isItem", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.isItem(item))
-            })
+        registry.registerClass(ITEM_TYPE)
+        val type = ITEM_TYPE
+        registry.registerMethod(type, "isItem", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.isItem(item))
+        })
 
-            registry.registerMethod(type, "getContainer", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val container = operations.getContainer(item) ?: return@luaFunction LuaValue.FALSE
-                env.userdata.wrap("Container", container)
-            })
+        registry.registerMethod(type, "getContainer", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val container = operations.getContainer(item) ?: return@luaFunction LuaValue.FALSE
+            env.userdata.wrap("Container", container)
+        })
 
-            registry.registerMethod(type, "getParent", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val parent = operations.getParent(item) ?: return@luaFunction LuaValue.NIL
-                wrapCylinderUserdata(env, parent)
-            })
+        registry.registerMethod(type, "getParent", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val parent = operations.getParent(item) ?: return@luaFunction LuaValue.NIL
+            wrapCylinderUserdata(env, parent)
+        })
 
-            registry.registerMethod(type, "getTopParent", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val topParent = operations.getTopParent(item) ?: return@luaFunction LuaValue.NIL
-                wrapCylinderUserdata(env, topParent)
-            })
+        registry.registerMethod(type, "getTopParent", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val topParent = operations.getTopParent(item) ?: return@luaFunction LuaValue.NIL
+            wrapCylinderUserdata(env, topParent)
+        })
 
-            registry.registerMethod(type, "getId", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.getId(item))
-            })
+        registry.registerMethod(type, "getId", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.getId(item))
+        })
 
-            registry.registerMethod(type, "clone", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val clone = operations.clone(item) ?: return@luaFunction LuaValue.NIL
-                wrapItemUserdata(env, clone)
-            })
+        registry.registerMethod(type, "clone", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val clone = operations.clone(item) ?: return@luaFunction LuaValue.NIL
+            wrapItemUserdata(env, clone)
+        })
 
-            registry.registerMethod(type, "split", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val count = args.arg(2).optint(1)
-                val split = operations.split(item, count) ?: return@luaFunction LuaValue.NIL
-                wrapItemUserdata(env, split)
-            })
+        registry.registerMethod(type, "split", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val count = args.arg(2).optint(1)
+            val split = operations.split(item, count) ?: return@luaFunction LuaValue.NIL
+            wrapItemUserdata(env, split)
+        })
 
-            registry.registerMethod(type, "remove", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val count = args.arg(2).optint(-1)
-                LuaValue.valueOf(operations.remove(item, count))
-            })
+        registry.registerMethod(type, "remove", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val count = args.arg(2).optint(-1)
+            LuaValue.valueOf(operations.remove(item, count))
+        })
 
-            registry.registerMethod(type, "getCount", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.getCount(item))
-            })
+        registry.registerMethod(type, "getCount", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.getCount(item))
+        })
 
-            registry.registerMethod(type, "getCharges", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.getCharges(item))
-            })
+        registry.registerMethod(type, "getCharges", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.getCharges(item))
+        })
 
-            registry.registerMethod(type, "getFluidType", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.getFluidType(item))
-            })
+        registry.registerMethod(type, "getFluidType", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.getFluidType(item))
+        })
 
-            registry.registerMethod(type, "getWeight", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.getWeight(item))
-            })
+        registry.registerMethod(type, "getWeight", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.getWeight(item))
+        })
 
-            registry.registerMethod(type, "getName", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.getName(item))
-            })
+        registry.registerMethod(type, "getName", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.getName(item))
+        })
 
-            registry.registerMethod(type, "getPluralName", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.getPluralName(item))
-            })
+        registry.registerMethod(type, "getPluralName", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.getPluralName(item))
+        })
 
-            registry.registerMethod(type, "getArticle", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.getArticle(item))
-            })
+        registry.registerMethod(type, "getArticle", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.getArticle(item))
+        })
 
-            registry.registerMethod(type, "getSubType", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.getSubType(item))
-            })
+        registry.registerMethod(type, "getSubType", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.getSubType(item))
+        })
 
-            registry.registerMethod(type, "getPosition", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                env.userdata.wrap(PositionFunctions.POSITION_TYPE, operations.getPosition(item))
-            })
+        registry.registerMethod(type, "getPosition", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            env.userdata.wrap(PositionFunctions.POSITION_TYPE, operations.getPosition(item))
+        })
 
-            registry.registerMethod(type, "getTile", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val tile = operations.getTile(item) ?: return@luaFunction LuaValue.NIL
-                env.userdata.wrap("Tile", tile)
-            })
+        registry.registerMethod(type, "getTile", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val tile = operations.getTile(item) ?: return@luaFunction LuaValue.NIL
+            env.userdata.wrap("Tile", tile)
+        })
 
-            registry.registerMethod(type, "hasAttribute", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val attribute = resolveItemAttribute(args.arg(2), operations::itemAttributeByName)
-                LuaValue.valueOf(operations.hasAttribute(item, attribute))
-            })
+        registry.registerMethod(type, "hasAttribute", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val attribute = resolveItemAttribute(args.arg(2), operations::itemAttributeByName)
+            LuaValue.valueOf(operations.hasAttribute(item, attribute))
+        })
 
-            registry.registerMethod(type, "getAttribute", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val attribute = resolveItemAttribute(args.arg(2), operations::itemAttributeByName)
-                attributeValueToLua(operations.getAttribute(item, attribute))
-            })
+        registry.registerMethod(type, "getAttribute", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val attribute = resolveItemAttribute(args.arg(2), operations::itemAttributeByName)
+            attributeValueToLua(operations.getAttribute(item, attribute))
+        })
 
-            registry.registerMethod(type, "setAttribute", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val attribute = resolveItemAttribute(args.arg(2), operations::itemAttributeByName)
-                val value = luaToAttributeValue(args.arg(3))
-                LuaValue.valueOf(operations.setAttribute(item, attribute, value))
-            })
+        registry.registerMethod(type, "setAttribute", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val attribute = resolveItemAttribute(args.arg(2), operations::itemAttributeByName)
+            val value = luaToAttributeValue(args.arg(3))
+            LuaValue.valueOf(operations.setAttribute(item, attribute, value))
+        })
 
-            registry.registerMethod(type, "removeAttribute", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val attribute = resolveItemAttribute(args.arg(2), operations::itemAttributeByName)
-                LuaValue.valueOf(operations.removeAttribute(item, attribute))
-            })
+        registry.registerMethod(type, "removeAttribute", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val attribute = resolveItemAttribute(args.arg(2), operations::itemAttributeByName)
+            LuaValue.valueOf(operations.removeAttribute(item, attribute))
+        })
 
-            registry.registerMethod(type, "getCustomAttribute", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val key = customAttributeKey(args.arg(2)) ?: return@luaFunction LuaValue.NIL
-                attributeValueToLua(operations.getCustomAttribute(item, key))
-            })
+        registry.registerMethod(type, "getCustomAttribute", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val key = customAttributeKey(args.arg(2)) ?: return@luaFunction LuaValue.NIL
+            attributeValueToLua(operations.getCustomAttribute(item, key))
+        })
 
-            registry.registerMethod(type, "setCustomAttribute", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val key = customAttributeKey(args.arg(2)) ?: return@luaFunction LuaValue.NIL
-                val value = luaToAttributeValue(args.arg(3)) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.setCustomAttribute(item, key, value))
-            })
+        registry.registerMethod(type, "setCustomAttribute", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val key = customAttributeKey(args.arg(2)) ?: return@luaFunction LuaValue.NIL
+            val value = luaToAttributeValue(args.arg(3)) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.setCustomAttribute(item, key, value))
+        })
 
-            registry.registerMethod(type, "removeCustomAttribute", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val key = customAttributeKey(args.arg(2)) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.removeCustomAttribute(item, key))
-            })
+        registry.registerMethod(type, "removeCustomAttribute", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val key = customAttributeKey(args.arg(2)) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.removeCustomAttribute(item, key))
+        })
 
-            registry.registerMethod(type, "setExpertPvpFieldContext", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
-                val owner = retrieveUserdata(args, 2) ?: return@luaFunction LuaValue.FALSE
-                LuaValue.valueOf(operations.setExpertPvpFieldContext(item, owner))
-            })
+        registry.registerMethod(type, "setExpertPvpFieldContext", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+            val owner = retrieveUserdata(args, 2) ?: return@luaFunction LuaValue.FALSE
+            LuaValue.valueOf(operations.setExpertPvpFieldContext(item, owner))
+        })
 
-            registry.registerMethod(type, "canBeMoved", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.canBeMoved(item))
-            })
+        registry.registerMethod(type, "canBeMoved", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.canBeMoved(item))
+        })
 
-            registry.registerMethod(type, "setOwner", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NONE
-                if (args.arg(2).isuserdata()) {
-                    val creature = retrieveUserdata(args, 2)
-                    if (creature !is Creature) {
-                        return@luaFunction LuaValue.NONE
-                    }
-                    LuaValue.valueOf(operations.setOwner(item, creature))
+        registry.registerMethod(type, "setOwner", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NONE
+            if (args.arg(2).isuserdata()) {
+                val creature = retrieveUserdata(args, 2)
+                if (creature !is Creature) {
+                    return@luaFunction LuaValue.NONE
+                }
+                LuaValue.valueOf(operations.setOwner(item, creature))
+            } else {
+                val creatureId = args.arg(2).optlong(0)
+                if (creatureId == 0L) {
+                    LuaValue.FALSE
                 } else {
-                    val creatureId = args.arg(2).optlong(0)
-                    if (creatureId == 0L) {
-                        LuaValue.FALSE
-                    } else {
-                        LuaValue.valueOf(operations.setOwner(item, creatureId))
-                    }
+                    LuaValue.valueOf(operations.setOwner(item, creatureId))
                 }
-            })
+            }
+        })
 
-            registry.registerMethod(type, "getOwnerId", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NONE
-                val ownerId = operations.getOwnerId(item)
-                if (ownerId == 0L) LuaValue.NIL else LuaValue.valueOf(ownerId.toDouble())
-            })
+        registry.registerMethod(type, "getOwnerId", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NONE
+            val ownerId = operations.getOwnerId(item)
+            if (ownerId == 0L) LuaValue.NIL else LuaValue.valueOf(ownerId.toDouble())
+        })
 
-            registry.registerMethod(type, "isOwner", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NONE
-                if (args.arg(2).isuserdata()) {
-                    val creature = retrieveUserdata(args, 2)
-                    if (creature !is Creature) {
-                        return@luaFunction LuaValue.NONE
-                    }
-                    LuaValue.valueOf(operations.isOwner(item, creature))
+        registry.registerMethod(type, "isOwner", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NONE
+            if (args.arg(2).isuserdata()) {
+                val creature = retrieveUserdata(args, 2)
+                if (creature !is Creature) {
+                    return@luaFunction LuaValue.NONE
+                }
+                LuaValue.valueOf(operations.isOwner(item, creature))
+            } else {
+                val creatureId = args.arg(2).optlong(0)
+                if (creatureId == 0L) {
+                    LuaValue.FALSE
                 } else {
-                    val creatureId = args.arg(2).optlong(0)
-                    if (creatureId == 0L) {
-                        LuaValue.FALSE
-                    } else {
-                        LuaValue.valueOf(operations.isOwner(item, creatureId))
-                    }
+                    LuaValue.valueOf(operations.isOwner(item, creatureId))
                 }
-            })
+            }
+        })
 
-            registry.registerMethod(type, "getOwnerName", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NONE
-                val ownerName = operations.getOwnerName(item)
-                if (ownerName.isNullOrEmpty()) LuaValue.NIL else LuaValue.valueOf(ownerName)
-            })
+        registry.registerMethod(type, "getOwnerName", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NONE
+            val ownerName = operations.getOwnerName(item)
+            if (ownerName.isNullOrEmpty()) LuaValue.NIL else LuaValue.valueOf(ownerName)
+        })
 
-            registry.registerMethod(type, "hasOwner", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.hasOwner(item))
-            })
+        registry.registerMethod(type, "hasOwner", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.hasOwner(item))
+        })
 
-            registry.registerMethod(type, "actor", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                if (args.narg() == 1) {
-                    LuaValue.valueOf(operations.hasActor(item))
-                } else {
-                    LuaValue.valueOf(operations.setActor(item, luaBoolean(args.arg(2), false)))
-                }
-            })
+        registry.registerMethod(type, "actor", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            if (args.narg() == 1) {
+                LuaValue.valueOf(operations.hasActor(item))
+            } else {
+                LuaValue.valueOf(operations.setActor(item, luaBoolean(args.arg(2), false)))
+            }
+        })
 
-            registry.registerMethod(type, "moveTo", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val rawTarget = args.arg(2)
-                val target = retrieveUserdata(args, 2)
-                val destination = target?.takeIf { it !is Position }
-                val position = when {
-                    target is Position -> target
-                    destination == null -> luaToPosition(rawTarget)
-                    else -> null
-                }
-                val flags = args.arg(3).optlong(DEFAULT_MOVE_TO_FLAGS)
-                LuaValue.valueOf(operations.moveTo(item, destination, position, flags))
-            })
+        registry.registerMethod(type, "moveTo", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val rawTarget = args.arg(2)
+            val target = retrieveUserdata(args, 2)
+            val destination = target?.takeIf { it !is Position }
+            val position = when {
+                target is Position -> target
+                destination == null -> luaToPosition(rawTarget)
+                else -> null
+            }
+            val flags = args.arg(3).optlong(DEFAULT_MOVE_TO_FLAGS)
+            LuaValue.valueOf(operations.moveTo(item, destination, position, flags))
+        })
 
-            registry.registerMethod(type, "transform", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val itemId = resolveItemId(args.arg(2), operations::itemIdByName) ?: return@luaFunction LuaValue.NIL
-                val subType = args.arg(3).optint(-1)
-                LuaValue.valueOf(operations.transform(item, itemId, subType))
-            })
+        registry.registerMethod(type, "transform", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val itemId = resolveItemId(args.arg(2), operations::itemIdByName) ?: return@luaFunction LuaValue.NIL
+            val subType = args.arg(3).optint(-1)
+            LuaValue.valueOf(operations.transform(item, itemId, subType))
+        })
 
-            registry.registerMethod(type, "decay", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val decayId = args.arg(2).toint()
-                LuaValue.valueOf(operations.decay(item, decayId))
-            })
+        registry.registerMethod(type, "decay", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val decayId = args.arg(2).toint()
+            LuaValue.valueOf(operations.decay(item, decayId))
+        })
 
-            registry.registerMethod(type, "serializeAttributes", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val attributes = operations.serializeAttributes(item) ?: return@luaFunction LuaValue.NIL
-                LuaString.valueOf(attributes)
-            })
+        registry.registerMethod(type, "serializeAttributes", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val attributes = operations.serializeAttributes(item) ?: return@luaFunction LuaValue.NIL
+            LuaString.valueOf(attributes)
+        })
 
-            registry.registerMethod(type, "moveToSlot", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val player = retrieveUserdata(args, 2)
-                if (player !is Player) {
-                    return@luaFunction LuaValue.NIL
-                }
-                val slot = args.arg(3).optint(SLOT_WHEREEVER)
-                LuaValue.valueOf(operations.moveToSlot(item, player, slot))
-            })
+        registry.registerMethod(type, "moveToSlot", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val player = retrieveUserdata(args, 2)
+            if (player !is Player) {
+                return@luaFunction LuaValue.NIL
+            }
+            val slot = args.arg(3).optint(SLOT_WHEREEVER)
+            LuaValue.valueOf(operations.moveToSlot(item, player, slot))
+        })
 
-            registry.registerMethod(type, "getDescription", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val distance = args.arg(2).toint()
-                LuaValue.valueOf(operations.getDescription(item, distance))
-            })
+        registry.registerMethod(type, "getDescription", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val distance = args.arg(2).toint()
+            LuaValue.valueOf(operations.getDescription(item, distance))
+        })
 
-            registry.registerMethod(type, "hasProperty", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
-                LuaValue.valueOf(operations.hasProperty(item, args.arg(2).toint()))
-            })
+        registry.registerMethod(type, "hasProperty", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+            LuaValue.valueOf(operations.hasProperty(item, args.arg(2).toint()))
+        })
 
-            registry.registerMethod(type, "getImbuementSlot", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
-                LuaValue.valueOf(operations.getImbuementSlot(item))
-            })
+        registry.registerMethod(type, "getImbuementSlot", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+            LuaValue.valueOf(operations.getImbuementSlot(item))
+        })
 
-            registry.registerMethod(type, "getImbuement", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
-                val imbuement = operations.getImbuements(item).lastOrNull() ?: return@luaFunction LuaValue.NIL
-                imbuementTable(imbuement)
-            })
+        registry.registerMethod(type, "getImbuement", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+            val imbuement = operations.getImbuements(item).lastOrNull() ?: return@luaFunction LuaValue.NIL
+            imbuementTable(imbuement)
+        })
 
-            registry.registerMethod(type, "setDuration", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
-                LuaValue.valueOf(
-                    operations.setDuration(
-                        item = item,
-                        minDuration = args.arg(2).optlong(0),
-                        maxDuration = if (args.narg() > 2) args.arg(3).optlong(0) else null,
-                        decayTo = if (args.narg() > 3) args.arg(4).optint(0) else 0,
-                        showDuration = if (args.narg() > 4) luaBoolean(args.arg(5), true) else true,
-                    ),
-                )
-            })
+        registry.registerMethod(type, "setDuration", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+            LuaValue.valueOf(
+                operations.setDuration(
+                    item = item,
+                    minDuration = args.arg(2).optlong(0),
+                    maxDuration = if (args.narg() > 2) args.arg(3).optlong(0) else null,
+                    decayTo = if (args.narg() > 3) args.arg(4).optint(0) else 0,
+                    showDuration = if (args.narg() > 4) luaBoolean(args.arg(5), true) else true,
+                ),
+            )
+        })
 
-            registry.registerMethod(type, "isInsideDepot", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
-                LuaValue.valueOf(operations.isInsideDepot(item, args.arg(2).optboolean(false)))
-            })
+        registry.registerMethod(type, "isInsideDepot", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+            LuaValue.valueOf(operations.isInsideDepot(item, args.arg(2).optboolean(false)))
+        })
 
-            registry.registerMethod(type, "isContainer", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.isContainer(item))
-            })
+        registry.registerMethod(type, "isContainer", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.isContainer(item))
+        })
 
-            registry.registerMethod(type, "getTier", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
-                LuaValue.valueOf(operations.getTier(item))
-            })
+        registry.registerMethod(type, "getTier", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+            LuaValue.valueOf(operations.getTier(item))
+        })
 
-            registry.registerMethod(type, "setTier", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
-                LuaValue.valueOf(operations.setTier(item, args.arg(2).toint()))
-            })
+        registry.registerMethod(type, "setTier", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+            LuaValue.valueOf(operations.setTier(item, args.arg(2).toint()))
+        })
 
-            registry.registerMethod(type, "getClassification", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
-                LuaValue.valueOf(operations.getClassification(item))
-            })
+        registry.registerMethod(type, "getClassification", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+            LuaValue.valueOf(operations.getClassification(item))
+        })
 
-            registry.registerMethod(type, "canReceiveAutoCarpet", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
-                LuaValue.valueOf(operations.canReceiveAutoCarpet(item))
-            })
+        registry.registerMethod(type, "canReceiveAutoCarpet", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+            LuaValue.valueOf(operations.canReceiveAutoCarpet(item))
+        })
 
-            registry.registerMethod(type, "setShader", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
-                LuaValue.valueOf(operations.setShader(item, args.arg(2).optjstring("")))
-            })
+        registry.registerMethod(type, "setShader", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+            LuaValue.valueOf(operations.setShader(item, args.arg(2).optjstring("")))
+        })
 
-            registry.registerMethod(type, "getShader", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
-                LuaValue.valueOf(operations.getShader(item))
-            })
+        registry.registerMethod(type, "getShader", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+            LuaValue.valueOf(operations.getShader(item))
+        })
 
-            registry.registerMethod(type, "hasShader", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.hasShader(item))
-            })
+        registry.registerMethod(type, "hasShader", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.hasShader(item))
+        })
 
-            registry.registerMethod(type, "getActionId", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.getActionId(item))
-            })
+        registry.registerMethod(type, "getActionId", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.getActionId(item))
+        })
 
-            registry.registerMethod(type, "setActionId", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val actionId = args.arg(2).toint()
-                LuaValue.valueOf(operations.setActionId(item, actionId))
-            })
+        registry.registerMethod(type, "setActionId", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val actionId = args.arg(2).toint()
+            LuaValue.valueOf(operations.setActionId(item, actionId))
+        })
 
-            registry.registerMethod(type, "getUniqueId", luaFunction { args ->
-                val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.getUniqueId(item).toDouble())
-            })
-        }
+        registry.registerMethod(type, "getUniqueId", luaFunction { args ->
+            val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.getUniqueId(item).toDouble())
+        })
     }
 
     /**

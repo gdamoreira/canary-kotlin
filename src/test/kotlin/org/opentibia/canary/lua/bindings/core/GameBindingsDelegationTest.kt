@@ -144,9 +144,9 @@ class GameBindingsDelegationTest {
         GameFunctions.install(environment, operations)
 
         environment.loadChunk("list = Game.getSpectators({ x = 100, y = 200, z = 7 }, true, true, 1, 2, 3, 4)")
-        environment.loadChunk("monsterMt = getmetatable(list[1]) == rawgetmetatable('Monster')")
-        environment.loadChunk("playerMt = getmetatable(list[2]) == rawgetmetatable('Player')")
-        environment.loadChunk("npcMt = getmetatable(list[3]) == rawgetmetatable('Npc')")
+        environment.loadChunk("monsterMt = getmetatable(list[1]) == rawgetmetatable('Monster').__metatable")
+        environment.loadChunk("playerMt = getmetatable(list[2]) == rawgetmetatable('Player').__metatable")
+        environment.loadChunk("npcMt = getmetatable(list[3]) == rawgetmetatable('Npc').__metatable")
         environment.loadChunk("count = #list")
 
         assertThat(operations.lastSpectators)
@@ -180,7 +180,7 @@ class GameBindingsDelegationTest {
         environment.globals.set("master", environment.userdata.wrap("Player", master))
 
         environment.loadChunk("monster = Game.createMonster('Rat', { x = 1, y = 2, z = 7 }, true, true, master)")
-        environment.loadChunk("monsterMt = getmetatable(monster) == rawgetmetatable('Monster')")
+        environment.loadChunk("monsterMt = getmetatable(monster) == rawgetmetatable('Monster').__metatable")
 
         assertThat(operations.lastMonster)
             .isEqualTo(MonsterCall("Rat", Position(1, 2, 7), true, true, master))
@@ -195,7 +195,7 @@ class GameBindingsDelegationTest {
         GameFunctions.install(environment, operations)
 
         environment.loadChunk("npc = Game.createNpc('Sam', { x = 1, y = 2, z = 7 }, true, true)")
-        environment.loadChunk("npcMt = getmetatable(npc) == rawgetmetatable('Npc')")
+        environment.loadChunk("npcMt = getmetatable(npc) == rawgetmetatable('Npc').__metatable")
 
         assertThat(operations.lastNpc).isEqualTo(NpcCall("Sam", Position(1, 2, 7), true, true))
         assertThat(environment.getGlobal("npcMt").toboolean()).isTrue()
@@ -210,7 +210,7 @@ class GameBindingsDelegationTest {
 
         environment.loadChunk("byName = Game.getOfflinePlayer('Hero')")
         environment.loadChunk("byId = Game.getOfflinePlayer(42)")
-        environment.loadChunk("playerMt = getmetatable(byName) == rawgetmetatable('Player')")
+        environment.loadChunk("playerMt = getmetatable(byName) == rawgetmetatable('Player').__metatable")
 
         assertThat(operations.lastOffline).isEqualTo(42)
         assertThat(environment.getGlobal("playerMt").toboolean()).isTrue()

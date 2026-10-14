@@ -72,8 +72,8 @@ class LuaClassRegistry(private val globals: Globals) {
      * `registerSharedClass<T>` overload): a class whose userdata is reference-counted,
      * plus the `__gc` metamethod. LuaJ never runs `__gc`, so the hook is inert.
      */
-    fun registerSharedClass(className: String) {
-        registerClass(className)
+    fun registerSharedClass(className: String, baseClass: String = "", newFunction: LuaValue? = null) {
+        registerClass(className, baseClass, newFunction)
         registerMetaMethod(className, "__gc", luaGarbageCollection)
     }
 

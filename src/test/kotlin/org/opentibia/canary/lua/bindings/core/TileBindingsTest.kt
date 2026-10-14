@@ -76,7 +76,7 @@ class TileBindingsTest {
         TileFunctions.install(environment, FakeTileOperations())
 
         val checks = methodNames.joinToString(" and ") {
-            "(rawgetmetatable('Tile').$it ~= nil)"
+            "(rawgetmetatable('Tile').__metatable.$it ~= nil)"
         }
         environment.loadChunk("checks = $checks and (rawgetmetatable('Tile').__eq ~= nil)")
 

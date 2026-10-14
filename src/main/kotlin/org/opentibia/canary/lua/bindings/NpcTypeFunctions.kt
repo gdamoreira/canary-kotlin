@@ -141,7 +141,7 @@ object NpcTypeFunctions {
     fun install(env: LuaEnvironment, operations: NpcTypeOperations = WorldNpcTypeOperations()) {
         val registry = env.userdata
 
-        env.globals.set(NPC_TYPE_TYPE, luaFunction { args ->
+        registry.registerClass(NPC_TYPE_TYPE, "", luaFunction { args ->
             operations.create(args.arg(1).tojstring())?.let { env.userdata.wrap(NPC_TYPE_TYPE, it) } ?: LuaValue.NIL
         })
 

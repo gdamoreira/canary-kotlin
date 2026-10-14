@@ -56,7 +56,7 @@ object ModalWindowFunctions {
     const val MODAL_WINDOW_TYPE = "ModalWindow"
 
     fun install(env: LuaEnvironment, operations: ModalWindowOperations = UnwiredModalWindowOperations) {
-        env.globals.set(MODAL_WINDOW_TYPE, libraryFunction { args ->
+        env.userdata.registerClass(MODAL_WINDOW_TYPE, "", libraryFunction { args ->
             val window = ModalWindow(
                 id = luaArgLong(args, 1),
                 title = luaArgString(args, 2),

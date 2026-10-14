@@ -35,7 +35,7 @@ object GlobalEventBindings {
     fun install(env: LuaEnvironment): GlobalEvents {
         val events = GlobalEvents()
 
-        env.globals.set("GlobalEvent", object : VarArgFunction() {
+        env.userdata.registerClass("GlobalEvent", "", object : VarArgFunction() {
             override fun invoke(args: Varargs): Varargs {
                 val name = if (args.arg(1).isstring()) args.arg(1).tojstring() else ""
                 val self = LuaTable()

@@ -152,14 +152,14 @@ class ImbuementFunctionsTest {
         val environment = environment(FakeImbuementOperations(imbuements()))
 
         environment.loadChunk(
-            "checks = (rawgetmetatable('Imbuement').getName ~= nil) and " +
-                "(rawgetmetatable('Imbuement').getId ~= nil) and " +
-                "(rawgetmetatable('Imbuement').getItems ~= nil) and " +
-                "(rawgetmetatable('Imbuement').getBase ~= nil) and " +
-                "(rawgetmetatable('Imbuement').getCategory ~= nil) and " +
-                "(rawgetmetatable('Imbuement').isPremium ~= nil) and " +
-                "(rawgetmetatable('Imbuement').getElementDamage ~= nil) and " +
-                "(rawgetmetatable('Imbuement').getCombatType ~= nil) and " +
+            "checks = (rawgetmetatable('Imbuement').__metatable.getName ~= nil) and " +
+                "(rawgetmetatable('Imbuement').__metatable.getId ~= nil) and " +
+                "(rawgetmetatable('Imbuement').__metatable.getItems ~= nil) and " +
+                "(rawgetmetatable('Imbuement').__metatable.getBase ~= nil) and " +
+                "(rawgetmetatable('Imbuement').__metatable.getCategory ~= nil) and " +
+                "(rawgetmetatable('Imbuement').__metatable.isPremium ~= nil) and " +
+                "(rawgetmetatable('Imbuement').__metatable.getElementDamage ~= nil) and " +
+                "(rawgetmetatable('Imbuement').__metatable.getCombatType ~= nil) and " +
                 "(rawgetmetatable('Imbuement').__eq ~= nil) and " +
                 "(Imbuement ~= nil)",
         )

@@ -85,8 +85,8 @@ class LuaEnvironment {
     fun initState() {
         state = JsePlatform.debugGlobals()
         loadCompatShim()
-        userdata = UserdataRegistry(globals)
         classes = LuaClassRegistry(globals)
+        userdata = UserdataRegistry(globals, classes)
 
         // Install the Canary-named engine primitives backed by the world domain objects.
         WorldLuaOperations.forEnvironment(this).install(this)

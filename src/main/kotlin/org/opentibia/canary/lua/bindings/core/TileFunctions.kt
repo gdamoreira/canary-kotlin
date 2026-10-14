@@ -234,12 +234,12 @@ object TileFunctions {
     fun install(env: LuaEnvironment, operations: TileOperations = UnwiredTileOperations) {
         val registry = env.userdata
 
-        env.globals.set(TILE_TYPE, luaFunction { args ->
+        env.userdata.registerClass(TILE_TYPE, "", luaFunction { args ->
             val position = tilePosition(args) ?: return@luaFunction LuaValue.NIL
             operations.create(position)?.let { env.userdata.wrap(TILE_TYPE, it) } ?: LuaValue.NIL
         })
 
-        registry.registerMethod(TILE_TYPE, "__eq", luaFunction { args ->
+        registry.registerMetaMethod(TILE_TYPE, "__eq", luaFunction { args ->
             val tile = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             val other = retrieveUserdata(args, 2) ?: return@luaFunction LuaValue.FALSE
             LuaValue.valueOf(tile == other)

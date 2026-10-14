@@ -100,12 +100,12 @@ object WeaponFunctions {
     const val WEAPON_TYPE = "Weapon"
 
     fun install(env: LuaEnvironment, operations: WeaponOperations = UnwiredWeaponOperations) {
-        env.globals.set(WEAPON_TYPE, luaFunction { args ->
+        env.userdata.registerClass(WEAPON_TYPE, "", luaFunction { args ->
             createWeapon(env, args.arg(1), operations)
         })
 
         val registry = env.userdata
-        registry.registerMethod(WEAPON_TYPE, "__newindex", luaFunction { args ->
+        registry.registerMetaMethod(WEAPON_TYPE, "__newindex", luaFunction { args ->
             val state = retrieveUserdata(args, 1) as? LuaWeapon
             if (state != null && args.arg(2).tojstring() == "onUseWeapon") {
                 state.callback = args.arg(3)

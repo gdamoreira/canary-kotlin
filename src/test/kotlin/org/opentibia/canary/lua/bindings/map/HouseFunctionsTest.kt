@@ -135,7 +135,7 @@ class HouseFunctionsTest {
         val operations = FakeHouseOperations()
         val environment = environment(operations)
 
-        environment.loadChunk("price = rawgetmetatable('House').getPrice(123)")
+        environment.loadChunk("price = rawgetmetatable('House').__metatable.getPrice(123)")
 
         assertThat(environment.getGlobal("price").toint()).isEqualTo(0)
     }
@@ -478,9 +478,9 @@ class HouseFunctionsTest {
         val environment = environment(operations)
 
         environment.loadChunk(
-            "checks = (rawgetmetatable('House').getId ~= nil) and " +
-                "(rawgetmetatable('House').startTrade ~= nil) and " +
-                "(rawgetmetatable('House').isInvited ~= nil) and " +
+            "checks = (rawgetmetatable('House').__metatable.getId ~= nil) and " +
+                "(rawgetmetatable('House').__metatable.startTrade ~= nil) and " +
+                "(rawgetmetatable('House').__metatable.isInvited ~= nil) and " +
                 "(rawgetmetatable('House').__eq ~= nil) and " +
                 "(House ~= nil)",
         )

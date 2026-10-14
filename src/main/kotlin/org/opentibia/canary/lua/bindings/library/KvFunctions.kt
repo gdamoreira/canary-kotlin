@@ -123,11 +123,7 @@ object KvFunctions {
 
     fun install(env: LuaEnvironment, operations: KvOperations = WorldKvOperations()) {
         val root = operations.root()
-        val metatable = env.userdata.metatable(KV_TYPE)
-        if (metatable.get("__index").isnil()) {
-            metatable.set("__index", metatable)
-        }
-        env.globals.set(KV_TYPE, metatable)
+        env.userdata.registerClass(KV_TYPE)
 
         val kv = (env.globals.get(KV_GLOBAL) as? LuaTable)
             ?: LuaTable().also { env.globals.set(KV_GLOBAL, it) }
@@ -138,7 +134,7 @@ object KvFunctions {
             env.userdata.wrap(KV_TYPE, operations.scoped(target, key))
         }
         kv.set("scoped", scoped)
-        metatable.set("scoped", scoped)
+        env.userdata.registerMethod(KV_TYPE, "scoped", scoped)
 
         val set = libraryFunction { args ->
             val value = luaToValueWrapper(args.arg(args.narg()))
@@ -150,7 +146,7 @@ object KvFunctions {
             LuaValue.TRUE
         }
         kv.set("set", set)
-        metatable.set("set", set)
+        env.userdata.registerMethod(KV_TYPE, "set", set)
 
         val get = libraryFunction { args ->
             val receiver = args.arg(1).touserdata() as? KV
@@ -165,7 +161,7 @@ object KvFunctions {
             operations.get(target, key, forceLoad)?.let(::valueWrapperToLua) ?: LuaValue.NIL
         }
         kv.set("get", get)
-        metatable.set("get", get)
+        env.userdata.registerMethod(KV_TYPE, "get", get)
 
         val keys = libraryFunction { args ->
             val receiver = args.arg(1).touserdata() as? KV
@@ -180,7 +176,7 @@ object KvFunctions {
             luaArrayOf(result.map(LuaValue::valueOf))
         }
         kv.set("keys", keys)
-        metatable.set("keys", keys)
+        env.userdata.registerMethod(KV_TYPE, "keys", keys)
 
         val remove = libraryFunction { args ->
             val receiver = args.arg(1).touserdata() as? KV
@@ -189,6 +185,6 @@ object KvFunctions {
             LuaValue.NIL
         }
         kv.set("remove", remove)
-        metatable.set("remove", remove)
+        env.userdata.registerMethod(KV_TYPE, "remove", remove)
     }
 }

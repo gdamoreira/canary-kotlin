@@ -88,10 +88,10 @@ object SpellFunctions {
     fun install(env: LuaEnvironment, spells: Spells, operations: SpellOperations = UnwiredSpellOperations) {
         env.globals.set("SPELL_INSTANT", LuaValue.valueOf(SPELL_INSTANT))
         env.globals.set("SPELL_RUNE", LuaValue.valueOf(SPELL_RUNE))
-        env.globals.set(SPELL_CLASS, luaFunction { args -> createSpell(env, args, spells) })
+        env.userdata.registerClass(SPELL_CLASS, "", luaFunction { args -> createSpell(env, args, spells) })
 
         val registry = env.userdata
-        registry.registerMethod(SPELL_CLASS, "__newindex", luaFunction { args ->
+        registry.registerMetaMethod(SPELL_CLASS, "__newindex", luaFunction { args ->
             val spell = retrieveUserdata(args, 1) as? LuaSpell
             if (spell != null && args.arg(2).tojstring() == "onCastSpell") {
                 spell.onCastSpell = args.arg(3)

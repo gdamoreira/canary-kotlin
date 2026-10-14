@@ -65,7 +65,7 @@ object ShopFunctions {
     fun install(env: LuaEnvironment, operations: ShopOperations = WorldShopOperations()) {
         val registry = env.userdata
 
-        env.globals.set(SHOP_TYPE, luaFunction {
+        registry.registerClass(SHOP_TYPE, "", luaFunction {
             env.userdata.wrap(SHOP_TYPE, ShopData())
         })
 

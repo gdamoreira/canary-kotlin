@@ -54,7 +54,7 @@ object BatchUpdateFunctions {
     const val BATCH_UPDATE_TYPE = "BatchUpdate"
 
     fun install(env: LuaEnvironment, operations: BatchUpdateOperations = WorldBatchUpdateOperations()) {
-        env.globals.set(BATCH_UPDATE_TYPE, libraryFunction { args ->
+        env.userdata.registerClass(BATCH_UPDATE_TYPE, "", libraryFunction { args ->
             val batchUpdate = operations.create(args.arg(1).touserdata())
             if (batchUpdate == null) {
                 operations.reportError("Player not found")

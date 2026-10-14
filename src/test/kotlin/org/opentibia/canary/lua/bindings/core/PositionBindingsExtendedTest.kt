@@ -69,17 +69,17 @@ class PositionBindingsExtendedTest {
         PositionFunctions.install(environment, FakePositionOperations())
 
         environment.loadChunk(
-            "checks = (rawgetmetatable('Position').getDistance ~= nil) and " +
-                "(rawgetmetatable('Position').getPathTo ~= nil) and " +
-                "(rawgetmetatable('Position').isSightClear ~= nil) and " +
-                "(rawgetmetatable('Position').getTile ~= nil) and " +
-                "(rawgetmetatable('Position').getZones ~= nil) and " +
-                "(rawgetmetatable('Position').sendMagicEffect ~= nil) and " +
-                "(rawgetmetatable('Position').removeMagicEffect ~= nil) and " +
-                "(rawgetmetatable('Position').sendDistanceEffect ~= nil) and " +
-                "(rawgetmetatable('Position').sendSingleSoundEffect ~= nil) and " +
-                "(rawgetmetatable('Position').sendDoubleSoundEffect ~= nil) and " +
-                "(rawgetmetatable('Position').toString ~= nil) and " +
+            "checks = (rawgetmetatable('Position').__metatable.getDistance ~= nil) and " +
+                "(rawgetmetatable('Position').__metatable.getPathTo ~= nil) and " +
+                "(rawgetmetatable('Position').__metatable.isSightClear ~= nil) and " +
+                "(rawgetmetatable('Position').__metatable.getTile ~= nil) and " +
+                "(rawgetmetatable('Position').__metatable.getZones ~= nil) and " +
+                "(rawgetmetatable('Position').__metatable.sendMagicEffect ~= nil) and " +
+                "(rawgetmetatable('Position').__metatable.removeMagicEffect ~= nil) and " +
+                "(rawgetmetatable('Position').__metatable.sendDistanceEffect ~= nil) and " +
+                "(rawgetmetatable('Position').__metatable.sendSingleSoundEffect ~= nil) and " +
+                "(rawgetmetatable('Position').__metatable.sendDoubleSoundEffect ~= nil) and " +
+                "(rawgetmetatable('Position').__metatable.toString ~= nil) and " +
                 "(rawgetmetatable('Position').__add ~= nil) and " +
                 "(rawgetmetatable('Position').__sub ~= nil) and " +
                 "(rawgetmetatable('Position').__eq ~= nil) and " +

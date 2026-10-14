@@ -363,7 +363,7 @@ object MonsterTypeFunctions {
     private const val CONDITION_CURSED = 23
 
     fun install(env: LuaEnvironment, operations: MonsterTypeOperations = UnwiredMonsterTypeOperations) {
-        env.globals.set(MONSTER_TYPE_TYPE, luaFunction { args ->
+        env.userdata.registerClass(MONSTER_TYPE_TYPE, "", luaFunction { args ->
             val argument = args.arg(1)
             val monsterType = when {
                 argument.isnumber() -> operations.create(argument.toint())
