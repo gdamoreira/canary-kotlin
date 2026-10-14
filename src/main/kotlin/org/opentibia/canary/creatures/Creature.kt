@@ -45,6 +45,7 @@ import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Tile
 import org.opentibia.canary.network.protocol.MessageClass
+import org.opentibia.canary.network.protocol.ProtocolSink
 import org.opentibia.canary.network.protocol.SourceEffect
 import org.opentibia.canary.systems.forge.PlayerForgeHistory
 import org.opentibia.canary.systems.prey.PreySlot
@@ -349,9 +350,17 @@ abstract class Creature(
     }
 
     /**
-     * `Creature::changeHealth` (`creature.cpp:845-876`). The
-     * `g_game().addCreatureHealth` broadcast (`sendHealthChange`) is a world
-     * side effect owned by the protocol senders, and Canary queues `onDeath`
+     * `g_game().addCreatureHealth(creature)` broadcast seam
+     * (`creature.cpp:859-861`, `game.cpp:7826`). The `Game` facade binds this to
+     * its spectator fanout when the creature is placed; an unbound creature
+     * (or one outside a `Game`) keeps the C++ `sendHealthChange = false`
+     * silence.
+     */
+    var addCreatureHealth: (Creature) -> Unit = {}
+
+    /**
+     * `Creature::changeHealth` (`creature.cpp:845-876`). [addCreatureHealth] is
+     * the `g_game().addCreatureHealth` broadcast, and Canary queues `onDeath`
      * through the dispatcher (`creature.cpp:862-874`); the port runs confined on
      * the world lane and invokes [onDeath] directly when the lifeless guard lets
      * the transition through.
@@ -361,14 +370,16 @@ abstract class Creature(
             return
         }
 
+        val oldHealth = health
+
         if (healthChange > 0) {
             health += minOf(healthChange, maxHealth - health)
         } else {
             health = maxOf(0, health + healthChange)
         }
 
-        if (sendHealthChange) {
-            // `g_game().addCreatureHealth` protocol broadcast is not ported.
+        if (sendHealthChange && oldHealth != health) {
+            addCreatureHealth(this)
         }
 
         if (health <= 0 && !isRemoved()) {
@@ -1377,6 +1388,13 @@ class Player(
 
     // --- condition integration (player.cpp:356-394, 6291-6436) -------------------
 
+    /**
+     * `Player::client` (`ProtocolGame*`, player.hpp:1955) replaced by the
+     * per-player [ProtocolSink]. Every unbound seam below falls back to the
+     * `nullptr` client behavior; binding the sink wires them all at once.
+     */
+    var protocolSink: ProtocolSink? = null
+
     /** `Player::sendIcons()` (player.hpp:1085) — protocol send seam. */
     var sendIcons: () -> Unit = {}
 
@@ -1384,13 +1402,48 @@ class Player(
     var sendTextMessage: (String) -> Unit = {}
 
     /** `Player::sendTextMessage(MessageClasses, text)` (`player.cpp:6350-6407`) typed protocol seam. */
-    var sendTextMessageTyped: (MessageClass, String) -> Unit = { _, text -> sendTextMessage(text) }
+    var sendTextMessageTyped: (MessageClass, String) -> Unit = { type, text ->
+        protocolSink?.sendTextMessage(type, text)
+    }
 
     /** `Player::sendCreatureAppear(creature, pos, isLogin)` (`player.cpp:8785-8802`) protocol seam. */
-    var sendCreatureAppear: (Creature, Position, Boolean) -> Unit = { _, _, _ -> }
+    var sendCreatureAppear: (Creature, Position, Boolean) -> Unit = { creature, position, isLogin ->
+        protocolSink?.sendCreatureAppear(creature, position, isLogin)
+    }
 
     /** `Player::sendRemoveTileThing(pos, stackpos)` (`player.cpp:7076-7080`) protocol seam. */
-    var sendRemoveTileThing: (Position, Int) -> Unit = { _, _ -> }
+    var sendRemoveTileThing: (Position, Int) -> Unit = { position, stackpos ->
+        protocolSink?.sendRemoveTileThing(position, stackpos)
+    }
+
+    /** `Player::sendCreatureMove(creature, newPos, newStackPos, oldPos, oldStackPos, teleport)` (`player.cpp:8803`) protocol seam. */
+    var sendCreatureMove: (Creature, Position, Int, Position, Int, Boolean) -> Unit =
+        { creature, newPos, newStackPos, oldPos, oldStackPos, teleport ->
+            protocolSink?.sendCreatureMove(creature, newPos, newStackPos, oldPos, oldStackPos, teleport)
+        }
+
+    /** `Player::sendCreatureHealth(creature)` (`player.cpp:2139`) protocol seam. */
+    var sendCreatureHealth: (Creature) -> Unit = { creature ->
+        protocolSink?.sendCreatureHealth(creature)
+    }
+
+    /** `Player::sendCreatureChangeOutfit(creature, outfit)` (`player.cpp:8861`) protocol seam. */
+    var sendCreatureOutfit: (Creature, Outfit) -> Unit = { creature, outfit ->
+        protocolSink?.sendCreatureOutfit(creature, outfit)
+    }
+
+    /** `Player::sendChangeSpeed(creature, stepSpeed)` (`player.hpp:1097`) protocol seam. */
+    var sendChangeSpeed: (Creature, Int) -> Unit = { creature, stepSpeed ->
+        protocolSink?.sendChangeSpeed(creature, stepSpeed)
+    }
+
+    /** `Player::sendStats()` (`player.cpp:2347`) protocol seam. */
+    var sendStats: () -> Unit = { protocolSink?.sendStats(this) }
+
+    /** `Player::sendInventoryItem(slot, item)` (`player.cpp:9281`) protocol seam. */
+    var sendInventoryItem: (Slots_t, Item?) -> Unit = { slot, item ->
+        protocolSink?.sendInventoryItem(slot, item)
+    }
 
     /** `Player::sendWorldLight(lightInfo)` (`player.cpp:2511-2515`) protocol seam. */
     var sendWorldLight: (LightInfo) -> Unit = { _ -> }
@@ -1413,17 +1466,89 @@ class Player(
         cancelNextWalk = true
     }
 
-    /** `Player::sendCancelMessage(ReturnValue)` (player.cpp:2115) protocol seam. */
-    var sendCancelMessage: (ReturnValue) -> Unit = {}
+    /** `Player::sendCancelMessage(ReturnValue)` (player.cpp:2117) protocol seam. */
+    var sendCancelMessage: (ReturnValue) -> Unit = { returnValue ->
+        protocolSink?.sendCancelMessage(returnValue)
+    }
+
+    /** `Player::sendCancelMessage(const std::string&)` (player.cpp:2111) protocol seam. */
+    var sendCancelMessageText: (String) -> Unit = { message ->
+        protocolSink?.sendCancelMessage(message)
+    }
 
     /** `Player::sendCancelTarget` (player.cpp:2121) protocol seam. */
     var sendCancelTarget: () -> Unit = {}
 
-    /** `Player::sendCloseContainer` protocol seam (player.cpp). */
-    var sendCloseContainer: (Int) -> Unit = {}
+    /** `Player::sendCloseContainer` (player.cpp:8378) protocol seam. */
+    var sendCloseContainer: (Int) -> Unit = { cid -> protocolSink?.sendCloseContainer(cid) }
 
-    /** `Player::sendContainer` protocol seam (player.cpp). */
-    var sendContainer: (Int, Container, Boolean, Int) -> Unit = { _, _, _, _ -> }
+    /** `Player::sendContainer` (player.cpp:9134) protocol seam. */
+    var sendContainer: (Int, Container, Boolean, Int) -> Unit = { cid, container, hasParent, firstIndex ->
+        protocolSink?.sendContainer(cid, container, hasParent, firstIndex)
+    }
+
+    /**
+     * `Player::sendAddContainerItem(container, item)` (player.cpp:9056): maps
+     * the container to every open cid and applies the browse-field page and
+     * out-of-window item substitution before the sink send.
+     */
+    var sendAddContainerItem: (Container, Item) -> Unit = { container, item ->
+        for ((cid, info) in openContainers) {
+            if (info.container !== container) {
+                continue
+            }
+
+            var slot = info.index
+            var resolvedItem = item
+            if (container.id == Container.ITEM_BROWSEFIELD) {
+                val containerSize = container.size() - 1
+                val pageEnd = info.index + container.capacity - 1
+                if (containerSize > pageEnd) {
+                    slot = pageEnd
+                    container.getItemByIndex(pageEnd)?.let { resolvedItem = it }
+                } else {
+                    slot = containerSize
+                }
+            } else if (info.index >= container.capacity) {
+                container.getItemByIndex(info.index - 1)?.let { resolvedItem = it }
+            }
+            protocolSink?.sendAddContainerItem(cid, slot, resolvedItem)
+        }
+    }
+
+    /** `Player::sendUpdateContainerItem(container, slot, newItem)` (player.cpp:9087). */
+    var sendUpdateContainerItem: (Container, Int, Item) -> Unit = { container, slot, newItem ->
+        for ((cid, info) in openContainers) {
+            if (info.container !== container) {
+                continue
+            }
+            if (slot < info.index || slot >= info.index + container.capacity) {
+                continue
+            }
+            protocolSink?.sendUpdateContainerItem(cid, slot, newItem)
+        }
+    }
+
+    /** `Player::sendRemoveContainerItem(container, slot)` (player.cpp:9110). */
+    var sendRemoveContainerItem: (Container, Int) -> Unit = { container, slot ->
+        for ((cid, info) in openContainers) {
+            if (info.container !== container) {
+                continue
+            }
+
+            var firstIndex = info.index
+            if (firstIndex > 0 && firstIndex >= container.size() - 1) {
+                firstIndex -= container.capacity
+                info.index = firstIndex
+                sendContainer(cid, container, false, firstIndex)
+            }
+            protocolSink?.sendRemoveContainerItem(
+                cid,
+                maxOf(slot, firstIndex),
+                container.getItemByIndex(container.capacity + firstIndex),
+            )
+        }
+    }
 
     /**
      * `Player::setFollowCreature` (src/creatures/players/player.cpp:6127): a
@@ -2387,10 +2512,11 @@ class Player(
             return ReturnValue.NOTENOUGHCAPACITY
         }
         inventory[target.value] = item
+        sendInventoryItem(target, item)
         return ReturnValue.NOERROR
     }
 
-    /** `Player::removeItem` (player.cpp:10251-10281). */
+    /** `Player::removeItem` (player.cpp:10251-10281); `Player::removeThing` refresh included. */
     fun removeItem(item: Item, count: Int = 0): ReturnValue {
         val slot = inventory.indexOfFirst { it === item }
         if (slot < 0) {
@@ -2401,6 +2527,7 @@ class Player(
         if (item.count <= 0) {
             inventory[slot] = null
         }
+        sendInventoryItem(Slots_t.fromValue(slot) ?: return ReturnValue.NOTPOSSIBLE, if (item.count <= 0) null else item)
         return ReturnValue.NOERROR
     }
 
@@ -2438,12 +2565,95 @@ class Player(
         return skills[skill.value].level
     }
 
-    /** Lua `player:addSkillTries` -> `Player::addSkillAdvance` (player.cpp:1190-1249). */
+    /** `Player::getBaseSkill` (player.cpp:1127). */
+    fun getBaseSkill(skill: skills_t): Int {
+        if (skill.value < skills_t.FIRST || skill.value > skills_t.LAST) {
+            return 0
+        }
+        return skills[skill.value].level
+    }
+
+    /**
+     * `Player::getLoyaltySkill` (player.cpp:1100). The account loyalty bonus is
+     * not ported (PARITY GAP), so the base skill level is returned.
+     */
+    fun getLoyaltySkill(skill: skills_t): Int = getBaseSkill(skill)
+
+    /** `Player::getSkillPercent` (player.cpp:1131). */
+    fun getSkillPercent(skill: skills_t): Double {
+        if (skill.value < skills_t.FIRST || skill.value > skills_t.LAST) {
+            return 0.0
+        }
+        return skills[skill.value].percent
+    }
+
+    /**
+     * Lua `player:addSkillTries` -> `Player::addSkillAdvance` (player.cpp:1190-1249).
+     *
+     * The skill events (`g_events().eventPlayerOnGainSkillTries`), the
+     * screenshots and the `playerAdvance` creature events are Lua/host side
+     * (AGENTS.md 1.4) and not ported. Without a wired vocation registry the
+     * required-tries table is unknown, so the legacy accumulate-only behavior
+     * is kept (PARITY GAP).
+     */
     fun addSkillTries(skill: skills_t, tries: Long) {
         if (skill.value < skills_t.FIRST || skill.value > skills_t.LAST) {
             return
         }
-        skills[skill.value].tries += tries
+
+        val vocation = vocations?.getVocation(vocationId)
+        if (vocation == null) {
+            skills[skill.value].tries += tries
+            return
+        }
+
+        var count = tries
+        var currReqTries = vocation.getReqSkillTries(skill.value, skills[skill.value].level)
+        var nextReqTries = vocation.getReqSkillTries(skill.value, skills[skill.value].level + 1)
+        if (currReqTries >= nextReqTries) {
+            return
+        }
+        if (count == 0L) {
+            return
+        }
+
+        var sendUpdateSkills = false
+        while (skills[skill.value].tries + count >= nextReqTries) {
+            count -= nextReqTries - skills[skill.value].tries
+            skills[skill.value].level++
+            skills[skill.value].tries = 0
+            skills[skill.value].percent = 0.0
+
+            sendTextMessageTyped(
+                MessageClass.MESSAGE_EVENT_ADVANCE,
+                "You advanced to ${getSkillName(skill)} level ${skills[skill.value].level}.",
+            )
+            sendUpdateSkills = true
+
+            currReqTries = nextReqTries
+            nextReqTries = vocation.getReqSkillTries(skill.value, skills[skill.value].level + 1)
+            if (currReqTries >= nextReqTries) {
+                count = 0
+                break
+            }
+        }
+
+        skills[skill.value].tries += count
+
+        val newPercent = if (nextReqTries > currReqTries) {
+            getPercentLevel(skills[skill.value].tries, nextReqTries)
+        } else {
+            0.0
+        }
+        if (skills[skill.value].percent != newPercent) {
+            skills[skill.value].percent = newPercent
+            sendUpdateSkills = true
+        }
+
+        if (sendUpdateSkills) {
+            sendSkills()
+            sendStats()
+        }
     }
 
     /** Lua `player:getSkillTries` (player_functions.cpp:1662-1672). */
@@ -2647,8 +2857,8 @@ class Player(
     /**
      * `Player::addExperience` (player.cpp:3613-3742). The rate/message/stat
      * machinery is a PARITY GAP (see [onGainSharedExperience]); the port keeps
-     * the experience gain, the level-up loop and the `levelPercent`
-     * bookkeeping [getLostPercent] reads.
+     * the experience gain, the level-up loop, the `levelPercent` bookkeeping
+     * [getLostPercent] reads and the trailing `Player::sendStats()` refresh.
      */
     fun addExperience(exp: Long) {
         experience += exp
@@ -2661,6 +2871,8 @@ class Player(
         } else {
             0
         }
+
+        sendStats()
     }
 
     /**
@@ -2693,8 +2905,8 @@ class Player(
     /** `Player::sendMonkData` (`player.cpp:9249-9253`) protocol seam. */
     var sendMonkData: (MonkData, Int) -> Unit = { _, _ -> }
 
-    /** `Player::sendSkills()` protocol seam used by virtue/serenity changes. */
-    var sendSkills: () -> Unit = {}
+    /** `Player::sendSkills()` (player.cpp:2366) protocol seam used by virtue/serenity/skill changes. */
+    var sendSkills: () -> Unit = { protocolSink?.sendSkills(this) }
 
     /**
      * `Combat::harmonyHeal(caster, target, charges)` (`combat.cpp:761-792`)
