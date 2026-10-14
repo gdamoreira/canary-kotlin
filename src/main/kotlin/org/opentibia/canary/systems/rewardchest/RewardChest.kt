@@ -1,6 +1,7 @@
 package org.opentibia.canary.systems.rewardchest
 
 import org.opentibia.canary.items.Item
+import org.opentibia.canary.items.ItemAttribute
 
 /**
  * Small contract for the owning Player, mirroring exactly the Canary members the
@@ -41,8 +42,12 @@ interface RewardChestOwner {
  * Constructor state mirrors `RewardChest(type): Container(type) { maxSize = 32;
  * unlocked = false; pagination = true; }` and `canRemove() == false`.
  *
- * Note: the shared Kotlin Container is modeled directly on top of `Item` for the
- * same reason as [Reward]. See the class-level parity gap in the task report.
+ * PARITY GAP: unlike [Reward] this proxy is still modeled on top of `Item`
+ * instead of `Container`, so the chest is not a `Cylinder`: the `Reward`
+ * children of `getReward` receive the DATE attribute and the Canary prepend
+ * order, but the chest cannot be their parent (the C++ `internalAddItem(chest,
+ * reward, ...)` would set `reward->parent` to the chest). The child links inside
+ * each [Reward] are reachable and set.
  */
 class RewardChest(type: Int = ITEM_REWARD_CHEST) : Item(type) {
 
@@ -64,11 +69,13 @@ class RewardChest(type: Int = ITEM_REWARD_CHEST) : Item(type) {
     val canRemove: Boolean = false
 
     /**
-     * Mirrors `Player::getReward(rewardId, autoCreate)`.
+     * Mirrors `Player::getReward(rewardId, autoCreate)` (player.cpp:2067-2083).
      *
-     * Returns the tracked reward, or creates one (storing `rewardId` in the DATE
-     * attribute via [Reward.date]) and adds it to the chest when [autoCreate] is
-     * true. Uses the reward map as the source of truth.
+     * Returns the tracked reward, or creates one when [autoCreate] is true:
+     * `reward->setAttribute(ItemAttribute_t::DATE, rewardId)` is applied before
+     * the proxy is added, and the add reaches the chest's item list through the
+     * `Game::internalAddItem`/`Container::addThing` path, which prepends. Uses
+     * the reward map as the source of truth.
      */
     fun getReward(rewardId: Long, autoCreate: Boolean): Reward? {
         rewardMap[rewardId]?.let { return it }
@@ -77,9 +84,9 @@ class RewardChest(type: Int = ITEM_REWARD_CHEST) : Item(type) {
         }
 
         val reward = Reward()
-        reward.date = rewardId
+        reward.setAttribute(ItemAttribute.DATE, rewardId)
         rewardMap[rewardId] = reward
-        itemlist.add(reward)
+        itemlist.add(0, reward)
         return reward
     }
 

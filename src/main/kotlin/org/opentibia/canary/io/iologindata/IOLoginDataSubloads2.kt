@@ -42,11 +42,12 @@ import org.opentibia.canary.systems.rewardchest.Reward
  * PARITY GAPS: Canary applies the bestiary/kill-count columns of the same
  * `player_charms` row through `Player::storage()` and the wheel/bosstiary
  * columns through `loadOnlyDataForOnlinePlayer`; the Kotlin port keeps those
- * with their owning loaders. The reward proxy of the port is not a [Container]
- * (Reward.kt parity gap), so [insertItemsIntoRewardBag] prepends through
- * [Reward.internalAddThing] instead of `Container::internalAddThing`; the
- * `RewardChest.getReward` auto-create path stores the reward id in
- * `Reward.date` only, exactly like the save path already compensates for.
+ * with their owning loaders. The reward proxy is a real [Container]
+ * ([Reward]), so [insertItemsIntoRewardBag] reaches it through
+ * `Container::internalAddThing` and every loaded child gets its parent link;
+ * the chest itself is still not a `Cylinder` (RewardChest.kt parity gap), so
+ * the rebind only re-keys the proxy to the chest id, like the C++ `itemPair`
+ * replacement.
  */
 class IOLoginDataSubloads2(
     /**
@@ -173,9 +174,10 @@ class IOLoginDataSubloads2(
      * `IOLoginDataLoad::insertItemsIntoRewardBag`
      * (iologindata_load_player.cpp:972-990): descending `sid` order, every
      * non-direct item is attached to the container of the row `pid` resolved
-     * to. Canary's `Container::internalAddThing` prepends, restoring the
-     * ascending serialized order; the port's [Reward] proxy is not a
-     * [Container] (Reward.kt parity gap) and prepends through its own list.
+     * to. The [Reward] proxy is a [Container], so `getContainer()` resolves it
+     * exactly like the C++ `rewardIt->second.first->getContainer()` and
+     * `Container::internalAddThing` prepends the child (restoring the ascending
+     * serialized order) and sets its parent link.
      */
     private fun insertItemsIntoRewardBag(rewardItemsMap: ItemsMap) {
         for ((_, pair) in rewardItemsMap.entries.reversed()) {
@@ -185,10 +187,7 @@ class IOLoginDataSubloads2(
             }
 
             val parentItem = rewardItemsMap[pid]?.first ?: continue
-            when (parentItem) {
-                is Reward -> parentItem.internalAddThing(item)
-                else -> parentItem.getContainer()?.internalAddThing(item)
-            }
+            parentItem.getContainer()?.internalAddThing(item)
         }
     }
 }

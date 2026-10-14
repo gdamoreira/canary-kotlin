@@ -46,13 +46,35 @@ data class PlayerConditionSkullRecord(
 )
 
 /**
- * Port of the `players.conditions`/`players.skull`/`players.skulltime` reads
- * of `IOLoginDataLoad::loadPlayerConditions` / `loadPlayerSkullSystem`
- * (iologindata_load_player.cpp:257-342).
+ * The `players` look columns `IOLoginDataLoad::loadPlayerDefaultOutfit`
+ * (iologindata_load_player.cpp:291-317) reads from the same result row.
+ *
+ * PARITY GAP (schema): Canary's `players` row also carries `lookmounthead`,
+ * `lookmountbody`, `lookmountlegs`, `lookmountfeet` and `lookfamiliarstype`
+ * (schema.sql:144-148). Those columns are absent from the port's V1 schema
+ * (`lookbody`..`lookaddons` only, V1__initial_schema.sql:48-53), so the record
+ * (and the load) only carries the six available columns.
+ */
+data class PlayerOutfitRecord(
+    val lookType: Int,
+    val lookHead: Int,
+    val lookBody: Int,
+    val lookLegs: Int,
+    val lookFeet: Int,
+    val lookAddons: Int,
+)
+
+/**
+ * Port of the `players` column reads of `IOLoginDataLoad::loadPlayerConditions`
+ * / `loadPlayerSkullSystem` (iologindata_load_player.cpp:257-342) and
+ * `loadPlayerDefaultOutfit` (:291-317).
  */
 interface PlayerSubloadRepository {
     /** `null` when the player row is missing, mirroring the C++ null result. */
     fun loadConditionSkull(playerId: Long): PlayerConditionSkullRecord?
+
+    /** `null` when the player row is missing, mirroring the C++ null result. */
+    fun loadOutfit(playerId: Long): PlayerOutfitRecord?
 }
 
 /**
@@ -84,12 +106,46 @@ class DbPlayerSubloadRepository(private val dataSource: DataSource) : PlayerSubl
         null
     }
 
+    override fun loadOutfit(playerId: Long): PlayerOutfitRecord? = try {
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(OUTFIT_SQL).use { statement ->
+                statement.setLong(1, playerId)
+                statement.executeQuery().use { result ->
+                    if (result.next()) {
+                        PlayerOutfitRecord(
+                            lookType = result.getInt(LOOK_TYPE_COLUMN),
+                            lookHead = result.getInt(LOOK_HEAD_COLUMN),
+                            lookBody = result.getInt(LOOK_BODY_COLUMN),
+                            lookLegs = result.getInt(LOOK_LEGS_COLUMN),
+                            lookFeet = result.getInt(LOOK_FEET_COLUMN),
+                            lookAddons = result.getInt(LOOK_ADDONS_COLUMN),
+                        )
+                    } else {
+                        null
+                    }
+                }
+            }
+        }
+    } catch (ex: SQLException) {
+        logger.error(ex) { "player outfit load failed for player $playerId" }
+        null
+    }
+
     private companion object {
         const val CONDITIONS_COLUMN = "conditions"
         const val SKULL_COLUMN = "skull"
         const val SKULL_TIME_COLUMN = "skulltime"
+        const val LOOK_TYPE_COLUMN = "looktype"
+        const val LOOK_HEAD_COLUMN = "lookhead"
+        const val LOOK_BODY_COLUMN = "lookbody"
+        const val LOOK_LEGS_COLUMN = "looklegs"
+        const val LOOK_FEET_COLUMN = "lookfeet"
+        const val LOOK_ADDONS_COLUMN = "lookaddons"
 
         const val LOAD_SQL = """SELECT "conditions", "skull", "skulltime" FROM players WHERE id = ?"""
+
+        const val OUTFIT_SQL =
+            """SELECT "looktype", "lookhead", "lookbody", "looklegs", "lookfeet", "lookaddons" FROM players WHERE id = ?"""
     }
 }
 
@@ -198,11 +254,15 @@ class DbGuildMembershipRepository(private val dataSource: DataSource) : GuildMem
 }
 
 /**
- * The six `IOLoginDataLoad` sub-loads of `IOLoginData::loadPlayer`
+ * The seven `IOLoginDataLoad` sub-loads of `IOLoginData::loadPlayer`
  * (src/io/iologindata.cpp:102-193) that wave 55 reported missing:
  *
  *  - [loadPlayerConditions] (`load_player.cpp:257-275`): decodes the persisted
  *    `players.conditions` stream into `Player::storedConditionList`.
+ *  - [loadPlayerDefaultOutfit] (`:291-317`): applies the persisted look
+ *    columns to `Player::defaultOutfit` and copies them into
+ *    `Player::currentOutfit`, with the `WARN_UNSAFE_SCRIPTS` unregistered
+ *    look-type guard.
  *  - [loadPlayerSkullSystem] (`:322-342`): restores `Player::skullTicks` /
  *    `Player::skull` on non-`WORLD_TYPE_PVP_ENFORCED` worlds.
  *  - [loadPlayerGuild] (`:394-442`): membership, nick, guild + rank, war list
@@ -255,6 +315,19 @@ class IOLoginDataSubloads(
     private val addGuild: (Guild) -> Unit = {},
     /** `time(nullptr)` for the skull window; seconds. */
     private val now: () -> Long = { getTimeNow() },
+    /**
+     * `g_configManager().getBoolean(WARN_UNSAFE_SCRIPTS)`
+     * (configmanager.cpp:169, default true) for the default-outfit look-type
+     * guard. `false` keeps the guard inert like [ConditionOutfit]'s seam.
+     */
+    private val warnUnsafeScripts: Boolean = false,
+    /**
+     * `g_game().isLookTypeRegistered` (game.hpp:667) over the appearance
+     * registry for the default-outfit look-type guard. `null`-style default
+     * `false` mirrors [ConditionOutfit]'s seam and only matters while
+     * [warnUnsafeScripts] is set.
+     */
+    private val isLookTypeRegistered: (Int) -> Boolean = { false },
 ) {
 
     /**
@@ -270,6 +343,59 @@ class IOLoginDataSubloads(
         for (condition in decodeConditions(blob)) {
             player.storedConditionList.add(condition)
         }
+    }
+
+    /**
+     * `IOLoginDataLoad::loadPlayerDefaultOutfit`
+     * (iologindata_load_player.cpp:291-317): the persisted look columns are
+     * applied to `Player::defaultOutfit` and then copied into
+     * `Player::currentOutfit`. `g_configManager().getBoolean(WARN_UNSAFE_SCRIPTS)`
+     * becomes [warnUnsafeScripts] and `g_game().isLookTypeRegistered` becomes
+     * [isLookTypeRegistered]: an unregistered non-zero look type logs the
+     * warning and returns before the remaining fields, exactly like the C++
+     * `return` after `defaultOutfit.lookType` was already assigned.
+     *
+     * PARITY NOTE (`Creature.kt` accessors): Canary mutates the live
+     * `player->defaultOutfit` fields and ends with
+     * `player->currentOutfit = player->defaultOutfit`. The Kotlin `Creature`
+     * only exposes value-copying accessors (`getDefaultOutfit()` returns a
+     * `copy()`, `setDefaultOutfit`/`setCurrentOutfit` copy again), so the
+     * loader read-modify-writes through them and commits the copy before the
+     * early return; this reproduces the in-place C++ mutation without a new
+     * `Creature.kt` accessor.
+     *
+     * PARITY GAP: the `lookmounthead`/`lookmountbody`/`lookmountlegs`/
+     * `lookmountfeet` and `lookfamiliarstype` columns of Canary's `players`
+     * row (schema.sql:144-148) do not exist in the port schema, so those
+     * `Outfit` fields are left at their constructed defaults and the second
+     * C++ unregistered-familiar-type guard is unreachable.
+     */
+    fun loadPlayerDefaultOutfit(player: Player) {
+        val row = subloadRepository?.loadOutfit(player.id) ?: return
+
+        val defaultOutfit = player.getDefaultOutfit()
+        defaultOutfit.lookType = row.lookType
+        // Commit before the guard: the C++ field is mutated in place and stays
+        // assigned when the guard returns early.
+        player.setDefaultOutfit(defaultOutfit)
+
+        if (warnUnsafeScripts && defaultOutfit.lookType != 0 && !isLookTypeRegistered(defaultOutfit.lookType)) {
+            logger.warn {
+                "[loadPlayerDefaultOutfit] An unregistered creature looktype type with id " +
+                    "'${defaultOutfit.lookType}' was blocked to prevent client crash."
+            }
+            return
+        }
+
+        // `static_cast<uint8_t>(result->getNumber<uint16_t>(...))` for the byte fields.
+        defaultOutfit.lookHead = row.lookHead and 0xFF
+        defaultOutfit.lookBody = row.lookBody and 0xFF
+        defaultOutfit.lookLegs = row.lookLegs and 0xFF
+        defaultOutfit.lookFeet = row.lookFeet and 0xFF
+        defaultOutfit.lookAddons = row.lookAddons and 0xFF
+        player.setDefaultOutfit(defaultOutfit)
+
+        player.setCurrentOutfit(player.getDefaultOutfit())
     }
 
     /**
