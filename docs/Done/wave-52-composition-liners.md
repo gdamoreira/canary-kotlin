@@ -27,3 +27,7 @@
 ## Post-wave (§6)
 
 Update §1–§3, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+
+## Completion
+
+Completed: composition one-liners, player depth 9 (747/821), persistence guard, dispatcher depth. Fixed the imbuement scheduler test race. 652 suites / 7289 tests.

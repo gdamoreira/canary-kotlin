@@ -330,7 +330,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Inbound opcodes complete** — all **141/141 active** opcodes now decode; wave 35 added the final 64 across 4 batches (party analyzer/team finder, client options, extended opcode, channels, item interaction, text/house windows, bosstiary, highscores, weapon proficiency, task hunting, forge history, container browse/seek, inspection, VIP, cyclopedia, prey, hireling, resource balance, greet, object info). ~180 new tests.
 - **Outbound senders** — trade/channel/house/VIP/store/inspection/blessing/stash/cyclopedia writers added. 63 tests.
 - Verified per-module coverage percentages added to `docs/missing-features.md` §1.
-- **643 suites / 7237 tests, all green.**
+- **652 suites / 7289 tests, all green.**
 
 ---
 
@@ -340,7 +340,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **iomarket + ioprey** — offers/history/statistics/expiration + prey/task-hunting persistence. Migration V12. 36 tests.
 - **iobestiary + io_bosstiary + ioguild** — charms/kill counts/tracker/animus, boss points/slots/boosted boss, guild load/save. Migration V13. 32 tests.
 - **player_storage_repository** — typed repo (load/deleteKeys/bulk upsert). Migration V14. 14 tests.
-- **643 suites / 7237 tests, all green.**
+- **652 suites / 7289 tests, all green.**
 
 ---
 
@@ -352,7 +352,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Item functions + weapons** — custom attributes, 69 XML `parse*` methods, weapon registry/damage formulas (64 tests).
 - **Items registry** — protobuf merge, augments, loot types, reload (46 tests).
 - 6 parallel branches integrated via a dedicated semantic-merge pass (Item.kt 6-way conflict resolved).
-- **643 suites / 7237 tests, all green.**
+- **652 suites / 7289 tests, all green.**
 
 ---
 
@@ -362,7 +362,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Spectators** — sets, direction/multifloor filtering, cache (24 tests).
 - **Houses** — rent cycle, transfers, auctions, access lists, eviction, depot transfer (71 tests).
 - **A*/towns** — AStarNodes open/closed sets, Town/Towns registry (20 tests).
-- **643 suites / 7237 tests, all green.**
+- **652 suites / 7289 tests, all green.**
 
 ---
 
@@ -372,7 +372,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Item** — 55/55 (attributes, owner, tier, shader, imbuement slots, serialization).
 - **ItemType** — 58/58 + **Tile** — 32/32.
 - **Player** — 114/305 (vitals/skills/inventory/money/conditions + social/party/guild/modal/UI/house/account/kills/vocation).
-- **643 suites / 7237 tests, all green.**
+- **652 suites / 7289 tests, all green.**
 
 ---
 
@@ -385,7 +385,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Creatures** — group (7), guild (10), mount (4), party (16), vocation (21).
 - **Events** — 46 registrations across action/creature_event/event_callback/scheduler/global/move/talk.
 - 8 branches integrated (WorldLuaOperations wiring union; 29 duplicate player registrations deduped).
-- **643 suites / 7237 tests, all green.**
+- **652 suites / 7289 tests, all green.**
 
 ---
 
@@ -396,7 +396,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Server edge** — connection state machine/transport codec, signals + shutdown drain, webhook, protocol profile/session hints (52 tests).
 - **Lua complete** — `player_functions` 305/305, `modules` recvbyte, +645 enum constants; **all 1,246 method bindings registered**.
 - **Game remainder** — trade/shop/party/guild/VIP/reports/highscores/`checkCreatures` (87 tests).
-- **643 suites / 7237 tests, all green.**
+- **652 suites / 7289 tests, all green.**
 
 ---
 
@@ -405,7 +405,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Lua sandboxing** — `LuaScriptInterface`/`ScriptEnvironment` (protected calls, class registration, environments pool, reload, error reporting) (65 tests).
 - **Opcode application** — trade (0x7D–0x80), containers (0x87/0x88), follow (0xA2), quick-loot fallback (0x90/0x91), depot-search close (0x93), imbuement close (0xD7), market leave (0xF4), quest-log Lua callbacks (0xF0/F1) now apply real engine state (22 tests).
 - **Outbound senders** — creature/map/tile writers (move/turn/say/helpers, map description, add/update tile item), player/UI writers (tutorial, cancel target/walk, fight modes, cooldowns, chat/text windows), cyclopedia computation helpers (64 tests).
-- **643 suites / 7237 tests, all green.**
+- **652 suites / 7289 tests, all green.**
 
 ---
 
@@ -416,7 +416,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **game.cpp families** — movement/combat/targeting (19), market (5), quest/forge/bosstiary/task (8), player handlers (9) (95 tests).
 - **Player depth** — 68 methods (action timers, walk state, vitals, outfit, combat, social, UI, town) → 479/821 raw (78 tests).
 - **Monster depth** — full targeting/combat/walk/summon/respawn; 89 name-matched methods (142 tests).
-- **643 suites / 7237 tests, all green.**
+- **652 suites / 7289 tests, all green.**
 
 ---
 
@@ -427,7 +427,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Player** — `Player::death`, walk queue, `canWalkthrough`, scheduler variants → 496/821 raw (71 tests).
 - **Monster async** — real target-search/combat-intention/follow-path/post-think/movement/visibility pipelines with generation safety (87 tests).
 - **Lua class registry** — bindings migrated to Canary's registration flow + 106 sound enum names (7 tests).
-- **643 suites / 7237 tests, all green.**
+- **652 suites / 7289 tests, all green.**
 
 ---
 
@@ -438,7 +438,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Sender wiring** — `ProtocolSink` + `NettyProtocolSink`; creature/item/container/stats/cancel state changes emit frames (29 tests).
 - **Runtime composition** — stash unified on `Player.stash`, item custom-attribute store + imbuement accessors, `ImbuementItem` over real items, `GameHandler` context with `ioMarket`/`itemTypes`/`imbuements`, market escrow (30 tests).
 - **Player depth 2** — XP boosts, pronouns, loyalty, client/session, stats → 538/821 raw (47 tests).
-- **643 suites / 7237 tests, all green.**
+- **652 suites / 7289 tests, all green.**
 
 ---
 
@@ -449,7 +449,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Monster type state** — forge/hazard/soul-pit, attack/defense spells, strategies, `canUseAttack`/`castSpell` (23 tests).
 - **Map spectator sectors** — 16×16 sector lists + `Map::moveCreature` fanout emits frames (13 tests).
 - **Imbuement decay** — Maintenance-lane tick, generation-checked, registry validation (16 tests).
-- **643 suites / 7237 tests, all green.**
+- **652 suites / 7289 tests, all green.**
 
 ---
 
@@ -459,7 +459,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Player depth 4** — spell cooldown, container/UI, interaction, light, race icons → 648/821 raw (90 tests).
 - **Imbuement composition** — dispatcher-backed decay engine at server root, registry assignment, lifecycle drain (5 tests).
 - **Lua item attributes** — custom-attribute bindings + imbuement scroll/clear wired to real stores (10 tests).
-- **643 suites / 7237 tests, all green.**
+- **652 suites / 7289 tests, all green.**
 
 ---
 
@@ -468,7 +468,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Player depth 5** — inventory weight, exiva restrictions, `saySpell`, kill tracking (bestiary/bosstiary/hunting), `onKilledMonster`/`onKilledPlayer`, reward chest, async follow pipeline (50 tests).
 - **Monster composition** — `checkCreatureAttack`/extra-swing/post-think/onThink_async/idle/navigation bound to host; lane hops (12 tests).
 - **Item registry hub** — imbuement registry at `Item.create`/OTBM map load/`IOMapSerialize`/loot (10 tests).
-- **643 suites / 7237 tests, all green.**
+- **652 suites / 7289 tests, all green.**
 
 ---
 
@@ -477,7 +477,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Player depth 6** — damage accuracy, cleave, perfect shot, reflect, active foods, message buffer, client icons → 672/821 raw (27 tests).
 - **Composition final** — imbuement registry at `GameHandler` item creation; `Creature` async-batch `WorkerCompletion` hand-back; `Monster.onExecuteAsyncTasks` host seam (6 tests).
 - **Login item materialization** — `IOLoginData.loadItems` + inventory/depot/inbox rebuild + `ATTR_CUSTOM` codec (16 tests).
-- **643 suites / 7237 tests, all green.**
+- **652 suites / 7289 tests, all green.**
 
 ---
 
@@ -486,7 +486,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Player depth 7** — attack totals, augments, forge history, item abilities, quick loot, bosstiary points/slots, cyclopedia trackers → 710/821 raw (70 tests).
 - **Host composition 3** — monster `asyncTaskDispatcher`/`onExecuteAsyncTasksHost` bound; `PlayerFeatures` composes combat bonuses/foods/message buffer (9 tests).
 - **Nested inventory persistence** — `player_inventory_items` gains `pid`/`sid` (V17); nested container trees materialize (4 tests).
-- **643 suites / 7237 tests, all green.**
+- **652 suites / 7289 tests, all green.**
 - **The tracked inventory is now 100% IMPLEMENTED: 115/115 rows, 0 PARTIAL, 0 MISSING.**
 
 ---
@@ -496,12 +496,22 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Host bindings** — item abilities/boss points/cyclopedia trackers/aim-at-target/magic affinity composed into `PlayerFeatures`; cyclopedia router delegation; message buffer wired; imbuement adapter stats live (12 tests).
 - **Persistence depth** — live inventory save walk (BFS `sid` from 101) + `OPENCONTAINER` re-arming (4 tests).
 - **Barrier lanes** — 32 shared creature async buckets, slice budgets, promotion, requeue, rejection rollback, barrier-parallel fan-out (12 tests).
-- **643 suites / 7237 tests, all green.**
+- **652 suites / 7289 tests, all green.**
+
+---
+
+### Phase 50: Composition One-Liners & Dispatcher Depth (19:00 – 21:00)
+- **Composition liners** — `playerSay`→message buffer, aim-at-target router (0xC8), charged-item `transformItem`, `MAX_MESSAGEBUFFER` config, non-monster async buckets at login/placement; fixed a tile-insert ordering defect (14 tests).
+- **Player depth 9** — setAccount, protection, dead state, coins, bed, VIP lists, disconnect, loot containers → 747/821 raw (22 tests).
+- **Persistence guard** — `savePlayerGuard` now saves inventory+depot+reward+inbox live walks with reward expiry/order parity (5 tests).
+- **Dispatcher depth** — serial-lane admission, adaptive budget refresh (250 ms), `safeCall` barrier continuation, `observeInternalWork` gating (11 tests).
+- Fixed an order-dependent race in `ImbuementDecaySchedulerTest` (capture generation before advancing the clock).
+- **652 suites / 7289 tests, all green.**
 
 ---
 
 ### Current Status
-- **Automated Tests**: **643 test suites / 7237 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **652 test suites / 7289 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.
