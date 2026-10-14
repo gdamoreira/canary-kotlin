@@ -861,12 +861,11 @@ class Game(
     }
 
     /**
-     * `Creature::updateCreatureWalk()` (creature.hpp:412): `goToFollowCreature_async()`
-     * whose barrier invokes the virtual `goToFollowCreature`. The async barrier
-     * is not ported (PARITY GAP), so the host player's `goToFollowCreature` is
-     * invoked directly.
+     * `Creature::updateCreatureWalk()` (creature.hpp:412): the async
+     * `goToFollowCreature_async` barrier whose dispatcher batch invokes the
+     * virtual `goToFollowCreature`; the host player owns the whole pipeline.
      */
-    var updateCreatureWalk: (Player) -> Unit = { player -> player.goToFollowCreature() }
+    var updateCreatureWalk: (Player) -> Unit = { player -> player.updateCreatureWalk() }
 
     // --- channel handler seams (game.cpp:4324-4441) ----------------------------
 

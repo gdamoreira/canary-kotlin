@@ -1,11 +1,14 @@
 package org.opentibia.canary.creatures.players.pvp
 
 import org.opentibia.canary.account.getTimeNow
+import org.opentibia.canary.combat.condition.Condition
+import org.opentibia.canary.combat.condition.ConditionId
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.creatures.Skulls_t
+import org.opentibia.canary.game.zones.ZoneType
 import org.opentibia.canary.spells.WorldType
 import kotlin.math.ceil
 import kotlin.math.max
@@ -574,5 +577,67 @@ class PlayerPvp(
             }
         }
         player.pzLockEventId = scheduleEvent(duration, task)
+    }
+
+    // --- kill entry point -------------------------------------------------------------
+
+    /**
+     * `Player::onKilledPlayer` (`player.cpp:6595-6604`).
+     *
+     * A victim in a PvP zone drops loot and skill loss unconditionally; the
+     * unjustified-kill branch resolves the right of retribution or records the
+     * murder, and a last hit while in fight opens the white-skull PZ lock.
+     *
+     * `Combat::isInPvpZone` (which is only reached when the victim is *not* in
+     * a PvP zone, so it always returns false) and `Condition::createCondition`
+     * are injectable per AGENTS.md 1.1.
+     */
+    fun onKilledPlayer(
+        target: PlayerPvp,
+        lastHit: Boolean,
+        /** `Combat::isInPvpZone(getPlayer(), target)` (player.cpp:6613). */
+        isInPvpZone: (Player, Player) -> Boolean = { _, _ -> false },
+        /** `Condition::createCondition(CONDITIONID_DEFAULT, CONDITION_INFIGHT, WHITE_SKULL_TIME)` (player.cpp:6625). */
+        createInFightCondition: () -> Condition? = {
+            Condition.createCondition(
+                ConditionId.CONDITIONID_DEFAULT,
+                ConditionType.CONDITION_INFIGHT,
+                config.whiteSkullTime,
+                0,
+                now = { otsysTime() },
+            )
+        },
+    ): Boolean {
+        var unjustified = false
+        if (target.player.getZoneType() == ZoneType.ZONE_PVP) {
+            target.player.setDropLoot(false)
+            target.player.setSkillLoss(false)
+        } else if (!player.hasFlag(PlayerFlags_t.NotGainInFight) && !isPartner(target)) {
+            if (!isInPvpZone(player, target.player) &&
+                hasAttacked(target) &&
+                !target.hasAttacked(this) &&
+                !isGuildMate(target) &&
+                target.player !== player
+            ) {
+                if (target.hasKilled(this)) {
+                    for (kill in target.getUnjustifiedKills()) {
+                        if (kill.target == player.getGUID() && kill.unavenged) {
+                            kill.unavenged = false
+                            removeAttacked(target)
+                            break
+                        }
+                    }
+                } else if (target.player.getSkull() == Skulls_t.SKULL_NONE && !isInWar(target)) {
+                    unjustified = true
+                    addUnjustifiedDead(target)
+                }
+
+                if (lastHit && player.hasCondition(ConditionType.CONDITION_INFIGHT)) {
+                    player.pzLocked = true
+                    player.addCondition(createInFightCondition())
+                }
+            }
+        }
+        return unjustified
     }
 }
