@@ -141,6 +141,10 @@ class GameHandler(
         )
         this.player = activePlayer
 
+        // `Player::client` is the per-session ProtocolGame; the port models it
+        // as the per-player sink over this channel (fire-and-forget writes).
+        activePlayer.protocolSink = NettyProtocolSink(ctx.channel(), activePlayer, gameMap)
+
         // Canary restores the persisted player systems during login
         // (IOLoginData::loadPlayer) before firing the login creature events
         // (Player::onPlacedCreature -> CreatureEvents::playerLogin).
@@ -168,6 +172,10 @@ class GameHandler(
     override fun channelInactive(ctx: ChannelHandlerContext) {
         val activePlayer = player
         if (activePlayer != null) {
+            // `Player::client == nullptr` on disconnect; pending writes against
+            // the closed channel are dropped by the sink.
+            activePlayer.protocolSink = null
+
             // Canary unregisters the player on logout (`Player::removeList`,
             // src/creatures/players/player.cpp:4519 -> `Game::removePlayer`,
             // src/game/game.cpp:11631).

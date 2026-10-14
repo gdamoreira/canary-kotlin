@@ -546,8 +546,10 @@ class Game(
     /** `g_callbacks().executeCallback(playerOnReportBug, ...)` seam (game.cpp:10200). */
     var callbackPlayerOnReportBug: (Player, String, Position, Int) -> Unit = { _, _, _, _ -> }
 
-    /** `Player::sendCancelMessage` protocol seam (player.cpp). */
-    var sendCancelMessage: (Player, ReturnValue) -> Unit = { _, _ -> }
+    /** `Player::sendCancelMessage` protocol seam (player.cpp:2117); defaults to the player's sink. */
+    var sendCancelMessage: (Player, ReturnValue) -> Unit = { player, returnValue ->
+        player.sendCancelMessage(returnValue)
+    }
 
     /**
      * `Player::sendTradeItemRequest` protocol seam (player.cpp:2499-2503), used
@@ -632,7 +634,9 @@ class Game(
     var sendCyclopediaHouseList: (Player, Map<Int, House>) -> Unit = { _, _ -> }
 
     /** `Player::sendCancelMessage(const std::string&)` (player.hpp:1066) protocol seam. */
-    var sendCancelMessageText: (Player, String) -> Unit = { _, _ -> }
+    var sendCancelMessageText: (Player, String) -> Unit = { player, message ->
+        player.sendCancelMessageText(message)
+    }
 
     /** `BedItem::wakeUp(nullptr)` (src/items/bed.cpp:216-255) seam. */
     var wakeUpBed: (BedItem) -> Unit = { _ -> }
@@ -660,7 +664,9 @@ class Game(
     var sendCreatureTurn: (Player, Creature) -> Unit = { _, _ -> }
 
     /** `Player::sendChangeSpeed(creature, stepSpeed)` protocol seam used by the speed helpers. */
-    var sendChangeSpeed: (Player, Creature, Int) -> Unit = { _, _, _ -> }
+    var sendChangeSpeed: (Player, Creature, Int) -> Unit = { player, creature, stepSpeed ->
+        player.sendChangeSpeed(creature, stepSpeed)
+    }
 
     /** `Player::resetLoginProtection()` (player.cpp) seam used by the walk/target handlers. */
     var resetLoginProtection: (Player) -> Unit = { _ -> }
@@ -1029,7 +1035,9 @@ class Game(
     var getMoney: (Player) -> Long = { 0L }
 
     /** `Player::sendTextMessage(type, text)` protocol seam (player.hpp). */
-    var sendTextMessage: (Player, MessageClass, String) -> Unit = { _, _, _ -> }
+    var sendTextMessage: (Player, MessageClass, String) -> Unit = { player, type, text ->
+        player.sendTextMessageTyped(type, text)
+    }
 
     /** `Player::sendMarketEnter(depotId)` protocol seam (game.cpp:10785, 10852). */
     var sendMarketEnter: (Player, Int) -> Unit = { _, _ -> }
@@ -1326,7 +1334,13 @@ class Game(
         }
 
         creature.position = destination.second
+        destination.first.internalAddThing(creature)
         placedCreatures[creature] = destination.first
+
+        // `g_game().addCreatureHealth` reach of `Creature::changeHealth`
+        // (creature.cpp:859-861): bind the spectator fanout once the creature
+        // is on the map.
+        creature.addCreatureHealth = ::addCreatureHealth
 
         if (creatureCheck) {
             addCreatureCheck(creature)
@@ -1383,12 +1397,10 @@ class Game(
      * `Creature::setRemoved()` run, the creature leaves the think buckets and
      * every summon is removed first with `setSkillLoss(false)`.
      *
-     * Parity gaps: `Tile::getClientIndexOfCreature` is not modeled, so the
-     * `sendRemoveTileThing` fanout always uses the no-op `-1` stack position;
-     * `Cylinder::postRemoveNotification`, `Creature::removeList` and the
-     * team-finder logout cleanup (game.cpp:1599-1617) are not modeled. Canary
-     * keeps going when `getTile()` is null; the facade rejects a creature that
-     * was never placed instead.
+     * Parity gaps: `Cylinder::postRemoveNotification`, `Creature::removeList`
+     * and the team-finder logout cleanup (game.cpp:1599-1617) are not modeled.
+     * Canary keeps going when `getTile()` is null; the facade rejects a
+     * creature that was never placed instead.
      */
     fun removeCreature(creature: Creature, isLogout: Boolean = true): Boolean {
         if (creature.isRemoved()) {
@@ -1398,11 +1410,22 @@ class Game(
         val fromZones = tileZones(tile.position)
         val spectators = spectatorsOf(tile.position, multifloor = true)
 
-        placedCreatures.remove(creature)
-
+        val stackPosByPlayer = IdentityHashMap<Player, Int>()
         for (spectator in spectators) {
-            if (spectator is Player) {
-                spectator.sendRemoveTileThing(tile.position, -1)
+            val playerSpectator = spectator as? Player ?: continue
+            stackPosByPlayer[playerSpectator] = if (playerSpectator.canSeeCreature(creature)) {
+                tile.getClientIndexOfCreature(playerSpectator, creature)
+            } else {
+                -1
+            }
+        }
+
+        placedCreatures.remove(creature)
+        tile.removeCreature(creature)
+
+        for ((playerSpectator, stackpos) in stackPosByPlayer) {
+            if (stackpos >= 0) {
+                playerSpectator.sendRemoveTileThing(tile.position, stackpos)
             }
         }
 
@@ -2295,6 +2318,50 @@ class Game(
             sendChangeSpeed(spectatorPlayer, player, player.getStepSpeed())
         }
     }
+
+    /**
+     * `Game::addCreatureHealth` (src/game/game.cpp:7826) less the forge
+     * broadcast: every multifloor player spectator of the creature receives
+     * `Player::sendCreatureHealth`.
+     */
+    fun addCreatureHealth(creature: Creature) {
+        for (spectator in spectatorsOf(creature.position, multifloor = true)) {
+            val spectatorPlayer = spectator as? Player ?: continue
+            spectatorPlayer.sendCreatureHealth(creature)
+        }
+    }
+
+    /**
+     * `Game::internalCreatureChangeOutfit` (src/game/game.cpp:7780). The event
+     * and callback vetoes are injected seams; the invisible creature is stored
+     * but not broadcast exactly like the C++ early return.
+     */
+    fun internalCreatureChangeOutfit(creature: Creature, outfit: Outfit) {
+        if (!eventCreatureOnChangeOutfit(creature, outfit)) {
+            return
+        }
+
+        if (!callbackCreatureOnChangeOutfit(creature, outfit)) {
+            return
+        }
+
+        creature.setCurrentOutfit(outfit)
+
+        if (creature.isInvisible()) {
+            return
+        }
+
+        for (spectator in spectatorsOf(creature.position, multifloor = true)) {
+            val spectatorPlayer = spectator as? Player ?: continue
+            spectatorPlayer.sendCreatureOutfit(creature, outfit)
+        }
+    }
+
+    /** `g_events().eventCreatureOnChangeOutfit` veto seam (game.cpp:7781). */
+    var eventCreatureOnChangeOutfit: (Creature, Outfit) -> Boolean = { _, _ -> true }
+
+    /** `g_callbacks().checkCallback(creatureOnChangeOutfit, ...)` veto seam (game.cpp:7785). */
+    var callbackCreatureOnChangeOutfit: (Creature, Outfit) -> Boolean = { _, _ -> true }
 
     /**
      * `Game::playerInviteToParty` (src/game/game.cpp:9657): inviting yourself

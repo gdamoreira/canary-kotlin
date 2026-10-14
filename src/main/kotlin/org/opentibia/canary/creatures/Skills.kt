@@ -45,3 +45,23 @@ class SkillState(
     var level: Int = 10,
     var percent: Double = 0.0,
 )
+
+/** `getSkillName` (`src/utils/tools.cpp:1022`). */
+fun getSkillName(skill: skills_t): String = when (skill) {
+    skills_t.SKILL_FIST -> "fist fighting"
+    skills_t.SKILL_CLUB -> "club fighting"
+    skills_t.SKILL_SWORD -> "sword fighting"
+    skills_t.SKILL_AXE -> "axe fighting"
+    skills_t.SKILL_DISTANCE -> "distance fighting"
+    skills_t.SKILL_SHIELD -> "shielding"
+    skills_t.SKILL_FISHING -> "fishing"
+    skills_t.SKILL_CRITICAL_HIT_CHANCE -> "critical hit chance"
+    skills_t.SKILL_CRITICAL_HIT_DAMAGE -> "critical extra damage"
+    skills_t.SKILL_LIFE_LEECH_CHANCE -> "life leech chance"
+    skills_t.SKILL_LIFE_LEECH_AMOUNT -> "life leech"
+    skills_t.SKILL_MANA_LEECH_CHANCE -> "mana leech chance"
+    skills_t.SKILL_MANA_LEECH_AMOUNT -> "mana leech"
+    skills_t.SKILL_MAGLEVEL -> "magic level"
+    skills_t.SKILL_LEVEL -> "level"
+    skills_t.SKILL_NONE -> "unknown"
+}
