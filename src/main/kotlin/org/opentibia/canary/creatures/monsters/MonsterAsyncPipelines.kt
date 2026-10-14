@@ -320,9 +320,14 @@ class MonsterAsyncPipelines(
     /** `Monster::visiblePlayerSpectatorIds` (monster.hpp:423). */
     val visiblePlayerSpectatorIds: MutableList<Long> = mutableListOf()
 
-    /** `Monster::playerVisibleUntil` (monster.hpp:424), steady-clock milliseconds. */
+    /**
+     * `Monster::playerVisibleUntil` (monster.hpp:424), steady-clock
+     * milliseconds. The host wiring writes the hold window from
+     * `Monster::updateTargetList` (monster.cpp:759-762), so the setter is
+     * module-visible.
+     */
     var playerVisibleUntil: Long = 0
-        private set
+        internal set
 
     /** `Monster::computeRelevance` (monster.hpp:405). */
     var computeRelevance: MonsterRelevanceState = MonsterRelevanceState()
