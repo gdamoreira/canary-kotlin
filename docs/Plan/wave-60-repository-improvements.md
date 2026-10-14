@@ -1,6 +1,7 @@
 # Wave 60 Plan — Repository Improvements (`docs/improvements.md`)
 
-**Status:** Planned — awaiting go-ahead (no implementation started)
+**Status:** Approved — executing sequentially (decisions resolved)
+**Decisions (user):** I2 keep upstream download URLs annotated · I7 copy datapack verbatim · I4 full 45-file port · I8 keep root compose + add docker/ guides · I5 **MIT license** (user-elected; upstream Canary is GPL-2.0 — provenance noted in README acknowledgments) · Q1-Q7 resolved as listed
 **Source of requirements:** `docs/improvements.md` (user-authored)
 **Baseline:** `main` @ `cf6496d`; 689 suites / 7620 tests green; zero Kotlin warnings
 **Rules from improvements.md:** every improvement documented in `docs/`; **each improvement committed as a separate commit**
