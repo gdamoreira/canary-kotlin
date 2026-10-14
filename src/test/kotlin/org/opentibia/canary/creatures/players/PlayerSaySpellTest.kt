@@ -3,12 +3,10 @@ package org.opentibia.canary.creatures.players
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.chat.SpeakClasses
-import org.opentibia.canary.combat.condition.Condition
-import org.opentibia.canary.combat.condition.ConditionId
-import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.grouping.Group
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.SpectatorMapAccess
 import org.opentibia.canary.map.SpectatorSector
@@ -166,15 +164,15 @@ class PlayerSaySpellTest {
 
     @Test
     fun `ghost mode skips spectators that cannot see the caster`() {
-        // player.cpp:11063-11065.
+        // player.cpp:11063-11065: `!isGhostMode || tmpPlayer->canSeeCreature(caster)`;
+        // a ghost player is only visible to observers with `group->access`
+        // (player.cpp:1414-1416).
         val world = World()
         val caster = world.player(1)
         val blind = world.player(2)
         val seer = world.player(3)
-        seer.setFlag(org.opentibia.canary.creatures.PlayerFlags_t.CanSenseInvisibility)
-        caster.addCondition(
-            Condition.createCondition(ConditionId.CONDITIONID_DEFAULT, ConditionType.CONDITION_INVISIBLE, 0),
-        )
+        seer.group = Group(name = "GM", access = true)
+        caster.switchGhostMode()
 
         caster.saySpell(
             type = SpeakClasses.TALKTYPE_SAY,
@@ -186,7 +184,7 @@ class PlayerSaySpellTest {
             },
         )
 
-        // Only the spectator that can see the invisible caster receives the words.
+        // Only the access spectator that can see the ghost caster receives the words.
         assertThat(world.sends).hasSize(1)
         assertThat(world.sends.single().recipient).isSameAs(seer)
     }

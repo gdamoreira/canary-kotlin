@@ -218,8 +218,13 @@ object CreaturePacketWriter {
         }
     }
 
-    /** `ProtocolGame::canSee(x, y, z)` (protocolgame.cpp:2392-2410). */
-    private fun canSee(player: Player, pos: Position): Boolean {
+    /**
+     * `ProtocolGame::canSee(x, y, z)` (protocolgame.cpp:2392-2410), the client
+     * viewport check behind every `canSee(pos)` gate. `ProtocolGame::canSee(creature)`
+     * (protocolgame.cpp:2376-2386) composes it with the removed flag and
+     * `player.canSeeCreature`; callers gate on that composition themselves.
+     */
+    fun canSee(player: Player, pos: Position): Boolean {
         val myPos = player.position
         if (myPos.z <= GameMap.MAP_INIT_SURFACE_LAYER) {
             if (pos.z > GameMap.MAP_INIT_SURFACE_LAYER) {

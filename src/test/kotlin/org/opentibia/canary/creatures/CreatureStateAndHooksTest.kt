@@ -7,6 +7,7 @@ import org.opentibia.canary.combat.condition.ConditionInvisible
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.LightInfo
 import org.opentibia.canary.combat.condition.Outfit
+import org.opentibia.canary.creatures.grouping.Group
 import org.opentibia.canary.map.Position
 
 /**
@@ -124,6 +125,85 @@ class CreatureStateAndHooksTest {
         player.setFlag(PlayerFlags_t.CanSenseInvisibility)
         assertThat(player.canSeeInvisibility()).isTrue()
         assertThat(player.canSeeCreature(hidden)).isTrue()
+    }
+
+    @Test
+    fun `player canSeeCreature hides ghosts from players without access`() {
+        // player.cpp:1409-1423: a ghost creature is hidden unless group->access.
+        val observer = Player(
+            id = 1,
+            name = "Watcher",
+            maxHealth = 150,
+            health = 150,
+            position = Position(100, 100, 7),
+        )
+        val ghost = Player(
+            id = 2,
+            name = "Ghost",
+            maxHealth = 150,
+            health = 150,
+            position = Position(100, 100, 7),
+        ).apply { switchGhostMode() }
+
+        assertThat(observer.canSeeCreature(ghost)).isFalse()
+
+        observer.group = Group(name = "GM", access = true)
+        assertThat(observer.canSeeCreature(ghost)).isTrue()
+    }
+
+    @Test
+    fun `player canSeeCreature always sees itself even in ghost mode`() {
+        // player.cpp:1410-1412: `creature.get() == this` returns true first.
+        val player = Player(
+            id = 1,
+            name = "Ghost",
+            maxHealth = 150,
+            health = 150,
+            position = Position(100, 100, 7),
+        )
+        player.switchGhostMode()
+
+        assertThat(player.canSeeCreature(player)).isTrue()
+    }
+
+    @Test
+    fun `player canSeeCreature hides invisible monsters but not invisible players`() {
+        // player.cpp:1418-1420: the invisibility check is skipped when the
+        // creature is a player (`!creature->getPlayer()` fails).
+        val observer = Player(
+            id = 1,
+            name = "Watcher",
+            maxHealth = 150,
+            health = 150,
+            position = Position(100, 100, 7),
+        )
+        val invisibleMonster = monster(2)
+        invisibleMonster.addCondition(
+            ConditionInvisible(
+                ConditionId.CONDITIONID_COMBAT,
+                ConditionType.CONDITION_INVISIBLE,
+                ticks = 10000,
+                now = { 0 },
+            ),
+        )
+        val invisiblePlayer = Player(
+            id = 3,
+            name = "Shade",
+            maxHealth = 150,
+            health = 150,
+            position = Position(100, 100, 7),
+        )
+        invisiblePlayer.addCondition(
+            ConditionInvisible(
+                ConditionId.CONDITIONID_COMBAT,
+                ConditionType.CONDITION_INVISIBLE,
+                ticks = 10000,
+                now = { 0 },
+            ),
+        )
+
+        assertThat(observer.canSeeCreature(invisibleMonster)).isFalse()
+        assertThat(observer.canSeeCreature(invisiblePlayer)).isTrue()
     }
 
     // --- speed (creature.cpp:1643-1664, creature.hpp:258-269, player.hpp:1909-1913) ---

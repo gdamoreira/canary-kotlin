@@ -1784,6 +1784,27 @@ class Player(
         hasFlag(PlayerFlags_t.CanSenseInvisibility) || isAccessPlayer()
 
     /**
+     * `Player::canSeeCreature` (player.cpp:1409-1423). The player always sees
+     * themselves, a ghost creature stays hidden unless the observer has
+     * `group->access`, and invisibility hides only non-player creatures when
+     * the observer lacks `canSeeInvisibility`.
+     */
+    override fun canSeeCreature(creature: Creature): Boolean {
+        if (creature === this) {
+            return true
+        }
+
+        if (creature.isInGhostMode() && !isAccessPlayer()) {
+            return false
+        }
+
+        if (creature !is Player && !canSeeInvisibility() && creature.isInvisible()) {
+            return false
+        }
+        return true
+    }
+
+    /**
      * `Player::getStepSpeed()` (player.hpp:1909-1913):
      * `max(PLAYER_MIN_SPEED, min(maxStepSpeed, getSpeed()))` with the
      * `PLAYER_MAX_STAFF_SPEED` cap (both max constants are 65535,
