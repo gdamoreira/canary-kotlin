@@ -32,7 +32,7 @@ class FakeMonsterFactory : MonsterFactory {
     private var nextId = 1L
     val created = mutableListOf<Monster>()
 
-    override fun create(monsterType: MonsterType, position: Position): Monster {
+    override fun create(monsterType: MonsterType, position: Position, startup: Boolean): Monster {
         val monster = Monster(nextId++, monsterType.name, maxHealth = 100, health = 100, position = position)
         created.add(monster)
         return monster

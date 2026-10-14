@@ -1,0 +1,121 @@
+package org.opentibia.canary.network
+
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import org.opentibia.canary.config.ConfigKeys
+import org.opentibia.canary.config.ConfigManager
+import org.opentibia.canary.creatures.monsters.MonsterType
+import org.opentibia.canary.creatures.monsters.Monsters
+import org.opentibia.canary.creatures.spawns.MONSTER_AUTO_ID_START
+import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.items.Item
+import org.opentibia.canary.map.GameMap
+import org.opentibia.canary.map.Position
+import org.opentibia.canary.map.Spectators
+import java.nio.file.Path
+
+/**
+ * Production-composition tests for the booted monster spawn path: [CanaryServer]
+ * loads the map's spawn XML (`IOMap::loadMonsters`, src/io/iomap.hpp:32), starts
+ * the engine on the WorldCommit lane (`Game::setGameState(GAME_STATE_INIT)` ->
+ * `map.spawnsMonster.startup()`, src/game/game.cpp:970) and drains it on
+ * [CanaryServer.stop] (`Game::shutdown`, src/game/game.cpp:9502). Every block
+ * must place through `Game::internalPlaceCreature` (src/game/game.cpp:1495).
+ */
+class CanaryServerSpawnPathTest {
+
+    @TempDir
+    lateinit var tempDir: Path
+
+    private lateinit var dispatcher: GameDispatcher
+    private lateinit var gameMap: GameMap
+    private lateinit var server: CanaryServer
+
+    private val spawnPosition = Position(200, 200, 7)
+
+    @BeforeEach
+    fun setUp() {
+        Spectators.clearCache()
+        dispatcher = GameDispatcher().apply { start() }
+        gameMap = GameMap()
+        gameMap.getOrCreateTile(spawnPosition).ground = Item(id = 100)
+        gameMap.monsterfile = tempDir.resolve("canary-monster.xml").toFile().apply {
+            writeText(
+                """
+                <monsters>
+                    <monster centerx="200" centery="200" centerz="7" radius="4">
+                        <monster name="Rat" x="0" y="0" spawntime="60"/>
+                    </monster>
+                </monsters>
+                """.trimIndent(),
+            )
+        }.path
+        val monsters = Monsters().apply {
+            tryAddMonsterType(
+                "Rat",
+                MonsterType("Rat").apply {
+                    info.isBlockable = true
+                    info.health = 100
+                    info.healthMax = 100
+                },
+            )
+        }
+        server = CanaryServer(
+            loginPort = 0,
+            gamePort = 0,
+            gameMap = gameMap,
+            dispatcher = dispatcher,
+            configManager = ConfigManager(keyMap = ConfigKeys.all.associateWith { it.luaIdentifier }),
+            monsters = monsters,
+        )
+    }
+
+    @AfterEach
+    fun tearDown() {
+        server.stop()
+        dispatcher.shutdown()
+    }
+
+    @Test
+    fun `server boot loads the spawn XML and places the monsters on the world lane`() {
+        server.start()
+        awaitLane()
+
+        val monster = server.game.getMonsterByID(MONSTER_AUTO_ID_START)
+        assertThat(monster).isNotNull
+        assertThat(monster!!.position).isEqualTo(spawnPosition)
+        assertThat(monster.getTile()).isNotNull
+        assertThat(gameMap.spawnsMonster.isLoaded()).isTrue
+        assertThat(gameMap.spawnsMonster.isStarted()).isTrue
+        assertThat(server.monsterSpawnPath).isNotNull
+    }
+
+    @Test
+    fun `stop cancels the spawn checks and releases the engine state`() {
+        server.start()
+        awaitLane()
+
+        server.stop()
+
+        assertThat(gameMap.spawnsMonster.isStarted()).isFalse
+        assertThat(gameMap.spawnsMonster.getspawnMonsterList()).isEmpty()
+    }
+
+    @Test
+    fun `a server without a composed monster registry keeps the spawn path uncomposed`() {
+        val plain = CanaryServer(loginPort = 0, gamePort = 0, gameMap = GameMap(), dispatcher = dispatcher)
+
+        assertThat(plain.monsterSpawnPath).isNull()
+    }
+
+    private fun awaitLane() {
+        val ran = CountDownLatch(1)
+        dispatcher.dispatch { ran.countDown() }
+        assertThat(ran.await(2, TimeUnit.SECONDS)).isTrue()
+    }
+}
