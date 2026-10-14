@@ -18,6 +18,11 @@ import org.opentibia.canary.creatures.grouping.Group
 import org.opentibia.canary.creatures.grouping.Party
 import org.opentibia.canary.creatures.grouping.PartyShields_t
 import org.opentibia.canary.creatures.monsters.MonsterType
+import org.opentibia.canary.creatures.players.CountBlock
+import org.opentibia.canary.creatures.players.PlayerDeathState
+import org.opentibia.canary.creatures.players.PlayerTask
+import org.opentibia.canary.creatures.players.PlayerWalkState
+import org.opentibia.canary.creatures.players.WalkStartPolicy
 import org.opentibia.canary.creatures.players.components.CyclopediaPlayer
 import org.opentibia.canary.creatures.players.components.InMemoryKV
 import org.opentibia.canary.creatures.players.components.KV
@@ -29,6 +34,8 @@ import org.opentibia.canary.creatures.players.components.RecentPvPKillEntry
 import org.opentibia.canary.creatures.players.pvp.PlayerPvp
 import org.opentibia.canary.creatures.players.storages.Stash
 import org.opentibia.canary.game.QuickLootFilter_t
+import org.opentibia.canary.game.movement.Direction
+import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.social.guild.Guild
 import org.opentibia.canary.social.guild.GuildRank
 import org.opentibia.canary.items.Container
@@ -46,6 +53,8 @@ import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Tile
 import org.opentibia.canary.network.protocol.MessageClass
 import org.opentibia.canary.network.protocol.SourceEffect
+import org.opentibia.canary.systems.bestiary.Charm
+import org.opentibia.canary.systems.bestiary.CharmRune
 import org.opentibia.canary.systems.forge.PlayerForgeHistory
 import org.opentibia.canary.systems.prey.PreySlot
 import org.opentibia.canary.systems.rewardchest.ReturnValue
@@ -55,6 +64,7 @@ import org.opentibia.canary.systems.wheel.PlayerWheel
 import org.opentibia.canary.spells.SoundEffect
 import org.opentibia.canary.spells.SpellBook
 import org.opentibia.canary.spells.Spells
+import org.opentibia.canary.spells.WorldType
 import org.opentibia.canary.utils.BatchUpdateActor
 import java.util.Collections
 import java.util.IdentityHashMap
@@ -217,6 +227,28 @@ abstract class Creature(
 
     /** `Creature::onPlacedCreature` (creature.hpp:618) virtual hook. */
     open fun onPlacedCreature() {
+        // No behaviour.
+    }
+
+    /**
+     * `Creature::onWalk` (creature.cpp:291-301) — the drunk-creature direction
+     * roll. The movement subsystem models the C++ `Direction &dir`
+     * out-parameter by returning the effective direction
+     * (`MonsterWalk.onWalk`); this base hook is the virtual seam
+     * `Player::onWalk` overrides. PARITY GAP: the drunk step replacement is not
+     * applied to players.
+     */
+    open fun onWalk(dir: Direction) {
+        // No behaviour; see KDoc.
+    }
+
+    /**
+     * `Creature::goToFollowCreature` (creature.cpp:1090-1120) — the follow
+     * subsystem's path recompute. PARITY GAP: the pathfinding body is not
+     * ported; `Player::goToFollowCreature` delegates the call to the walk
+     * state's seam.
+     */
+    open fun goToFollowCreature() {
         // No behaviour.
     }
 
@@ -514,6 +546,36 @@ abstract class Creature(
      */
     open fun getLostExperience(): Long = 0L
 
+    // --- damage tracking (creature.hpp:549, 694, 839, 897) -----------------------
+
+    /**
+     * `Creature::damageMap` (creature.hpp:839), the `std::map<uint32_t,
+     * CountBlock_t>` keyed by attacker id.
+     */
+    private val damageMap: MutableMap<Long, CountBlock> = sortedMapOf()
+
+    /** `Creature::lastHitCreatureId` (creature.hpp:897). */
+    var lastHitCreatureId: Long = 0
+
+    /** `Creature::getDamageMap` (creature.hpp:694-696). */
+    fun getDamageMap(): Map<Long, CountBlock> = damageMap
+
+    /** `Creature::addDamagePoints` (creature.cpp:1195-1211). */
+    fun addDamagePoints(attacker: Creature, damagePoints: Int) {
+        if (damagePoints <= 0) {
+            return
+        }
+
+        val existing = damageMap[attacker.id]
+        damageMap[attacker.id] = if (existing == null) {
+            CountBlock(total = damagePoints, ticks = now())
+        } else {
+            existing.copy(total = existing.total + damagePoints, ticks = now())
+        }
+
+        lastHitCreatureId = attacker.id
+    }
+
     /** `Creature::skull` (creature.hpp:925), default `SKULL_NONE`. */
     private var skull: Skulls_t = Skulls_t.SKULL_NONE
 
@@ -539,6 +601,13 @@ abstract class Creature(
 
     /** `Creature::canSeeInvisibility` (creature.hpp:213-215); base is false. */
     open fun canSeeInvisibility(): Boolean = false
+
+    /**
+     * `Creature::isInGhostMode` (creature.hpp:212-214); base is false.
+     * PARITY GAP: `Player::isInGhostMode` (player.hpp:566-568) and its
+     * `ghostMode` flag are not modelled yet, mirroring the `Tile` walk checks.
+     */
+    open fun isInGhostMode(): Boolean = false
 
     /**
      * `Creature::isInvisible` (`creature.cpp:1849-1853`): any stored
@@ -833,12 +902,15 @@ abstract class Creature(
     }
 
     /**
-     * `Creature::onIdleStatus` (`creature.cpp:210-215`). The damage-map reset
-     * belongs to the unported damage-tracking subsystem (PARITY GAP); the base
-     * body is the virtual seam `Player` overrides.
+     * `Creature::onIdleStatus` (`creature.cpp:210-215`): a living creature
+     * drops every damage-map entry and forgets the last hit. The base body is
+     * the virtual seam `Player` overrides.
      */
     open fun onIdleStatus() {
-        // No behaviour.
+        if (health > 0) {
+            damageMap.clear()
+            lastHitCreatureId = 0
+        }
     }
 
     /** `Creature::removeCondition(type)` (creature.cpp:1412-1433). */
@@ -3206,6 +3278,339 @@ class Player(
     fun resetAsyncOngoingTask(task: PlayerAsyncTask) {
         asyncOngoingTasks = asyncOngoingTasks and task.value.toLong().inv()
     }
+
+    // --- death/walk state wiring (player.cpp:2942-3070, 4035-4284, 6161-6171) -----
+
+    /**
+     * `Player::manaSpent` (player.hpp:1722), owned by [deathState] like Canary
+     * owns the accumulator on `Player` (player.cpp:4078-4113).
+     */
+    var manaSpent: Long
+        get() = deathState.manaSpent
+        set(value) {
+            deathState.manaSpent = value
+        }
+
+    /** `Player::getSpentMana` (player.cpp:7849-7851). */
+    fun getSpentMana(): Long = manaSpent
+
+    /** `Player::lastLogout` (player.hpp:1717); seconds. */
+    private var lastLogout: Long = 0
+
+    /** `Player::getLastLogout` (player.hpp:630-632). */
+    fun getLastLogout(): Long = lastLogout
+
+    /** `Player::magLevelPercent` (player.hpp:1851). */
+    private var magLevelPercent: Double = 0.0
+
+    /** `Player::getMagicLevelPercent` (player.hpp:588-590). */
+    fun getMagicLevelPercent(): Double = magLevelPercent
+
+    /** `g_game().sendSingleSoundEffect(pos, source)` (game.cpp:7833) seam used by [death]. */
+    var gameSendSingleSoundEffect: (Position, SoundEffect, Creature) -> Unit = { _, _, _ -> }
+
+    /** `g_game().internalCreatureChangeOutfit(creature, outfit)` (game.cpp) seam used by [death]. */
+    var internalCreatureChangeOutfit: (Player, Outfit) -> Unit = { _, _ -> }
+
+    /** `g_game().getPlayerByID(id)` (game.cpp) seam used by [death]. */
+    var playerByIdProvider: (Long) -> Player? = { null }
+
+    /** `g_iobestiary().getBestiaryCharm(charm)` (iobestiary.cpp:231-248) seam used by [death]. */
+    var bestiaryCharmProvider: (CharmRune) -> Charm? = { null }
+
+    /** `g_monsters().getMonsterType(name)` (`src/creatures/monsters/monsters.hpp`) seam used by [death]. */
+    var monsterTypeProvider: (String) -> MonsterType? = { null }
+
+    /** `g_events().eventPlayerOnLoseExperience(player, expLoss)` (player.cpp:4118) seam. */
+    var eventPlayerOnLoseExperience: (Player, Long) -> Unit = { _, _ -> }
+
+    /** `g_callbacks().executeCallback(playerOnLoseExperience, player, expLoss)` (player.cpp:4119) seam. */
+    var executePlayerOnLoseExperienceCallback: (Player, Long) -> Unit = { _, _ -> }
+
+    /** `Player::sendStats()` protocol seam used by [death]. */
+    var sendStats: () -> Unit = {}
+
+    /** `Player::sendReLoginWindow(unfairFightReduction)` (player.cpp:2384-2388) protocol seam. */
+    var sendReLoginWindow: (Int) -> Unit = {}
+
+    /**
+     * `Player::removeItemOfType(id, amount, subType)` (player.cpp:5292) seam.
+     * PARITY GAP: the inventory scan is not ported; the composition binds the
+     * item subsystem's implementation.
+     */
+    var removeItemOfType: (Int, Int, Int) -> Unit = { _, _, _ -> }
+
+    /** `Player::despawn()` (player.cpp:4310-4344) seam; the world removal/logout is Game-owned. */
+    var despawn: () -> Unit = {}
+
+    /** `g_game().internalTeleport(player, pos, effect)` (game.cpp:3540) seam used by the no-loss death. */
+    var internalTeleport: (Player, Position, Boolean) -> Unit = { _, _, _ -> }
+
+    /** `g_game().addCreatureHealth(player)` (game.cpp) protocol seam used by the no-loss death. */
+    var addCreatureHealth: (Player) -> Unit = {}
+
+    /** `g_game().addPlayerMana(player)` (game.cpp) protocol seam used by the no-loss death. */
+    var addPlayerMana: (Player) -> Unit = {}
+
+    /**
+     * `Player::getTemplePosition()` (player.cpp:8319-8326) seam. PARITY GAP:
+     * [org.opentibia.canary.creatures.players.PlayerTownState] is not composed
+     * into the host yet.
+     */
+    var templePositionProvider: () -> Position = { Position(0, 0, 0) }
+
+    /** `Player::loginPosition = town->getTemplePosition()` (player.cpp:4040) seam. */
+    var setLoginPosition: (Position) -> Unit = {}
+
+    /** `g_configManager().getBoolean(TOGGLE_MOUNT_IN_PZ)` (configmanager.cpp:373, default false). */
+    var toggleMountInPz: Boolean = false
+
+    /** `g_logger().debug(...)` seam used by the death/walk states. */
+    var logDebug: (String) -> Unit = {}
+
+    /** `g_dispatcher().scheduleEvent` (dispatcher.hpp:144-145) seam; 0 means rejected. */
+    var scheduleEvent: (DispatcherLane, Long, String, () -> Unit) -> Long = { _, _, _, _ -> 0L }
+
+    /** `g_dispatcher().stopEvent` (player.cpp:2984, 2998) seam. */
+    var stopEvent: (Long) -> Unit = {}
+
+    /** `Creature::addEventWalk` (creature.cpp:342-383) scheduler admission seam. */
+    var addEventWalk: (WalkStartPolicy) -> Unit = {}
+
+    /** `Player::sendCancelWalk()` (player.cpp:2127-2131) protocol seam. */
+    var sendCancelWalk: () -> Unit = {}
+
+    /** `g_callbacks().executeCallback(playerOnWalk, player, dir)` (player.cpp:2960) seam. */
+    var playerOnWalkCallback: (Direction) -> Unit = {}
+
+    /** `Player::inEventMovePush` (player.hpp). */
+    var inEventMovePush: Boolean = false
+
+    /** `g_configManager().getBoolean(PUSH_WHEN_ATTACKING)` (configmanager.cpp:125, default false). */
+    var pushWhenAttacking: Boolean = false
+
+    /** `Player::cancelPush()` (player.cpp:7230) seam. */
+    var cancelPush: () -> Unit = {}
+
+    /** `g_configManager().getNumber(PROTECTION_LEVEL)` (configmanager.cpp:276, default 1). */
+    var protectionLevel: Int = 1
+
+    /** `g_game().getWorldType()` (game.cpp:926-928) seam. */
+    var worldTypeProvider: () -> WorldType = { WorldType.PVP }
+
+    /** `ExpertPvp::isEnabled()` reading the configured `WORLD_TYPE` (expert_pvp.cpp:361-363). */
+    var expertPvpEnabled: Boolean = false
+
+    /** `Monster::isFamiliar()` (monster.cpp:299) seam. */
+    var isFamiliarProvider: (Monster) -> Boolean = { false }
+
+    /** `g_game().map.getTile(pos)` (`src/game/game.cpp`) seam for the feared-field check. */
+    var mapTileProvider: (Position) -> Tile? = { null }
+
+    /** `Creature::getWalkDelay()` (creature.cpp:109) seam; the movement subsystem owns the delay. */
+    var walkDelayProvider: () -> Int = { 0 }
+
+    /** `Creature::getStepDuration(dir)` (creature.cpp:1607) seam; the movement subsystem owns the step speed. */
+    var stepDurationProvider: (Direction) -> Int = { 0 }
+
+    /** `Creature::goToFollowCreature()` (creature.cpp:1090-1120) seam for the follow subsystem. */
+    var creatureGoToFollowCreature: () -> Unit = {}
+
+    /** `Player::setNextAction` (player.cpp:3429-3433) seam; `PlayerActionTimers` owns the deadline. */
+    var setNextAction: (Long) -> Unit = {}
+
+    /** `Player::resetIdleTime` (player.hpp:564-566) seam; the idle-logout clock is not modelled (PARITY GAP). */
+    var resetIdleTime: () -> Unit = {}
+
+    /**
+     * `g_dispatcher().scheduleEvent` wrapper: a scheduled action is dropped when
+     * the player left the world before the event ran (AGENTS.md deferred
+     * callback lifetime safety).
+     */
+    private fun schedulePlayerEvent(
+        lane: DispatcherLane,
+        delayMs: Long,
+        context: String,
+        action: () -> Unit,
+    ): Long = scheduleEvent(lane, delayMs, context) { if (!isRemoved()) action() }
+
+    /** `Creature::onWalk` super call seam for [walkState]. */
+    private fun creatureOnWalkSuper(dir: Direction) {
+        super.onWalk(dir)
+    }
+
+    /**
+     * [PlayerDeathState] host instance: `Player::death` (player.cpp:4035-4284)
+     * over the host accessors above. Constructed lazily so the host config
+     * values ([toggleMountInPz]) are read after composition; the world lane
+     * confinement makes `NONE` thread safety the correct mode (AGENTS.md 1.2).
+     */
+    private val deathState: PlayerDeathState by lazy(LazyThreadSafetyMode.NONE) {
+        PlayerDeathState(
+            player = this,
+            now = { now() },
+            toggleMountInPz = toggleMountInPz,
+            adventurersBlessingLevel = { adventurersBlessingLevel },
+            getSkillLoss = { skillLoss },
+            setSkillLoss = { setSkillLoss(it) },
+            skills = skills.toList(),
+            setLevelPercent = { levelPercent = it },
+            setMagLevelPercent = { magLevelPercent = it },
+            setLastLogout = { lastLogout = it },
+            getDamageMap = { getDamageMap() },
+            getPlayerById = { playerByIdProvider(it) },
+            getBestiaryCharm = { bestiaryCharmProvider(it) },
+            getMonsterType = { monsterTypeProvider(it) },
+            internalCreatureChangeOutfit = { p, outfit -> internalCreatureChangeOutfit(p, outfit) },
+            sendSingleSoundEffect = { pos, sound, source -> gameSendSingleSoundEffect(pos, sound, source) },
+            eventPlayerOnLoseExperience = { p, exp -> eventPlayerOnLoseExperience(p, exp) },
+            executePlayerOnLoseExperienceCallback = { p, exp -> executePlayerOnLoseExperienceCallback(p, exp) },
+            sendStats = { sendStats() },
+            sendReLoginWindow = { sendReLoginWindow(it) },
+            removeItemOfType = { id, amount, subType -> removeItemOfType(id, amount, subType) },
+            despawn = { despawn() },
+            internalTeleport = { p, pos, effect -> internalTeleport(p, pos, effect) },
+            addCreatureHealth = { addCreatureHealth(it) },
+            addPlayerMana = { addPlayerMana(it) },
+            getTemplePosition = { templePositionProvider() },
+            setLoginPosition = { setLoginPosition(it) },
+            logDebug = { logDebug(it) },
+        )
+    }
+
+    /**
+     * [PlayerWalkState] host instance: the walk queue, `Player::onWalk`
+     * (player.cpp:2942-2961), `goToFollowCreature` (player.cpp:6161-6171),
+     * `canWalkthrough` (player.cpp:1424-1536) and the action/push/potion
+     * scheduler variants (player.cpp:2983-3070).
+     */
+    private val walkState: PlayerWalkState = PlayerWalkState(
+        now = { now() },
+        getPosition = { position },
+        hasParalyze = { hasCondition(ConditionType.CONDITION_PARALYZE) },
+        hasFearedCondition = { hasCondition(ConditionType.CONDITION_FEARED) },
+        getWalkDelay = { walkDelayProvider() },
+        sendCancelWalk = { sendCancelWalk() },
+        scheduleEvent = ::schedulePlayerEvent,
+        stopEvent = { stopEvent(it) },
+        resetIdleTime = { resetIdleTime() },
+        sendCancelMessage = { sendCancelMessage(it) },
+        executeFearedCondition = {
+            getCondition(ConditionType.CONDITION_FEARED)?.executeCondition(conditionTarget, 0)
+        },
+        logDebug = { logDebug(it) },
+        addEventWalk = { addEventWalk(it) },
+        getPlayer = { this },
+        hasRootedCondition = { hasCondition(ConditionType.CONDITION_ROOTED) },
+        getFollowCreature = { getFollowCreature() },
+        hasFollowPath = { hasFollowPath },
+        creatureGoToFollowCreature = { creatureGoToFollowCreature() },
+        getStepDuration = { stepDurationProvider(it) },
+        setNextAction = { setNextAction(it) },
+        getTile = { mapTileProvider(it) },
+        creatureOnWalk = { creatureOnWalkSuper(it) },
+        playerOnWalkCallback = { playerOnWalkCallback(it) },
+        inEventMovePush = { inEventMovePush },
+        pushWhenAttacking = { pushWhenAttacking },
+        cancelPush = { cancelPush() },
+        protectionLevel = { protectionLevel },
+        getWorldType = { worldTypeProvider() },
+        expertPvpEnabled = { expertPvpEnabled },
+        isInGhostMode = { it.isInGhostMode() },
+        isFamiliar = { isFamiliarProvider(it) },
+    )
+
+    /** `Player::death` (player.cpp:4035-4284). */
+    override fun death(lastHitCreature: Creature?) {
+        deathState.death(lastHitCreature)
+    }
+
+    /** `Player::onWalk` (player.cpp:2942-2961). */
+    override fun onWalk(dir: Direction) {
+        walkState.onWalk(dir)
+    }
+
+    /** `Player::goToFollowCreature` (player.cpp:6161-6171). */
+    override fun goToFollowCreature() {
+        walkState.goToFollowCreature()
+    }
+
+    /** `Player::canWalkthrough` (player.cpp:1424-1489). */
+    fun canWalkthrough(creature: Creature): Boolean = walkState.canWalkthrough(creature)
+
+    /** `Player::canWalkthroughEx` (player.cpp:1492-1536). */
+    fun canWalkthroughEx(creature: Creature): Boolean = walkState.canWalkthroughEx(creature)
+
+    /** `Player::setNextWalkActionTask` (player.cpp:2983-2994). */
+    fun setNextWalkActionTask(task: PlayerTask?) {
+        walkState.setNextWalkActionTask(task)
+    }
+
+    /** `Player::setNextWalkTask` (player.cpp:2996-3012). */
+    fun setNextWalkTask(task: PlayerTask?) {
+        walkState.setNextWalkTask(task)
+    }
+
+    /** `Player::setNextActionTask` (player.cpp:3014-3036). */
+    fun setNextActionTask(task: PlayerTask?, resetIdleTime: Boolean = true) {
+        walkState.setNextActionTask(task, resetIdleTime)
+    }
+
+    /** `Player::setNextActionPushTask` (player.cpp:3038-3052). */
+    fun setNextActionPushTask(task: PlayerTask?) {
+        walkState.setNextActionPushTask(task)
+    }
+
+    /** `Player::setNextPotionActionTask` (player.cpp:3054-3070). */
+    fun setNextPotionActionTask(task: PlayerTask?) {
+        walkState.setNextPotionActionTask(task)
+    }
+
+    /** `Player::onWalkAborted` (player.cpp:6242-6245). */
+    fun onWalkAborted() {
+        walkState.onWalkAborted()
+    }
+
+    /** `Player::onWalkComplete` (player.cpp:6247-6271). */
+    fun onWalkComplete() {
+        walkState.onWalkComplete()
+    }
+
+    /**
+     * `Player::walkExhausted` (player.cpp:3176-3182), `setWalkExhaust`
+     * (player.cpp:3184-3186) and `updateParalyzeWalkExhaust`
+     * (player.cpp:3188-3196).
+     */
+    fun walkExhausted(): Boolean = walkState.walkExhausted()
+
+    /** `Player::setWalkExhaust` (player.cpp:3184-3186). */
+    fun setWalkExhaust(value: Long) {
+        walkState.setWalkExhaust(value)
+    }
+
+    /** `Player::updateParalyzeWalkExhaust` (player.cpp:3188-3196). */
+    fun updateParalyzeWalkExhaust() {
+        walkState.updateParalyzeWalkExhaust()
+    }
+
+    /** `Creature::startAutoWalk` (creature.cpp:326-340). */
+    fun startAutoWalk(
+        listDir: List<Direction>,
+        ignoreConditions: Boolean = false,
+        startPolicy: WalkStartPolicy = WalkStartPolicy.RespectDelay,
+    ) {
+        walkState.startAutoWalk(listDir, ignoreConditions, startPolicy)
+    }
+
+    /** `Creature::getNextStep` (creature.cpp:315-324): the walk event's queue consumer. */
+    fun getNextStep(): Direction? = walkState.getNextStep()
+
+    /** `Creature::listWalkDir` (creature.hpp:872) read view for the walk event owner. */
+    val listWalkDir: List<Direction> get() = walkState.listWalkDir
+
+    /** `Player::createPlayerTask` (player.cpp:212-214). */
+    fun createPlayerTask(delay: Long, f: () -> Unit, context: String): PlayerTask =
+        walkState.createPlayerTask(delay, f, context)
 
     companion object {
         /** `PLAYER_MAX_STAFF_SPEED` (`src/creatures/players/player.hpp:126`). */
