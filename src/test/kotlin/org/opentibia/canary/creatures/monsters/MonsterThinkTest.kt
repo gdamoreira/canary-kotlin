@@ -403,7 +403,7 @@ class MonsterThinkTest {
         isIdle: Boolean = false,
         isSummon: Boolean = false,
         targetListEmpty: Boolean = false,
-        targetListPopulatedByRefresh: Boolean = false,
+        targetListEmptyAfterRefresh: () -> Boolean = { targetListEmpty },
         friendlyFire: Boolean = false,
         attackedCreatureId: Long? = null,
         followCreatureId: Long? = null,
@@ -422,7 +422,7 @@ class MonsterThinkTest {
         followCreatureId = followCreatureId,
         hasFollowPath = hasFollowPath,
         targetDistance = targetDistance,
-        targetListPopulatedByRefresh = targetListPopulatedByRefresh,
+        targetListEmptyAfterRefresh = targetListEmptyAfterRefresh,
         canUseAttack = { canUseAttack },
         isFleeing = isFleeing,
         addEventWalk = { events.add("addEventWalk") },
@@ -464,7 +464,7 @@ class MonsterThinkTest {
         MonsterThink.onThinkAsync(
             asyncThinkRequest(
                 targetListEmpty = true,
-                targetListPopulatedByRefresh = true,
+                targetListEmptyAfterRefresh = { false },
                 friendlyFire = true,
                 events = events,
             )
