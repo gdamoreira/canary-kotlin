@@ -33,6 +33,7 @@ import org.opentibia.canary.network.message.readTibiaString
 import org.opentibia.canary.network.message.writeTibiaString
 import org.opentibia.canary.persistence.PlayerPersistenceService
 import org.opentibia.canary.systems.imbuement.ImbuementAction
+import org.opentibia.canary.systems.imbuement.ImbuementDecay
 import org.opentibia.canary.systems.imbuement.ImbuementEngine
 import org.opentibia.canary.systems.imbuement.ImbuementItem
 import org.opentibia.canary.systems.imbuement.ImbuementPlayer
@@ -60,6 +61,14 @@ class GameHandler(
     /** `g_imbuements()` (imbuements.cpp:47) registry backing the composed `ImbuementEngine`. */
     private val imbuements: Imbuements? = null,
     /**
+     * `g_imbuementDecay()` (imbuements.hpp:167) engine shared by every game
+     * connection; the composition root ([CanaryServer]) builds it once over the
+     * server dispatcher so decay ticks arm on the server lifecycle. When null
+     * the handler composes its own engine over [dispatcher], so a directly
+     * constructed handler still runs decay on the server schedules.
+     */
+    private val imbuementEngine: ImbuementEngine? = null,
+    /**
      * `g_game()` seam shared by every game connection. [CanaryServer] injects its
      * single instance; a directly constructed handler falls back to a private
      * instance over the same map/dispatcher, composed with the injected item,
@@ -79,12 +88,23 @@ class GameHandler(
     private val scriptingDispatch = ScriptingDispatch(luaEnvironment, dispatcher)
 
     /**
+     * `g_imbuementDecay()` engine bound by this handler: the server-owned
+     * [imbuementEngine] when injected, otherwise a handler-local engine whose
+     * `ImbuementDecay` arms its re-arming tick on [dispatcher]
+     * (imbuements.cpp:520-525, 621-631).
+     */
+    private val composedImbuementEngine: ImbuementEngine? =
+        imbuementEngine ?: imbuements?.let { registry ->
+            ImbuementEngine(registry, ImbuementDecay(registry, dispatcher))
+        }
+
+    /**
      * Production `IOMarket` escrow over this handler's `Game`
      * (`IOMarket::processExpiredOffers`, iomarket.cpp:155-232). The composition
      * root builds the production `IOMarket` with it so expired sell offers reach
      * the seller's inbox and expired buy offers credit the bank balance.
      */
-    val marketEscrow: MarketEscrow = GameMarketEscrow({ game }, itemTypes)
+    val marketEscrow: MarketEscrow = GameMarketEscrow({ game }, itemTypes, imbuements)
 
     init {
         // Host bindings for the `g_game()` seams the ported handlers call on the
@@ -106,29 +126,35 @@ class GameHandler(
         // the nearest reachable host method (PARITY GAP).
         game.updateCreatureWalk = { player -> player.goToFollowCreature() }
 
-        val imbuementEngine = imbuements?.let(::ImbuementEngine)
-        if (imbuementEngine != null) {
+        val engine = composedImbuementEngine
+        if (engine != null) {
             game.createScrollImbuement = { player, imbuement ->
-                imbuementEngine.createScrollImbuement(
+                engine.createScrollImbuement(
                     imbuement,
                     ImbuementPlayerAdapter(game, player, itemTypes),
                 )
             }
             game.onApplyImbuement = { player, imbuement, item, slot ->
+                // The seam composes the real item into the engine, so the
+                // process registry reaches it exactly like the C++
+                // `g_imbuements()` lookup in `Item::getImbuementInfo`
+                // (src/items/item.cpp:472-483).
+                imbuements?.let { item.imbuementRegistry = it }
                 val adapter = ImbuementPlayerAdapter(game, player, itemTypes)
                 val view = ImbuementItem(item).also {
                     it.parent = adapter
                     it.holdingPlayer = adapter
                 }
-                imbuementEngine.onApplyImbuement(imbuement, view, slot, adapter)
+                engine.onApplyImbuement(imbuement, view, slot, adapter)
             }
             game.onClearImbuement = { player, item, slot ->
+                imbuements?.let { item.imbuementRegistry = it }
                 val adapter = ImbuementPlayerAdapter(game, player, itemTypes)
                 val view = ImbuementItem(item).also {
                     it.parent = adapter
                     it.holdingPlayer = adapter
                 }
-                imbuementEngine.onClearImbuement(view, slot, adapter)
+                engine.onClearImbuement(view, slot, adapter)
             }
             game.sendImbuementResult = { player, message -> player.sendTextMessage(message) }
         }
@@ -356,6 +382,8 @@ class GameMarketEscrow(
      */
     private val gameProvider: () -> Game,
     private val itemTypes: Items? = null,
+    /** `g_imbuements()` registry composed onto the delivered items. */
+    private val imbuements: Imbuements? = null,
 ) : MarketEscrow {
 
     private val game: Game get() = gameProvider()
@@ -396,6 +424,7 @@ class GameMarketEscrow(
         }
 
         val item = Item(id = itemId, count = count, type = itemTypes?.get(itemId))
+        imbuements?.let { item.imbuementRegistry = it }
         if (tier != 0) {
             item.setTier(tier)
         }

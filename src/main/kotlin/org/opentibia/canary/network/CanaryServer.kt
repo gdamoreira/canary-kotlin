@@ -31,6 +31,8 @@ import org.opentibia.canary.network.protocol.GameHandler
 import org.opentibia.canary.network.protocol.GameMarketEscrow
 import org.opentibia.canary.network.protocol.LoginHandler
 import org.opentibia.canary.network.protocol.StatusHandler
+import org.opentibia.canary.systems.imbuement.ImbuementDecay
+import org.opentibia.canary.systems.imbuement.ImbuementEngine
 import org.opentibia.canary.systems.imbuement.Imbuements
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -81,7 +83,7 @@ class CanaryServer(
     val ioMarket: IOMarket? = dataSource?.let { source ->
         IOMarket(
             source,
-            escrow = GameMarketEscrow({ game }, itemTypes),
+            escrow = GameMarketEscrow({ game }, itemTypes, imbuements),
             scheduleCheck = { delayMillis ->
                 dispatcher.schedule(delayMillis, DispatcherLane.WorldCommit) {
                     ioMarket?.checkExpiredOffers()
@@ -101,6 +103,18 @@ class CanaryServer(
         ioMarket = ioMarket,
         imbuements = imbuements,
     )
+
+    /**
+     * Shared `g_imbuementDecay()` engine
+     * (src/creatures/players/imbuements/imbuements.hpp:167) composed once at the
+     * server root over the server-owned [dispatcher]: decay ticks arm on the
+     * server lifecycle and [stop] drains the tracker before the bootstrap shuts
+     * the dispatcher down (AGENTS.md deferred-callback lifetime safety). Every
+     * connection's [GameHandler] binds `Game::playerApplyImbuement` /
+     * `playerClearImbuement` to this one engine.
+     */
+    internal val imbuementEngine: ImbuementEngine? =
+        imbuements?.let { registry -> ImbuementEngine(registry, ImbuementDecay(registry, dispatcher)) }
 
     private val scriptingDispatch = ScriptingDispatch(luaEnvironment, dispatcher)
 
@@ -188,6 +202,7 @@ class CanaryServer(
         itemTypes = itemTypes,
         ioMarket = ioMarket,
         imbuements = imbuements,
+        imbuementEngine = imbuementEngine,
         game = game,
     )
 
@@ -232,6 +247,10 @@ class CanaryServer(
 
     override fun stop() {
         if (!stopped.compareAndSet(false, true)) return
+        // Drain the shared decay engine before the listener/event-loop teardown;
+        // the bootstrap shuts the dispatcher down after the listeners
+        // (ShutdownDrain order), so no callback can outlive its owner.
+        imbuementEngine?.decay?.shutdown()
         loginChannelFuture?.channel()?.close()?.sync()
         gameChannelFuture?.channel()?.close()?.sync()
         // Join the I/O producers before the bootstrap drains the dispatcher and globals.
