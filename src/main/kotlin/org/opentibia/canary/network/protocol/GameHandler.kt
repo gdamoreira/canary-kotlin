@@ -451,10 +451,6 @@ class GameMarketEscrow(
  * player text/protocol seams.
  *
  * PARITY GAPS (recorded, not invented):
- *  - `Player::setVarSkill` has no Kotlin counterpart (the domain models no
- *    `varSkills` array), `Player::setBonusCapacity` has no `bonusCapacity`
- *    field, and `Player::sendStats` has no player seam; those callbacks are
- *    inert.
  *  - `Player::getStorageValue` lives in the Lua operations layer, not on
  *    `Player`, so the shrine gate reports -1 (unset).
  *  - `Player::updateImbuementTrackerStats` has no protocol seam.
@@ -469,8 +465,10 @@ internal class ImbuementPlayerAdapter(
 
     override fun getCapacity(): Int = player.capacity.toInt()
 
-    /** PARITY GAP: `Player` models no `varSkills` array. */
-    override fun setVarSkill(skill: Skill, value: Int) = Unit
+    /** `Player::setVarSkill` (player.cpp:352-354); the bonus feeds `Player::getSkillLevel` (player.cpp:7468). */
+    override fun setVarSkill(skill: Skill, value: Int) {
+        player.setVarSkill(skill, value)
+    }
 
     override fun setVarStats(stat: Stat, value: Int) {
         player.setVarStats(stat, value)
@@ -480,11 +478,15 @@ internal class ImbuementPlayerAdapter(
         game.changeSpeed(player, value)
     }
 
-    /** PARITY GAP: `Player` models no `bonusCapacity` field. */
-    override fun setBonusCapacity(value: Int) = Unit
+    /** `Player::bonusCapacity` (player.hpp:1780); the value feeds `Player::getFreeCapacity` (player.cpp:5468). */
+    override fun setBonusCapacity(value: Int) {
+        player.bonusCapacity = value
+    }
 
-    /** PARITY GAP: `Player::sendStats` has no player-level seam. */
-    override fun sendStats() = Unit
+    /** `Player::sendStats` (player.cpp:2347-2352) through the host protocol seam. */
+    override fun sendStats() {
+        player.sendStats()
+    }
 
     override fun sendSkills() {
         player.sendSkills()

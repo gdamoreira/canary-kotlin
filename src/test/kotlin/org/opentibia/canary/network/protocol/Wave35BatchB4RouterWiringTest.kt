@@ -6,6 +6,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.players.components.PlayerAsyncTask
+import org.opentibia.canary.game.Game
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
@@ -107,10 +108,11 @@ class Wave35BatchB4RouterWiringTest {
         dispatcher.start()
         try {
             val player = hero()
+            val game = Game(GameMap(), dispatcher)
             val frame = Unpooled.buffer()
             writeCyclopediaCharacterInfo(frame, characterId = 1)
 
-            val handled = GamePacketRouter.route(player, frame, context(dispatcher))
+            val handled = GamePacketRouter.route(player, frame, context(dispatcher, game))
             awaitWorldCommit(dispatcher)
 
             assertThat(handled).isEqualTo(1)
@@ -126,10 +128,11 @@ class Wave35BatchB4RouterWiringTest {
         dispatcher.start()
         try {
             val player = hero()
+            val game = Game(GameMap(), dispatcher)
             val frame = Unpooled.buffer()
             writeCyclopediaCharacterInfo(frame, characterId = 0)
 
-            val handled = GamePacketRouter.route(player, frame, context(dispatcher))
+            val handled = GamePacketRouter.route(player, frame, context(dispatcher, game))
             awaitWorldCommit(dispatcher)
 
             assertThat(handled).isEqualTo(1)
@@ -145,10 +148,11 @@ class Wave35BatchB4RouterWiringTest {
         dispatcher.start()
         try {
             val player = hero()
+            val game = Game(GameMap(), dispatcher)
             val frame = Unpooled.buffer()
             writeCyclopediaCharacterInfo(frame, characterId = 2)
 
-            val handled = GamePacketRouter.route(player, frame, context(dispatcher))
+            val handled = GamePacketRouter.route(player, frame, context(dispatcher, game))
             awaitWorldCommit(dispatcher)
 
             assertThat(handled).isEqualTo(1)
@@ -320,10 +324,11 @@ class Wave35BatchB4RouterWiringTest {
         }
     }
 
-    private fun context(dispatcher: GameDispatcher): GamePacketContext = GamePacketContext(
+    private fun context(dispatcher: GameDispatcher, game: Game? = null): GamePacketContext = GamePacketContext(
         map = GameMap(),
         dispatcher = dispatcher,
         luaEnvironment = LuaEnvironment().apply { initState() },
+        game = game,
     )
 
     private fun hero(): Player = Player(1, "Hero", 100, 100, position = Position(100, 100, 7))

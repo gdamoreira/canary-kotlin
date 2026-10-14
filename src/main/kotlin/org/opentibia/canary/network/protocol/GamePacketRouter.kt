@@ -56,8 +56,9 @@ data class GamePacketContext(
     /**
      * `g_game()` seam for the handlers whose application lives in a
      * `Game::player*` member (trade, containers, follow, quick loot, depot
-     * search, market, imbuements). Optional so callers without a composed
-     * world keep the decode-only confinement boundary.
+     * search, market, imbuements, cyclopedia character info). Optional so
+     * callers without a composed world keep the decode-only confinement
+     * boundary.
      */
     val game: Game? = null,
     /**
@@ -1216,34 +1217,24 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // Game::playerCyclopediaCharacterInfo (game.cpp:9823-9882):
-                            // protocolgame.cpp:3040-3042 resolves a zero character id to
-                            // the requesting player, another character yields
-                            // sendCyclopediaCharacterNoData, the recent deaths / PvP
-                            // kills types load the ported PlayerCyclopedia history, and
-                            // every other type only has unported senders (PARITY GAP).
+                            // ProtocolGame::parseCyclopediaCharacterInfo resolves the
+                            // zero character id to the requesting player
+                            // (protocolgame.cpp:3040-3042) and hands the request to
+                            // Game::playerCyclopediaCharacterInfo (game.cpp:9823-9888),
+                            // which serves only the own-character request and routes
+                            // every info type through its ported senders/refusals.
                             val characterId = if (command.characterId == 0L) {
                                 player.id.toInt().toLong()
                             } else {
                                 command.characterId
                             }
-                            if (characterId == player.id.toInt().toLong()) {
-                                when (command.infoType) {
-                                    CyclopediaPacketHandler.CYCLOPEDIA_CHARACTERINFO_RECENT_DEATHS ->
-                                        player.features.cyclopedia.loadDeathHistory(
-                                            command.page,
-                                            command.entriesPerPage,
-                                        )
-
-                                    CyclopediaPacketHandler.CYCLOPEDIA_CHARACTERINFO_RECENTPVPKILLS ->
-                                        player.features.cyclopedia.loadRecentKills(
-                                            command.page,
-                                            command.entriesPerPage,
-                                        )
-
-                                    else -> Unit
-                                }
-                            }
+                            context.game?.playerCyclopediaCharacterInfo(
+                                player,
+                                characterId.toInt(),
+                                command.infoType,
+                                command.entriesPerPage,
+                                command.page,
+                            )
                         }
                         true
                     }
