@@ -1,7 +1,12 @@
 package org.opentibia.canary.creatures
 
+import org.opentibia.canary.account.Account
 import org.opentibia.canary.combat.CombatType
 import org.opentibia.canary.combat.condition.Condition
+import org.opentibia.canary.combat.condition.ConditionType
+import org.opentibia.canary.combat.condition.Outfit
+import org.opentibia.canary.creatures.appearance.effects.AttachedEffects
+import org.opentibia.canary.creatures.appearance.outfit.Outfits
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.players.CyclopediaTrackerClient
 import org.opentibia.canary.creatures.players.PlayerActiveFoods
@@ -10,25 +15,36 @@ import org.opentibia.canary.creatures.players.PlayerBossPointsState
 import org.opentibia.canary.creatures.players.PlayerCombatBonusState
 import org.opentibia.canary.creatures.players.PlayerCyclopediaTrackerState
 import org.opentibia.canary.creatures.players.PlayerItemAbilityState
+import org.opentibia.canary.creatures.players.PlayerLoyaltyState
 import org.opentibia.canary.creatures.players.PlayerMagicAffinityState
 import org.opentibia.canary.creatures.players.PlayerMessageBuffer
 import org.opentibia.canary.creatures.players.animus_mastery.AnimusMastery
 import org.opentibia.canary.creatures.players.components.Achievement
 import org.opentibia.canary.creatures.players.components.AchievementPlayer
 import org.opentibia.canary.creatures.players.components.AchievementRegistry
+import org.opentibia.canary.creatures.players.components.AttachedEffectsPlayer
+import org.opentibia.canary.creatures.players.components.BadgePlayer
 import org.opentibia.canary.creatures.players.components.CyclopediaPlayer
 import org.opentibia.canary.creatures.players.components.InMemoryAchievementRegistry
 import org.opentibia.canary.creatures.players.components.InMemoryKV
 import org.opentibia.canary.creatures.players.components.KV
+import org.opentibia.canary.creatures.players.components.MutableBadgeRegistry
+import org.opentibia.canary.creatures.players.components.MutableTitleRegistry
 import org.opentibia.canary.creatures.players.components.PlayerAchievement
 import org.opentibia.canary.creatures.players.components.PlayerAsyncTask
+import org.opentibia.canary.creatures.players.components.PlayerAttachedEffects
+import org.opentibia.canary.creatures.players.components.PlayerBadge
 import org.opentibia.canary.creatures.players.components.PlayerCyclopedia
+import org.opentibia.canary.creatures.players.components.PlayerSex_t
+import org.opentibia.canary.creatures.players.components.PlayerTitle
 import org.opentibia.canary.creatures.players.components.RecentDeathEntry
 import org.opentibia.canary.creatures.players.components.RecentPvPKillEntry
+import org.opentibia.canary.creatures.players.components.TitlePlayer
 import org.opentibia.canary.creatures.players.getEquippedItems
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.network.protocol.MessageClass
+import org.opentibia.canary.social.guild.GuildRank
 import org.opentibia.canary.systems.bestiary.PlayerBestiaryState
 import org.opentibia.canary.systems.concoction.PlayerConcoctions
 import org.opentibia.canary.systems.dailyreward.PlayerDailyReward
@@ -38,6 +54,7 @@ import org.opentibia.canary.systems.forge.Forge
 import org.opentibia.canary.systems.forge.ForgeConfig
 import org.opentibia.canary.systems.forge.PlayerForgeHistory
 import org.opentibia.canary.systems.hazard.PlayerHazard
+import org.opentibia.canary.systems.mount.Mount
 import org.opentibia.canary.systems.mount.Mounts
 import org.opentibia.canary.systems.mount.PlayerMountState
 import org.opentibia.canary.systems.offlinetraining.OfflineTraining
@@ -47,6 +64,7 @@ import org.opentibia.canary.systems.prey.PlayerPreyState
 import org.opentibia.canary.systems.prey.PreyEngine
 import org.opentibia.canary.systems.proficiency.WeaponProficiencyData
 import org.opentibia.canary.systems.proficiency.WeaponProficiencyPerfectShotBonus
+import org.opentibia.canary.systems.rewardchest.ReturnValue
 import org.opentibia.canary.systems.rewardchest.RewardChest
 import org.opentibia.canary.systems.taskhunting.PlayerTaskHuntingState
 import org.opentibia.canary.systems.taskhunting.TaskHuntingEngine
@@ -142,6 +160,29 @@ class PlayerFeatures(
     /** `Familiars::getInstance()` definition registry. */
     private val familiarDefinitions: Familiars = Familiars(),
     forgeConfig: ForgeConfig = ForgeConfig(),
+    /**
+     * `Game::m_badges` (game.cpp:570-597, 12536-12564) catalog of [badge]. The
+     * Kotlin `Player` cannot receive the composition root's registry by
+     * injection yet, so the world operations adopt its entries into this
+     * catalog on first touch (PARITY GAP, see `WorldPlayerExtraOperations`).
+     */
+    val badgeRegistry: MutableBadgeRegistry = MutableBadgeRegistry(),
+    /**
+     * `Game::m_titles` (game.cpp:599-703, 12566-12594) catalog of [title]; see
+     * [badgeRegistry] for the adoption seam.
+     */
+    val titleRegistry: MutableTitleRegistry = MutableTitleRegistry(),
+    /**
+     * `g_game().getAttachedEffects()` (player_attached_effects.cpp:56,63,110)
+     * definition registry of [attachedEffects]; the composition root injects
+     * the instance loaded from `data/XML/attachedeffects.xml`.
+     */
+    val attachedEffectDefinitions: AttachedEffects = AttachedEffects(),
+    /**
+     * `Outfits::getInstance()` (player_attached_effects.cpp:95,284,472,629)
+     * outfit registry of [attachedEffects], injected per AGENTS.md 1.1.
+     */
+    val attachedOutfits: Outfits = Outfits(),
     /**
      * `g_ioprey()` prey engine core (`src/io/ioprey.cpp`); Canary reaches it
      * through the global singleton and `Player::initializePrey` uses it, so it
@@ -407,6 +448,57 @@ class PlayerFeatures(
 
     /** `Player::animusMastery()` (player.cpp:12812): the composed [animusMastery] component. */
     fun animusMastery(): AnimusMastery = animusMastery
+
+    /**
+     * `Player::loyaltyPoints`/`loyaltyBonusPercent`/`loyaltyTitle`
+     * (player.hpp:1709,1796,1850) through the ported [PlayerLoyaltyState]; the
+     * `loyalty` Lua bindings and [HostBadgePlayer] read this same instance.
+     * Absent when the holder is constructed without a player (tooling/tests).
+     */
+    val loyalty: PlayerLoyaltyState? by lazy(LazyThreadSafetyMode.NONE) {
+        wheelPlayer?.let { PlayerLoyaltyState(it) }
+    }
+
+    /**
+     * `PlayerBadge m_badge` (player.hpp:1960); accessor `Player::badge()`
+     * (player.cpp:12767-12774). Backed by [badgeRegistry] and the host `kv`
+     * (player_badge.cpp:104), created lazily like the C++ member.
+     */
+    val badge: PlayerBadge by lazy(LazyThreadSafetyMode.NONE) {
+        PlayerBadge(
+            player = HostBadgePlayer(wheelPlayer) { loyalty?.getLoyaltyPoints() ?: 0L },
+            kv = wheelPlayer?.kv ?: InMemoryKV(),
+            registry = badgeRegistry,
+        )
+    }
+
+    /**
+     * `PlayerTitle m_title` (player.hpp:1962); accessor `Player::title()`
+     * (player.cpp:12776-12783). Backed by [titleRegistry] and the host `kv`
+     * (player_title.cpp:89), created lazily like the C++ member.
+     */
+    val title: PlayerTitle by lazy(LazyThreadSafetyMode.NONE) {
+        PlayerTitle(
+            player = HostTitlePlayer(wheelPlayer, this),
+            kv = wheelPlayer?.kv ?: InMemoryKV(),
+            registry = titleRegistry,
+            getMounts = { mountDefinitions.getMounts() },
+        )
+    }
+
+    /**
+     * `PlayerAttachedEffects m_attachedEffects` (player.hpp:1964); accessor
+     * `Player::attachedEffects()` (player.cpp:12821-12828). Backed by
+     * [attachedEffectDefinitions] and [attachedOutfits], created lazily like
+     * the C++ member.
+     */
+    val attachedEffects: PlayerAttachedEffects by lazy(LazyThreadSafetyMode.NONE) {
+        PlayerAttachedEffects(
+            player = HostAttachedEffectsPlayer(wheelPlayer),
+            attachedEffects = attachedEffectDefinitions,
+            outfits = attachedOutfits,
+        )
+    }
 }
 
 /**
@@ -497,5 +589,130 @@ private class HostAchievementPlayer(
         achievementsUnlocked: List<Pair<Achievement, Long>>,
     ) {
         sendAchievements(secretsUnlocked, achievementsUnlocked)
+    }
+}
+
+/**
+ * [BadgePlayer] adapter of [PlayerFeatures.badge] over the live [wheelPlayer]
+ * host. `Player::getName()` reads `Creature::name`, `Player::getAccount()`
+ * reads [Player.account] and `Player::getLoyaltyPoints()` reads the composed
+ * [PlayerFeatures.loyalty] state (player.cpp:10683). A `null` host
+ * (tooling/tests) yields the inert projection.
+ */
+private class HostBadgePlayer(
+    private val player: Player?,
+    private val loyaltyPoints: () -> Long,
+) : BadgePlayer {
+
+    override fun getName(): String = player?.name ?: ""
+
+    override fun getLoyaltyPoints(): Int = loyaltyPoints().toInt()
+
+    override fun getAccount(): Account? = player?.account
+}
+
+/**
+ * [TitlePlayer] adapter of [PlayerFeatures.title] over the live [wheelPlayer]
+ * host. Reads resolve per call so the `Player` rebinding of level, bestiary,
+ * task-hunting, boss-points and mount state is observed immediately; a `null`
+ * host (tooling/tests) yields the inert projection.
+ *
+ * PARITY GAPS: `Player::getBankBalance` (`PlayerVitalsState.bankBalance`),
+ * `Player::outfits` (`PlayerOutfitState`) and `Player::canWear` are state
+ * holders this port does not compose on `Player` yet, so `checkGold`,
+ * `checkOutfit` and the outfit-based `checkOther` titles read their zero/false
+ * defaults until the host wiring lands.
+ */
+private class HostTitlePlayer(
+    private val player: Player?,
+    private val features: PlayerFeatures,
+) : TitlePlayer {
+
+    override fun getName(): String = player?.name ?: ""
+
+    override fun getSex(): PlayerSex_t = player?.getSex() ?: PlayerSex_t.MALE
+
+    override fun getBankBalance(): Long = 0L
+
+    override fun hasMount(mount: Mount): Boolean = features.mounts.hasMount(mount)
+
+    override fun getOutfitsCount(): Int = 0
+
+    override fun getLevel(): Int = player?.level ?: 1
+
+    override fun getGUID(): Long = player?.getGUID() ?: 0L
+
+    override fun getBestiaryKillCount(raceid: Int): Int = features.bestiary.getBestiaryKillCount(raceid)
+
+    override fun getTaskHuntingPoints(): Long = features.taskHunting.getTaskHuntingPoints()
+
+    override fun getCharmPoints(): Int = features.bestiary.getCharmPoints()
+
+    override fun getBossPoints(): Int = features.bossPoints.getBossPoints().toInt()
+
+    override fun canWear(lookType: Int, addons: Int): Boolean = false
+
+    override fun getGuildRank(): GuildRank? = player?.getGuildRank()
+}
+
+/**
+ * [AttachedEffectsPlayer] adapter of [PlayerFeatures.attachedEffects] over the
+ * live [wheelPlayer] host. Outfit reads/writes, storage, `kv`, access checks
+ * and the cancel/outfit-change protocol seams resolve per call; a `null` host
+ * (tooling/tests) yields the inert projection.
+ *
+ * PARITY NOTES:
+ *  - `Player::m_storage` (player_storage.hpp:168) is not composed on the
+ *    Kotlin `Player` yet, so [getStorageValue]/[addStorageValue] keep the
+ *    per-feature storage in this adapter. `getStorageValue` returns -1 for a
+ *    missing key like `PlayerStorage::get` (player_storage.cpp:95-104) so the
+ *    wing/aura/effect range arithmetic of player_attached_effects.cpp:145-195,
+ *    265-308, 440-483, 615-657 behaves exactly like Canary.
+ *  - `Player::isRandomMounted()` and `Player::sendOutfitWindow()` have no
+ *    Kotlin `Player` seam yet (PARITY GAP); they default to `false`/no-op.
+ */
+private class HostAttachedEffectsPlayer(
+    private val player: Player?,
+) : AttachedEffectsPlayer {
+
+    private val storage = mutableMapOf<Int, Int>()
+
+    private val fallbackKv: KV = InMemoryKV()
+
+    override fun getSex(): PlayerSex_t = player?.getSex() ?: PlayerSex_t.MALE
+
+    override fun getDefaultOutfit(): Outfit = player?.getDefaultOutfit() ?: Outfit()
+
+    override fun setDefaultOutfit(outfit: Outfit) {
+        player?.setDefaultOutfit(outfit)
+    }
+
+    override fun getStorageValue(key: Int): Int = storage[key] ?: -1
+
+    override fun addStorageValue(key: Int, value: Int) {
+        if (value == -1) {
+            storage.remove(key)
+        } else {
+            storage[key] = value
+        }
+    }
+
+    override fun kv(): KV = player?.kv ?: fallbackKv
+
+    override fun isAccessPlayer(): Boolean = player?.isAccessPlayer() ?: false
+
+    override fun isRandomMounted(): Boolean = false
+
+    override fun hasCondition(conditionType: ConditionType): Boolean =
+        player?.hasCondition(conditionType) ?: false
+
+    override fun sendCancelMessage(returnValue: ReturnValue) {
+        player?.sendCancelMessage?.invoke(returnValue)
+    }
+
+    override fun sendOutfitWindow() = Unit
+
+    override fun internalCreatureChangeOutfit(outfit: Outfit) {
+        player?.let { it.internalCreatureChangeOutfit(it, outfit) }
     }
 }

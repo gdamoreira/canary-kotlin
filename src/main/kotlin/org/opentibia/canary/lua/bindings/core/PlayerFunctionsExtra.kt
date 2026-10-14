@@ -5,7 +5,17 @@ import org.luaj.vm2.LuaValue
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.creatures.Virtue_t
+import org.opentibia.canary.creatures.players.components.AttachedEffectSelector
+import org.opentibia.canary.creatures.players.components.BadgeRegistry
+import org.opentibia.canary.creatures.players.components.InMemoryBadgeRegistry
+import org.opentibia.canary.creatures.players.components.InMemoryTitleRegistry
+import org.opentibia.canary.creatures.players.components.MutableBadgeRegistry
+import org.opentibia.canary.creatures.players.components.MutableTitleRegistry
+import org.opentibia.canary.creatures.players.components.PlayerTitle
+import org.opentibia.canary.creatures.players.components.TitleRegistry
 import org.opentibia.canary.lua.runtime.LuaEnvironment
+import org.opentibia.canary.systems.wheel.WheelOnThink
+import java.util.WeakHashMap
 
 /**
  * Canary `player:getTitles()` row. Mirrors the `{ id, name, description }` entry pushed
@@ -937,15 +947,23 @@ object PlayerFunctionsExtra {
  *   is retained in memory and the name-lock/save path is unported.
  * - Exaltation Forge slivers/cores need `Player::getForgeSliversAndCores`'s history scan;
  *   the seam keeps per-player counters (default 0).
- * - Faction, UI exhaustion, bosstiary, store inbox, badges/titles, store
- *   summary, screenshots, creature icons, concoction/food, the Wheel of
- *   Destiny spell/gem queries and OTCR attached effects are protocol/component sends or
+ * - Faction, UI exhaustion, bosstiary, store inbox, store
+ *   summary, screenshots and creature icons are protocol/component sends or
  *   state the Kotlin components do not expose through `Player`; they persist in memory
  *   (empty defaults) rather than inventing gameplay decisions.
- * - Achievements and animus mastery delegate to the composed
- *   `PlayerFeatures.achievement`/`animusMastery` components (player.cpp:12758,
- *   12812) instead of keeping per-operations maps, so Lua mutations are visible
- *   to the engine and vice versa.
+ * - Achievements, animus mastery, badges, titles, loyalty, concoction/food and the OTCR
+ *   attached effects delegate to the composed `PlayerFeatures` components
+ *   (player.cpp:12758, 12812, 12767, 12776, 12821) instead of keeping per-operations
+ *   maps, so Lua mutations are visible to the engine and vice versa. The badge/title
+ *   registries are adopted from the injected `Game::m_badges`/`m_titles` seams on first
+ *   touch because `PlayerFeatures` cannot receive the composition root's registries by
+ *   injection yet ([BadgeRegistryAdopter]/[TitleRegistryAdopter]).
+ * - The Wheel of Destiny instant spells, revelation stages and the avatar timer delegate
+ *   to `PlayerFeatures.wheel` (`PlayerWheel::getInstant`/`setSpellInstant`/`getStage`/
+ *   `getOnThinkTimer`). `PlayerWheel::getSpellUpgrade`/`upgradeSpell`/`downgradeSpell`/
+ *   `resetUpgradedSpells`, the additional-area/target/duration queries, `unlockScroll` and
+ *   `onThink` are not ported in `systems/wheel` yet, so `upgradeSpellsWOD` keeps its
+ *   per-player upgrade ledger and the remaining calls stay inert (`false`/`0`/`true`).
  * - `Player::getBossBonus` needs `g_ioBosstiary().calculateLootBonus`; 0 until wired.
  * - `Player::weaponProficiency` has no `Player` accessor yet; the call is acknowledged
  *   without applying experience.
@@ -956,10 +974,18 @@ object PlayerFunctionsExtra {
  *   without transmitting, matching the client-less C++ behavior.
  *
  * @param vipSystemEnabled `VIP_SYSTEM_ENABLED` config seam (configmanager.cpp:168).
+ * @param badgeRegistry `Game::m_badges` (game.cpp:570-597) seam adopted into each reached
+ *   player's `PlayerFeatures.badgeRegistry`.
+ * @param titleRegistry `Game::m_titles` (game.cpp:599-703) seam adopted into each reached
+ *   player's `PlayerFeatures.titleRegistry`.
  */
 class WorldPlayerExtraOperations(
     private val vipSystemEnabled: Boolean = false,
+    private val badgeRegistry: BadgeRegistry = InMemoryBadgeRegistry(),
+    private val titleRegistry: TitleRegistry = InMemoryTitleRegistry(),
 ) : PlayerExtraOperations {
+    private val badgeAdopter = BadgeRegistryAdopter(badgeRegistry)
+    private val titleAdopter = TitleRegistryAdopter(titleRegistry)
     private val idleTimes = mutableMapOf<Long, Long>()
     private val offlineFlags = mutableSetOf<Long>()
     private val uiExhausted = mutableMapOf<Long, Boolean>()
@@ -970,20 +996,8 @@ class WorldPlayerExtraOperations(
     private val bossLevels = mutableMapOf<Long, MutableMap<String, Int>>()
     private val slivers = mutableMapOf<Long, Long>()
     private val cores = mutableMapOf<Long, Long>()
-    private val loyaltyBonuses = mutableMapOf<Long, Int>()
-    private val loyaltyTitles = mutableMapOf<Long, String>()
-    private val instantSkills = mutableMapOf<Long, MutableMap<String, Boolean>>()
     private val upgradeLevels = mutableMapOf<Long, MutableMap<String, Int>>()
-    private val stages = mutableMapOf<Long, MutableMap<String, Int>>()
-    private val avatarTicks = mutableMapOf<Long, Long>()
-    private val concoctions = mutableMapOf<Long, MutableMap<Int, Int>>()
-    private val foods = mutableMapOf<Long, MutableMap<Int, Long>>()
     private val storeInboxes = mutableMapOf<Long, Any>()
-    private val badges = mutableMapOf<Long, MutableSet<Int>>()
-    private val titles = mutableMapOf<Long, MutableSet<Int>>()
-    private val currentTitles = mutableMapOf<Long, Int>()
-    private val mapShaders = mutableMapOf<Long, String>()
-    private val customOutfits = mutableMapOf<Long, MutableSet<String>>()
     private val livestreamStates = mutableMapOf<Long, LuaLivestreamViewers>()
     private val livestreamViewers = mutableSetOf<Long>()
     private val names = mutableMapOf<Long, String>()
@@ -1137,32 +1151,42 @@ class WorldPlayerExtraOperations(
         (player as? Player)?.features?.hazard?.getHazardSystemPoints()
 
     override fun setLoyaltyBonus(player: Any, amount: Int): Boolean? {
-        val target = player as? Player ?: return null
-        loyaltyBonuses[target.id] = amount
+        val loyalty = (player as? Player)?.features?.loyalty ?: return null
+        loyalty.setLoyaltyBonus(amount)
         return true
     }
 
-    override fun getLoyaltyBonus(player: Any): Int? = playerId(player)?.let { loyaltyBonuses[it] ?: 0 }
+    override fun getLoyaltyBonus(player: Any): Int? =
+        (player as? Player)?.features?.loyalty?.getLoyaltyBonus()
 
-    override fun getLoyaltyPoints(player: Any): Int? = playerId(player)?.let { loyaltyBonuses[it] ?: 0 }
+    override fun getLoyaltyPoints(player: Any): Int? =
+        (player as? Player)?.features?.loyalty?.getLoyaltyPoints()?.toInt()
 
-    override fun getLoyaltyTitle(player: Any): String? = playerId(player)?.let { loyaltyTitles[it] ?: "" }
+    override fun getLoyaltyTitle(player: Any): String? =
+        (player as? Player)?.features?.loyalty?.getLoyaltyTitle()
 
     override fun setLoyaltyTitle(player: Any, name: String): Boolean? {
-        val target = player as? Player ?: return null
-        loyaltyTitles[target.id] = name
+        val loyalty = (player as? Player)?.features?.loyalty ?: return null
+        loyalty.setLoyaltyTitle(name)
         return true
     }
 
     override fun instantSkillWOD(player: Any, name: String, value: Boolean?): Boolean? {
         val target = player as? Player ?: return null
+        val wheel = target.features.wheel
         if (value == null) {
-            return instantSkills[target.id]?.get(name) ?: false
+            return wheel.getInstant(name)
         }
-        instantSkills.getOrPut(target.id) { mutableMapOf() }[name] = value
+        wheel.setSpellInstant(name, value)
         return true
     }
 
+    /**
+     * `PlayerWheel::getSpellUpgrade`/`upgradeSpell`/`downgradeSpell`/`resetUpgradedSpells`
+     * (player_wheel.cpp) are not ported in `systems/wheel` yet, so the upgraded-spell
+     * ledger stays per player here; every other Wheel of Destiny primitive delegates to
+     * [PlayerFeatures.wheel].
+     */
     override fun upgradeSpellsWOD(player: Any, name: String?, add: Boolean?): Any? {
         val target = player as? Player ?: return null
         if (name == null) {
@@ -1177,30 +1201,40 @@ class WorldPlayerExtraOperations(
         return true
     }
 
+    /**
+     * `luaPlayerRevelationStageWOD` (player_functions.cpp:4758): the getter reads
+     * `PlayerWheel::getStage`, the setter mirrors Canary's exact
+     * `setSpellInstant(name, static_cast<bool>(value))` call; the no-argument branch
+     * resets the upgraded spells like `PlayerWheel::resetUpgradedSpells`
+     * (player_wheel.cpp:3600), which `systems/wheel` does not port yet, so the port's
+     * own upgrade ledger is cleared instead.
+     */
     override fun revelationStageWOD(player: Any, name: String?, stage: Int?): Any? {
         val target = player as? Player ?: return null
         if (name == null) {
-            stages.remove(target.id)
+            upgradeLevels.remove(target.id)
             return true
         }
-        val values = stages.getOrPut(target.id) { mutableMapOf() }
+        val wheel = target.features.wheel
         if (stage == null) {
-            return values[name] ?: 0
+            return wheel.getStage(name)
         }
-        values[name] = stage
+        wheel.setSpellInstant(name, stage != 0)
         return true
     }
 
     override fun reloadData(player: Any): Boolean? = (player as? Player)?.let { true }
 
+    /** `PlayerWheel::onThink` is not ported in `systems/wheel` yet; the call is inert. */
     override fun onThinkWheelOfDestiny(player: Any, force: Boolean): Boolean? = (player as? Player)?.let { true }
 
     override fun avatarTimer(player: Any, value: Long?): Any? {
         val target = player as? Player ?: return null
+        val wheel = target.features.wheel
         if (value == null) {
-            return avatarTicks[target.id] ?: 0L
+            return wheel.getOnThinkTimer(WheelOnThink.AVATAR_SPELL)
         }
-        avatarTicks[target.id] = value
+        wheel.setOnThinkTimer(WheelOnThink.AVATAR_SPELL, value)
         return true
     }
 
@@ -1227,13 +1261,13 @@ class WorldPlayerExtraOperations(
 
     override fun updateConcoction(player: Any, itemId: Int, timeLeft: Int): Boolean? {
         val target = player as? Player ?: return null
-        concoctions.getOrPut(target.id) { mutableMapOf() }[itemId] = timeLeft
+        target.features.concoctions.updateConcoction(itemId, timeLeft)
         return true
     }
 
     override fun updateFood(player: Any, itemId: Int, timeLeft: Long): Boolean? {
         val target = player as? Player ?: return null
-        foods.getOrPut(target.id) { mutableMapOf() }[itemId] = timeLeft
+        target.features.activeFoods.updateFood(itemId, timeLeft.toInt())
         return true
     }
 
@@ -1294,26 +1328,48 @@ class WorldPlayerExtraOperations(
         return true
     }
 
+    /** `luaPlayerAddBadge` (player_functions.cpp:5148) discards `PlayerBadge::add`'s result. */
     override fun addBadge(player: Any, badgeId: Int): Boolean? {
         val target = player as? Player ?: return null
-        badges.getOrPut(target.id) { mutableSetOf() } += badgeId
+        badgeAdopter.adopt(target.features.badgeRegistry)
+        target.features.badge.add(badgeId)
         return true
     }
 
+    /** `luaPlayerAddTitle` (player_functions.cpp:5161) discards `PlayerTitle::manage`'s result. */
     override fun addTitle(player: Any, titleId: Int): Boolean? {
         val target = player as? Player ?: return null
-        titles.getOrPut(target.id) { mutableSetOf() } += titleId
+        titleAdopter.adopt(target.features.titleRegistry)
+        target.features.title.manage(true, titleId)
         return true
     }
 
-    override fun getTitles(player: Any): List<LuaPlayerTitle>? = (player as? Player)?.let { emptyList() }
+    /** `luaPlayerGetTitles` (player_functions.cpp:5174): name resolved by `Player::getSex()`. */
+    override fun getTitles(player: Any): List<LuaPlayerTitle>? {
+        val target = player as? Player ?: return null
+        titleAdopter.adopt(target.features.titleRegistry)
+        return target.features.title.getUnlockedTitles().map { (title, _) ->
+            LuaPlayerTitle(
+                id = title.id,
+                name = PlayerTitle.getNameBySex(target.getSex(), title.maleName, title.femaleName),
+                description = title.description,
+            )
+        }
+    }
 
+    /**
+     * `luaPlayerSetCurrentTitle` (player_functions.cpp:5196): an unknown id takes the
+     * `g_game().getTitleById` miss branch (normalized to nil), otherwise
+     * `PlayerTitle::setCurrentTitle` stores the unlocked title.
+     */
     override fun setCurrentTitle(player: Any, titleId: Int): Boolean? {
         val target = player as? Player ?: return null
-        if (titleId == 0) {
-            return false
+        titleAdopter.adopt(target.features.titleRegistry)
+        val title = target.features.titleRegistry.getTitleById(titleId)
+        if (title.id == 0) {
+            return null
         }
-        currentTitles[target.id] = titleId
+        target.features.title.setCurrentTitle(title.id)
         return true
     }
 
@@ -1423,26 +1479,43 @@ class WorldPlayerExtraOperations(
 
     override fun isLivestreamViewer(player: Any): Boolean? = playerId(player)?.let { it in livestreamViewers }
 
-    override fun getMapShader(player: Any): String? = playerId(player)?.let { mapShaders[it] ?: "" }
+    override fun getMapShader(player: Any): String? =
+        (player as? Player)?.features?.attachedEffects?.getMapShader()
 
+    /**
+     * `luaPlayerSetMapShader` (player_functions.cpp:5414): stores the shader on
+     * `PlayerAttachedEffects` and forwards it to the client send (inert without a client).
+     */
     override fun setMapShader(player: Any, shaderName: String): Boolean? {
         val target = player as? Player ?: return null
-        mapShaders[target.id] = shaderName
+        val attachedEffects = target.features.attachedEffects
+        attachedEffects.setMapShader(shaderName)
+        attachedEffects.sendMapShader(shaderName)
         return true
     }
 
+    /** `luaPlayerAddCustomOutfit` (player_functions.cpp:5458) forwards `PlayerAttachedEffects`. */
     override fun addCustomOutfit(player: Any, type: String, idOrName: Any): Boolean? {
         val target = player as? Player ?: return null
-        customOutfits.getOrPut(target.id) { mutableSetOf() } += "$type:$idOrName"
-        return true
+        val selector = attachedEffectSelector(idOrName) ?: return null
+        return target.features.attachedEffects.addCustomOutfit(type, selector)
     }
 
+    /** `luaPlayerRemoveCustomOutfit` (player_functions.cpp:5480) forwards `PlayerAttachedEffects`. */
     override fun removeCustomOutfit(player: Any, type: String, idOrName: Any): Boolean? {
         val target = player as? Player ?: return null
-        return customOutfits.getOrPut(target.id) { mutableSetOf() }.remove("$type:$idOrName")
+        val selector = attachedEffectSelector(idOrName) ?: return null
+        return target.features.attachedEffects.removeCustomOutfit(type, selector)
     }
 
     private fun playerId(player: Any): Long? = (player as? Player)?.id
+
+    /** `std::variant<uint16_t, std::string>` argument projection (player_functions.cpp:5467). */
+    private fun attachedEffectSelector(idOrName: Any): AttachedEffectSelector? = when (idOrName) {
+        is Int -> AttachedEffectSelector.Id(idOrName)
+        is String -> AttachedEffectSelector.Name(idOrName)
+        else -> null
+    }
 
     private fun resolveFlag(flag: Int): PlayerFlags_t? =
         PlayerFlags_t.entries.firstOrNull { it.value == flag }
@@ -1462,6 +1535,49 @@ class WorldPlayerExtraOperations(
             bans = emptyList(),
             kick = emptyList(),
         )
+    }
+}
+
+/**
+ * Propagates the composition root's badge registry (`Game::m_badges`, game.cpp:570-597)
+ * into the mutable catalog a `PlayerFeatures.badge` component was built with. Mirrors
+ * `AchievementRegistryAdopter`: `PlayerFeatures` constructs its own catalog because the
+ * Kotlin `Player` cannot receive the global registry by injection yet (PARITY GAP);
+ * copying the entries the first time a player is reached keeps `player:addBadge(id)`
+ * and the component's id lookups reading the same table. Weak keys avoid retaining
+ * player catalogs past their players.
+ */
+private class BadgeRegistryAdopter(private val source: BadgeRegistry) {
+
+    private val adopted = WeakHashMap<BadgeRegistry, Boolean>()
+
+    fun adopt(target: BadgeRegistry) {
+        if (target === source || adopted.put(target, true) != null) {
+            return
+        }
+        val catalog = target as? MutableBadgeRegistry ?: return
+        for (badge in source.getBadges()) {
+            catalog.register(badge)
+        }
+    }
+}
+
+/**
+ * Title counterpart of [BadgeRegistryAdopter] over `Game::m_titles` (game.cpp:599-703);
+ * see that class for the adoption rationale.
+ */
+private class TitleRegistryAdopter(private val source: TitleRegistry) {
+
+    private val adopted = WeakHashMap<TitleRegistry, Boolean>()
+
+    fun adopt(target: TitleRegistry) {
+        if (target === source || adopted.put(target, true) != null) {
+            return
+        }
+        val catalog = target as? MutableTitleRegistry ?: return
+        for (title in source.getTitles()) {
+            catalog.register(title)
+        }
     }
 }
 
