@@ -365,6 +365,17 @@ class PlayerWalkState(
     }
 
     /**
+     * `Creature::getNextStep` (creature.cpp:315-324): pops the queued step
+     * (`listWalkDir.back()`), runs [onWalk] for it and reports whether a step
+     * was available. The host walk event consumes the queue through this.
+     */
+    fun getNextStep(): Direction? {
+        val dir = walkDirQueue.removeLastOrNull() ?: return null
+        onWalk(dir)
+        return dir
+    }
+
+    /**
      * `Creature::startAutoWalk` (creature.cpp:326-340): the step queue is
      * replaced, rooted/feared creatures refuse the walk unless
      * [ignoreConditions] is set, and an empty queue never starts the event.
