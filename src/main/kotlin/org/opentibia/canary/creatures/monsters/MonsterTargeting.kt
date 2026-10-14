@@ -304,9 +304,10 @@ class MonsterTargetSearchRequest(
  * - `Monster::searchTargetImmediate` (src/creatures/monsters/monster.cpp:906-1064)
  * - `Monster::updateTargetList` weak-ref/health/visibility pruning (src/creatures/monsters/monster.cpp:741-757)
  *
- * The asynchronous target-ranking pipeline (`requestTargetSearchCompute` and the
- * `MonsterComputeService`) is not ported; [searchTargetImmediate] is the synchronous
- * path Canary takes outside the barrier-parallel dispatcher context.
+ * [searchTargetImmediate] is the synchronous path Canary takes outside the
+ * barrier-parallel dispatcher context; the asynchronous target-ranking pipeline
+ * (`requestTargetSearchCompute` and the `MonsterComputeService`) lives in
+ * [MonsterAsyncPipelines] and is reached through the [searchTarget] seam.
  */
 object MonsterTargeting {
 

@@ -259,11 +259,14 @@ class MonsterAttackingRequest(
  *   `Monster::isInSpawnRange` (monster.cpp:3322-3344)
  * - idle/walk-back: `Monster::updateIdleStatus`/`setIdle` (monster.cpp:1499-1556)
  *
- * PARITY GAPS: the async combat-intention pipeline is injected through
- * `isValid`/`geometrySuggested` (see `MonsterCombatIntention`); the defense
- * summon roll (monster.cpp:2224-2267) depends on the Lua-loaded monster type
- * and `Game::placeCreature`; `Monster::getDistanceStep` and
- * `Monster::updateLookDirection` are not transcribed.
+ * The async combat-intention pipeline (`requestCombatIntention`,
+ * `prepare`/`completeCombatIntention`, `commitCombatIntention`) lives in
+ * [MonsterAsyncPipelines]; [commitCombatIntention] here is the synchronous
+ * `isValid`/`geometrySuggested` projection of the same spell loop.
+ *
+ * PARITY GAPS: the defense summon roll (monster.cpp:2224-2267) depends on the
+ * Lua-loaded monster type and `Game::placeCreature`; `Monster::getDistanceStep`
+ * and `Monster::updateLookDirection` are not transcribed.
  */
 object MonsterBehavior {
     /** `ITEM_FULLSPLASH` (src/utils/utils_definitions.hpp:629). */

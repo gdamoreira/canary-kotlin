@@ -107,10 +107,13 @@ class MonsterSoundRequest(
  * - `Monster::onThinkYell` (src/creatures/monsters/monster.cpp:2274-2294)
  * - `Monster::onThinkSound` (src/creatures/monsters/monster.cpp:2296-2310)
  *
- * PARITY GAPS: `Creature::onThink`'s condition/event tail, the post-think
- * scheduling machinery (`trySchedulePostThink`, `executePostThink`,
- * `onThink_async`'s `safeCall` generation guards) and the Lua `thinkEvent` body
- * stay behind the injected seams; `Monster::getLookCorpse` is not ported.
+ * The post-think scheduling machinery (`trySchedulePostThink`,
+ * `executePostThink`, `promotePostThinkToPlayerVisibleQueue`) and the deferred
+ * `onThink_async` target/combat generations live in [MonsterAsyncPipelines].
+ *
+ * PARITY GAPS: `Creature::onThink`'s condition/event tail and the Lua
+ * `thinkEvent` body stay behind the injected seams; `Monster::getLookCorpse` is
+ * not ported.
  */
 object MonsterThink {
 
