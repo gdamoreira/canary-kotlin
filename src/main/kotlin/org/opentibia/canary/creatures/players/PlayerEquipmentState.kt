@@ -10,6 +10,7 @@ import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemType
 import org.opentibia.canary.systems.wheel.WheelStat
 import kotlin.math.ceil
+import kotlin.math.floor
 
 /**
  * `Player::getShieldAndWeapon`'s two `shared_ptr<Item>&` out-parameters
@@ -396,4 +397,29 @@ fun Player.getCombatTacticsMitigation(): Double = when (fightMode) {
     FightMode.Attack -> 0.8
     FightMode.Balanced -> 1.0
     FightMode.Defense -> 1.2
+}
+
+/**
+ * `Player::attackTotal` (player.cpp:616-641). The fight-mode factor is a C++
+ * `float` product (`1.2f * equipment`) floored in `double` before scaling by
+ * `(skill + 4) / 28.`; the `uint16_t` return truncates the sum.
+ */
+fun Player.attackTotal(flatBonus: Int, equipment: Int, skill: Int): Int {
+    val fightFactor = when (fightMode) {
+        FightMode.Attack -> 1.2f * equipment
+        FightMode.Balanced -> 1.0f * equipment
+        FightMode.Defense -> 0.6f * equipment
+    }.toDouble().let { floor(it) }
+
+    val skillFactor = (skill + 4) / 28.0
+    return (flatBonus + fightFactor * skillFactor).toInt()
+}
+
+/**
+ * `Player::attackRawTotal` (player.cpp:643-646): the same skill factor over the
+ * raw equipment value, without the fight-mode multiplier.
+ */
+fun Player.attackRawTotal(flatBonus: Int, equipment: Int, skill: Int): Int {
+    val skillFactor = (skill + 4) / 28.0
+    return (flatBonus + equipment * skillFactor).toInt()
 }
