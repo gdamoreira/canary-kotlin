@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test
 import org.opentibia.canary.combat.condition.ConditionId
 import org.opentibia.canary.combat.condition.ConditionInvisible
 import org.opentibia.canary.combat.condition.ConditionType
+import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.grouping.Group
 import org.opentibia.canary.game.CylinderFlags
@@ -275,7 +276,9 @@ class TileTest {
     @Test
     fun `top visible creature honours an access player and invisibility`() {
         val tile = tileWithGround()
-        val hidden = creature(1, "Hidden").apply {
+        // `Player::canSeeCreature` skips the invisibility check for players
+        // (player.cpp:1418-1420), so the hidden creature is a monster here.
+        val hidden = Monster(id = 1, name = "Hidden", maxHealth = 100, health = 100, position = pos).apply {
             addCondition(
                 ConditionInvisible(
                     ConditionId.CONDITIONID_COMBAT,

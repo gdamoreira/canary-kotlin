@@ -22,6 +22,7 @@ import org.opentibia.canary.network.protocol.ProtocolFrameSink
 import org.opentibia.canary.network.protocol.ProtocolSink
 import org.opentibia.canary.network.protocol.StoreWindowWriter
 import org.opentibia.canary.network.protocol.bosstiary.BosstiaryWindowWriter
+import org.opentibia.canary.network.protocol.creature.CreaturePacketWriter
 import org.opentibia.canary.network.protocol.creature.CreatureUpdateWriter
 import org.opentibia.canary.network.protocol.depot.DepotSearchWriter
 import org.opentibia.canary.network.protocol.forge.ForgeDataWriter
@@ -462,6 +463,12 @@ class PlayerFrameSink(
     // --- tile sends --------------------------------------------------------------
 
     override fun sendUpdateTile(tile: Tile?, pos: Position) {
+        // `ProtocolGame::sendUpdateTile` (protocolgame.cpp:8540-8543) drops the
+        // refresh when the position is outside the client view.
+        if (!CreaturePacketWriter.canSee(player, pos)) {
+            return
+        }
+
         emitFrame {
             TilePacketWriter.writeUpdateTile(this, player, tile, pos) { creature ->
                 appearanceOf(creature)
@@ -489,6 +496,23 @@ class PlayerFrameSink(
     }
 
     // --- creature sends ----------------------------------------------------------
+
+    /**
+     * `Player::sendCreatureAppear` (player.cpp:8785-8802). A missing tile is
+     * silent; an out-of-range client stack position falls back to
+     * `Player::sendUpdateTile` (protocolgame.cpp:8540), otherwise the 0x6A
+     * frame is emitted. The base [ProtocolFrameSink.sendCreatureAppear] keeps
+     * the plain [ProtocolSink] transports that have no tile-refresh sender.
+     */
+    override fun sendCreatureAppear(creature: Creature, position: Position, isLogin: Boolean) {
+        val tile = creature.getTile() ?: return
+        val stackpos = tile.getClientIndexOfCreature(player, creature)
+        if (stackpos < 0 || stackpos >= MAX_STACKPOS) {
+            sendUpdateTile(tile, position)
+            return
+        }
+        super.sendCreatureAppear(creature, position, isLogin)
+    }
 
     override fun sendCreatureChangeOutfit(creature: Creature, outfit: Outfit) {
         sendCreatureOutfit(creature, outfit)
@@ -519,6 +543,17 @@ class PlayerFrameSink(
     }
 
     override fun sendCreatureSquare(creature: Creature, color: Int) {
+        // `ProtocolGame::sendCreatureSquare` (protocolgame.cpp:4723-4740) gates
+        // on `canSee(creature)` (protocolgame.cpp:2376-2386): removed, not
+        // visible to the player (ghost/invisibility) or out of the client view.
+        if (
+            creature.isRemoved() ||
+            !player.canSeeCreature(creature) ||
+            !CreaturePacketWriter.canSee(player, creature.position)
+        ) {
+            return
+        }
+
         emitFrame { CreatureWindowWriter.writeCreatureSquare(this, creature.id, color) }
     }
 

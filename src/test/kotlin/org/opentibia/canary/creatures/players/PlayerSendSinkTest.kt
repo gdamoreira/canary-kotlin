@@ -7,6 +7,7 @@ import org.opentibia.canary.combat.condition.Outfit
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Npc
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.grouping.Group
 import org.opentibia.canary.creatures.grouping.TeamFinder
 import org.opentibia.canary.creatures.npcs.NpcType
 import org.opentibia.canary.items.Item
@@ -450,11 +451,21 @@ class PlayerSendSinkTest {
     fun `sendUpdateTile writes the empty tile description for a missing tile`() {
         val bound = bind()
 
-        bound.sink.sendUpdateTile(null, Position(100, 200, 7))
+        bound.sink.sendUpdateTile(null, Position(1001, 1001, 7))
 
         assertThat(bound.frames).containsExactly(
-            bytes(0x69, 0x64, 0x00, 0xC8, 0x00, 0x07, 0x01, 0xFF),
+            bytes(0x69, 0xE9, 0x03, 0xE9, 0x03, 0x07, 0x01, 0xFF),
         )
+    }
+
+    @Test
+    fun `sendUpdateTile is inert outside the client view`() {
+        // protocolgame.cpp:8540-8543: `if (!canSee(pos))` drops the refresh.
+        val bound = bind()
+
+        bound.sink.sendUpdateTile(null, Position(100, 200, 7))
+
+        assertThat(bound.frames).isEmpty()
     }
 
     @Test
@@ -589,6 +600,27 @@ class PlayerSendSinkTest {
     }
 
     @Test
+    fun `sendCreatureAppear falls back to the tile refresh for an out-of-range stack position`() {
+        // player.cpp:8791-8794: stackpos < 0 || >= 10 -> sendUpdateTile(tile, pos).
+        val map = GameMap()
+        val tile = map.getOrCreateTile(adjacent)
+        tile.ground = Item(id = 100)
+        repeat(10) { index ->
+            tile.internalAddThing(
+                Monster(5100L + index, "Crowd $index", maxHealth = 100, health = 80, position = adjacent),
+            )
+        }
+        val rat = Monster(5000, "Rat", maxHealth = 100, health = 80, position = adjacent)
+        tile.internalAddThing(rat)
+        val bound = bind(map = map)
+
+        bound.player.sendCreatureAppear(rat, adjacent, true)
+
+        assertThat(bound.frames).hasSize(1)
+        assertThat(bound.frames[0]).startsWith(*bytes(0x69, 0xE9, 0x03, 0xE8, 0x03, 0x07))
+    }
+
+    @Test
     fun `sendCreatureSquare writes the square color`() {
         val bound = bind()
         val rat = Monster(5000, "Rat", maxHealth = 100, health = 80, position = center)
@@ -596,6 +628,43 @@ class PlayerSendSinkTest {
         bound.sink.sendCreatureSquare(rat, 1)
 
         assertThat(bound.frames).containsExactly(bytes(0x93, 0x88, 0x13, 0x00, 0x00, 0x01, 0x01))
+    }
+
+    @Test
+    fun `sendCreatureSquare is inert when the creature is outside the client view`() {
+        // protocolgame.cpp:4724-4726: `if (!canSee(creature)) return;`.
+        val bound = bind()
+        val rat = Monster(5000, "Rat", maxHealth = 100, health = 80, position = Position(2000, 2000, 7))
+
+        bound.sink.sendCreatureSquare(rat, 1)
+
+        assertThat(bound.frames).isEmpty()
+    }
+
+    @Test
+    fun `sendCreatureSquare is inert against a ghost the player cannot see`() {
+        // protocolgame.cpp:2376-2386: canSee(creature) includes
+        // player->canSeeCreature(creature), which hides ghosts from non-access
+        // players (player.cpp:1414-1416).
+        val bound = bind()
+        val ghost = newPlayer(id = 2, name = "Ghost", position = adjacent)
+        ghost.switchGhostMode()
+
+        bound.sink.sendCreatureSquare(ghost, 1)
+
+        assertThat(bound.frames).isEmpty()
+    }
+
+    @Test
+    fun `sendCreatureSquare writes the color for an access player seeing a ghost`() {
+        val bound = bind()
+        bound.player.group = Group(name = "GM", access = true)
+        val ghost = newPlayer(id = 2, name = "Ghost", position = adjacent)
+        ghost.switchGhostMode()
+
+        bound.sink.sendCreatureSquare(ghost, 1)
+
+        assertThat(bound.frames).containsExactly(bytes(0x93, 0x02, 0x00, 0x00, 0x00, 0x01, 0x01))
     }
 
     // --- party sends -------------------------------------------------------------
