@@ -20,14 +20,22 @@ class ConditionAttributes(
     now: () -> Long = { System.currentTimeMillis() },
 ) : ConditionGeneric(id, type, ticks, buff, subId, false, now) {
 
-    /** `ConditionAttributes::skills` (`condition.hpp:179`). */
-    private val skills = IntArray(Skill.LAST + 1)
+    /**
+     * `ConditionAttributes::skills` (`condition.hpp:179`); the C++
+     * `unserializeProp` `CONDITIONATTR_SKILLS` case writes
+     * `skills[currentSkill++]` inside the class (condition.cpp:750-752), so the
+     * io condition codec writes through this module-visible array.
+     */
+    internal val skills = IntArray(Skill.LAST + 1)
 
     /** `ConditionAttributes::skillsPercent` (`condition.hpp:180`). */
     private val skillsPercent = IntArray(Skill.LAST + 1)
 
-    /** `ConditionAttributes::stats` (`condition.hpp:181`). */
-    private val stats = IntArray(Stat.LAST + 1)
+    /**
+     * `ConditionAttributes::stats` (`condition.hpp:181`); written by
+     * `unserializeProp` `CONDITIONATTR_STATS` (condition.cpp:752-754).
+     */
+    internal val stats = IntArray(Stat.LAST + 1)
 
     /** `ConditionAttributes::statsPercent` (`condition.hpp:182`). */
     private val statsPercent = IntArray(Stat.LAST + 1)
@@ -35,8 +43,11 @@ class ConditionAttributes(
     /** `ConditionAttributes::buffsPercent` (`condition.hpp:183`). */
     private val buffsPercent = IntArray(Buff.LAST + 1)
 
-    /** `ConditionAttributes::buffs` (`condition.hpp:184`). */
-    private val buffs = IntArray(Buff.LAST + 1)
+    /**
+     * `ConditionAttributes::buffs` (`condition.hpp:184`); written by
+     * `unserializeProp` `CONDITIONATTR_BUFFS` (condition.cpp:754-756).
+     */
+    internal val buffs = IntArray(Buff.LAST + 1)
 
     /** `ConditionAttributes::charmChanceModifier` (`condition.hpp:190`). */
     private var charmChanceModifier: Int = 0
@@ -664,7 +675,12 @@ class ConditionAttributes(
 
     private fun getAbsorbByIndex(index: Int): Int = absorbs.getOrElse(index) { 0 }
 
-    private fun setAbsorb(index: Int, value: Int) {
+    /**
+     * `ConditionAttributes::setAbsorb` (`condition.cpp:1360-1366`); the io
+     * condition codec calls it for each `CONDITIONATTR_ABSORBS` pair exactly
+     * like C++ `unserializeProp` (condition.cpp:757-767).
+     */
+    internal fun setAbsorb(index: Int, value: Int) {
         if (index in absorbs.indices) {
             absorbs[index] = value
         }
@@ -680,7 +696,12 @@ class ConditionAttributes(
 
     private fun getIncreaseByIndex(index: Int): Int = increases.getOrElse(index) { 0 }
 
-    private fun setIncrease(index: Int, value: Int) {
+    /**
+     * `ConditionAttributes::setIncrease` (`condition.cpp:1394-1400`); the io
+     * condition codec calls it for each `CONDITIONATTR_INCREASES` pair exactly
+     * like C++ `unserializeProp` (condition.cpp:768-780).
+     */
+    internal fun setIncrease(index: Int, value: Int) {
         if (index in increases.indices) {
             increases[index] = value
         }

@@ -6,9 +6,17 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.account.Account
+import org.opentibia.canary.combat.condition.Buff
+import org.opentibia.canary.combat.condition.CombatType
+import org.opentibia.canary.combat.condition.ConditionAttributes
+import org.opentibia.canary.combat.condition.ConditionDamage
 import org.opentibia.canary.combat.condition.ConditionId
 import org.opentibia.canary.combat.condition.ConditionSpeed
 import org.opentibia.canary.combat.condition.ConditionType
+import org.opentibia.canary.combat.condition.FakeConditionTarget
+import org.opentibia.canary.combat.condition.IntervalInfo
+import org.opentibia.canary.combat.condition.Skill
+import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.Skulls_t
 import org.opentibia.canary.creatures.appearance.outfit.OutfitEntry
@@ -166,6 +174,68 @@ class IOLoginDataSubloadsTest {
         subloads.loadPlayerConditions(player)
 
         assertThat(player.storedConditionList).isEmpty()
+    }
+
+    @Test
+    fun `loadPlayerConditions applies the flat skill stat buff absorb and increase records`() {
+        seedConditions(attributesCondition())
+        val player = newPlayer()
+
+        subloads.loadPlayerConditions(player)
+
+        val condition = player.storedConditionList.single() as ConditionAttributes
+        val target = FakeConditionTarget()
+        condition.startCondition(target)
+
+        assertThat(target.varSkills[Skill.SKILL_FIST]).isEqualTo(7)
+        assertThat(target.varStats[Stat.STAT_MAXHITPOINTS]).isEqualTo(100)
+        assertThat(target.varStats[Stat.STAT_MAXMANAPOINTS]).isEqualTo(50)
+        assertThat(target.varStats[Stat.STAT_SOULPOINTS]).isEqualTo(33)
+        assertThat(target.varStats[Stat.STAT_MAGICPOINTS]).isEqualTo(9)
+        assertThat(target.varStats[Stat.STAT_CAPACITY]).isEqualTo(200)
+        assertThat(target.buffValues[Buff.BUFF_AUTOATTACKDEALT]).isEqualTo(15)
+        // The serialized absorb/increase index selects the combat type.
+        assertThat(target.absorbValues[CombatType.COMBAT_LIFEDRAIN]).isEqualTo(8)
+        assertThat(target.increaseValues[CombatType.COMBAT_FIREDAMAGE]).isEqualTo(25)
+    }
+
+    @Test
+    fun `loadPlayerConditions restores the persistent flag`() {
+        seedConditions(
+            genericCondition(
+                type = ConditionType.CONDITION_INFIGHT,
+                id = ConditionId.CONDITIONID_HEAD,
+                ticks = 5_000,
+                persistent = true,
+            ),
+        )
+        val player = newPlayer()
+
+        subloads.loadPlayerConditions(player)
+
+        // `Condition::unserializeProp` CONDITIONATTR_PERSISTENT sets
+        // `m_isPersistent` (condition.cpp:259-267); a HEAD-id condition would
+        // otherwise derive false (condition.cpp:475-489).
+        assertThat(player.storedConditionList.single().isPersistent()).isTrue()
+    }
+
+    @Test
+    fun `loadPlayerConditions preserves the interval damage timeLeft and interval`() {
+        seedConditions(intervalCondition())
+        val player = newPlayer()
+
+        subloads.loadPlayerConditions(player)
+
+        val condition = player.storedConditionList.single() as ConditionDamage
+        // `ConditionDamage::unserializeProp` appends the raw IntervalInfo and
+        // re-stamps `ticks = ticks + damageInfo.interval` per record
+        // (condition.cpp:1817-1824); the damage condition starts at ticks 0
+        // (condition.cpp:343-345).
+        assertThat(condition.ticks).isEqualTo(4_500)
+        assertThat(condition.scheduledDamage).containsExactly(
+            IntervalInfo(timeLeft = 500, value = -5, interval = 1_500),
+            IntervalInfo(timeLeft = 50, value = -7, interval = 3_000),
+        )
     }
 
     // --- loadPlayerSkullSystem ------------------------------------------------
@@ -527,6 +597,7 @@ class IOLoginDataSubloadsTest {
         type: ConditionType,
         ticks: Int,
         id: ConditionId = ConditionId.CONDITIONID_COMBAT,
+        persistent: Boolean = false,
         trailingAttrs: ((PropWriteStream) -> Unit)? = null,
     ): ByteArray {
         val stream = PropWriteStream()
@@ -536,8 +607,68 @@ class IOLoginDataSubloadsTest {
         stream.writeU8(CONDITION_ATTR_ADDSOUND)
         stream.writeU16(0)
         stream.writeU8(CONDITION_ATTR_PERSISTENT)
-        stream.writeU8(0)
+        stream.writeU8(if (persistent) 1 else 0)
         trailingAttrs?.invoke(stream)
+        stream.writeU8(CONDITION_ATTR_END)
+        return stream.getStream()
+    }
+
+    /**
+     * One `ConditionAttributes::serialize` stream
+     * (condition.cpp:789-820): one flat skill, all five flat stats, one flat
+     * buff and the COMBAT_COUNT absorb/increase pairs.
+     */
+    private fun attributesCondition(): ByteArray {
+        val stream = PropWriteStream()
+        conditionHeader(
+            stream,
+            ConditionType.CONDITION_ATTRIBUTES,
+            ConditionId.CONDITIONID_DEFAULT,
+            ticks = 10_000,
+        )
+        stream.writeU8(CONDITION_ATTR_SKILLS)
+        stream.writeI32(7)
+        for (value in listOf(100, 50, 33, 9, 200)) {
+            stream.writeU8(CONDITION_ATTR_STATS)
+            stream.writeI32(value)
+        }
+        stream.writeU8(CONDITION_ATTR_BUFFS)
+        stream.writeI32(15)
+        stream.writeU8(CONDITION_ATTR_ABSORBS)
+        for (index in 0 until COMBAT_COUNT) {
+            stream.writeU8(index)
+            stream.writeI32(if (index == CombatType.COMBAT_LIFEDRAIN.value) 8 else 0)
+        }
+        stream.writeU8(CONDITION_ATTR_INCREASES)
+        for (index in 0 until COMBAT_COUNT) {
+            stream.writeU8(index)
+            stream.writeI32(if (index == CombatType.COMBAT_FIREDAMAGE.value) 25 else 0)
+        }
+        stream.writeU8(CONDITION_ATTR_END)
+        return stream.getStream()
+    }
+
+    /**
+     * One `ConditionDamage::serialize` stream
+     * (condition.cpp:1830-1848): two raw `IntervalInfo` rounds with a
+     * `timeLeft` that differs from their interval.
+     */
+    private fun intervalCondition(): ByteArray {
+        val stream = PropWriteStream()
+        conditionHeader(
+            stream,
+            ConditionType.CONDITION_POISON,
+            ConditionId.CONDITIONID_DEFAULT,
+            ticks = 9_000,
+        )
+        stream.writeU8(CONDITION_ATTR_INTERVALDATA)
+        stream.writeI32(500)
+        stream.writeI32(-5)
+        stream.writeI32(1_500)
+        stream.writeU8(CONDITION_ATTR_INTERVALDATA)
+        stream.writeI32(50)
+        stream.writeI32(-7)
+        stream.writeI32(3_000)
         stream.writeU8(CONDITION_ATTR_END)
         return stream.getStream()
     }
@@ -581,18 +712,26 @@ class IOLoginDataSubloadsTest {
     private companion object {
         const val NOW = 1_700_000_000L
 
+        const val COMBAT_COUNT = 14
+
         const val CONDITION_ATTR_TYPE = 1
         const val CONDITION_ATTR_ID = 2
         const val CONDITION_ATTR_TICKS = 3
+        const val CONDITION_ATTR_INTERVALDATA = 10
         const val CONDITION_ATTR_SPEEDDELTA = 11
         const val CONDITION_ATTR_FORMULA_MINA = 12
         const val CONDITION_ATTR_FORMULA_MINB = 13
         const val CONDITION_ATTR_FORMULA_MAXA = 14
         const val CONDITION_ATTR_FORMULA_MAXB = 15
+        const val CONDITION_ATTR_SKILLS = 22
+        const val CONDITION_ATTR_STATS = 23
+        const val CONDITION_ATTR_BUFFS = 24
         const val CONDITION_ATTR_ISBUFF = 27
         const val CONDITION_ATTR_SUBID = 28
         const val CONDITION_ATTR_ADDSOUND = 30
         const val CONDITION_ATTR_TICKSOUND = 31
+        const val CONDITION_ATTR_ABSORBS = 32
+        const val CONDITION_ATTR_INCREASES = 33
         const val CONDITION_ATTR_PERSISTENT = 35
         const val CONDITION_ATTR_END = 254
     }

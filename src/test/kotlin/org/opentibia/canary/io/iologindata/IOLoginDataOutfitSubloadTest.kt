@@ -75,6 +75,64 @@ class IOLoginDataOutfitSubloadTest {
     }
 
     @Test
+    fun `loadPlayerById applies the persisted mount and familiar look columns`() {
+        insertPlayer(
+            id = 102L,
+            name = "Mounted Hero",
+            lookType = 137,
+            lookHead = 1,
+            lookBody = 2,
+            lookLegs = 3,
+            lookFeet = 4,
+            lookAddons = 5,
+            lookMountHead = 6,
+            lookMountBody = 7,
+            lookMountLegs = 8,
+            lookMountFeet = 9,
+            lookFamiliarsType = 410,
+        )
+        val player = newPlayer(id = 102L, name = "Mounted Hero")
+
+        assertThat(loginData.loadPlayerById(player, 102L)).isTrue()
+
+        val defaultOutfit = player.getDefaultOutfit()
+        assertThat(defaultOutfit.lookMountHead).isEqualTo(6)
+        assertThat(defaultOutfit.lookMountBody).isEqualTo(7)
+        assertThat(defaultOutfit.lookMountLegs).isEqualTo(8)
+        assertThat(defaultOutfit.lookMountFeet).isEqualTo(9)
+        assertThat(defaultOutfit.lookFamiliarsType).isEqualTo(410)
+        assertThat(player.getCurrentOutfit()).isEqualTo(defaultOutfit)
+    }
+
+    @Test
+    fun `loadPlayerById blocks an unregistered familiar type before the current outfit copy`() {
+        insertPlayer(
+            id = 103L,
+            name = "Familiar Hero",
+            lookType = 137,
+            lookHead = 1,
+            lookBody = 2,
+            lookLegs = 3,
+            lookFeet = 4,
+            lookAddons = 5,
+            lookMountHead = 6,
+            lookFamiliarsType = 999,
+        )
+        loginData = newLoginData(warnUnsafeScripts = true, isLookTypeRegistered = { it == 137 })
+        val player = newPlayer(id = 103L, name = "Familiar Hero")
+
+        assertThat(loginData.loadPlayerById(player, 103L)).isTrue()
+
+        // The C++ loader mutates `defaultOutfit` in place and returns before
+        // `player->currentOutfit = player->defaultOutfit`
+        // (iologindata_load_player.cpp:312-317).
+        val defaultOutfit = player.getDefaultOutfit()
+        assertThat(defaultOutfit.lookFamiliarsType).isEqualTo(999)
+        assertThat(defaultOutfit.lookMountHead).isEqualTo(6)
+        assertThat(player.getCurrentOutfit().lookType).isZero()
+    }
+
+    @Test
     fun `loadPlayerById blocks an unregistered look type before the remaining look fields`() {
         loginData = newLoginData(warnUnsafeScripts = true, isLookTypeRegistered = { false })
         val player = newPlayer()
@@ -132,13 +190,19 @@ class IOLoginDataOutfitSubloadTest {
         lookLegs: Int,
         lookFeet: Int,
         lookAddons: Int,
+        lookMountHead: Int = 0,
+        lookMountBody: Int = 0,
+        lookMountLegs: Int = 0,
+        lookMountFeet: Int = 0,
+        lookFamiliarsType: Int = 0,
     ) {
         dataSource.connection.use { conn ->
             conn.prepareStatement(
                 """
                 INSERT INTO players (
-                    id, name, account_id, looktype, lookhead, lookbody, looklegs, lookfeet, lookaddons
-                ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)
+                    id, name, account_id, looktype, lookhead, lookbody, looklegs, lookfeet, lookaddons,
+                    lookmounthead, lookmountbody, lookmountlegs, lookmountfeet, lookfamiliarstype
+                ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """.trimIndent(),
             ).use { stmt ->
                 stmt.setLong(1, id)
@@ -149,14 +213,19 @@ class IOLoginDataOutfitSubloadTest {
                 stmt.setInt(6, lookLegs)
                 stmt.setInt(7, lookFeet)
                 stmt.setInt(8, lookAddons)
+                stmt.setInt(9, lookMountHead)
+                stmt.setInt(10, lookMountBody)
+                stmt.setInt(11, lookMountLegs)
+                stmt.setInt(12, lookMountFeet)
+                stmt.setInt(13, lookFamiliarsType)
                 stmt.executeUpdate()
             }
         }
     }
 
-    private fun newPlayer(): Player = Player(
-        id = 101L,
-        name = "Outfit Hero",
+    private fun newPlayer(id: Long = 101L, name: String = "Outfit Hero"): Player = Player(
+        id = id,
+        name = name,
         maxHealth = 1,
         health = 1,
         position = Position(1, 1, 7),

@@ -44,9 +44,14 @@ abstract class Condition(
     var subId: Int = subId
         protected set
 
-    /** `Condition::m_isPersistent` (`condition.hpp:69`). */
+    /**
+     * `Condition::m_isPersistent` (`condition.hpp:69`); the C++
+     * `Condition::unserializeProp` `CONDITIONATTR_PERSISTENT` case writes it
+     * directly (condition.cpp:259-267), so the io condition codec needs the
+     * same module-level write access (Kotlin has no friend classes).
+     */
     var isPersistentFlag: Boolean = isPersistent
-        protected set
+        internal set
 
     /** `Condition::owner` (`condition.hpp:61`). */
     var owner: Int = 0

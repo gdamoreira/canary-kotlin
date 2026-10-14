@@ -2,6 +2,7 @@ package org.opentibia.canary.io.iologindata
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import org.opentibia.canary.account.getTimeNow
+import org.opentibia.canary.combat.condition.Buff
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionAttributes
 import org.opentibia.canary.combat.condition.ConditionDamage
@@ -11,7 +12,10 @@ import org.opentibia.canary.combat.condition.ConditionOutfit
 import org.opentibia.canary.combat.condition.ConditionParam
 import org.opentibia.canary.combat.condition.ConditionSpeed
 import org.opentibia.canary.combat.condition.ConditionType
+import org.opentibia.canary.combat.condition.IntervalInfo
 import org.opentibia.canary.combat.condition.Outfit
+import org.opentibia.canary.combat.condition.Skill
+import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.Skulls_t
 import org.opentibia.canary.creatures.players.PlayerSocialState
@@ -49,11 +53,8 @@ data class PlayerConditionSkullRecord(
  * The `players` look columns `IOLoginDataLoad::loadPlayerDefaultOutfit`
  * (iologindata_load_player.cpp:291-317) reads from the same result row.
  *
- * PARITY GAP (schema): Canary's `players` row also carries `lookmounthead`,
- * `lookmountbody`, `lookmountlegs`, `lookmountfeet` and `lookfamiliarstype`
- * (schema.sql:144-148). Those columns are absent from the port's V1 schema
- * (`lookbody`..`lookaddons` only, V1__initial_schema.sql:48-53), so the record
- * (and the load) only carries the six available columns.
+ * The record mirrors the Canary `players` columns (schema.sql:136-148); the
+ * mount/familiar columns arrive with V20.
  */
 data class PlayerOutfitRecord(
     val lookType: Int,
@@ -62,6 +63,11 @@ data class PlayerOutfitRecord(
     val lookLegs: Int,
     val lookFeet: Int,
     val lookAddons: Int,
+    val lookMountHead: Int,
+    val lookMountBody: Int,
+    val lookMountLegs: Int,
+    val lookMountFeet: Int,
+    val lookFamiliarsType: Int,
 )
 
 /**
@@ -119,6 +125,11 @@ class DbPlayerSubloadRepository(private val dataSource: DataSource) : PlayerSubl
                             lookLegs = result.getInt(LOOK_LEGS_COLUMN),
                             lookFeet = result.getInt(LOOK_FEET_COLUMN),
                             lookAddons = result.getInt(LOOK_ADDONS_COLUMN),
+                            lookMountHead = result.getInt(LOOK_MOUNT_HEAD_COLUMN),
+                            lookMountBody = result.getInt(LOOK_MOUNT_BODY_COLUMN),
+                            lookMountLegs = result.getInt(LOOK_MOUNT_LEGS_COLUMN),
+                            lookMountFeet = result.getInt(LOOK_MOUNT_FEET_COLUMN),
+                            lookFamiliarsType = result.getInt(LOOK_FAMILIARS_TYPE_COLUMN),
                         )
                     } else {
                         null
@@ -141,11 +152,18 @@ class DbPlayerSubloadRepository(private val dataSource: DataSource) : PlayerSubl
         const val LOOK_LEGS_COLUMN = "looklegs"
         const val LOOK_FEET_COLUMN = "lookfeet"
         const val LOOK_ADDONS_COLUMN = "lookaddons"
+        const val LOOK_MOUNT_HEAD_COLUMN = "lookmounthead"
+        const val LOOK_MOUNT_BODY_COLUMN = "lookmountbody"
+        const val LOOK_MOUNT_LEGS_COLUMN = "lookmountlegs"
+        const val LOOK_MOUNT_FEET_COLUMN = "lookmountfeet"
+        const val LOOK_FAMILIARS_TYPE_COLUMN = "lookfamiliarstype"
 
         const val LOAD_SQL = """SELECT "conditions", "skull", "skulltime" FROM players WHERE id = ?"""
 
         const val OUTFIT_SQL =
-            """SELECT "looktype", "lookhead", "lookbody", "looklegs", "lookfeet", "lookaddons" FROM players WHERE id = ?"""
+            """SELECT "looktype", "lookhead", "lookbody", "looklegs", "lookfeet", "lookaddons", """ +
+                """"lookmounthead", "lookmountbody", "lookmountlegs", "lookmountfeet", "lookfamiliarstype" """ +
+                """FROM players WHERE id = ?"""
     }
 }
 
@@ -281,11 +299,13 @@ class DbGuildMembershipRepository(private val dataSource: DataSource) : GuildMem
  * sub-load inert exactly like the other unwired `IOLoginData` seams.
  *
  * PARITY GAPS (see the individual methods for details):
- *  - `loadPlayerConditions` needs the per-condition `unserializeProp`
- *    overrides that the Kotlin `Condition` classes do not expose yet; it
- *    decodes the base attributes, the regeneration/mana-shield/soul/damage/
- *    speed/outfit/light/charm payloads and skips a condition whose
- *    representation is impossible (matching the C++ failure semantics).
+ *  - `loadPlayerConditions` decodes the base attributes, the regeneration/
+ *    mana-shield/soul/damage/speed/outfit/light/charm payloads (including the
+ *    flat skill/stat/buff/absorb/increase records, `PERSISTENT` and the raw
+ *    `INTERVALDATA` rounds) and skips a condition whose representation is
+ *    impossible (matching the C++ failure semantics). The condition classes
+ *    expose the C++ `unserializeProp` writes as module-visible members because
+ *    Kotlin has no friend classes.
  *  - `Player::storage()`, `Player::vip()`, `Player::kv()` (full ValueWrapper
  *    store) and `Player::guildNick` are not composed into the Kotlin `Player`
  *    yet, so the sub-loads take their owners as seams.
@@ -351,24 +371,20 @@ class IOLoginDataSubloads(
      * applied to `Player::defaultOutfit` and then copied into
      * `Player::currentOutfit`. `g_configManager().getBoolean(WARN_UNSAFE_SCRIPTS)`
      * becomes [warnUnsafeScripts] and `g_game().isLookTypeRegistered` becomes
-     * [isLookTypeRegistered]: an unregistered non-zero look type logs the
-     * warning and returns before the remaining fields, exactly like the C++
-     * `return` after `defaultOutfit.lookType` was already assigned.
+     * [isLookTypeRegistered]: an unregistered non-zero look type (or familiar
+     * type, the second guard at :312-315) logs the warning and returns before
+     * the current-outfit copy, exactly like the two C++ `return`s after the
+     * `defaultOutfit` fields were already assigned in place.
      *
-     * PARITY NOTE (`Creature.kt` accessors): Canary mutates the live
+     * ACCESSOR NEED (`Creature.kt`): Canary mutates the live
      * `player->defaultOutfit` fields and ends with
      * `player->currentOutfit = player->defaultOutfit`. The Kotlin `Creature`
      * only exposes value-copying accessors (`getDefaultOutfit()` returns a
      * `copy()`, `setDefaultOutfit`/`setCurrentOutfit` copy again), so the
-     * loader read-modify-writes through them and commits the copy before the
-     * early return; this reproduces the in-place C++ mutation without a new
-     * `Creature.kt` accessor.
-     *
-     * PARITY GAP: the `lookmounthead`/`lookmountbody`/`lookmountlegs`/
-     * `lookmountfeet` and `lookfamiliarstype` columns of Canary's `players`
-     * row (schema.sql:144-148) do not exist in the port schema, so those
-     * `Outfit` fields are left at their constructed defaults and the second
-     * C++ unregistered-familiar-type guard is unreachable.
+     * loader read-modify-writes through them and commits the copy before each
+     * guard return; a `Creature.kt` accessor exposing the live `defaultOutfit`
+     * (or a mutable `currentOutfit` assignment) would remove that dance, but
+     * that file belongs to the host-wiring agent of this wave.
      */
     fun loadPlayerDefaultOutfit(player: Player) {
         val row = subloadRepository?.loadOutfit(player.id) ?: return
@@ -393,7 +409,24 @@ class IOLoginDataSubloads(
         defaultOutfit.lookLegs = row.lookLegs and 0xFF
         defaultOutfit.lookFeet = row.lookFeet and 0xFF
         defaultOutfit.lookAddons = row.lookAddons and 0xFF
+        defaultOutfit.lookMountHead = row.lookMountHead and 0xFF
+        defaultOutfit.lookMountBody = row.lookMountBody and 0xFF
+        defaultOutfit.lookMountLegs = row.lookMountLegs and 0xFF
+        defaultOutfit.lookMountFeet = row.lookMountFeet and 0xFF
+        // `result->getNumber<uint16_t>("lookfamiliarstype")`.
+        defaultOutfit.lookFamiliarsType = row.lookFamiliarsType and 0xFFFF
         player.setDefaultOutfit(defaultOutfit)
+
+        if (warnUnsafeScripts &&
+            defaultOutfit.lookFamiliarsType != 0 &&
+            !isLookTypeRegistered(defaultOutfit.lookFamiliarsType)
+        ) {
+            logger.warn {
+                "[loadPlayerDefaultOutfit] An unregistered creature looktype type with id " +
+                    "'${defaultOutfit.lookFamiliarsType}' was blocked to prevent client crash."
+            }
+            return
+        }
 
         player.setCurrentOutfit(player.getDefaultOutfit())
     }
@@ -624,21 +657,22 @@ class IOLoginDataSubloads(
      *    speed, light and charm modifier) require [Condition.setParam] to
      *    accept the value, exactly like the C++ override dispatch.
      *  - `OUTFIT` maps to `ConditionOutfit::setOutfit`.
-     *  - `INTERVALDATA` maps to `ConditionDamage::addDamage` (PARITY GAP: the
-     *    stored `timeLeft` is reset to the full interval because the damage
-     *    list has no direct append seam).
+     *  - `INTERVALDATA` maps to `ConditionDamage::unserializeProp`
+     *    (condition.cpp:1817-1824): the raw `IntervalInfo` (preserving
+     *    `timeLeft`) is appended and `ticks` re-stamped by the raw interval.
      *  - `LIGHTTICKS`/`LIGHTINTERVAL` are consumed and ignored: Canary stores
      *    them but `ConditionLight::startCondition` recomputes both.
-     *  - `PERSISTENT` is consumed and ignored: the flag has no public setter
-     *    (PARITY GAP; `Condition::isPersistent` still derives true for
-     *    default/combat ids with finite ticks).
-     *  - `SKILLS`/`STATS` with a flat representation map to `setParam`;
-     *    `BUFFS`/`ABSORBS`/`INCREASES` and the capacity/soul stats have no
-     *    public flat setter and are consumed with a warning (PARITY GAP).
+     *  - `PERSISTENT` writes `Condition::m_isPersistent` exactly like
+     *    `Condition::unserializeProp` (condition.cpp:259-267).
+     *  - `SKILLS`/`STATS`/`BUFFS` write the flat arrays at their serialized
+     *    sequential index and `ABSORBS`/`INCREASES` call the C++
+     *    `setAbsorb`/`setIncrease` by serialized index
+     *    (condition.cpp:749-783); the charm modifier maps to `setParam`.
      */
     private fun readConditionAttributes(condition: Condition, stream: PropStream): Boolean {
         var skillIndex = 0
         var statIndex = 0
+        var buffIndex = 0
         var formulaMina: Float? = null
         var formulaMinb: Float? = null
         var formulaMaxa: Float? = null
@@ -766,45 +800,36 @@ class IOLoginDataSubloads(
                 CONDITION_ATTR_SOULGAIN ->
                     readParam(stream, condition, ConditionParam.CONDITION_PARAM_SOULGAIN) { it.readU32()?.toInt() }
 
+                // `ConditionAttributes::unserializeProp` flat records
+                // (condition.cpp:750-757): each record writes the next slot of
+                // the flat array. C++ does the writes inside the class; the
+                // Kotlin arrays are module-visible for this codec.
                 CONDITION_ATTR_SKILLS -> {
                     val value = stream.readI32()
-                    if (value == null || condition !is ConditionAttributes) {
+                    if (value == null || condition !is ConditionAttributes || skillIndex > Skill.LAST) {
                         false
                     } else {
-                        val param = SKILL_ATTRIBUTE_PARAMS.getOrNull(skillIndex++)
-                        if (param == null) {
-                            false
-                        } else {
-                            condition.setParam(param, value)
-                        }
+                        condition.skills[skillIndex++] = value
+                        true
                     }
                 }
 
                 CONDITION_ATTR_STATS -> {
                     val value = stream.readI32()
-                    if (value == null || condition !is ConditionAttributes) {
+                    if (value == null || condition !is ConditionAttributes || statIndex > Stat.LAST) {
                         false
                     } else {
-                        val param = STAT_ATTRIBUTE_PARAMS.getOrNull(statIndex++)
-                        if (param == null) {
-                            logger.warn {
-                                "[loadPlayerConditions] - Flat stat #${statIndex - 1} has no setter, skipping value for player condition"
-                            }
-                            true
-                        } else {
-                            condition.setParam(param, value)
-                        }
+                        condition.stats[statIndex++] = value
+                        true
                     }
                 }
 
                 CONDITION_ATTR_BUFFS -> {
                     val value = stream.readI32()
-                    if (value == null || condition !is ConditionAttributes) {
+                    if (value == null || condition !is ConditionAttributes || buffIndex > Buff.LAST) {
                         false
                     } else {
-                        logger.warn {
-                            "[loadPlayerConditions] - Flat buff attributes have no setter, skipping value for player condition"
-                        }
+                        condition.buffs[buffIndex++] = value
                         true
                     }
                 }
@@ -819,16 +844,12 @@ class IOLoginDataSubloads(
                 CONDITION_ATTR_MANASHIELD ->
                     readParam(stream, condition, ConditionParam.CONDITION_PARAM_MANASHIELD) { it.readU32()?.toInt() }
 
-                CONDITION_ATTR_ABSORBS -> readCombatAttribute(stream, condition) { index, value ->
-                    logger.warn {
-                        "[loadPlayerConditions] - Flat absorb #$index has no setter, skipping value for player condition: $value"
-                    }
+                CONDITION_ATTR_ABSORBS -> readCombatAttribute(stream, condition) { attributes, index, value ->
+                    attributes.setAbsorb(index, value)
                 }
 
-                CONDITION_ATTR_INCREASES -> readCombatAttribute(stream, condition) { index, value ->
-                    logger.warn {
-                        "[loadPlayerConditions] - Flat increase #$index has no setter, skipping value for player condition: $value"
-                    }
+                CONDITION_ATTR_INCREASES -> readCombatAttribute(stream, condition) { attributes, index, value ->
+                    attributes.setIncrease(index, value)
                 }
 
                 CONDITION_ATTR_CHARM_CHANCE_MODIFIER -> stream.readU8()?.let { value ->
@@ -836,8 +857,17 @@ class IOLoginDataSubloads(
                 } ?: false
 
                 // `Condition::unserializeProp` (condition.cpp:259-267) sets
-                // `m_isPersistent`; the Kotlin flag has no public setter.
-                CONDITION_ATTR_PERSISTENT -> stream.readU8() != null
+                // `m_isPersistent`; the Kotlin property setter is
+                // module-visible for this codec.
+                CONDITION_ATTR_PERSISTENT -> {
+                    val value = stream.readU8()
+                    if (value == null) {
+                        false
+                    } else {
+                        condition.isPersistentFlag = value != 0
+                        true
+                    }
+                }
 
                 else -> false
             }
@@ -886,10 +916,11 @@ class IOLoginDataSubloads(
 
     /**
      * `ConditionDamage::unserializeProp` `CONDITIONATTR_INTERVALDATA`
-     * (condition.cpp:1816-1824): one `IntervalInfo` round re-adds a damage
-     * tick. PARITY GAP: the Kotlin damage list has no direct append seam, so
-     * `addDamage` restores the value and interval but resets `timeLeft` to the
-     * full interval.
+     * (condition.cpp:1816-1824): the raw `IntervalInfo` is appended to the
+     * damage list (preserving `timeLeft` and the unclamped interval) and
+     * `ticks` is re-stamped by the record's interval unless the condition is
+     * immortal, exactly like the C++ `damageList.emplace_back` +
+     * `setTicks(ticks + damageInfo.interval)`.
      */
     private fun readIntervalData(condition: Condition, stream: PropStream): Boolean {
         val damage = condition as? ConditionDamage ?: return false
@@ -897,29 +928,30 @@ class IOLoginDataSubloads(
         val value = stream.readI32() ?: return false
         val interval = stream.readI32() ?: return false
 
-        if (timeLeft != interval) {
-            logger.warn {
-                "[loadPlayerConditions] - Interval damage timeLeft $timeLeft reset to interval $interval (no direct append seam)"
-            }
+        damage.damageList.add(IntervalInfo(timeLeft = timeLeft, value = value, interval = interval))
+        if (damage.ticks != -1) {
+            damage.setTicks(damage.ticks + interval)
         }
-        damage.addDamage(1, interval, value)
         return true
     }
 
-    /** `ConditionAttributes::unserializeProp` absorbs/increases block (condition.cpp:749-783). */
+    /**
+     * `ConditionAttributes::unserializeProp` absorbs/increases block
+     * (condition.cpp:757-780): `COMBAT_COUNT` serialized `(uint8 index,
+     * int32 value)` pairs routed through the C++ `setAbsorb`/`setIncrease`
+     * by the record's own index.
+     */
     private inline fun readCombatAttribute(
         stream: PropStream,
         condition: Condition,
-        onValue: (index: Int, value: Int) -> Unit,
+        onValue: (attributes: ConditionAttributes, index: Int, value: Int) -> Unit,
     ): Boolean {
-        if (condition !is ConditionAttributes) {
-            return false
-        }
+        val attributes = condition as? ConditionAttributes ?: return false
 
         for (index in 0 until COMBAT_COUNT) {
             stream.readU8() ?: return false
             val value = stream.readI32() ?: return false
-            onValue(index, value)
+            onValue(attributes, index, value)
         }
         return true
     }
@@ -1022,39 +1054,5 @@ class IOLoginDataSubloads(
         const val CONDITION_ATTR_CHARM_CHANCE_MODIFIER = 34
         const val CONDITION_ATTR_PERSISTENT = 35
         const val CONDITION_ATTR_END = 254
-
-        /**
-         * `ConditionAttributes::serialize` skill order
-         * (condition.cpp:789-792 over `skills_t`, creatures_definitions.hpp:466-487).
-         */
-        val SKILL_ATTRIBUTE_PARAMS = listOf(
-            ConditionParam.CONDITION_PARAM_SKILL_FIST,
-            ConditionParam.CONDITION_PARAM_SKILL_CLUB,
-            ConditionParam.CONDITION_PARAM_SKILL_SWORD,
-            ConditionParam.CONDITION_PARAM_SKILL_AXE,
-            ConditionParam.CONDITION_PARAM_SKILL_DISTANCE,
-            ConditionParam.CONDITION_PARAM_SKILL_SHIELD,
-            ConditionParam.CONDITION_PARAM_SKILL_FISHING,
-            ConditionParam.CONDITION_PARAM_SKILL_CRITICAL_HIT_CHANCE,
-            ConditionParam.CONDITION_PARAM_SKILL_CRITICAL_HIT_DAMAGE,
-            ConditionParam.CONDITION_PARAM_SKILL_LIFE_LEECH_CHANCE,
-            ConditionParam.CONDITION_PARAM_SKILL_LIFE_LEECH_AMOUNT,
-            ConditionParam.CONDITION_PARAM_SKILL_MANA_LEECH_CHANCE,
-            ConditionParam.CONDITION_PARAM_SKILL_MANA_LEECH_AMOUNT,
-        )
-
-        /**
-         * `ConditionAttributes::serialize` stat order
-         * (condition.cpp:794-797 over `stats_t`, creatures_definitions.hpp:266-275).
-         * `STAT_SOULPOINTS` and `STAT_CAPACITY` have no flat setter in the
-         * Kotlin `ConditionAttributes::setParam`; `null` consumes and warns.
-         */
-        val STAT_ATTRIBUTE_PARAMS = listOf<ConditionParam?>(
-            ConditionParam.CONDITION_PARAM_STAT_MAXHITPOINTS,
-            ConditionParam.CONDITION_PARAM_STAT_MAXMANAPOINTS,
-            null,
-            ConditionParam.CONDITION_PARAM_STAT_MAGICPOINTS,
-            null,
-        )
     }
 }

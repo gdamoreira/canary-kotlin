@@ -64,8 +64,13 @@ class ConditionDamage(
     /** `ConditionDamage::field` (`condition.hpp:332`). */
     private var field: Boolean = false
 
-    /** `ConditionDamage::damageList` (`condition.hpp:336`). */
-    private val damageList: MutableList<IntervalInfo> = mutableListOf()
+    /**
+     * `ConditionDamage::damageList` (`condition.hpp:336`); the C++
+     * `ConditionDamage::unserializeProp` `CONDITIONATTR_INTERVALDATA` case
+     * emplaces the raw `IntervalInfo` directly (condition.cpp:1817-1824), so
+     * the io condition codec appends through this module-visible list.
+     */
+    internal val damageList: MutableList<IntervalInfo> = mutableListOf()
 
     /** Read-only view of the scheduled rounds, for engine tests. */
     val scheduledDamage: List<IntervalInfo> get() = damageList
