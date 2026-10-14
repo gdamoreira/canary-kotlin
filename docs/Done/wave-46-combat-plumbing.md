@@ -31,3 +31,7 @@
 ## Post-wave (§6)
 
 Update §1–§3, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+
+## Completion
+
+Completed: combat pipeline, player depth 3 (596/821), composition plumbing, monster type state, map spectator sectors, imbuement decay. 587 suites / 6473 tests.
