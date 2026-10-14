@@ -9,6 +9,7 @@ import org.opentibia.canary.creatures.CyclopediaMonsterTrackerClient
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.monsters.MonsterType
+import org.opentibia.canary.creatures.players.components.PlayerStorageRow
 import org.opentibia.canary.database.DatabaseConnectionFactory
 import org.opentibia.canary.database.JdbcAccountRepository
 import org.opentibia.canary.database.JdbcFeatureStateRepository
@@ -383,6 +384,39 @@ class IOLoginDataSaveGuardTest {
 
         assertThat(JdbcPlayerRepository(dataSource).loadRecordByName("Save Guard Hero")!!.health).isEqualTo(100)
         assertThat(failing.loadPlayerStashItems(101L)).isEmpty()
+    }
+
+    @Test
+    fun `savePlayer persists the live storage delta through the guard`() {
+        val player = newPlayer()
+        player.features.storage.add(100, 7)
+        player.features.storage.add(200, -3)
+
+        assertThat(loginData.savePlayer(player)).isTrue()
+
+        assertThat(JdbcPlayerStorageRepository(dataSource).load(101L)).containsExactly(
+            PlayerStorageRow(key = 100, value = 7),
+            PlayerStorageRow(key = 200, value = -3),
+        )
+        assertThat(player.features.storage.getModifiedKeys()).isEmpty()
+        assertThat(player.features.storage.getRemovedKeys()).isEmpty()
+    }
+
+    @Test
+    fun `savePlayer persists the animus mastery blob and loadPlayer restores it`() {
+        val player = newPlayer()
+        player.features.animusMastery.add("Dragon")
+        player.features.animusMastery.add("Rat")
+
+        assertThat(loginData.savePlayer(player)).isTrue()
+
+        assertThat(IOBestiaryPersistence(dataSource).loadAnimusMastery(101L))
+            .containsExactly("dragon", "rat")
+
+        val loaded = newPlayer()
+        assertThat(loginData.loadPlayerByName(loaded, "Save Guard Hero", disableIrrelevantInfo = true)).isTrue()
+        assertThat(loaded.features.animusMastery.getAnimusMasteries()).containsExactly("dragon", "rat")
+        assertThat(loaded.features.animusMastery.has("Dragon")).isTrue()
     }
 
     private fun trackBestiaryMonster(player: Player, raceId: Int) {

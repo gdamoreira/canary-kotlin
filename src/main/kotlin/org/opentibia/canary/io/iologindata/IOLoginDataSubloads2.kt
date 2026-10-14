@@ -90,6 +90,22 @@ class IOLoginDataSubloads2(
     }
 
     /**
+     * `IOLoginDataLoad::loadPlayerAnimusMastery`
+     * (iologindata_load_player.cpp:277-289): the `players.animus_mastery`
+     * blob's lowercased monster names are re-added through
+     * `Player::animusMastery()` (player.cpp:12812), which lowercases again and
+     * de-duplicates exactly like `AnimusMastery::add`
+     * (animus_mastery.cpp:27-32). An unwired sink keeps the sub-load inert like
+     * the other unwired seams.
+     */
+    fun loadPlayerAnimusMastery(player: Player) {
+        val persistence = bestiaryPersistence ?: return
+        for (monsterName in persistence.loadAnimusMastery(player.id)) {
+            player.features.animusMastery().add(monsterName)
+        }
+    }
+
+    /**
      * `IOLoginDataLoad::loadPlayerStoreInbox`
      * (iologindata_load_player.cpp:634-643): `CONST_SLOT_STORE_INBOX` receives
      * a fresh `ITEM_STORE_INBOX` only while the slot is empty.

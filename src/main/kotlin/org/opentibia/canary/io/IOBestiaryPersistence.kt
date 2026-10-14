@@ -29,9 +29,10 @@ import javax.sql.DataSource
  *    delegates to it so there is a single writer.
  *  - Animus mastery, serialized into `players.animus_mastery`
  *    (`AnimusMastery::serialize`/`unserialize`,
- *    src/creatures/players/animus_mastery/animus_mastery.cpp:62-72) as an
- *    insertion-ordered list of lowercased monster names; mapped here to
- *    `player_animus_mastery` (V13).
+ *    src/creatures/players/animus_mastery/animus_mastery.cpp:62-73) as an
+ *    insertion-ordered list of lowercased monster names; persisted in the
+ *    Canary single column (V21). The wave-36 `player_animus_mastery` relational
+ *    table (V13) is superseded and no longer read or written.
  *
  * PARITY GAPS: the C++ load resolves tracker race ids through
  * `g_monsters().getMonsterTypeByRaceId` and drops unknown ids; the port returns
@@ -167,48 +168,56 @@ class IOBestiaryPersistence(
         }
     }
 
-    /** `players`.`animus_mastery` unserialize (`AnimusMastery::unserialize`). */
-    fun loadAnimusMastery(playerId: Long): List<String> = dataSource.connection.use { conn ->
+    /**
+     * `players`.`animus_mastery` unserialize (`AnimusMastery::unserialize`,
+     * src/creatures/players/animus_mastery/animus_mastery.cpp:68-73; reached by
+     * `IOLoginDataLoad::loadPlayerAnimusMastery`,
+     * iologindata_load_player.cpp:277-289): the column blob is an
+     * insertion-ordered sequence of `PropWriteStream::writeString` records; the
+     * decode loop stops at the first failed read exactly like the C++ `while
+     * (propStream.readString(monsterName))`.
+     */
+    fun loadAnimusMastery(playerId: Long): List<String> {
+        val blob = loadAnimusMasteryBlob(playerId) ?: return emptyList()
+        val stream = PropStream(blob)
         val masteries = mutableListOf<String>()
-        conn.prepareStatement(
-            "SELECT monster_name FROM player_animus_mastery WHERE player_id = ? ORDER BY position",
-        ).use { stmt ->
-            stmt.setLong(1, playerId)
-            stmt.executeQuery().use { rs ->
-                while (rs.next()) {
-                    masteries.add(rs.getString("monster_name"))
-                }
-            }
+        while (true) {
+            val monsterName = stream.readString() ?: break
+            masteries.add(monsterName)
         }
-        masteries
+        return masteries
     }
 
-    /** `players`.`animus_mastery` serialize (`AnimusMastery::serialize`). */
+    /**
+     * `players`.`animus_mastery` serialize (`AnimusMastery::serialize`,
+     * animus_mastery.cpp:62-66; inline block of
+     * `IOLoginDataSave::savePlayerFirst`,
+     * iologindata_save_player.cpp:293-299): every mastery is written as one
+     * length-prefixed UTF-8 record into the Canary single column. The wave-36
+     * `player_animus_mastery` rows are left untouched, exactly like Canary,
+     * which never had that table.
+     */
     fun saveAnimusMastery(playerId: Long, masteries: List<String>) {
+        val stream = PropWriteStream()
+        for (monsterName in masteries) {
+            stream.writeString(monsterName)
+        }
+
         dataSource.connection.use { conn ->
-            conn.autoCommit = false
-            try {
-                conn.prepareStatement("DELETE FROM player_animus_mastery WHERE player_id = ?").use { stmt ->
-                    stmt.setLong(1, playerId)
-                    stmt.executeUpdate()
-                }
-                if (masteries.isNotEmpty()) {
-                    conn.prepareStatement(
-                        "INSERT INTO player_animus_mastery (player_id, position, monster_name) VALUES (?, ?, ?)",
-                    ).use { stmt ->
-                        masteries.forEachIndexed { position, monsterName ->
-                            stmt.setLong(1, playerId)
-                            stmt.setInt(2, position)
-                            stmt.setString(3, monsterName)
-                            stmt.addBatch()
-                        }
-                        stmt.executeBatch()
-                    }
-                }
-                conn.commit()
-            } catch (ex: Exception) {
-                conn.rollback()
-                throw ex
+            conn.prepareStatement("UPDATE players SET animus_mastery = ? WHERE id = ?").use { stmt ->
+                stmt.setBytes(1, stream.getStream())
+                stmt.setLong(2, playerId)
+                stmt.executeUpdate()
+            }
+        }
+    }
+
+    /** The raw `players`.`animus_mastery` column read; `null` when the row is missing. */
+    private fun loadAnimusMasteryBlob(playerId: Long): ByteArray? = dataSource.connection.use { conn ->
+        conn.prepareStatement("SELECT animus_mastery FROM players WHERE id = ?").use { stmt ->
+            stmt.setLong(1, playerId)
+            stmt.executeQuery().use { rs ->
+                if (rs.next()) rs.getBytes("animus_mastery") else null
             }
         }
     }

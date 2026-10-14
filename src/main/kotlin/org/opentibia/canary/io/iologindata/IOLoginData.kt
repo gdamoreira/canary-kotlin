@@ -87,8 +87,9 @@ typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
  * advanced feature state and exiva restrictions when `disableIrrelevantInfo`
  * is unset. The part-1 sub-loads live in [IOLoginDataSubloads] and the
  * part-2 sub-loads in [IOLoginDataSubloads2], both reached through injected
- * seams. The `loadPlayerAnimusMastery` blob has no Kotlin state holder yet
- * (PARITY GAP).
+ * seams. The `loadPlayerAnimusMastery` blob is loaded through
+ * [IOLoginDataSubloads2.loadPlayerAnimusMastery] over the single
+ * `players.animus_mastery` column (V21).
  *
  * The live item walks are ported as [saveItems] plus [savePlayerItem(player)]
  * (inventory), [savePlayerDepotItems(player)], [saveRewardItems(player)] and
@@ -108,6 +109,9 @@ typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
  * [savePlayerStash(player)] walks `Player::getStashItems` with the C++
  * decay/ware filters, [savePlayerBestiarySystem(player)] writes the charm
  * state and cyclopedia tracker through [IOBestiaryPersistence],
+ * [savePlayerFirst(player)] also writes the `conditions` stream
+ * (iologindata_save_player.cpp:279-291) and the `players.animus_mastery` blob
+ * (:293-299) through [PlayerConditionPersistence] and [IOBestiaryPersistence],
  * [savePlayerPreyClass(player)] and [savePlayerTaskHuntingClass(player)] write
  * the prey/task slots through [IOPreyPersistence], and
  * [PlayerSaveTransaction] shares one JDBC transaction across every repository
@@ -127,6 +131,8 @@ typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
  * repository still opens and commits its own connection, so the guard cannot be
  * rolled back as a whole; the Canary offline guard (`Player::isOffline`) has no
  * Kotlin equivalent yet, so [saveOnlyDataForOnlinePlayer] always flushes; the
+ * `players.conditions` write of [savePlayerFirst] only runs when the
+ * composition root supplies [subloadRepository]; the
  * row-based overloads of the walks remain for callers that already hold the
  * persisted rows; [savePlayerStash(player)] applies the decay/ware filters only
  * when the `ItemTypeRegistry` seam is wired (an unknown item id stays unfiltered, exactly
@@ -216,7 +222,17 @@ class IOLoginData(
      * resolution inert.
      */
     private val monsterTypeByRaceId: (raceId: Int, isBoss: Boolean) -> MonsterType? = { _, _ -> null },
+    /**
+     * `IOLoginDataSave::savePlayerFirst` `players`.`conditions` write
+     * (iologindata_save_player.cpp:279-291). `null` keeps the pre-wiring
+     * no-write behavior (PARITY GAP); the composition root constructs the same
+     * [PlayerSubloadRepository] it feeds to [IOLoginDataSubloads].
+     */
+    private val subloadRepository: PlayerSubloadRepository? = null,
 ) {
+
+    /** The `Condition::serialize` codec of [savePlayerFirst] (condition.cpp:277-301). */
+    private val playerConditions = PlayerConditionPersistence()
 
     private val featureLoader: PlayerFeatureStateLoader? by lazy(LazyThreadSafetyMode.NONE) {
         features?.let { PlayerFeatureStateLoader(it) }
@@ -314,13 +330,11 @@ class IOLoginData(
      * mirrors the missing-result guard.
      *
      * The ported sub-loads keep Canary's order for the systems the Kotlin state
-     * models: basic info, experience, blessings, conditions, default outfit,
-     * skull, skills, kills, guild, stash, bestiary charms, inventory tree,
-     * store inbox, depot chests, reward chest, inbox, storage map, VIP,
-     * prey/task hunting, instant spell list and (when the login is not a
-     * preload) the advanced feature state plus the exiva restrictions. The
-     * `loadPlayerAnimusMastery` blob is the remaining `IOLoginDataLoad` step
-     * without a Kotlin state holder (PARITY GAP).
+     * models: basic info, experience, blessings, conditions, animus mastery,
+     * default outfit, skull, skills, kills, guild, stash, bestiary charms,
+     * inventory tree, store inbox, depot chests, reward chest, inbox, storage,
+     * VIP, prey/task hunting, instant spell list and (when the login is not a
+     * preload) the advanced feature state plus the exiva restrictions.
      */
     fun loadPlayer(player: Player, record: PlayerRecord?, disableIrrelevantInfo: Boolean = false): Boolean {
         if (record == null) {
@@ -332,6 +346,7 @@ class IOLoginData(
         loadPlayerExperience(player, record)
         loadPlayerBlessings(player, record)
         subloads?.loadPlayerConditions(player)
+        subloads2.loadPlayerAnimusMastery(player)
         subloads?.loadPlayerDefaultOutfit(player)
         subloads?.loadPlayerSkullSystem(player)
         loadPlayerSkill(player, record)
@@ -400,8 +415,48 @@ class IOLoginData(
         }
     }
 
-    /** `IOLoginData::savePlayerFirst` (src/io/functions/iologindata_save_player.cpp:191-372). */
-    fun savePlayerFirst(player: Player): Boolean = players.savePlayerRecord(player)
+    /**
+     * `IOLoginData::savePlayerFirst` (src/io/functions/iologindata_save_player.cpp:191-372):
+     * the `players` record write plus the blob columns of the same statement,
+     * the persistent `conditions` stream (:279-291) and the `animus_mastery`
+     * blob (:293-299). A failed write of either blob fails the guard exactly
+     * like the C++ `savePlayerFirst` returning `false`.
+     */
+    fun savePlayerFirst(player: Player): Boolean {
+        if (!players.savePlayerRecord(player)) {
+            return false
+        }
+
+        if (!savePlayerConditions(player)) {
+            return false
+        }
+
+        return savePlayerAnimusMastery(player)
+    }
+
+    /**
+     * The inline `conditions` block of `IOLoginDataSave::savePlayerFirst`
+     * (iologindata_save_player.cpp:279-291) over the [PlayerConditionPersistence]
+     * codec. An unwired [subloadRepository] keeps the write inert like the
+     * other unwired seams.
+     */
+    private fun savePlayerConditions(player: Player): Boolean {
+        val repository = subloadRepository ?: return true
+        return repository.saveConditions(player.id, playerConditions.savePlayerConditions(player))
+    }
+
+    /**
+     * The inline `animus_mastery` block of `IOLoginDataSave::savePlayerFirst`
+     * (iologindata_save_player.cpp:293-299): `Player::animusMastery()`
+     * (player.cpp:12812) is serialized through [IOBestiaryPersistence] into the
+     * single Canary column. An unwired sink stays inert like the other unwired
+     * seams.
+     */
+    private fun savePlayerAnimusMastery(player: Player): Boolean {
+        val persistence = bestiaryPersistence ?: return true
+        persistence.saveAnimusMastery(player.id, player.features.animusMastery().getAnimusMasteries())
+        return true
+    }
 
     /**
      * `IOLoginData::savePlayer` (src/io/iologindata.cpp:195-211). The
@@ -486,11 +541,16 @@ class IOLoginData(
         return saveOnlyDataForOnlinePlayer(player)
     }
 
-    /** `IOLoginData::saveOnlyDataForOnlinePlayer` (src/io/iologindata.cpp:269-298). */
+    /**
+     * `IOLoginData::saveOnlyDataForOnlinePlayer` (src/io/iologindata.cpp:269-298):
+     * the advanced feature state is flushed through [featureLoader] and the
+     * `Player::storage()` delta through [savePlayerStorage] (iologindata.cpp:295).
+     * Canary's `player->isOffline()` early return has no Kotlin equivalent yet,
+     * so both flushes always run (PARITY GAP).
+     */
     fun saveOnlyDataForOnlinePlayer(player: Player): Boolean {
-        val loader = featureLoader ?: return true
-        loader.save(player.id, player.features)
-        return true
+        featureLoader?.save(player.id, player.features)
+        return savePlayerStorage(player, player.features.storage)
     }
 
     /** `IOLoginData::getNameByGuid` (src/io/iologindata.cpp:300-308). */
