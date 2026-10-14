@@ -81,6 +81,19 @@ class GameHandler(
         ioMarket = ioMarket,
         imbuements = imbuements,
     ),
+    /**
+     * World-shared `Player::muteCountMap` (player.hpp:281) resolved by the
+     * composition root; each logged-in [Player] receives it so the chat
+     * escalation survives relogs. A directly constructed handler keeps a
+     * per-handler map (its sessions share it).
+     */
+    private val muteCountMap: MutableMap<Long, Int> = mutableMapOf(),
+    /**
+     * `g_game().transformItem(item, item->getID(), charges - 1)` seam
+     * (player.cpp:1065, 7588, 7697, 7718) bound by [CanaryServer] to its world
+     * `Game`; inert when the handler is constructed directly.
+     */
+    private val transformItemCharges: (Item) -> Unit = {},
 ) : SimpleChannelInboundHandler<ByteBuf>() {
 
     private var player: Player? = null
@@ -248,7 +261,11 @@ class GameHandler(
             maxMana = 50,
             mana = 50,
             speed = 220,
-            position = spawnPos
+            position = spawnPos,
+            // `Player::muteCountMap` (player.hpp:281) and the world
+            // `g_game().transformItem` binding are shared across sessions.
+            muteCountMap = muteCountMap,
+            transformItemCharges = transformItemCharges,
         )
         this.player = activePlayer
 

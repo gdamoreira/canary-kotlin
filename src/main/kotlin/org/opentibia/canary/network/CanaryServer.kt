@@ -15,10 +15,14 @@ import io.netty.util.concurrent.GlobalEventExecutor
 import javax.sql.DataSource
 import org.opentibia.canary.account.AccountRepository
 import org.opentibia.canary.account.InMemoryAccountRepository
+import org.opentibia.canary.config.ConfigManager
 import org.opentibia.canary.game.Game
+import org.opentibia.canary.game.scheduling.CreatureAsyncTaskBuckets
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.io.IOMarket
+import org.opentibia.canary.items.Item
+import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.Items
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.ScriptingDispatch
@@ -60,7 +64,12 @@ class CanaryServer(
     private val gamePort: Int = 7172,
     private val accountRepository: AccountRepository = InMemoryAccountRepository(),
     private val gameMap: GameMap = GameMap(),
-    private val dispatcher: GameDispatcher = GameDispatcher(),
+    /**
+     * `g_dispatcher()` shared by the world. When absent the composition root
+     * owns one composed with [configManager] (`getConfiguredDispatcherBudgets`,
+     * dispatcher.cpp:38-49); a booted dispatcher stays caller-owned.
+     */
+    dispatcher: GameDispatcher? = null,
     private val rsaCipher: RsaCipher = RsaCipher(),
     private val luaEnvironment: LuaEnvironment = LuaEnvironment().apply { initState() },
     /** `Item::items` registry (`src/items/items.hpp:389`) loaded by the bootstrap. */
@@ -70,7 +79,35 @@ class CanaryServer(
     /** `g_database()` source backing the composed `IOMarket::getInstance()` (iomarket.cpp). */
     private val dataSource: DataSource? = null,
     suppliedGame: Game? = null,
+    /**
+     * `g_configManager()` composed by the bootstrap: read by the world `Game`
+     * for the `Player` host values (`MAX_MESSAGEBUFFER`, game.cpp:11624) and by
+     * the dispatcher's adaptive budgets. `null` keeps the getter defaults.
+     */
+    private val configManager: ConfigManager? = null,
 ) : ListenerBoot {
+    /**
+     * `g_dispatcher()` (`CanaryServer::run`, src/canary_server.cpp:132): the
+     * injected booted dispatcher or one this composition root owns.
+     */
+    private val dispatcher: GameDispatcher = dispatcher ?: GameDispatcher(config = configManager)
+
+    /**
+     * `Creature::getCreatureAsyncTaskBuckets` shared world state
+     * (creature.cpp:34-55): one registry per composition root, shared by the
+     * `Game` non-monster bindings and any `MonsterPipelinesHost` the bootstrap
+     * composes with the world.
+     */
+    internal val creatureAsyncTaskBuckets: CreatureAsyncTaskBuckets =
+        CreatureAsyncTaskBuckets(dispatcher = { this.dispatcher })
+
+    /**
+     * `Player::muteCountMap` (player.hpp:281): the C++ static map shared by
+     * every player, replaced by this composition-root-owned instance
+     * (AGENTS.md 1.1) and injected into each session's `Player`.
+     */
+    internal val muteCountMap: MutableMap<Long, Int> = mutableMapOf()
+
     val scriptingEnvironment: LuaEnvironment get() = luaEnvironment
 
     /**
@@ -85,7 +122,7 @@ class CanaryServer(
             source,
             escrow = GameMarketEscrow({ game }, itemTypes, imbuements),
             scheduleCheck = { delayMillis ->
-                dispatcher.schedule(delayMillis, DispatcherLane.WorldCommit) {
+                this.dispatcher.schedule(delayMillis, DispatcherLane.WorldCommit) {
                     ioMarket?.checkExpiredOffers()
                 }
             },
@@ -94,15 +131,30 @@ class CanaryServer(
 
     /**
      * `g_game()` equivalent shared by every game connection served by this listener,
-     * composed with the booted item/imbuement registries and market.
+     * composed with the booted item/imbuement registries, market, config and
+     * world-shared async buckets.
      */
     val game: Game = suppliedGame ?: Game(
         gameMap,
-        dispatcher,
+        this.dispatcher,
         itemTypes = itemTypes,
         ioMarket = ioMarket,
         imbuements = imbuements,
+        configManager = configManager,
+        creatureAsyncTaskBuckets = creatureAsyncTaskBuckets,
     )
+
+    /**
+     * `g_game().transformItem(item, item->getID(), charges - 1)` binding
+     * (player.cpp:1065, 7588, 7697, 7718) shared by every session's
+     * `Player`/`PlayerFeatures`. The charges are read exactly like the
+     * `PlayerCombatBonusState`/`PlayerMagicAffinityState` `getCharges` seam
+     * (`ItemAttribute.CHARGES`).
+     */
+    internal val transformItemCharges: (Item) -> Unit = { item ->
+        val charges = (item.getAttribute(ItemAttribute.CHARGES) as? Number)?.toInt() ?: 0
+        game.transformItem(item, item.id, charges - 1)
+    }
 
     /**
      * Shared `g_imbuementDecay()` engine
@@ -114,9 +166,9 @@ class CanaryServer(
      * `playerClearImbuement` to this one engine.
      */
     internal val imbuementEngine: ImbuementEngine? =
-        imbuements?.let { registry -> ImbuementEngine(registry, ImbuementDecay(registry, dispatcher)) }
+        imbuements?.let { registry -> ImbuementEngine(registry, ImbuementDecay(registry, this.dispatcher)) }
 
-    private val scriptingDispatch = ScriptingDispatch(luaEnvironment, dispatcher)
+    private val scriptingDispatch = ScriptingDispatch(luaEnvironment, this.dispatcher)
 
     /** `Game::playersOnline` equivalent; see [checkPlayersRecord]. */
     private val playersOnline = AtomicInteger(0)
@@ -178,6 +230,11 @@ class CanaryServer(
         gameChannelFuture = gameBootstrap.bind(gamePort).sync()
         logger.info { "Canary Game World listener running on port $gamePort" }
 
+        // `g_dispatcher().setQueueLatencyLoggingEnabled(true)`
+        // (src/canary_server.cpp:311): the world dispatcher starts collecting
+        // its queue-latency/internal-work telemetry once the server is online.
+        dispatcher.setQueueLatencyLoggingEnabled(true)
+
         // `IOMarket::checkExpiredOffers()` runs during server startup
         // (src/canary_server.cpp:230) and reschedules itself from there.
         ioMarket?.let { market ->
@@ -204,6 +261,8 @@ class CanaryServer(
         imbuements = imbuements,
         imbuementEngine = imbuementEngine,
         game = game,
+        muteCountMap = muteCountMap,
+        transformItemCharges = transformItemCharges,
     )
 
     /**

@@ -114,6 +114,14 @@ class MonsterPipelinesHost(
     private val resolveCreature: (Long) -> Creature? = { null },
     /** `MonsterRelevancePolicy::Clock::now()` / `Task::Clock::now()`, milliseconds. */
     private val clock: () -> Long = System::currentTimeMillis,
+    /**
+     * `Creature::getCreatureAsyncTaskBuckets` shared world state
+     * (creature.cpp:34-55): the composition root owns one registry and injects
+     * it here (and into `Game`) so monster and non-monster batches share the
+     * same buckets. When absent the host owns a private registry over
+     * [dispatcher] (embedded/test use).
+     */
+    creatureAsyncTaskBuckets: CreatureAsyncTaskBuckets? = null,
 ) {
     /** `g_configManager().getBoolean(MONSTER_PERF_TEST_FRIENDLY_FIRE)` seam. */
     var monsterPerfTestFriendlyFire: () -> Boolean = { false }
@@ -234,16 +242,19 @@ class MonsterPipelinesHost(
 
     /**
      * Shared creature async buckets (`Creature::enqueueAsyncTask`,
-     * creature.cpp:34-55, 2031-2146), one registry per world host. [register]
-     * rebinds each monster's `Creature.scheduleAsyncTaskBatch` to it; the
-     * per-entry closures carry the owner identity so removed/replaced monsters
-     * can neither run nor roll back through a successor (AGENTS.md
-     * deferred-callback lifetime safety). Non-monster creatures still use the
-     * serial `Creature.asyncTaskDispatcher` hand-back until the composition root
-     * binds them to a shared registry (`Creature.kt` CALL-SITE NEED:
+     * creature.cpp:34-55, 2031-2146), one registry per world host: the
+     * composition-root instance when injected, otherwise a host-private
+     * registry over [dispatcher]. [register] rebinds each monster's
+     * `Creature.scheduleAsyncTaskBatch` to it; the per-entry closures carry the
+     * owner identity so removed/replaced monsters can neither run nor roll back
+     * through a successor (AGENTS.md deferred-callback lifetime safety).
+     * Non-monster creatures still use the serial
+     * `Creature.asyncTaskDispatcher` hand-back until the composition root binds
+     * them to the same shared registry (`Creature.kt` CALL-SITE NEED:
      * `Game.internalPlaceCreature` and `GameHandler` session login).
      */
-    internal val creatureAsyncTaskBuckets = CreatureAsyncTaskBuckets(dispatcher = { dispatcher })
+    internal val creatureAsyncTaskBuckets: CreatureAsyncTaskBuckets =
+        creatureAsyncTaskBuckets ?: CreatureAsyncTaskBuckets(dispatcher = { dispatcher })
     private val rejectedPostThink = longArrayOf(0L, 0L)
 
     /** Registry lookup; `null` once the owner was unregistered/replaced. */
