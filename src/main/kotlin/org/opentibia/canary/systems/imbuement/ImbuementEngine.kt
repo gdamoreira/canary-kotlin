@@ -3,6 +3,9 @@ package org.opentibia.canary.systems.imbuement
 import io.github.oshai.kotlinlogging.KotlinLogging
 import org.opentibia.canary.combat.condition.Skill
 import org.opentibia.canary.combat.condition.Stat
+import org.opentibia.canary.game.scheduling.DispatcherLane
+import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.game.scheduling.ScheduledTask
 import org.opentibia.canary.items.Item
 import java.lang.ref.WeakReference
 import java.util.IdentityHashMap
@@ -355,25 +358,51 @@ internal fun removeItemImbuementStatsFrom(imbuement: Imbuement, player: Imbuemen
     }
 }
 
+/** `g_dispatcher().scheduleEvent(1000, ...)` delay for `ImbuementDecay::checkImbuementDecay` (imbuements.cpp:521,625). */
+internal const val IMBUEMENT_DECAY_CHECK_INTERVAL_MS: Long = 1_000L
+
 /**
  * Mirror of Canary's `ImbuementDecay` (src/creatures/players/imbuements/imbuements.hpp:140).
  *
- * The C++ class schedules its own 1-second dispatcher event; this port is
- * caller-driven: the game dispatcher/timer must call [checkImbuementDecay] on
- * the same cadence. Tracked items are held through [WeakReference] so a decay
- * tick never extends an item's lifetime, matching the C++ `std::weak_ptr`
- * tracker and the deferred-callback lifetime policy.
+ * `startImbuementDecay` arms the same re-arming 1-second
+ * `DispatcherLane::Maintenance` tick as the C++ `m_eventId` event
+ * (imbuements.cpp:520-525, 621-631) on the injected [dispatcher]; when no
+ * dispatcher is injected the tick stays caller-driven via [checkImbuementDecay].
+ * Tracked items are held through [WeakReference] so a decay tick never extends
+ * an item's lifetime, matching the C++ `std::weak_ptr` tracker, and every
+ * scheduled callback resolves the owner weakly and validates a generation
+ * stamped at scheduling time, so a callback that outlives its owner, was
+ * superseded by a later timer, or arrives after a cancellation/shutdown is a
+ * no-op (AGENTS.md deferred-callback lifetime safety).
  */
 class ImbuementDecay(
     private val imbuements: Imbuements,
-    private val clock: () -> Long = System::currentTimeMillis
+    /** `g_dispatcher()` seam (imbuements.cpp:521,545,625); null keeps the tick caller-driven. */
+    private val dispatcher: GameDispatcher? = null,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private class TrackedImbuementItem(val item: WeakReference<ImbuementItem>, var lastUpdate: Long)
 
     private val itemsToDecay = IdentityHashMap<ImbuementItem, TrackedImbuementItem>()
 
+    /** `ImbuementDecay::m_eventId` (imbuements.hpp:164), re-resolvable via [ScheduledTask.cancel]. */
+    private var eventId: ScheduledTask? = null
+
+    /**
+     * Monotonic token stamped into every scheduled callback. It is advanced each
+     * time a check is armed or cancelled, so a superseded or post-cancel
+     * callback is discarded (AGENTS.md deferred-callback lifetime safety).
+     */
+    private var timerGeneration: Long = 0
+
     /** Number of items currently tracked for decay (diagnostics/tests). */
     internal val trackedItemCount: Int get() = itemsToDecay.size
+
+    /** Whether a decay check is currently armed on the injected dispatcher (diagnostics/tests). */
+    internal val hasScheduledCheck: Boolean get() = eventId != null
+
+    /** Generation of the live timer, as observed by a scheduled check (diagnostics/tests). */
+    internal val scheduledGeneration: Long get() = timerGeneration
 
     /** `ImbuementDecay::startImbuementDecay` (imbuements.cpp:499). */
     fun startImbuementDecay(item: ImbuementItem) {
@@ -390,11 +419,31 @@ class ImbuementDecay(
         }
 
         itemsToDecay[item] = TrackedImbuementItem(WeakReference(item), clock())
+
+        if (eventId == null) {
+            scheduleCheck()
+        }
     }
 
     /** `ImbuementDecay::stopImbuementDecay` (imbuements.cpp:532). */
     fun stopImbuementDecay(item: ImbuementItem) {
         itemsToDecay.remove(item)
+
+        if (itemsToDecay.isEmpty()) {
+            cancelScheduledCheck()
+        }
+    }
+
+    /**
+     * Idempotent drain for controlled shutdown: cancels the pending tick,
+     * invalidates any callback already handed to the dispatcher and clears the
+     * tracker. The C++ counterpart is the dispatcher-owned event lifetime that
+     * ends with the process (AGENTS.md deferred-callback/static-ownership
+     * lifetime safety).
+     */
+    fun shutdown() {
+        cancelScheduledCheck()
+        itemsToDecay.clear()
     }
 
     /**
@@ -427,7 +476,11 @@ class ImbuementDecay(
         return true
     }
 
-    /** `ImbuementDecay::checkImbuementDecay` (imbuements.cpp:555). */
+    /**
+     * `ImbuementDecay::checkImbuementDecay` (imbuements.cpp:555), without the
+     * C++ reschedule tail (that lives in [runScheduledCheck] so a caller-driven
+     * invocation can never arm a duplicate timer).
+     */
     fun checkImbuementDecay(nonAggressiveFightOnly: Boolean = false) {
         val currentTime = clock()
         val iterator = itemsToDecay.entries.iterator()
@@ -447,8 +500,11 @@ class ImbuementDecay(
 
             var hasImbuements = false
             val lastUpdate = if (entry.value.lastUpdate == 0L) currentTime else entry.value.lastUpdate
-            val elapsedTime = maxOf(0L, currentTime - lastUpdate)
-            val elapsedSeconds = (elapsedTime / 1000).toInt()
+            // Bounded 64-bit arithmetic: the C++ `static_cast<uint32_t>(elapsedTime / 1000)`
+            // truncates a clock regression/jump; keeping the subtraction in `Long`
+            // makes every huge or negative interval expire cleanly instead of wrapping.
+            val elapsedMillis = maxOf(0L, currentTime - lastUpdate)
+            val elapsedSeconds = elapsedMillis / 1000L
 
             for (slotId in 0 until item.getImbuementSlot()) {
                 val imbuementInfo = resolveImbuementInfo(item, slotId, imbuements) ?: continue
@@ -468,8 +524,8 @@ class ImbuementDecay(
                     continue
                 }
 
-                val duration = if (imbuementInfo.duration > elapsedSeconds) {
-                    imbuementInfo.duration - elapsedSeconds
+                val duration = if (imbuementInfo.duration.toLong() > elapsedSeconds) {
+                    (imbuementInfo.duration.toLong() - elapsedSeconds).toInt()
                 } else {
                     0
                 }
@@ -488,6 +544,56 @@ class ImbuementDecay(
 
             entry.value.lastUpdate = currentTime
         }
+    }
+
+    /**
+     * Validates a scheduled tick against the current generation and runs it when
+     * it is still the live timer, then applies the C++ reschedule tail of
+     * `checkImbuementDecay` (imbuements.cpp:621-631): re-arm while items remain,
+     * otherwise leave the timer stopped. A superseded or post-cancel callback
+     * becomes a no-op (AGENTS.md deferred-callback lifetime safety).
+     */
+    internal fun runScheduledCheck(generation: Long) {
+        if (generation != timerGeneration) {
+            return
+        }
+
+        eventId = null
+        checkImbuementDecay()
+
+        if (itemsToDecay.isNotEmpty()) {
+            scheduleCheck()
+        }
+    }
+
+    /**
+     * `g_dispatcher().scheduleEvent(1000, [this]{ checkImbuementDecay(); }, ...)`
+     * (imbuements.cpp:520-525, 625-631). The owning instance is resolved through
+     * a [WeakReference] so the queued callback never extends its lifetime.
+     */
+    private fun scheduleCheck() {
+        val dispatcher = dispatcher ?: return
+        if (eventId != null) {
+            return
+        }
+
+        timerGeneration += 1
+        val generation = timerGeneration
+        val weakSelf = WeakReference(this)
+        eventId = dispatcher.schedule(IMBUEMENT_DECAY_CHECK_INTERVAL_MS, DispatcherLane.Maintenance) {
+            weakSelf.get()?.runScheduledCheck(generation)
+        }
+    }
+
+    /**
+     * `g_dispatcher().stopEvent(m_eventId)` (imbuements.cpp:544-548). The
+     * generation advances even when the dispatcher accepted the cancellation,
+     * so a callback already promoted by the scheduler is stale and inert.
+     */
+    private fun cancelScheduledCheck() {
+        eventId?.cancel()
+        eventId = null
+        timerGeneration += 1
     }
 
     private fun hasImbuements(item: ImbuementItem): Boolean =

@@ -14,6 +14,7 @@ import org.opentibia.canary.io.PropWriteStream
 import org.opentibia.canary.map.Tile
 import org.opentibia.canary.map.house.Door
 import org.opentibia.canary.systems.imbuement.ImbuementTypes_t
+import org.opentibia.canary.systems.imbuement.Imbuements
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import java.lang.ref.WeakReference
 
@@ -1337,6 +1338,7 @@ open class Item(
         for ((key, customAttribute) in customAttributes) {
             copy.customAttributes[key] = CustomAttribute(customAttribute)
         }
+        copy.imbuementRegistry = imbuementRegistry
         return copy
     }
 
@@ -1517,6 +1519,15 @@ open class Item(
 
     // --- Imbuement custom attributes (src/items/item.cpp:453-488, item.hpp:713-735) ----
 
+    /**
+     * `g_imbuements()` registry seam (src/items/item.cpp:478): when assigned,
+     * [hasImbuements] resolves the packed imbuement id against it exactly like
+     * `Item::getImbuementInfo`; when null the custom-attribute presence is used.
+     * The registry is runtime-owned and only borrowed here; the composition root
+     * assigns the loaded registry to the items it composes.
+     */
+    var imbuementRegistry: Imbuements? = null
+
     /** `Item::hasImbuementAttribute` (src/items/item.cpp:453). */
     fun hasImbuementAttribute(attributeSlot: String): Boolean = getCustomAttribute(attributeSlot) != null
 
@@ -1541,15 +1552,21 @@ open class Item(
     fun clearImbuement(slot: Int, imbuementId: Int) = setImbuement(slot, imbuementId, 0)
 
     /**
-     * `Item::hasImbuements` (src/items/item.hpp:728-737) reduced to the custom
-     * attribute store: the C++ `getImbuementInfo` also validates the imbuement
-     * id against `g_imbuements()`, which has no registry seam on [Item]
-     * (PARITY GAP); a zeroed slot attribute is treated as empty, matching the
-     * packed encoding.
+     * `Item::hasImbuements` (src/items/item.hpp:728-737) over
+     * `Item::getImbuementInfo` (src/items/item.cpp:472-483): the packed slot
+     * value counts only when its duration (`value >> 8`) is non-zero and, when
+     * [imbuementRegistry] is assigned, the imbuement id (`value & 0xFF`) resolves
+     * through `g_imbuements().getImbuement`. Without the registry seam only the
+     * packed encoding is validated.
      */
     fun hasImbuements(): Boolean {
         for (slot in 0 until getImbuementSlot()) {
-            if ((getImbuementAttribute(slot) ?: 0L) != 0L) {
+            val packed = getImbuementAttribute(slot) ?: continue
+            if (packed == 0L || (packed ushr 8) == 0L) {
+                continue
+            }
+            val registry = imbuementRegistry
+            if (registry == null || registry.getImbuement((packed and 0xFF).toInt()) != null) {
                 return true
             }
         }
