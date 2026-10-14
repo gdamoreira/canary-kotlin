@@ -24,10 +24,13 @@ import org.opentibia.canary.combat.condition.ConditionId
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.LightInfo
 import org.opentibia.canary.combat.condition.Outfit
+import org.opentibia.canary.config.ConfigKeys
+import org.opentibia.canary.config.ConfigManager
 import org.opentibia.canary.config.FeatureFlags
 import org.opentibia.canary.creatures.ChaseMode
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.FightMode
+import org.opentibia.canary.creatures.FlagAsyncClass_t
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Npc
 import org.opentibia.canary.creatures.Player
@@ -80,6 +83,7 @@ import org.opentibia.canary.game.movement.getDistanceX
 import org.opentibia.canary.game.movement.getDistanceY
 import org.opentibia.canary.game.movement.getDistanceZ
 import org.opentibia.canary.game.movement.getNextPosition
+import org.opentibia.canary.game.scheduling.CreatureAsyncTaskBuckets
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.zones.TileFlags
@@ -608,7 +612,27 @@ class Game(
     private val itemClassifications: ItemClassifications = ItemClassifications(),
     /** `Game::teamFinderMap` owner (game.hpp:140-148) behind the team-finder helpers. */
     private val teamFinderList: TeamFinderList = TeamFinderList(),
+    /**
+     * `g_configManager()` seam for the `Player` host values the facade copies
+     * when a player enters the world. Currently `MAX_MESSAGEBUFFER`
+     * (configmanager.cpp:315), read by `Player::removeMessageBuffer`
+     * (player.cpp:3514-3543) on every accepted say. `null` leaves the host
+     * value the composition root set on the `Player` untouched.
+     */
+    private val configManager: ConfigManager? = null,
+    /**
+     * `Creature::getCreatureAsyncTaskBuckets` shared world state
+     * (creature.cpp:34-55): the buckets every non-monster creature batch is
+     * admitted through by [bindCreatureAsyncTaskHost]. A host can inject the
+     * same instance the monster pipeline host uses; when absent the facade
+     * owns one over [dispatcher].
+     */
+    creatureAsyncTaskBuckets: CreatureAsyncTaskBuckets? = null,
 ) {
+    /** `getCreatureAsyncTaskBuckets` world state (creature.cpp:34-55). */
+    private val asyncTaskBuckets: CreatureAsyncTaskBuckets =
+        creatureAsyncTaskBuckets ?: CreatureAsyncTaskBuckets(dispatcher = { dispatcher })
+
     private val players = mutableMapOf<Long, Player>()
 
     /** `Game::monsters` (game.hpp): every live monster, registered by [addMonster]. */
@@ -1531,11 +1555,56 @@ class Game(
     /** `Player::setScheduledSaleUpdate(false)` (player.hpp) seam (game.cpp:11601). */
     var setScheduledSaleUpdate: (Player, Boolean) -> Unit = { _, _ -> }
 
-    /** `Game::addPlayer` (src/game/game.cpp:11624). */
+    /**
+     * `Game::addPlayer` (src/game/game.cpp:11624) plus the login composition the
+     * eliminated globals require: the `MAX_MESSAGEBUFFER` host value from the
+     * injected `g_configManager()` (configmanager.cpp:315) and the shared
+     * creature async buckets / `g_dispatcher()` binding every non-monster
+     * batch is admitted through (creature.cpp:2031-2054, 2186-2193).
+     */
     fun addPlayer(player: Player) {
         players[player.id] = player
         if (player.name.isNotEmpty()) {
             wildcardTree.insert(player.name.lowercase())
+        }
+
+        configManager?.let { config ->
+            ConfigKeys.byName("MAX_MESSAGEBUFFER")?.let { key ->
+                player.maxMessageBuffer = config.getNumber(key, key.defaultValue as Int)
+            }
+        }
+        bindCreatureAsyncTaskHost(player)
+    }
+
+    /**
+     * Attaches the world dispatcher and routes the async batches of every
+     * non-monster creature through the world-shared [asyncTaskBuckets]
+     * (`Creature::sendAsyncTasks` -> `Creature::enqueueAsyncTask`,
+     * creature.cpp:2186-2193, 2031-2054). Monsters keep the binding the
+     * `MonsterPipelinesHost` installs (it carries the pipeline's
+     * player-visibility probe and its own `AsyncTaskRunning` rollback), so a
+     * placement must not overwrite it.
+     */
+    private fun bindCreatureAsyncTaskHost(creature: Creature) {
+        creature.asyncTaskDispatcher = dispatcher
+        if (creature is Monster) {
+            return
+        }
+
+        val creatureId = creature.id
+        creature.scheduleAsyncTaskBatch = { task ->
+            asyncTaskBuckets.enqueueAsyncTask(
+                creatureId = creatureId,
+                task = task,
+                // `Creature::isPlayerVisibleForScheduling` base returns true
+                // (creature.hpp:831-833); only `Monster` overrides it and keeps
+                // the host binding.
+                playerVisible = true,
+                isPlayerVisibleForScheduling = { true },
+                clearAsyncTaskRunning = {
+                    creature.setAsyncTaskFlag(FlagAsyncClass_t.AsyncTaskRunning, false)
+                },
+            )
         }
     }
 
@@ -2120,6 +2189,12 @@ class Game(
         // (creature.cpp:859-861): bind the spectator fanout once the creature
         // is on the map.
         creature.addCreatureHealth = ::addCreatureHealth
+
+        // `Creature::enqueueAsyncTask`'s `g_dispatcher()` and the shared
+        // `getCreatureAsyncTaskBuckets` state (creature.cpp:34-55,
+        // 2031-2054): a creature entering the world is admitted through the
+        // world buckets instead of running its batch on the producer thread.
+        bindCreatureAsyncTaskHost(creature)
 
         if (creatureCheck) {
             addCreatureCheck(creature)
@@ -3005,10 +3080,9 @@ class Game(
     /**
      * `Game::playerSay` (src/game/game.cpp:7411): resets the login/idle
      * timers, lets the talk-action/spell pipeline consume the input, gates the
-     * muted speaker and dispatches on the talk type.
-     *
-     * PARITY GAP: `Player::removeMessageBuffer` (game.cpp:7437) has no Kotlin
-     * counterpart; `Game::internalCreatureSay` runs through its seam.
+     * muted speaker, feeds `Player::removeMessageBuffer` (game.cpp:7436-7438)
+     * for every type except the private NPC whisper and dispatches on the talk
+     * type. `Game::internalCreatureSay` runs through its seam.
      */
     fun playerSay(playerId: Long, channelId: Int, type: SpeakClasses, receiver: String, text: String) {
         val player = getPlayerByID(playerId) ?: return
@@ -3028,6 +3102,10 @@ class Game(
 
         if (text.isNotEmpty() && text.first() == '/' && player.isAccessPlayer()) {
             return
+        }
+
+        if (type != SpeakClasses.TALKTYPE_PRIVATE_PN) {
+            player.removeMessageBuffer()
         }
 
         when (type) {
@@ -5423,11 +5501,20 @@ class Game(
 
     /**
      * `Game::transformItem` (src/game/game.cpp:3401) reduced to the paths used
-     * by [wrapItem]/[unwrapItem]: the no-op early return, the always-on-top
-     * re-add, the same-`ItemTypes_t` in-place update and the replacement path
-     * of `Item::transform` (src/items/item.cpp:3501).
+     * by [wrapItem]/[unwrapItem] and the charged-item transforms
+     * (`g_game().transformItem(item, item->getID(), charges - 1)`,
+     * player.cpp:1065, 7588, 7697, 7718): the no-op early return, the
+     * always-on-top re-add, the charged/stackable `newCount == 0` removal or
+     * `ItemType::decayTo` replacement (game.cpp:3437-3458), the
+     * same-`ItemTypes_t` in-place update gated by `ItemType::hasSubType` and
+     * the replacement path of `Item::transform` (src/items/item.cpp:3501).
      *
-     * PARITY GAPS: the browse-field remap, the decay/group/equip branches, the
+     * [internalRemoveItem] resolves the parent through the facade's tracked
+     * tile, so a charged item equipped on a player is not unlinked here
+     * (PARITY GAP; Canary removes through the item's `Cylinder`).
+     *
+     * PARITY GAPS: `Item::canTransform`, the browse-field remap, the decaying
+     * `decayTo` branch, `Item::setDefaultSubtype` on a group change, the
      * quiver inventory update and the `postAddNotification` spectator fanout
      * are not modelled.
      */
@@ -5460,8 +5547,46 @@ class Game(
         }
 
         if (curType != null && curType.type == newType.type) {
-            cylinder.updateThing(item, newId, if (newCount != -1) newCount else item.getSubType())
+            if (newCount == 0 && (item.isStackable() || item.hasAttribute(ItemAttribute.CHARGES))) {
+                if (item.isStackable()) {
+                    internalRemoveItem(item)
+                    return null
+                }
+
+                var newItemId = newId
+                if (curType.id == newType.id) {
+                    newItemId = curType.decayTo
+                }
+
+                if (newItemId < 0) {
+                    internalRemoveItem(item)
+                    return null
+                } else if (newItemId != newId) {
+                    return replaceItem(item, newItemId, -1)
+                } else {
+                    return transformItem(item, newItemId)
+                }
+            }
+
+            val count = if (newCount != -1 && newType.hasSubType()) newCount else item.getSubType()
+            cylinder.updateThing(item, newId, count)
             startDecaying(item)
+            return item
+        }
+
+        return replaceItem(item, newId, newCount)
+    }
+
+    /**
+     * `Item::transform` (src/items/item.cpp:3501): the old item is replaced in
+     * place by a freshly created [newId] instance that inherits the remaining
+     * duration. Shared by [transformItem]'s replacement tail and the charged
+     * `ItemType::decayTo` prototype path (game.cpp:3452).
+     */
+    private fun replaceItem(item: Item, newId: Int, newCount: Int): Item? {
+        val cylinder = item.getParent() ?: itemParents[item] ?: return null
+        val itemIndex = cylinder.getThingIndex(item)
+        if (itemIndex == -1) {
             return item
         }
 
@@ -5809,8 +5934,8 @@ class Game(
         motdNum++
     }
 
-    /** `Tile::getTopDownItem` equivalent (src/items/tile.cpp:408): last inserted down item. */
-    private fun topDownItem(tile: Tile): Item? = tile.items.lastOrNull()
+    /** `Tile::getTopDownItem` (src/items/tile.cpp:408-413, `TileItemVector::getTopDownItem`). */
+    private fun topDownItem(tile: Tile): Item? = tile.getTopDownItem()
 
     /** `Tile::getThingIndex` equivalent (src/items/tile.cpp:1443): ground is 0, then item list. */
     private fun thingIndex(tile: Tile, item: Item): Int {
@@ -5839,11 +5964,15 @@ class Game(
     private fun cloneItem(item: Item, count: Int): Item = Item(id = item.id, count = count, type = item.type)
 
     /**
-     * `Tile::addThing(int32_t, Thing)` (src/items/tile.cpp:1131). The index is accepted
-     * for parity but ignored, exactly like the C++ overload does for plain down items.
+     * `Tile::addThing(int32_t, Thing)` (src/items/tile.cpp:1131): down items
+     * insert at the front of the down range (reverse insertion order) and
+     * always-on-top items order by `alwaysOnTopOrder`, so the tile's
+     * `getThingIndex`/`updateThing` see everything this facade adds. The
+     * facade's item-to-tile registry (the port's `Cylinder` link used by
+     * [internalRemoveItem]) is kept in step.
      */
     private fun addThing(tile: Tile, item: Item, index: Int) {
-        tile.addItem(item)
+        tile.addThing(index, item)
         item.setParent(tile)
         itemParents[item] = tile
     }

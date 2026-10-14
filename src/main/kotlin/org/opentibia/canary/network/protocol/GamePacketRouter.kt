@@ -1095,10 +1095,12 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // ProtocolGame::parseAimAtTarget applies each pair through
-                            // Player::updateAimAtTargetSpells (player.cpp:13361); the
-                            // aimAtTargetSpellIds set is not ported, so the decoded
-                            // command only marks the confinement boundary (PARITY GAP).
+                            // ProtocolGame::parseAimAtTarget applies each decoded pair
+                            // through Player::updateAimAtTargetSpells (protocolgame.cpp:12196-12209,
+                            // player.cpp:13361-13368) on the world lane.
+                            for (spell in command.spells) {
+                                player.updateAimAtTargetSpells(spell.spellId, spell.state)
+                            }
                         }
                         true
                     }

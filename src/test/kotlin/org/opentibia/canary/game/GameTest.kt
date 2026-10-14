@@ -228,14 +228,17 @@ class GameTest {
         assertThat(game.internalAddItem(tile, gold(60))).isEqualTo(ReturnValue.NOERROR)
         assertThat(game.internalAddItem(tile, gold(60))).isEqualTo(ReturnValue.NOERROR)
 
+        // `Tile::addThing` inserts every down item at the front of the down
+        // range (src/items/tile.cpp:1242-1244) and `Tile::getTopDownItem` is
+        // that front stack, so the remainder leads.
         assertThat(tile.items).hasSize(2)
-        assertThat(tile.items[0].count).isEqualTo(100)
-        assertThat(tile.items[1].count).isEqualTo(20)
+        assertThat(tile.items[0].count).isEqualTo(20)
+        assertThat(tile.items[1].count).isEqualTo(100)
 
         assertThat(game.internalAddItem(tile, gold(10))).isEqualTo(ReturnValue.NOERROR)
 
         assertThat(tile.items).hasSize(2)
-        assertThat(tile.items[1].count).isEqualTo(30)
+        assertThat(tile.items[0].count).isEqualTo(30)
     }
 
     @Test
@@ -246,8 +249,9 @@ class GameTest {
         assertThat(game.internalAddItem(tile, gold(10))).isEqualTo(ReturnValue.NOERROR)
         assertThat(game.internalAddItem(tile, platinum(10))).isEqualTo(ReturnValue.NOERROR)
 
+        // Down items insert at the front (src/items/tile.cpp:1242-1244).
         assertThat(tile.items).hasSize(2)
-        assertThat(tile.items.map { it.id }).containsExactly(goldCoinId, platinumCoinId)
+        assertThat(tile.items.map { it.id }).containsExactly(platinumCoinId, goldCoinId)
     }
 
     @Test

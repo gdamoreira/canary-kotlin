@@ -82,7 +82,9 @@ class GameItemBatchTest {
         assertThat(ret).isEqualTo(ReturnValue.NOERROR)
         assertThat(totalAdded).isEqualTo(2L)
         assertThat(containersCreated).isEqualTo(1)
-        assertThat(tile.items).containsExactly(plain, bag)
+        // Down items insert at the front of the down range
+        // (src/items/tile.cpp:1242-1244), so the last dropped item leads.
+        assertThat(tile.items).containsExactly(bag, plain)
     }
 
     @Test

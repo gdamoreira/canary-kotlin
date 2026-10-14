@@ -350,10 +350,13 @@ class GameFinalMembersTest {
 
         assertThat(ret).isEqualTo(ReturnValue.NOERROR)
         assertThat(added).isEqualTo(123456L)
+        // `Game::addMoney` adds crystal, platinum and gold in that order
+        // (game.cpp:3367-3394); every down item lands at the front of the
+        // down range (src/items/tile.cpp:1242-1244), so gold leads.
         assertThat(tile.items.map { it.id to it.count }).containsExactly(
-            3043 to 12,
-            3035 to 34,
             3031 to 56,
+            3035 to 34,
+            3043 to 12,
         )
     }
 

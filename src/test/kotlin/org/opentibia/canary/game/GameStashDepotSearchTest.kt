@@ -68,7 +68,7 @@ class GameStashDepotSearchTest {
         )
 
     private fun Game.putOnTile(position: Position, item: Item) {
-        map.getOrCreateTile(position).addItem(item)
+        map.getOrCreateTile(position).addThing(item)
     }
 
     // ----- isTryingToStow -----

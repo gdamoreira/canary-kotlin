@@ -82,6 +82,28 @@ class Wave35BatchB4RouterWiringTest {
     }
 
     @Test
+    fun `applies every decoded aim at target pair on the world commit lane`() {
+        // ProtocolGame::parseAimAtTarget applies each pair through
+        // Player::updateAimAtTargetSpells (protocolgame.cpp:12196-12209).
+        val dispatcher = GameDispatcher()
+        dispatcher.start()
+        try {
+            val player = hero()
+            player.updateAimAtTargetSpells(0x5678, 1)
+            val frame = Unpooled.buffer()
+            writeAimAtTarget(frame)
+
+            val handled = GamePacketRouter.route(player, frame, context(dispatcher))
+            awaitWorldCommit(dispatcher)
+
+            assertThat(handled).isEqualTo(1)
+            assertThat(player.getAimAtTargetSpells()).containsExactly(0x1234)
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    @Test
     fun `applies the prey action engine on the world commit lane`() {
         val dispatcher = GameDispatcher()
         dispatcher.start()

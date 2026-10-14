@@ -168,6 +168,44 @@ class GameSayHandlersTest {
         assertThat(harness.said).isEmpty()
     }
 
+    @Test
+    fun `playerSay feeds the message buffer for every type except the private npc whisper`() {
+        // game.cpp:7436-7438: `if (type != TALKTYPE_PRIVATE_PN) player->removeMessageBuffer();`
+        val harness = newGame()
+        harness.speaker.maxMessageBuffer = 4
+
+        harness.game.playerSay(1, 0, SpeakClasses.TALKTYPE_SAY, "", "hello")
+
+        assertThat(harness.speaker.features.messageBuffer.messageBufferCount).isEqualTo(1)
+
+        harness.game.playerSay(1, 0, SpeakClasses.TALKTYPE_PRIVATE_PN, "", "hello npc")
+
+        assertThat(harness.speaker.features.messageBuffer.messageBufferCount).isEqualTo(1)
+    }
+
+    @Test
+    fun `playerSay does not feed the message buffer on a muted or slash-command say`() {
+        val harness = newGame()
+        harness.speaker.maxMessageBuffer = 4
+        harness.speaker.group = org.opentibia.canary.creatures.grouping.Group(access = true)
+
+        harness.game.playerSay(1, 0, SpeakClasses.TALKTYPE_SAY, "", "/t")
+
+        assertThat(harness.speaker.features.messageBuffer.messageBufferCount).isZero()
+        assertThat(harness.said).isEmpty()
+
+        harness.speaker.addCondition(
+            org.opentibia.canary.combat.condition.Condition.createCondition(
+                id = org.opentibia.canary.combat.condition.ConditionId.CONDITIONID_DEFAULT,
+                type = ConditionType.CONDITION_MUTED,
+                ticks = 10_000,
+            ),
+        )
+        harness.game.playerSay(1, 0, SpeakClasses.TALKTYPE_SAY, "", "hello")
+
+        assertThat(harness.speaker.features.messageBuffer.messageBufferCount).isZero()
+    }
+
     // ----- playerYell -----
 
     @Test
