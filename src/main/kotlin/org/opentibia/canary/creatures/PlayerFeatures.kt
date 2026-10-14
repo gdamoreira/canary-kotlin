@@ -6,6 +6,9 @@ import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.Outfit
 import org.opentibia.canary.creatures.appearance.effects.AttachedEffects
+import org.opentibia.canary.creatures.appearance.outfit.Outfit as OutfitDefinition
+import org.opentibia.canary.creatures.appearance.outfit.OutfitEntry
+import org.opentibia.canary.creatures.appearance.outfit.OutfitPlayer
 import org.opentibia.canary.creatures.appearance.outfit.Outfits
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.players.CyclopediaTrackerClient
@@ -18,6 +21,8 @@ import org.opentibia.canary.creatures.players.PlayerItemAbilityState
 import org.opentibia.canary.creatures.players.PlayerLoyaltyState
 import org.opentibia.canary.creatures.players.PlayerMagicAffinityState
 import org.opentibia.canary.creatures.players.PlayerMessageBuffer
+import org.opentibia.canary.creatures.players.PlayerOutfitState
+import org.opentibia.canary.creatures.players.PlayerVitalsState
 import org.opentibia.canary.creatures.players.animus_mastery.AnimusMastery
 import org.opentibia.canary.creatures.players.components.Achievement
 import org.opentibia.canary.creatures.players.components.AchievementPlayer
@@ -36,9 +41,11 @@ import org.opentibia.canary.creatures.players.components.PlayerAttachedEffects
 import org.opentibia.canary.creatures.players.components.PlayerBadge
 import org.opentibia.canary.creatures.players.components.PlayerCyclopedia
 import org.opentibia.canary.creatures.players.components.PlayerSex_t
+import org.opentibia.canary.creatures.players.components.PlayerStorage
 import org.opentibia.canary.creatures.players.components.PlayerTitle
 import org.opentibia.canary.creatures.players.components.RecentDeathEntry
 import org.opentibia.canary.creatures.players.components.RecentPvPKillEntry
+import org.opentibia.canary.creatures.players.components.StoragePlayer
 import org.opentibia.canary.creatures.players.components.TitlePlayer
 import org.opentibia.canary.creatures.players.getEquippedItems
 import org.opentibia.canary.items.Item
@@ -48,6 +55,7 @@ import org.opentibia.canary.social.guild.GuildRank
 import org.opentibia.canary.systems.bestiary.PlayerBestiaryState
 import org.opentibia.canary.systems.concoction.PlayerConcoctions
 import org.opentibia.canary.systems.dailyreward.PlayerDailyReward
+import org.opentibia.canary.systems.familiar.FamiliarEntry
 import org.opentibia.canary.systems.familiar.Familiars
 import org.opentibia.canary.systems.familiar.PlayerFamiliars
 import org.opentibia.canary.systems.forge.Forge
@@ -102,11 +110,21 @@ import org.opentibia.canary.creatures.vocations.Vocations
  * `m_bosstiaryMonsterTracker`), [aimAtTarget]
  * (`Player::aimAtTargetSpellIds`), [magicAffinity]
  * (`Player::specializedMagicLevel`/`magicShieldCapacity*`), [achievement]
- * (`Player::achiev()`, player.cpp:12758) and [animusMastery]
- * (`Player::animusMastery()`, player.cpp:12812). Their
- * `Player`-backed seams ([getEquippedItems], [cannotBeMuted], [addCondition],
- * [sendTextMessage], [achievementKv]) default to the injected [wheelPlayer]
- * view, which the `Player` always supplies as itself.
+ * (`Player::achiev()`, player.cpp:12758), [animusMastery]
+ * (`Player::animusMastery()`, player.cpp:12812), [outfits]
+ * (`Player::outfits`/`Player::canWear`, player.hpp:1686, player.cpp:6783), the
+ * [storage] `Player::m_storage` (player.hpp:1968) and [vitals]
+ * (`Player::soul`/`staminaMinutes`/`bankBalance`, player.hpp:1726,1817,1848).
+ * Their `Player`-backed seams ([getEquippedItems], [cannotBeMuted],
+ * [addCondition], [sendTextMessage], [achievementKv], [getOutfitByLookType])
+ * default to the injected [wheelPlayer] view, which the `Player` always supplies
+ * as itself.
+ *
+ * The `players.animus_mastery` blob save/load pair lives in
+ * `PlayerAnimusMasteryPersistence` over [animusMastery]; the io package call sites
+ * that still need to invoke it are `IOLoginDataLoad::loadPlayerAnimusMastery`
+ * (iologindata_load_player.cpp:277-289) and the inline save block of
+ * `IOLoginDataSave::savePlayerFirst` (iologindata_save_player.cpp:293-299).
  *
  * COMPOSITION (`CanaryServer` composition root):
  *  - the `Player` feeds [maxMessageBuffer] from its own `maxMessageBuffer`
@@ -129,6 +147,10 @@ import org.opentibia.canary.creatures.vocations.Vocations
  *    until `PlayerWheel::getSpecializedMagic` (player_wheel.cpp:405) and
  *    `WeaponProficiency::getSpecializedMagic` (weapon_proficiency.hpp:65) are
  *    ported.
+ *  - the io package must bind [storage] into
+ *    `IOLoginDataSubloads(playerStorage = { it.features.storage })` and call
+ *    `IOLoginData.savePlayerStorage(player, player.features.storage)` (see
+ *    [storage]); `PlayerAnimusMasteryPersistence` covers the animus blob.
  */
 class PlayerFeatures(
     /** `Player::getGUID()`, used to scope forge-history persistence. */
@@ -183,6 +205,37 @@ class PlayerFeatures(
      * outfit registry of [attachedEffects], injected per AGENTS.md 1.1.
      */
     val attachedOutfits: Outfits = Outfits(),
+    /**
+     * `g_configManager().getBoolean(WARN_UNSAFE_SCRIPTS)` (configmanager.cpp:425)
+     * seam of [outfits] (player.cpp:6785).
+     */
+    private val outfitWarnUnsafeScripts: Boolean = true,
+    /** `g_game().isLookTypeRegistered(lookType)` (game.hpp:667) seam of [outfits] (player.cpp:6784). */
+    private val isLookTypeRegistered: (Int) -> Boolean = { true },
+    /**
+     * `Outfits::getInstance().getOutfitByLookType(player, lookType)`
+     * (outfit.cpp:85) seam of [outfits] (player.cpp:6794); defaults to the
+     * injected [attachedOutfits] registry and the host player's sex.
+     */
+    private val getOutfitByLookType: (Int) -> OutfitDefinition? = { lookType ->
+        wheelPlayer?.let { player ->
+            attachedOutfits.getOutfitByLookType(OutfitPlayer { player.getSex() }, lookType)
+        }
+    },
+    /**
+     * `g_dispatcher().getDispatcherCycle()` (player_storage.cpp:83) seam of
+     * [storage].
+     */
+    private val currentFrameTime: () -> Long = { 0L },
+    /** `g_events().eventOnStorageUpdate(...)` (player_storage.cpp:85) seam of [storage]. */
+    private val eventOnStorageUpdate: (StoragePlayer, Int, Int, Int, Long) -> Unit = { _, _, _, _, _ -> },
+    /**
+     * `g_callbacks().executeCallback(EventCallback_t::playerOnStorageUpdate,
+     * ...)` (player_storage.cpp:86) seam of [storage].
+     */
+    private val playerOnStorageUpdateCallback: (StoragePlayer, Int, Int, Int, Long) -> Unit = { _, _, _, _, _ -> },
+    /** `g_logger().warn` (player_storage.cpp:71, player.cpp:6785) seam of [storage] and [outfits]. */
+    private val logWarn: (String) -> Unit = {},
     /**
      * `g_ioprey()` prey engine core (`src/io/ioprey.cpp`); Canary reaches it
      * through the global singleton and `Player::initializePrey` uses it, so it
@@ -259,6 +312,12 @@ class PlayerFeatures(
      */
     val animusMastery: AnimusMastery = AnimusMastery(),
     /**
+     * `Player::bankBalance`/`Player::soul`/`Player::staminaMinutes`
+     * (player.hpp:1726, 1817, 1848) through [PlayerVitalsState]; the composed
+     * [title] reads `checkGold`'s bank balance from this instance.
+     */
+    val vitals: PlayerVitalsState = PlayerVitalsState(),
+    /**
      * `Player&` view of [achievement] (`player_achievement.hpp:31`); when
      * absent the holder adapts the injected [wheelPlayer] host.
      */
@@ -305,6 +364,57 @@ class PlayerFeatures(
             hasAccess = hasAccessProvider(),
         )
     }
+
+    /**
+     * `Player::outfits` / `Player::canWear` (player.hpp:1686, player.cpp:
+     * 6783-6806) through [PlayerOutfitState]. The storage reserved range
+     * ([storage]), the title `checkOutfit`/`checkOther` reads and the Lua
+     * outfit bindings must share this instance; the host `Player` accessors
+     * delegate here once `Creature.kt` wiring lands.
+     *
+     * PARITY GAP: `PlayerFunctions.outfitsOf` (lua/bindings/core) still keeps
+     * its own per-player `PlayerOutfits` map, so `player:addOutfit` and this
+     * state diverge until the Lua delegation lands (lua package owned outside
+     * this wave).
+     */
+    val outfits: PlayerOutfitState = PlayerOutfitState(
+        isAccessPlayer = { wheelPlayer?.isAccessPlayer() ?: false },
+        isPremium = { wheelPlayer?.isPremium() ?: false },
+        warnUnsafeScripts = outfitWarnUnsafeScripts,
+        isLookTypeRegistered = isLookTypeRegistered,
+        getOutfitByLookType = getOutfitByLookType,
+        logWarn = logWarn,
+    )
+
+    /**
+     * `PlayerStorage m_storage` (player.hpp:1968); accessor `Player::storage()`
+     * (player.hpp:1541-1542). Composed over the real outfit/familiar accessors,
+     * exactly like `friend class PlayerStorage` (player.hpp:1956) reaches
+     * `m_player.outfits`/`m_player.familiars` (`player_storage.cpp:59-66`).
+     *
+     * COMPOSITION (`CanaryServer`/io wiring, the io package owned outside this wave):
+     *  - `IOLoginDataLoad::loadPlayerStorageMap` (iologindata_load_player.cpp:
+     *    760-768) must bind `IOLoginDataSubloads(playerStorage = { it.features.storage })`.
+     *  - `IOLoginDataSave::savePlayerStorage` (iologindata_save_player.cpp:
+     *    837-859), reached from `IOLoginData::savePlayer` (iologindata.cpp:295),
+     *    must call the port's `IOLoginData.savePlayerStorage(player, player.features.storage)`.
+     *
+     * PARITY GAPS: the host `Player::storage()` accessor still needs
+     * `Creature.kt` wiring, and `WorldLuaOperations.getStorageValue`/
+     * `setStorageValue` still keep a per-player id-keyed map shadowing this
+     * instance (lua package owned outside this wave).
+     */
+    val storage: PlayerStorage = PlayerStorage(
+        player = HostStoragePlayer(
+            player = wheelPlayer,
+            outfitsProvider = { outfits.outfitsBacking },
+            familiarsProvider = { familiars.familiars },
+        ),
+        currentFrameTime = currentFrameTime,
+        eventOnStorageUpdate = eventOnStorageUpdate,
+        playerOnStorageUpdateCallback = playerOnStorageUpdateCallback,
+        logWarn = logWarn,
+    )
 
     /** `Player` bestiary/charm state (player.hpp:1836-1841). */
     val bestiary: PlayerBestiaryState = PlayerBestiaryState()
@@ -489,12 +599,12 @@ class PlayerFeatures(
     /**
      * `PlayerAttachedEffects m_attachedEffects` (player.hpp:1964); accessor
      * `Player::attachedEffects()` (player.cpp:12821-12828). Backed by
-     * [attachedEffectDefinitions] and [attachedOutfits], created lazily like
-     * the C++ member.
+     * [attachedEffectDefinitions], [attachedOutfits] and the composed
+     * [storage], created lazily like the C++ member.
      */
     val attachedEffects: PlayerAttachedEffects by lazy(LazyThreadSafetyMode.NONE) {
         PlayerAttachedEffects(
-            player = HostAttachedEffectsPlayer(wheelPlayer),
+            player = HostAttachedEffectsPlayer(wheelPlayer, storage),
             attachedEffects = attachedEffectDefinitions,
             outfits = attachedOutfits,
         )
@@ -614,14 +724,15 @@ private class HostBadgePlayer(
 /**
  * [TitlePlayer] adapter of [PlayerFeatures.title] over the live [wheelPlayer]
  * host. Reads resolve per call so the `Player` rebinding of level, bestiary,
- * task-hunting, boss-points and mount state is observed immediately; a `null`
- * host (tooling/tests) yields the inert projection.
+ * task-hunting, boss-points, mount, bank and outfit state is observed
+ * immediately; a `null` host (tooling/tests) yields the inert projection.
  *
- * PARITY GAPS: `Player::getBankBalance` (`PlayerVitalsState.bankBalance`),
- * `Player::outfits` (`PlayerOutfitState`) and `Player::canWear` are state
- * holders this port does not compose on `Player` yet, so `checkGold`,
- * `checkOutfit` and the outfit-based `checkOther` titles read their zero/false
- * defaults until the host wiring lands.
+ * COMPOSED READS: `Player::getBankBalance` reads [PlayerFeatures.vitals]
+ * (`PlayerVitalsState`, player.cpp:8299), `Player::outfits.size()` and
+ * `Player::canWear` read [PlayerFeatures.outfits] (`PlayerOutfitState`,
+ * player.cpp:6783-6806), so `checkGold`, `checkOutfit` and the outfit-based
+ * `checkOther` titles match the state the storage reserved ranges and the
+ * outfit bindings share.
  */
 private class HostTitlePlayer(
     private val player: Player?,
@@ -632,11 +743,11 @@ private class HostTitlePlayer(
 
     override fun getSex(): PlayerSex_t = player?.getSex() ?: PlayerSex_t.MALE
 
-    override fun getBankBalance(): Long = 0L
+    override fun getBankBalance(): Long = features.vitals.getBankBalance()
 
     override fun hasMount(mount: Mount): Boolean = features.mounts.hasMount(mount)
 
-    override fun getOutfitsCount(): Int = 0
+    override fun getOutfitsCount(): Int = features.outfits.getOutfits().size
 
     override fun getLevel(): Int = player?.level ?: 1
 
@@ -650,7 +761,7 @@ private class HostTitlePlayer(
 
     override fun getBossPoints(): Int = features.bossPoints.getBossPoints().toInt()
 
-    override fun canWear(lookType: Int, addons: Int): Boolean = false
+    override fun canWear(lookType: Int, addons: Int): Boolean = features.outfits.canWear(lookType, addons)
 
     override fun getGuildRank(): GuildRank? = player?.getGuildRank()
 }
@@ -662,20 +773,22 @@ private class HostTitlePlayer(
  * (tooling/tests) yields the inert projection.
  *
  * PARITY NOTES:
- *  - `Player::m_storage` (player_storage.hpp:168) is not composed on the
- *    Kotlin `Player` yet, so [getStorageValue]/[addStorageValue] keep the
- *    per-feature storage in this adapter. `getStorageValue` returns -1 for a
- *    missing key like `PlayerStorage::get` (player_storage.cpp:95-104) so the
+ *  - [getStorageValue]/[addStorageValue] read and write the composed
+ *    [PlayerFeatures.storage], the same `Player::m_storage` instance
+ *    (player.hpp:1968) the wing/aura/effect/shader reserved ranges and the
+ *    `player:getStorageValue` bindings share. `getStorageValue` returns -1 for
+ *    a missing key like `PlayerStorage::get` (player_storage.cpp:95-104) so the
  *    wing/aura/effect range arithmetic of player_attached_effects.cpp:145-195,
- *    265-308, 440-483, 615-657 behaves exactly like Canary.
+ *    265-308, 440-483, 615-657 behaves exactly like Canary, and
+ *    `addStorageValue` routes through `PlayerStorage::add`
+ *    (player_storage.cpp:56-93) so the pass-through ranges persist.
  *  - `Player::isRandomMounted()` and `Player::sendOutfitWindow()` have no
  *    Kotlin `Player` seam yet (PARITY GAP); they default to `false`/no-op.
  */
 private class HostAttachedEffectsPlayer(
     private val player: Player?,
+    private val storage: PlayerStorage,
 ) : AttachedEffectsPlayer {
-
-    private val storage = mutableMapOf<Int, Int>()
 
     private val fallbackKv: KV = InMemoryKV()
 
@@ -687,14 +800,10 @@ private class HostAttachedEffectsPlayer(
         player?.setDefaultOutfit(outfit)
     }
 
-    override fun getStorageValue(key: Int): Int = storage[key] ?: -1
+    override fun getStorageValue(key: Int): Int = storage.get(key)
 
     override fun addStorageValue(key: Int, value: Int) {
-        if (value == -1) {
-            storage.remove(key)
-        } else {
-            storage[key] = value
-        }
+        storage.add(key, value)
     }
 
     override fun kv(): KV = player?.kv ?: fallbackKv
@@ -715,4 +824,25 @@ private class HostAttachedEffectsPlayer(
     override fun internalCreatureChangeOutfit(outfit: Outfit) {
         player?.let { it.internalCreatureChangeOutfit(it, outfit) }
     }
+}
+
+/**
+ * [StoragePlayer] adapter of [PlayerFeatures.storage] over the live
+ * [wheelPlayer] host. `PlayerStorage` reaches `Player::outfits` and
+ * `Player::familiars` directly as a friend (player.hpp:1956,
+ * player_storage.cpp:59-66), so the adapter resolves the composed
+ * [PlayerOutfitState] backing vector and [PlayerFamiliars] list per call; a
+ * `null` host (tooling/tests) still yields a valid empty storage.
+ */
+private class HostStoragePlayer(
+    private val player: Player?,
+    private val outfitsProvider: () -> MutableList<OutfitEntry>,
+    private val familiarsProvider: () -> MutableList<FamiliarEntry>,
+) : StoragePlayer {
+
+    override fun getName(): String = player?.name ?: ""
+
+    override fun getOutfits(): MutableList<OutfitEntry> = outfitsProvider()
+
+    override fun getFamiliars(): MutableList<FamiliarEntry> = familiarsProvider()
 }

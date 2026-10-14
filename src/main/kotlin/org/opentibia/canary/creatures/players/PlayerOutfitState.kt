@@ -42,6 +42,16 @@ class PlayerOutfitState(
     fun getOutfits(): List<OutfitEntry> = outfits
 
     /**
+     * `Player::outfits` (player.hpp:1686) as the `friend class PlayerStorage`
+     * (player.hpp:1956) reaches it: the mutable backing vector the storage
+     * reserved-range append pushes with `emplace_back`
+     * (player_storage.cpp:59-62). Gameplay reads keep [getOutfits], the
+     * read-only `Player::getOutfits` projection.
+     */
+    internal val outfitsBacking: MutableList<OutfitEntry>
+        get() = outfits
+
+    /**
      * `Player::canWear` (player.cpp:6783-6806): registration gate, access
      * bypass, registry/premium checks, then the unlocked-with-no-addons fast
      * path and the owned-addon bitmask check.
