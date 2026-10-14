@@ -143,6 +143,28 @@ class GameHandlerImbuementCompositionTest {
     }
 
     @Test
+    fun `the crafted imbuement scroll carries the production imbuement registry`() {
+        items.register(ItemType(id = 51742, name = "imbuement scroll"))
+        val player = Player(
+            id = 9L,
+            name = "Crafter",
+            maxHealth = 150,
+            health = 150,
+            position = Position(1000, 1000, 7),
+        )
+        handler.game.addPlayer(player)
+        handler.game.removeMoney = { _, _, _, _ -> true }
+        player.stash.addItemOnStash(11444, 20)
+        player.stash.addItemOnStash(51442, 1)
+
+        val strike = imbuements.imbuementMap.values.single { it.name == "Strike" }
+        handler.game.createScrollImbuement(player, strike)
+
+        val scroll = player.getInventoryItemsFromId(51742, ignore = false).single()
+        assertThat(scroll.imbuementRegistry).isSameAs(imbuements)
+    }
+
+    @Test
     fun `the market escrow composes the imbuement registry onto delivered items`() {
         val player = Player(
             id = 7L,

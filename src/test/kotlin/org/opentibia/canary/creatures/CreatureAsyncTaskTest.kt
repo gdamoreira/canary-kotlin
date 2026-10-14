@@ -1,7 +1,12 @@
 package org.opentibia.canary.creatures
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.game.scheduling.DispatcherLane
+import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.map.Position
 
 /**
@@ -192,5 +197,92 @@ class CreatureAsyncTaskTest {
     fun `isAlive mirrors the lifeless health guard`() {
         assertThat(RecordingCreature(health = 100).isAlive()).isTrue()
         assertThat(RecordingCreature(health = 0).isAlive()).isFalse()
+    }
+
+    @Test
+    fun `the async batch is handed back through the dispatcher WorkerCompletion lane`() = runBlocking<Unit> {
+        val dispatcher = GameDispatcher()
+        dispatcher.start()
+        try {
+            val gate = CompletableDeferred<Unit>()
+            dispatcher.dispatch(DispatcherLane.WorkerCompletion) { gate.await() }
+
+            val ran = mutableListOf<Int>()
+            val creature = RecordingCreature()
+            creature.asyncTaskDispatcher = dispatcher
+            val done = CompletableDeferred<Unit>()
+            creature.addAsyncTask {
+                ran.add(1)
+                done.complete(Unit)
+            }
+
+            assertThat(ran).isEmpty()
+            assertThat(creature.hasAsyncTaskFlag(FlagAsyncClass_t.AsyncTaskRunning)).isTrue()
+
+            gate.complete(Unit)
+            withTimeout(2_000) { done.await() }
+
+            assertThat(ran).containsExactly(1)
+            assertThat(creature.hasAsyncTaskFlag(FlagAsyncClass_t.AsyncTaskRunning)).isFalse()
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    @Test
+    fun `the follow barrier callback is handed back through the dispatcher`() = runBlocking<Unit> {
+        val dispatcher = GameDispatcher()
+        dispatcher.start()
+        try {
+            val gate = CompletableDeferred<Unit>()
+            dispatcher.dispatch(DispatcherLane.WorkerCompletion) { gate.await() }
+
+            val completed = mutableListOf<Int>()
+            val creature = RecordingCreature()
+            creature.asyncTaskDispatcher = dispatcher
+            val done = CompletableDeferred<Unit>()
+            creature.goToFollowCreature_async {
+                completed.add(1)
+                done.complete(Unit)
+            }
+
+            assertThat(completed).isEmpty()
+
+            gate.complete(Unit)
+            withTimeout(2_000) { done.await() }
+
+            assertThat(completed).containsExactly(1)
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    @Test
+    fun `a stopped dispatcher keeps the inline async pump`() {
+        val creature = RecordingCreature()
+        creature.asyncTaskDispatcher = GameDispatcher()
+        val ran = mutableListOf<Int>()
+
+        creature.addAsyncTask { ran.add(1) }
+
+        assertThat(ran).containsExactly(1)
+        assertThat(creature.executeHookCalls).isEqualTo(1)
+    }
+
+    @Test
+    fun `Monster executeAsyncTasks delegates the body to the pipeline host seam`() {
+        val monster = Monster(
+            id = 7,
+            name = "Rat",
+            maxHealth = 100,
+            health = 100,
+            position = Position(100, 100, 7),
+        )
+        var hostCalls = 0
+        monster.onExecuteAsyncTasksHost = { hostCalls++ }
+
+        monster.addAsyncTask { }
+
+        assertThat(hostCalls).isEqualTo(1)
     }
 }

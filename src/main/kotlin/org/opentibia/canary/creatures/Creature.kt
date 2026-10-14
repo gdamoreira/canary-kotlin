@@ -40,6 +40,7 @@ import org.opentibia.canary.creatures.players.storages.Stash
 import org.opentibia.canary.game.QuickLootFilter_t
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.game.scheduling.DispatcherLane
+import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.zones.ZoneType
 import org.opentibia.canary.social.guild.Guild
 import org.opentibia.canary.social.guild.GuildRank
@@ -450,20 +451,59 @@ abstract class Creature(
     private var isExecutingAsyncTasks: Boolean = false
 
     /**
+     * `g_dispatcher()` hand-back seam for the creature async queue
+     * (`Creature::enqueueAsyncTask`, creature.cpp:2031-2055). The port
+     * eliminates the global: the production composition attaches the server
+     * dispatcher to each creature entering the world, and
+     * [scheduleAsyncTaskBatch]/[scheduleAsyncCallback] then hand their work
+     * back through [DispatcherLane.WorkerCompletion] — the serial
+     * world-worker lane — instead of running it on the producer's thread
+     * (AGENTS.md 1.2). A `null` dispatcher keeps the world-confined inline
+     * default for embedded use.
+     *
+     * CALL-SITE NEEDS (files outside this port's ownership):
+     *  - `Game.internalPlaceCreature` (Game.kt) binds this for every creature
+     *    it places, next to the existing `creature.addCreatureHealth` bind.
+     *  - `MonsterPipelinesHost.register` (MonsterPipelinesHost.kt) binds this
+     *    for registered monsters from its injected dispatcher so
+     *    `Monster`-owned batches no longer run inline.
+     *  - `GameHandler` binds the session player at login.
+     */
+    var asyncTaskDispatcher: GameDispatcher? = null
+
+    /**
      * `g_dispatcher().addCreatureAsyncEvent` admission seam
      * (`creature.cpp:2048-2054`). The port runs world work confined to the
-     * single world lane (AGENTS.md 1.2), so the default pumps the scheduled
-     * batch synchronously; a host can inject the dispatcher hop.
+     * single world lane (AGENTS.md 1.2): with [asyncTaskDispatcher] attached
+     * the batch is handed back through [DispatcherLane.WorkerCompletion]; a
+     * host can also rebind the member directly, and without a dispatcher the
+     * batch pumps synchronously.
      */
-    var scheduleAsyncTaskBatch: (() -> Unit) -> Unit = { task -> task() }
+    var scheduleAsyncTaskBatch: (() -> Unit) -> Unit = { task -> dispatchAsyncTaskHandBack(task) }
 
     /**
      * `g_dispatcher().addEvent` admission seam used by
      * `Creature::goToFollowCreature_async` for its `onComplete` barrier
      * (`creature.cpp:1052`). The default mirrors [scheduleAsyncTaskBatch] and
-     * runs the callback inline; a host can inject the dispatcher hop.
+     * hands the callback back through [asyncTaskDispatcher]; a host can inject
+     * the dispatcher hop.
      */
-    var scheduleAsyncCallback: (() -> Unit) -> Unit = { task -> task() }
+    var scheduleAsyncCallback: (() -> Unit) -> Unit = { task -> dispatchAsyncTaskHandBack(task) }
+
+    /**
+     * [asyncTaskDispatcher] hand-back with the inline fallback: a stopped or
+     * absent dispatcher pumps on the caller's thread. The deferred callback
+     * re-reads [asyncTaskDispatcher] at admission time; the queued task keeps
+     * its own generation guard (see [sendAsyncTasks]).
+     */
+    private fun dispatchAsyncTaskHandBack(task: () -> Unit) {
+        val dispatcher = asyncTaskDispatcher
+        if (dispatcher != null && dispatcher.isRunning) {
+            dispatcher.dispatch(DispatcherLane.WorkerCompletion) { task() }
+        } else {
+            task()
+        }
+    }
 
     /** `Creature::addAsyncTask` (creature.hpp:984-989). */
     fun addAsyncTask(fnc: () -> Unit) {
@@ -1480,6 +1520,24 @@ class Monster(
 
     /** `Monster::hasExtraSwing` (monster.cpp:2091-2093). */
     override fun hasExtraSwing(): Boolean = hasExtraSwingProvider()
+
+    /**
+     * `MonsterPipelinesHost.onExecuteAsyncTasks` coordinator seam for
+     * `Monster::onExecuteAsyncTasks` (monster.cpp:3972-3996), bound where the
+     * world pipelines are composed (AGENTS.md 1.1); an unbound monster keeps
+     * the tail inert.
+     *
+     * CALL-SITE NEED: `MonsterPipelinesHost.bindMonsterHooks`
+     * (MonsterPipelinesHost.kt:280-294) must bind this to
+     * `onExecuteAsyncTasks(monsterId)` under the existing `isCurrentOwner`
+     * guard, next to the `onCreatureAppearHost`/`onRemoveCreatureHost` binds.
+     */
+    var onExecuteAsyncTasksHost: () -> Unit = {}
+
+    /** `Monster::onExecuteAsyncTasks` (monster.cpp:3972-3996). */
+    override fun onExecuteAsyncTasks() {
+        onExecuteAsyncTasksHost()
+    }
 }
 
 enum class FightMode {
