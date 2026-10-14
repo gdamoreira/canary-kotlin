@@ -24,7 +24,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | Monster engine (`monster.cpp`, 4,014 lines) | 198 unique `Monster::` methods | 89 name-matched + async pipelines + host + type state + barrier buckets | **~85%** | wave 51: barrier-parallel creature async buckets, budget/requeue/promotion/rollback |
 | Map engine (`map.cpp`) | — | — | **~85%** | sight/`canWalkTo`/pathing/caches/spectators/houses/towns (wave 38) |
 | Persistence (`iologindata*`, `iomapserialize`) | — | — | **~80%** | 24/24 iologindata, 10/10 iomapserialize, market/prey/bestiary/bosstiary/guild/storage (V10–V14) |
-| **Estimated full-parity completion** | — | — | **~99%** | tracked inventory complete; live transport + login load + monster registration wired; remaining = production registry injections (Vocations/Monsters/ioLoginData) and persistence sub-loads |
+| **Estimated full-parity completion** | — | — | **~99.5%** | tracked inventory complete; registry injection, spawn path, persistence sub-loads (conditions/skull/guild/storage/VIP/exiva + bestiary/store/reward/prey/task), and Lua extra-ops delegation all wired |
 
 ### 1.2 Module completion (by inventory rows in §2)
 
@@ -242,12 +242,11 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 ## 3. Highest-Impact Gaps (ranked, verified)
 
-**The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Remaining work is production registry injection and persistence sub-loads:
+**The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Remaining work is depth polish:
 
-1. **Production registry injection** — `CanaryServer`/`ServerBootstrap` must pass `ioLoginData`, a `Monsters`-backed `monsterTypeProvider`, and a `Vocations` registry into the composed `Game`/`GameHandler`.
-2. **Monster spawn path** — no production `MonsterFactory`/spawn caller composed yet (registration is ready).
-3. **Persistence sub-loads** — conditions, skull, guild, bestiary charms, store inbox, reward chest, storage map, VIP, prey/task hunting, exiva restrictions in `loadPlayer`.
-4. **Lua remainder** — extra-ops badges/titles/concoction/OTCR state still per-ops in-memory.
+1. **Monster-type XML depth** — the booted `Monsters` registry currently maps name/experience/speed/health/loot only; the datapack populates types via Lua `Game.createMonsterType` (Lua path not composed at boot).
+2. **Outfit sub-load + remaining `Reward`-as-`Container` shape** — small pre-existing shape gaps.
+3. **Depth seams** — wheel upgrade APIs, `Player::m_storage` host composition, `AnimusMastery` blob persistence vs relational, host title/badge player reads.
 
 ---
 

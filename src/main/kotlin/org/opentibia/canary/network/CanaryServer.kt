@@ -99,7 +99,7 @@ class CanaryServer(
      * builds each spawned monster from its registered type. `null` keeps the
      * spawn path uncomposed (embedded/test use).
      */
-    private val monsters: Monsters? = null,
+    internal val monsters: Monsters? = null,
     /**
      * `Creature::getCreatureAsyncTaskBuckets` shared world state
      * (creature.cpp:34-55) composed by the bootstrap; when absent the listener

@@ -27,3 +27,7 @@ A1/A2 share `CanaryServer.kt` — separate regions; A3/A4 share `io/**` but diff
 
 - §1.1 parity, §1.2 WorldCommit confinement, §2.1 Flyway discipline, §4 TDD, zero warnings.
 - Commit on your branch (no merge/push).
+
+## Completion
+
+Completed: registry injection, production spawn path, persistence sub-loads (V19), Lua extra-ops delegation. 675 suites / 7487 tests. Merge conflicts (CanaryServer monsters param, IOLoginData constructor) resolved by union.
