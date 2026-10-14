@@ -130,7 +130,7 @@ class GameHandler(
             game.createScrollImbuement = { player, imbuement ->
                 engine.createScrollImbuement(
                     imbuement,
-                    ImbuementPlayerAdapter(game, player, itemTypes),
+                    ImbuementPlayerAdapter(game, player, itemTypes, imbuements),
                 )
             }
             game.onApplyImbuement = { player, imbuement, item, slot ->
@@ -139,7 +139,7 @@ class GameHandler(
                 // `g_imbuements()` lookup in `Item::getImbuementInfo`
                 // (src/items/item.cpp:472-483).
                 imbuements?.let { item.imbuementRegistry = it }
-                val adapter = ImbuementPlayerAdapter(game, player, itemTypes)
+                val adapter = ImbuementPlayerAdapter(game, player, itemTypes, imbuements)
                 val view = ImbuementItem(item).also {
                     it.parent = adapter
                     it.holdingPlayer = adapter
@@ -148,7 +148,7 @@ class GameHandler(
             }
             game.onClearImbuement = { player, item, slot ->
                 imbuements?.let { item.imbuementRegistry = it }
-                val adapter = ImbuementPlayerAdapter(game, player, itemTypes)
+                val adapter = ImbuementPlayerAdapter(game, player, itemTypes, imbuements)
                 val view = ImbuementItem(item).also {
                     it.parent = adapter
                     it.holdingPlayer = adapter
@@ -251,6 +251,13 @@ class GameHandler(
             position = spawnPos
         )
         this.player = activePlayer
+
+        // `Creature::enqueueAsyncTask` admits async batches through
+        // `g_dispatcher()` (creature.cpp:2031-2055); the port attaches the
+        // server dispatcher to the session creature so its batches hand back
+        // through the `WorkerCompletion` lane instead of running on the
+        // calling (Netty) thread (AGENTS.md 1.2).
+        activePlayer.asyncTaskDispatcher = dispatcher
 
         // `Player::client` is the per-session ProtocolGame; the port models it
         // as the per-player sink over this channel (fire-and-forget writes).
@@ -456,6 +463,8 @@ internal class ImbuementPlayerAdapter(
     private val game: Game,
     private val player: Player,
     private val itemTypes: Items?,
+    /** `g_imbuements()` registry composed onto every item the adapter creates. */
+    private val imbuements: Imbuements? = null,
 ) : ImbuementPlayer {
 
     override fun getCapacity(): Int = player.capacity.toInt()
@@ -555,7 +564,7 @@ internal class ImbuementPlayerAdapter(
         if (itemType == null || itemType.id == 0) {
             return false
         }
-        val realItem = Item.create(item.id, count, itemTypes)
+        val realItem = Item.create(item.id, count, itemTypes, imbuements)
         return player.addItem(realItem) == ReturnValue.NOERROR
     }
 

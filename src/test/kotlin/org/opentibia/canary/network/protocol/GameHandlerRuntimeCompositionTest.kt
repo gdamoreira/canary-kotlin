@@ -270,6 +270,25 @@ class GameHandlerRuntimeCompositionTest {
     }
 
     @Test
+    fun `login hands the player async queue back through the server dispatcher`() {
+        val ch = openChannel()
+        val player = login(ch)
+        val callerThread = Thread.currentThread()
+        var ranOn: Thread? = null
+        val applied = CountDownLatch(1)
+
+        player.addAsyncTask {
+            ranOn = Thread.currentThread()
+            applied.countDown()
+        }
+        awaitLane()
+
+        assertThat(applied.await(2, TimeUnit.SECONDS)).isTrue()
+        assertThat(ranOn).isNotNull
+        assertThat(ranOn).isNotSameAs(callerThread)
+    }
+
+    @Test
     fun `apply imbuement writes the real item store and consumes the unified stash`() {
         val player = Player(
             id = 8L,
