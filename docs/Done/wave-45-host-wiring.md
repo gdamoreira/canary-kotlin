@@ -31,3 +31,7 @@
 ## Post-wave (§6)
 
 Update §1–§3, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+
+## Completion
+
+Completed: game.cpp remainder batch, monster host wiring, player host wiring, ProtocolSink sender wiring, runtime composition (stash/imbuements/market escrow), Player depth 2. 572 suites / 6284 tests.

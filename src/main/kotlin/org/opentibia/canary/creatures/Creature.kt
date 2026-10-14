@@ -3539,8 +3539,6 @@ class Player(
     /** `g_callbacks().executeCallback(playerOnLoseExperience, player, expLoss)` (player.cpp:4119) seam. */
     var executePlayerOnLoseExperienceCallback: (Player, Long) -> Unit = { _, _ -> }
 
-    /** `Player::sendStats()` protocol seam used by [death]. */
-    var sendStats: () -> Unit = {}
 
     /** `Player::sendReLoginWindow(unfairFightReduction)` (player.cpp:2384-2388) protocol seam. */
     var sendReLoginWindow: (Int) -> Unit = {}
@@ -3558,8 +3556,6 @@ class Player(
     /** `g_game().internalTeleport(player, pos, effect)` (game.cpp:3540) seam used by the no-loss death. */
     var internalTeleport: (Player, Position, Boolean) -> Unit = { _, _, _ -> }
 
-    /** `g_game().addCreatureHealth(player)` (game.cpp) protocol seam used by the no-loss death. */
-    var addCreatureHealth: (Player) -> Unit = {}
 
     /** `g_game().addPlayerMana(player)` (game.cpp) protocol seam used by the no-loss death. */
     var addPlayerMana: (Player) -> Unit = {}

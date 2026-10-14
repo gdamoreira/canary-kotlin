@@ -18,13 +18,13 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 |---|---|---|---|---|
 | Tracked gameplay features (56) | 56 | 56 | **100%** engine scope | `docs/game-play-features.md`; residual parity gaps per feature |
 | Inbound `ProtocolGame` opcodes | 141 active (148 cases − 7 commented-out) | 141 decoded | **100%** | ~46/141 (**~33%**) fully applied; the rest decode + WorldCommit confinement boundary (engine state machine unapplied) |
-| Outbound `ProtocolGame` senders | 187 `ProtocolGame::send*` | 187 ported | **100%** | wave 44 completed party/podium/depot/container/login/loot/team-finder/outfit/forge/cyclopedia senders |
+| Outbound `ProtocolGame` senders | 187 `ProtocolGame::send*` | 187 ported + wired | **100%** | wave 45 added the `ProtocolSink` and wired creature/item/container/stats state changes to frames |
 | Lua bindings (`src/lua/functions/*`) | 1,961 registrations (1,246 methods + 34 meta + 673 enums + 8 classes) | 1,246 methods + ~1,300 enums | **100%** methods | remaining: a few `SOUND_EFFECT_TYPE_*` names; `luascript.cpp` sandboxing partial |
-| `Player` methods (`player.cpp`) | 821 `Player::` methods | 496 functions in `creatures/players/**` | **~60%** raw count | +68 wave 43, +17 wave 44 (`death`, walk queue, `canWalkthrough`, scheduler variants) |
-| Monster engine (`monster.cpp`, 4,014 lines) | 198 unique `Monster::` methods | 89 name-matched + async pipelines | **~60%** | wave 44: real target-search/combat-intention/follow-path/post-think/movement/visibility pipelines |
+| `Player` methods (`player.cpp`) | 821 `Player::` methods | 538 functions in `creatures/players/**` | **~66%** raw count | +68 wave 43, +17 wave 44 (`death`/walk queue), +37 wave 45 (XP boosts, pronouns, loyalty, client/session, stats) |
+| Monster engine (`monster.cpp`, 4,014 lines) | 198 unique `Monster::` methods | 89 name-matched + async pipelines + host | **~70%** | wave 45: pipelines instantiated by `MonsterPipelinesHost`, spectator scan + appear/remove wiring |
 | Map engine (`map.cpp`) | — | — | **~85%** | sight/`canWalkTo`/pathing/caches/spectators/houses/towns (wave 38) |
 | Persistence (`iologindata*`, `iomapserialize`) | — | — | **~80%** | 24/24 iologindata, 10/10 iomapserialize, market/prey/bestiary/bosstiary/guild/storage (V10–V14) |
-| **Estimated full-parity completion** | — | — | **~90%** | weighted across the above |
+| **Estimated full-parity completion** | — | — | **~92%** | weighted across the above |
 
 ### 1.2 Module completion (by inventory rows in §2)
 
@@ -132,7 +132,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 ### `src/game/`
 | C++ | Status | Missing |
 |---|---|---|
-| `game.cpp` (13,141, ~352 methods) | PARTIAL | core + trade/shop/party/guild/VIP/reports/highscores + houses/auctions/MOTD + movement/combat/targeting + quest/forge/bosstiary/task + market create/cancel/accept + forge fuse + wheel + NPC greet/modal/podium (waves 35–44); remaining: `playerSetShowOffSocket`, fiendish forge events, wheel combat application, walk-queue host wiring |
+| `game.cpp` (13,141, ~352 methods) | PARTIAL | waves 35–45 added trade/shop/party/guild/VIP/reports/highscores, houses/auctions/MOTD, movement/combat/targeting, quest/forge/bosstiary/task, market, forge fuse, wheel (+combat application), NPC greet/modal/podium, show-off socket, fiendish/influenced forge, monster registry; remaining ~122 absent (`Game::` combat pipeline, quick-loot/depot handlers, stash, channels, cyclopedia, party/records) |
 | `functions/game_reload.cpp` | **IMPLEMENTED** | `game/reload/GameReload.kt` (generation-checked reload, `Reload_t`) |
 | `modal_window/*` | **IMPLEMENTED** | `game/modal/ModalWindow.kt` (per-player tracking + answer routing) |
 | `movement/position.cpp` | **IMPLEMENTED** | `game/movement/Position.kt` (offsets/distances/rectangles/directions) |
@@ -242,11 +242,11 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 ## 3. Highest-Impact Gaps (ranked, verified)
 
-1. **`Player` domain model** — 496/821 raw (~60%); `Player::death`/walk queue ported as state classes awaiting host wiring (`Creature.kt` overrides).
-2. **`game.cpp` remainder** — `playerSetShowOffSocket`, fiendish forge events, wheel combat application, walk-queue host wiring, misc handlers.
-3. **Monster host wiring** — async pipelines implemented but not yet instantiated by `Game.checkCreatures`/`Monster`.
-4. **Sender wiring** — all 187 senders ported as serializers; handler call sites still to be wired.
-5. **Runtime composition** — several engines (imbuement attribute store, market escrow inbox, stash unification) remain seam-injected.
+1. **`game.cpp` remainder** — ~122 absent `Game::` methods (combat pipeline, quick-loot/depot handlers, stash, channels, cyclopedia, party/records).
+2. **`Player` domain model** — 538/821 raw (~66%).
+3. **Runtime composition** — bootstrap plumbing (`itemTypes`/`ioMarket`/`imbuements` into `GameHandler`), `imbuingItem` accessor, imbuement decay scheduler tick, spectator sector lists for map move fanout.
+4. **Host call-site one-liners** — `Game.checkCreatures → trySchedulePostThink`, `Monster` virtual overrides, `Game.kt` seams bound to host walk methods.
+5. **Monster-type/forge state** on the Kotlin `Monster` (seams still inert).
 
 ---
 
