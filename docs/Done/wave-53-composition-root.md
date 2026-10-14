@@ -27,3 +27,7 @@
 ## Post-wave (§6)
 
 Update §1–§3, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+
+## Completion
+
+Completed: composition root final, player final depth (754/821), persistence final (stash/bestiary/prey/task + shared transaction), dispatcher final (telemetry + context). 657 suites / 7327 tests.
