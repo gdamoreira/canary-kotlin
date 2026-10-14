@@ -41,6 +41,8 @@ import org.opentibia.canary.map.Position
 import org.opentibia.canary.persistence.PlayerFeatureStateLoader
 import org.opentibia.canary.systems.imbuement.ImbuementItem
 import org.opentibia.canary.systems.imbuement.Imbuements
+import org.opentibia.canary.systems.rewardchest.Reward
+import org.opentibia.canary.utils.Tools
 
 private val logger = KotlinLogging.logger {}
 
@@ -74,23 +76,42 @@ typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
  * `Container` trees in Canary's descending-`sid` order and re-arming decay
  * and imbuement decay through the injected seams.
  *
- * The live inventory walk is ported as [saveItems] / [savePlayerItem(player)]:
- * the rows are built from the player's inventory slots with Canary's BFS `sid`
- * assignment from 101 and the `OPENCONTAINER` attributes are re-armed from
- * `Player::getOpenContainers` before the attributes are captured. The depot,
- * reward and inbox trees still take caller-built rows ([savePlayerItem]'s
- * row-based seam) because their live `Player` sinks are not composed yet.
+ * The live item walks are ported as [saveItems] plus [savePlayerItem(player)]
+ * (inventory), [savePlayerDepotItems(player)], [saveRewardItems(player)] and
+ * [savePlayerInbox(player)]: the rows are built from the player's live trees
+ * with Canary's BFS `sid` assignment from 101 and the `OPENCONTAINER`
+ * attributes are re-armed from `Player::getOpenContainers` before the
+ * attributes are captured. The reward chest (`Player::getRewardChest`,
+ * player.cpp:2058-2063) and inbox (`Player::inbox`, player.hpp:1760) sinks are
+ * reached through the `Player` itself; the depot chests need the
+ * `Player::depotChests` map (see CREATURE.KT ACCESSOR NEEDS) and stay inert
+ * until it exists. [savePlayerGuard] calls all four live walks; the row-based
+ * overloads remain for callers that already hold the `(pid, sid)` rows.
+ *
+ * CREATURE.KT ACCESSOR NEEDS (report to the composition owner):
+ *  - `Player::depotChests` (src/creatures/players/player.hpp:1673), a
+ *    `Map<Int, DepotChest>` populated by `Player::getDepotChest(depotId,
+ *    autoCreate)` (player.cpp:1998-2022) and by `Player::getDepotLocker`
+ *    (player.cpp:2024-2058) for boxes `1..DEPOT_BOXES`. `loadPlayerDepotItems`
+ *    and `savePlayerDepotItems` must resolve the same chest instances, so the
+ *    composition root should wire the save `depotChests` seam to that map and
+ *    pass `{ player.getDepotChest(it, true) }` at the load call site. Until
+ *    the accessor exists the depot save seam defaults to `null` and the walk
+ *    stays inert instead of clearing the persisted rows.
  *
  * PARITY GAPS (reported by the wave): `savePlayer` cannot wrap every
  * repository in one shared transaction because each JDBC repository owns its
  * connection; the Canary offline guard (`Player::isOffline`) has no Kotlin
  * equivalent yet, so [saveOnlyDataForOnlinePlayer] always flushes; the
- * `PlayerPvp` kill list, stash and reward chest have no live `Player` sink in
- * this port, so those helpers take the persisted values directly;
- * [savePlayerGuard] still does not call the live [savePlayerItem(player)],
- * depot, reward or inbox saves; and the item type registry, imbuement
- * registry and decay/imbuement-decay seams default to unwired until the
- * composition root supplies them.
+ * `PlayerPvp` kill list and stash have no live `Player` sink in this port, so
+ * those helpers take the persisted values directly; [savePlayerGuard] omits
+ * the stash, bestiary, prey and task-hunting live saves whose sinks are not
+ * ported; `saveItems` resolves [Reward] children through `Reward.items`
+ * because the port's reward proxy is not a `Container` (Reward.kt gap), and
+ * [saveRewardItems(player)] re-applies the DATE attribute at save time because
+ * `RewardChest.getReward` keeps the id in `Reward.date` only; and the item type
+ * registry, imbuement registry and decay/imbuement-decay seams default to
+ * unwired until the composition root supplies them.
  */
 class IOLoginData(
     private val players: PlayerLoginRepository,
@@ -109,6 +130,16 @@ class IOLoginData(
     private val imbuements: Imbuements? = null,
     private val startDecaying: (Item) -> Unit = {},
     private val startImbuementDecay: (ImbuementItem) -> Unit = {},
+    /**
+     * `Player::depotChests` (src/creatures/players/player.hpp:1673): the
+     * materialized depot chest map keyed by `pid` that
+     * `IOLoginDataSave::savePlayerDepotItems`
+     * (iologindata_save_player.cpp:583-586) iterates. The port's `Player` does
+     * not expose the map yet (see the class CREATURE.KT ACCESSOR NEEDS), so it
+     * is a nullable seam: `null` keeps the depot walk inert like the other
+     * unwired sinks instead of clearing the persisted rows.
+     */
+    private val depotChests: ((Player) -> Map<Int, Container>)? = null,
 ) {
 
     private val featureLoader: PlayerFeatureStateLoader? by lazy(LazyThreadSafetyMode.NONE) {
@@ -245,6 +276,26 @@ class IOLoginData(
             return false
         }
 
+        if (!savePlayerItem(player)) {
+            logger.error { "[savePlayerGuard] - Failed to save player items: ${player.name}" }
+            return false
+        }
+
+        if (!savePlayerDepotItems(player)) {
+            logger.error { "[savePlayerGuard] - Failed to save player depot items: ${player.name}" }
+            return false
+        }
+
+        if (!saveRewardItems(player)) {
+            logger.error { "[savePlayerGuard] - Failed to save player reward items: ${player.name}" }
+            return false
+        }
+
+        if (!savePlayerInbox(player)) {
+            logger.error { "[savePlayerGuard] - Failed to save player inbox: ${player.name}" }
+            return false
+        }
+
         return saveOnlyDataForOnlinePlayer(player)
     }
 
@@ -373,19 +424,22 @@ class IOLoginData(
 
     /**
      * `IOLoginDataSave::saveItems` (iologindata_save_player.cpp:34-188): walks
-     * the given `(pid, item)` blocks (ascending slot order for the inventory)
-     * and their containers in BFS order, assigning the running `sid` from 101.
-     * Each container item re-arms its `OPENCONTAINER` attribute from
-     * `Player::getOpenContainers` (item attribute first cleared when positive,
-     * then the matching open container id plus one) before both the live item
-     * mutation and the row attributes are captured, exactly like the C++
-     * helper serializes `item->serializeAttr` after the same update. The C++
-     * `query_insert`/`propWriteStream` out-parameters become the returned row
-     * list and a local stream.
+     * the given `(pid, item)` blocks (ascending slot or chest order for the
+     * direct children) and their containers in BFS order, assigning the running
+     * `sid` from 101. Each container item re-arms its `OPENCONTAINER` attribute
+     * from `Player::getOpenContainers` (item attribute first cleared when
+     * positive, then the matching open container id plus one) before both the
+     * live item mutation and the row attributes are captured, exactly like the
+     * C++ helper serializes `item->serializeAttr` after the same update. The
+     * C++ `query_insert`/`propWriteStream` out-parameters become the returned
+     * row list and a local stream. The port's [Reward] proxy is not a
+     * [Container] (Reward.kt parity gap), so [childItems] resolves its children
+     * through `Reward.items` exactly where the C++ `item->getContainer()`
+     * queues the reward's container.
      */
     fun saveItems(player: Player, itemList: List<Pair<Int, Item>>): List<PlayerItemState> {
         val rows = mutableListOf<PlayerItemState>()
-        val queue = ArrayDeque<Pair<Container, Int>>()
+        val queue = ArrayDeque<Pair<List<Item>, Int>>()
         var runningId = 100
         val openContainers = player.getOpenContainers()
 
@@ -395,23 +449,25 @@ class IOLoginData(
             val container = item.getContainer()
             if (container != null) {
                 rearmOpenContainer(container, openContainers)
-                queue.addLast(container to runningId)
             }
+
+            childItems(item)?.let { queue.addLast(it to runningId) }
 
             rows.add(itemRow(player.id, pid, runningId, item))
         }
 
         while (queue.isNotEmpty()) {
-            val (container, parentId) = queue.removeFirst()
+            val (children, parentId) = queue.removeFirst()
 
-            for (item in container.getItemList()) {
+            for (item in children) {
                 ++runningId
 
                 val subContainer = item.getContainer()
                 if (subContainer != null) {
                     rearmOpenContainer(subContainer, openContainers)
-                    queue.addLast(subContainer to runningId)
                 }
+
+                childItems(item)?.let { queue.addLast(it to runningId) }
 
                 rows.add(itemRow(player.id, parentId, runningId, item))
             }
@@ -419,6 +475,16 @@ class IOLoginData(
 
         return rows
     }
+
+    /**
+     * The `item->getContainer()` child-list lookup the C++
+     * `IOLoginDataSave::saveItems` (iologin_data_save_player.cpp:64, 128) uses
+     * to queue an item's children. The port's [Reward] proxy is not a
+     * [Container] (Reward.kt parity gap), so its children are resolved through
+     * `Reward.items`; every [Container] item keeps the plain container list.
+     */
+    private fun childItems(item: Item): List<Item>? =
+        item.getContainer()?.getItemList() ?: (item as? Reward)?.items
 
     /**
      * The container attribute update block `IOLoginDataSave::saveItems`
@@ -464,6 +530,34 @@ class IOLoginData(
     /** `IOLoginDataSave::savePlayerDepotItems` (iologindata_save_player.cpp:566-597). */
     fun savePlayerDepotItems(playerId: Long, depotList: List<PlayerContainerItemState>): Boolean {
         depots.save(playerId, depotList)
+        return true
+    }
+
+    /**
+     * `IOLoginDataSave::savePlayerDepotItems`
+     * (iologindata_save_player.cpp:566-597): `player->depotChests` is walked in
+     * its `std::map` order ([Map.toSortedMap], ascending `pid`), every chest's
+     * item list becomes a `(pid, item)` block keyed by the chest id and
+     * [saveItems] assigns the `sid`s. Canary skips the whole walk, including
+     * the `DELETE`, while `lastDepotId` is `-1`, i.e. before the player ever
+     * opened a depot (iologindata_save_player.cpp:576). The [depotChests] sink
+     * is `null` until `Creature.kt` exposes `Player::depotChests`, which keeps
+     * the walk and its `DELETE` inert rather than clearing persisted rows.
+     */
+    fun savePlayerDepotItems(player: Player): Boolean {
+        val chests = depotChests?.invoke(player) ?: return true
+        if (player.getLastDepotId() == -1) {
+            return true
+        }
+
+        val depotList = mutableListOf<Pair<Int, Item>>()
+        for ((pid, depotChest) in chests.toSortedMap()) {
+            for (item in depotChest.getItemList()) {
+                depotList.add(pid to item)
+            }
+        }
+
+        depots.save(player.id, saveItems(player, depotList))
         return true
     }
 
@@ -705,6 +799,22 @@ class IOLoginData(
     }
 
     /**
+     * `IOLoginDataSave::savePlayerInbox` (iologindata_save_player.cpp:634-659):
+     * every direct item of `Player::getInbox()->getItemList()` (player.hpp:374)
+     * becomes a `(pid = 0, item)` block and [saveItems] walks its containers in
+     * BFS order.
+     */
+    fun savePlayerInbox(player: Player): Boolean {
+        val inboxList = mutableListOf<Pair<Int, Item>>()
+        for (item in player.inbox.getItemList()) {
+            inboxList.add(0 to item)
+        }
+
+        depots.saveInbox(player.id, saveItems(player, inboxList))
+        return true
+    }
+
+    /**
      * `IOLoginDataLoad::loadPlayerKills` (iologindata_load_player.cpp:371-392).
      * Rows outside the `FRAG_TIME` window are dropped like the C++ loop; the
      * `Player::updateLastKillTimeCache` side effect has no Kotlin sink yet
@@ -741,6 +851,36 @@ class IOLoginData(
     /** `IOLoginDataSave::saveRewardItems` (iologindata_save_player.cpp:599-632). */
     fun saveRewardItems(playerId: Long, rewardList: List<PlayerContainerItemState>): Boolean {
         rewards.save(playerId, rewardList)
+        return true
+    }
+
+    /**
+     * `IOLoginDataSave::saveRewardItems` (iologindata_save_player.cpp:599-632):
+     * every `Player::rewardMap` id is resolved through
+     * `Player::getReward(rewardId, false)` in `std::map` order (ascending
+     * `rewardId`) and kept only when the proxy is non-empty and at most seven
+     * days old, then [saveItems] walks each kept reward with `pid` 0.
+     * `Player::getReward` stores the id in the DATE attribute
+     * (player.cpp:2067-2083); the port's `RewardChest.getReward` keeps it in
+     * `Reward.date` only (Reward.kt gap), so the attribute is re-applied here
+     * before serialization. The age test mirrors the C++ `uint64_t`
+     * subtraction, which skips a reward whose id is newer than [now].
+     */
+    fun saveRewardItems(player: Player, now: Long = Tools.getTimeMsNow()): Boolean {
+        val rewardChest = player.getRewardChest()
+        val rewardListItems = mutableListOf<Pair<Int, Item>>()
+
+        for (rewardId in rewardChest.getRewardList().sorted()) {
+            val reward = rewardChest.getReward(rewardId, autoCreate = false) ?: continue
+            reward.setAttribute(ItemAttribute.DATE, rewardId)
+
+            val age = now - rewardId
+            if (!reward.empty && age in 0..REWARD_EXPIRATION_MS) {
+                rewardListItems.add(0 to reward)
+            }
+        }
+
+        rewards.save(player.id, saveItems(player, rewardListItems))
         return true
     }
 
@@ -805,5 +945,8 @@ class IOLoginData(
 
         /** `FRAG_TIME` config default in seconds (`configmanager.hpp`). */
         const val FRAG_TIME_DEFAULT_SECONDS = 86_400L
+
+        /** `1000 * 60 * 60 * 24 * 7` reward age window (iologindata_save_player.cpp:620). */
+        const val REWARD_EXPIRATION_MS = 604_800_000L
     }
 }
