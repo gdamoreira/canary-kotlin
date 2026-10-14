@@ -27,3 +27,7 @@
 ## Post-wave (§6)
 
 Update §1–§3, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+
+## Completion
+
+Completed: player depth 8 (733/821), host bindings, persistence depth (live save walk + OPENCONTAINER), barrier lanes. 643 suites / 7237 tests.
