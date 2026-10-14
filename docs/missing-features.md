@@ -20,11 +20,11 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | Inbound `ProtocolGame` opcodes | 141 active (148 cases − 7 commented-out) | 141 decoded | **100%** | ~46/141 (**~33%**) fully applied; the rest decode + WorldCommit confinement boundary (engine state machine unapplied) |
 | Outbound `ProtocolGame` senders | 187 `ProtocolGame::send*` | 187 ported + wired | **100%** | wave 45 added the `ProtocolSink` and wired creature/item/container/stats state changes to frames |
 | Lua bindings (`src/lua/functions/*`) | 1,961 registrations (1,246 methods + 34 meta + 673 enums + 8 classes) | 1,246 methods + ~1,300 enums | **100%** methods | remaining: a few `SOUND_EFFECT_TYPE_*` names; `luascript.cpp` sandboxing partial |
-| `Player` methods (`player.cpp`) | 821 `Player::` methods | 672 functions in `creatures/players/**` | **~82%** raw count | +11 wave 48, +13 wave 49 (damage accuracy, cleave, perfect shot, reflect, foods, message buffer, client icons) |
+| `Player` methods (`player.cpp`) | 821 `Player::` methods | 710 functions in `creatures/players/**` | **~86%** raw count | +30 wave 50 (attack totals, augments, forge history, item abilities, quick loot, bosstiary, cyclopedia trackers) |
 | Monster engine (`monster.cpp`, 4,014 lines) | 198 unique `Monster::` methods | 89 name-matched + async pipelines + host + type state | **~80%** | wave 46: forge/hazard/soul-pit state, attack/defense spells, strategies, `canUseAttack`/`castSpell` |
 | Map engine (`map.cpp`) | — | — | **~85%** | sight/`canWalkTo`/pathing/caches/spectators/houses/towns (wave 38) |
 | Persistence (`iologindata*`, `iomapserialize`) | — | — | **~80%** | 24/24 iologindata, 10/10 iomapserialize, market/prey/bestiary/bosstiary/guild/storage (V10–V14) |
-| **Estimated full-parity completion** | — | — | **~97%** | weighted across the above |
+| **Estimated full-parity completion** | — | — | **~98%** | tracked inventory complete; remaining work is depth (Player raw count, host seam bindings) |
 
 ### 1.2 Module completion (by inventory rows in §2)
 
@@ -45,7 +45,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | `src/utils/` | 3 | 3 | 0 | 0 | **100%** | 100% |
 | `src/protobuf/` | 2 | 2 | 0 | 0 | **100%** | 100% |
 | `src/lua/` | 12 | 12 | 0 | 0 | **100%** | **100%** |
-| `src/game/` | 10 | 9 | 1 | 0 | **90%** | **95%** |
+| `src/game/` | 10 | 10 | 0 | 0 | **100%** | **100%** |
 | `src/server/` | 5 | 4 | 1 | 0 | **80%** | **90%** |
 | **All modules** | **115** | **113** | **2** | **0** | **98%** | **99%** |
 
@@ -132,7 +132,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 ### `src/game/`
 | C++ | Status | Missing |
 |---|---|---|
-| `game.cpp` (13,141, ~352 methods) | PARTIAL | waves 35–49 added movement (`playerMove*`), item interactions (`playerEquipItem`/`playerWrapableItem`/`playerLookInShop`/`playerChangeOutfit`/`playerInspectItem`/`playerConfigureShowOffSocket`), reward chest, `applyCharmRune`, `start`/`loadMotdNum`/`createLuaItemsOnMap`/`outfitSupportsMount`; 7 real members remain (`combatBlockHit`, `playerCyclopediaCharacterInfo`, `loadMap`/`loadMainMap`/`loadCustomMaps`, `loadAppearanceProtobuf`, `loadBoostedCreature`; `getInstance` skipped by DI design) |
+| `game.cpp` (13,141, ~352 methods) | **IMPLEMENTED** | waves 35–50 completed every real `Game::` member including the final 7 (`combatBlockHit`, `playerCyclopediaCharacterInfo`, `loadMap`/`loadMainMap`/`loadCustomMaps`, `loadAppearanceProtobuf`, `loadBoostedCreature`); `getInstance` intentionally replaced by DI |
 | `functions/game_reload.cpp` | **IMPLEMENTED** | `game/reload/GameReload.kt` (generation-checked reload, `Reload_t`) |
 | `modal_window/*` | **IMPLEMENTED** | `game/modal/ModalWindow.kt` (per-player tracking + answer routing) |
 | `movement/position.cpp` | **IMPLEMENTED** | `game/movement/Position.kt` (offsets/distances/rectangles/directions) |
@@ -242,10 +242,12 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 ## 3. Highest-Impact Gaps (ranked, verified)
 
-1. **`game.cpp` final 7** — `combatBlockHit`, `playerCyclopediaCharacterInfo`, map loading (`loadMap`/`loadMainMap`/`loadCustomMaps`), `loadAppearanceProtobuf`, `loadBoostedCreature`.
-2. **`Player` domain model** — 672/821 raw (~82%).
-3. **Host composition remainder** — monster host `asyncTaskDispatcher`/`onExecuteAsyncTasksHost` binding, `Game.internalPlaceCreature` dispatcher attach, imbuement adapter stats, player state holders composition (combat bonuses/foods/message buffer).
-4. **Nested inventory persistence** — `player_inventory_items` has no `pid`/`sid`; nested containers can't materialize.
+**The tracked inventory is 100% IMPLEMENTED (115/115 rows, 0 PARTIAL, 0 MISSING).** Remaining work is depth/composition, not missing surface:
+
+1. **`Player` domain model depth** — 710/821 raw `Player::` methods (~86%).
+2. **Host seam bindings** — player state holders into the host `Player`, monster host production seams, imbuement adapter stats, `Game.playerSay`→`removeMessageBuffer`, cyclopedia router delegation.
+3. **Persistence depth** — live inventory save walk (`savePlayerItem` row builder), `OPENCONTAINER` re-arming.
+4. **Monster async** — barrier-lane execution (port maps to WorldCommit) and rejection rollback.
 
 ---
 

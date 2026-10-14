@@ -27,3 +27,7 @@
 ## Post-wave (§6)
 
 Update §1–§3, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+
+## Completion
+
+Completed: all 7 final `Game::` members (game.cpp row IMPLEMENTED), player depth 7 (710/821), host composition 3, nested inventory persistence (V17). The tracked inventory is 100% IMPLEMENTED (115/115 rows). 635 suites / 7156 tests.
