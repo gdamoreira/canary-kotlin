@@ -306,6 +306,45 @@ class MonsterPipelinesHostTest {
     }
 
     @Test
+    fun `registering without a monster type keeps the inert type driven seams`() {
+        assertThat(entry.typeState.monsterType).isNull()
+        assertThat(entry.host.attackSpells()).isEmpty()
+        assertThat(entry.host.changeTargetChance()).isZero()
+        assertThat(
+            entry.host.canUseAttack(origin, TargetCreatureFacts(id = 2, position = Position(200, 200, 7))),
+        ).isTrue()
+    }
+
+    @Test
+    fun `registering with a monster type binds the type driven host seams`() {
+        val type = MonsterType("Rat").apply {
+            info.changeTargetChance = 20
+            info.strategiesTargetNearest = 100
+            info.strategiesTargetHealth = 25
+            info.strategiesTargetDamage = 50
+            info.attackSpells += SpellBlock(spell = BaseSpell { _, _ -> }, range = 5)
+        }
+
+        host.unregister(7)
+        host.register(monster, type)
+        val typed = host.entryOf(7)!!
+
+        assertThat(typed.typeState).isSameAs(host.typeStateOf(7))
+        assertThat(typed.typeState.monsterType).isSameAs(type)
+        assertThat(typed.host.attackSpells()).hasSize(1)
+        assertThat(typed.host.changeTargetChance()).isEqualTo(20)
+        assertThat(typed.host.strategiesTargetNearest()).isEqualTo(100)
+        assertThat(typed.host.strategiesTargetHealth()).isEqualTo(25)
+        assertThat(typed.host.strategiesTargetDamage()).isEqualTo(50)
+        assertThat(
+            typed.host.canUseAttack(origin, TargetCreatureFacts(id = 2, position = Position(104, 100, 7))),
+        ).isTrue()
+        assertThat(
+            typed.host.canUseAttack(origin, TargetCreatureFacts(id = 2, position = Position(200, 100, 7))),
+        ).isFalse()
+    }
+
+    @Test
     fun `an outstanding target search defers the post think until the completion`() {
         player(2, Position(101, 100, 7))
         player(3, Position(105, 100, 7))

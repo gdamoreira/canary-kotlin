@@ -32,8 +32,13 @@ fun interface BaseSpell {
     fun castSpell(caster: Monster, target: Creature)
 }
 
-/** `struct spellBlock_t` (src/creatures/monsters/monsters.hpp:35-47). */
-class MonsterSpellBlock(
+/**
+ * Runtime `struct spellBlock_t` (src/creatures/monsters/monsters.hpp:35-47):
+ * the value copy `Monster::attackSpells`/`defenseSpells` hold. The type-level
+ * registration record is [SpellBlock]; [MonsterTypeState] copies it into this
+ * runtime form (`Monster::Monster`, monster.cpp:104-105).
+ */
+data class MonsterSpellBlock(
     val spell: BaseSpell? = null,
     val chance: Int = 100,
     val speed: Int = 2000,

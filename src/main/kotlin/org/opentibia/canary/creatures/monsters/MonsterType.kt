@@ -93,13 +93,16 @@ data class SummonBlock(
 )
 
 /**
- * `struct spellBlock_t` (`src/creatures/monsters/monsters.hpp:35-47`).
+ * `struct spellBlock_t` (`src/creatures/monsters/monsters.hpp:35-47`) as the
+ * monster-type registration record. [MonsterTypeState] copies it into the
+ * runtime [MonsterSpellBlock] the combat rules consume.
  *
- * [spell] is the `std::shared_ptr<BaseSpell>` slot. The `BaseSpell`/`CombatSpell`
- * hierarchy is not ported yet, so the slot stays an opaque reference (PARITY GAP).
+ * [spell] is the `std::shared_ptr<BaseSpell>` slot; the Lua registration
+ * stores the concrete combat spell and the C++ `CombatSpell` actor subclass is
+ * not ported yet (PARITY GAP for the sound-effect fields of the spell itself).
  */
 data class SpellBlock(
-    var spell: Any? = null,
+    var spell: BaseSpell? = null,
     var chance: Int = 100,
     var speed: Int = 2000,
     var range: Int = 0,

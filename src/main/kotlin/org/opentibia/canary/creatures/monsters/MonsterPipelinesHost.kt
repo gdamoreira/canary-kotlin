@@ -68,11 +68,13 @@ import org.opentibia.canary.map.Spectators
  *   [ConcurrentTimedWork] sinks below are the ported dispatcher telemetry
  *   primitives, and the coordinator rebinds the two host lambdas when the
  *   dispatcher exposes the sink.
- * - Monster-type dependent seams stay with the coordinator on each entry's
- *   [MonsterAsyncHost]: `attackSpells`, `castSpell`, `canUseAttack`,
- *   `strategiesTarget*`, `changeTargetChance`, `updateLookDirection`,
- *   `onThinkAsync`, `updateIdleStatus`, the navigation/path/walk seams and the
- *   faction/type fields of [MonsterAsyncHost.monsterFacts].
+ * - The type-dependent seams of each entry's [MonsterAsyncHost]
+ *   (`attackSpells`, `castSpell`, `canUseAttack`, `strategiesTarget*`,
+ *   `changeTargetChance`) are bound when [register] receives the monster's
+ *   [MonsterType] (see [MonsterTypeState.bindHost]); without a type they stay
+ *   at their inert defaults. `updateLookDirection`, `onThinkAsync`,
+ *   `updateIdleStatus`, the navigation/path/walk seams and the faction/type
+ *   fields of [MonsterAsyncHost.monsterFacts] stay with the coordinator.
  */
 class MonsterPipelinesHost(
     private val service: MonsterComputeService,
@@ -109,13 +111,15 @@ class MonsterPipelinesHost(
 
     /**
      * One world monster's pipeline state: the C++ per-`Monster` members split
-     * into the standalone [MonsterTargetListState]/[MonsterBehaviorState], the
-     * [MonsterAsyncHost] seam bag and the [MonsterAsyncPipelines] state machine.
+     * into the standalone [MonsterTargetListState]/[MonsterBehaviorState]/
+     * [MonsterTypeState], the [MonsterAsyncHost] seam bag and the
+     * [MonsterAsyncPipelines] state machine.
      */
     class Entry internal constructor(
         val monster: Monster,
         val targetState: MonsterTargetListState,
         val behaviorState: MonsterBehaviorState,
+        val typeState: MonsterTypeState,
         val host: MonsterAsyncHost,
         val pipeline: MonsterAsyncPipelines,
     )
@@ -131,15 +135,23 @@ class MonsterPipelinesHost(
     /** The registered pipeline for [monsterId] (test/coordinator read view). */
     fun pipelineOf(monsterId: Long): MonsterAsyncPipelines? = entries[monsterId]?.pipeline
 
+    /** The forge/hazard/spell state of [monsterId] (`Monster::m_monsterType` family). */
+    fun typeStateOf(monsterId: Long): MonsterTypeState? = entries[monsterId]?.typeState
+
     /**
      * Instantiates and binds the pipelines for [monster]. Registering a new
      * instance for an id whose owner was not unregistered first replaces the
      * entry: pending completions then re-resolve to the new pipeline and are
      * rejected by its generation guards (stale/replaced owners no-op).
+     *
+     * [monsterType] is the creature's [MonsterType] (`Monster::m_monsterType`);
+     * when present the entry's [MonsterTypeState] is created from it and the
+     * type-driven host seams are bound through [MonsterTypeState.bindHost].
      */
-    fun register(monster: Monster): MonsterAsyncPipelines {
+    fun register(monster: Monster, monsterType: MonsterType? = null): MonsterAsyncPipelines {
         val targetState = MonsterTargetListState()
         val behaviorState = MonsterBehaviorState()
+        val typeState = MonsterTypeState(monsterType)
         val host = MonsterAsyncHost()
         val pipeline = MonsterAsyncPipelines(
             monsterId = monster.id,
@@ -148,9 +160,12 @@ class MonsterPipelinesHost(
             behaviorState = behaviorState,
             host = host,
         )
-        val entry = Entry(monster, targetState, behaviorState, host, pipeline)
+        val entry = Entry(monster, targetState, behaviorState, typeState, host, pipeline)
         entries[monster.id] = entry
         bind(entry)
+        if (monsterType != null) {
+            typeState.bindHost(host, monster) { creatureId -> resolveCreature(creatureId) }
+        }
         return pipeline
     }
 
