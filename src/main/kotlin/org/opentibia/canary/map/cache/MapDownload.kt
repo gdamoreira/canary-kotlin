@@ -65,11 +65,17 @@ class MapDownload(
         /** `SERVER_RELEASE_VERSION` (`src/core.hpp:17`). */
         const val SERVER_RELEASE_VERSION: String = "3.6.1"
 
-        /** `MAIN_CONFIG_DIST_URL` (map_download.cpp:24). */
+        /**
+         * `MAIN_CONFIG_DIST_URL` (map_download.cpp:24).
+         *
+         * Upstream artifact source: the map release and `config.lua.dist` are published by
+         * `opentibiabr/canary`; this port intentionally downloads those upstream artifacts
+         * because the fork does not publish equivalent release assets.
+         */
         internal const val MAIN_CONFIG_DIST_URL: String =
             "https://raw.githubusercontent.com/opentibiabr/canary/main/config.lua.dist"
 
-        /** `CANARY_RELEASE_MAP_URL_PREFIX` (map_download.cpp:25). */
+        /** `CANARY_RELEASE_MAP_URL_PREFIX` (map_download.cpp:25). Upstream artifact source; see [MAIN_CONFIG_DIST_URL]. */
         internal const val CANARY_RELEASE_MAP_URL_PREFIX: String =
             "https://github.com/opentibiabr/canary/releases/download/"
 

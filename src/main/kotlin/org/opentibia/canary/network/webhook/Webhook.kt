@@ -56,7 +56,7 @@ class HttpWebhookSender(
             val request = HttpRequest.newBuilder(URI.create(url))
                 .header("content-type", "application/json")
                 .header("accept", "application/json")
-                .header("user-agent", "canary (https://github.com/opentibiabr/canary)")
+                .header("user-agent", "canary (https://github.com/gdamoreira/canary-kotlin)")
                 .POST(HttpRequest.BodyPublishers.ofString(payload))
                 .build()
             val response = client.send(request, HttpResponse.BodyHandlers.ofString())

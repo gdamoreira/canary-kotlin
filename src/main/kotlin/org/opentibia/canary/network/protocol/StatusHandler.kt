@@ -61,7 +61,7 @@ class StatusHandler(
     private fun buildXmlStatus(): String {
         return """
             <tsqp version="1.0">
-                <serverinfo uptime="3600" ip="${config.ip}" servername="${config.serverName}" port="${config.loginPort}" location="Brazil" url="https://github.com/opentibiabr/canary" server="${config.serverName}" version="1.0.0" client="10.98"/>
+                <serverinfo uptime="3600" ip="${config.ip}" servername="${config.serverName}" port="${config.loginPort}" location="Brazil" url="https://github.com/gdamoreira/canary-kotlin" server="${config.serverName}" version="1.0.0" client="10.98"/>
                 <owner name="Canary Team" email="opentibiabr@outlook.com"/>
                 <players online="0" max="${config.maxPlayers}" peak="0"/>
                 <monsters total="0"/>

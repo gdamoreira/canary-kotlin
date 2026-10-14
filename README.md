@@ -5,9 +5,9 @@
 [![Gradle](https://img.shields.io/badge/gradle-9.8.1-green.svg?logo=gradle)](https://gradle.org)
 [![Netty](https://img.shields.io/badge/netty-4.1.118-blueviolet.svg)](https://netty.io)
 [![PostgreSQL](https://img.shields.io/badge/postgresql-16-blue.svg?logo=postgresql)](https://www.postgresql.org/)
-[![License](https://img.shields.io/github/license/opentibiabr/canary.svg)](https://github.com/opentibiabr/canary/blob/main/LICENSE)
+[![License](https://img.shields.io/github/license/gdamoreira/canary-kotlin.svg)](https://github.com/gdamoreira/canary-kotlin/blob/main/LICENSE)
 
-**Canary Kotlin Edition** is a modern, high-performance rewrite of the [Canary OpenTibia MMORPG Server](https://github.com/opentibiabr/canary) designed specifically for the **JVM stack** (Kotlin 2.4, Java 25 LTS, Gradle 9.8, Netty, and Kotlin Coroutines).
+**Canary Kotlin Edition** is a modern, high-performance rewrite of the [Canary OpenTibia MMORPG Server](https://github.com/gdamoreira/canary-kotlin) designed specifically for the **JVM stack** (Kotlin 2.4, Java 25 LTS, Gradle 9.8, Netty, and Kotlin Coroutines).
 
 It translates 15+ years of C++20 engine evolution into idiomatic, testable, and memory-safe Kotlin architectures without sacrificing wire-level binary and mathematical parity.
 
