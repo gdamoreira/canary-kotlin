@@ -1,6 +1,9 @@
 package org.opentibia.canary.game
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import org.opentibia.canary.account.AccountErrors
+import org.opentibia.canary.account.CoinTransactionType
+import org.opentibia.canary.account.CoinType
 import org.opentibia.canary.chat.CHANNEL_GUILD
 import org.opentibia.canary.chat.ChatClient
 import org.opentibia.canary.chat.NoopChatClient
@@ -42,6 +45,9 @@ import org.opentibia.canary.io.HistoryMarketOffer
 import org.opentibia.canary.io.IOBosstiary
 import org.opentibia.canary.io.IOMarket
 import org.opentibia.canary.io.MarketOffer
+import org.opentibia.canary.io.MarketOfferEx
+import org.opentibia.canary.io.MarketOfferState
+import org.opentibia.canary.io.marketTimeNow
 import org.opentibia.canary.items.BedItem
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
@@ -49,8 +55,11 @@ import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.ITEM_CRYSTAL_COIN
 import org.opentibia.canary.items.ITEM_GOLD_COIN
 import org.opentibia.canary.items.ITEM_PLATINUM_COIN
+import org.opentibia.canary.items.ItemType
 import org.opentibia.canary.items.Items
 import org.opentibia.canary.items.Thing
+import org.opentibia.canary.items.containers.Inbox
+import org.opentibia.canary.items.containers.depot.DepotLocker
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Tile
@@ -802,6 +811,81 @@ class Game(
     /** `Player::sendMarketBrowseOwnHistory(buyOffers, sellOffers)` protocol seam (game.cpp:10333). */
     var sendMarketBrowseOwnHistory: (Player, List<HistoryMarketOffer>, List<HistoryMarketOffer>) -> Unit =
         { _, _, _ -> }
+
+    // --- market offer seams (game.cpp:1037-11112) -----------------------------
+
+    /** `g_configManager().getBoolean(MARKET_PREMIUM)` default (configmanager.cpp:116). */
+    var marketPremium: Boolean = true
+
+    /** `g_configManager().getNumber(MAX_MARKET_OFFERS_AT_A_TIME_PER_PLAYER)` default (configmanager.cpp:314). */
+    var maxMarketOffersAtATimePerPlayer: Int = 100
+
+    /** `g_configManager().getNumber(MARKET_OFFER_DURATION)` default (configmanager.cpp:237); seconds. */
+    var marketOfferDuration: Long = 30L * 24L * 60L * 60L
+
+    /** `g_configManager().getNumber(FORGE_MAX_ITEM_TIER)` default (configmanager.cpp:268). */
+    var forgeMaxItemTier: Int = 10
+
+    /** `Player::getMoney()` (player.cpp) seam: the carried inventory worth. */
+    var getMoney: (Player) -> Long = { 0L }
+
+    /** `Player::sendTextMessage(type, text)` protocol seam (player.hpp). */
+    var sendTextMessage: (Player, MessageClass, String) -> Unit = { _, _, _ -> }
+
+    /** `Player::sendMarketEnter(depotId)` protocol seam (game.cpp:10785, 10852). */
+    var sendMarketEnter: (Player, Int) -> Unit = { _, _ -> }
+
+    /** `Player::sendMarketCancelOffer(offer)` protocol seam (game.cpp:10873). */
+    var sendMarketCancelOffer: (Player, MarketOfferEx) -> Unit = { _, _ -> }
+
+    /** `Player::sendMarketAcceptOffer(offer)` protocol seam (game.cpp:11120). */
+    var sendMarketAcceptOffer: (Player, MarketOfferEx) -> Unit = { _, _ -> }
+
+    /** `g_saveManager().savePlayer(player)` seam (game.cpp:10791). */
+    var savePlayer: (Player) -> Unit = { _ -> }
+
+    /** `Player::onReceiveMail()` (player.cpp) seam used by the accepted sell offer (game.cpp:11079). */
+    var onReceiveMail: (Player) -> Unit = { _ -> }
+
+    /** `Player::isOffline()` (player.hpp:1179) seam; the Kotlin player carries no client. */
+    var isOffline: (Player) -> Boolean = { false }
+
+    /** `Player::getStashItemCount(wareId)` (player.cpp:12798) seam. */
+    var getStashItemCount: (Player, Int) -> Int = { _, _ -> 0 }
+
+    /** `Player::withdrawItem(wareId, count)` (player.cpp:12852) seam. */
+    var withdrawItem: (Player, Int, Int) -> Boolean = { _, _, _ -> false }
+
+    /**
+     * `Player::getLockerItemsAndCountById(depotLocker, tier, itemId)`
+     * (player.cpp) seam; the pair is `(itemVector, totalCount)`.
+     */
+    var getLockerItemsAndCountById: (Player, DepotLocker, Int, Int) -> Pair<List<Item>, Int> =
+        { _, _, _, _ -> emptyList<Item>() to 0 }
+
+    /** `Player::updateState()` (player.cpp) seam, the sell-offer item removal tail. */
+    var updateState: (Player) -> Unit = { _ -> }
+
+    /**
+     * `Player::addItemBatchToPaginedContainer(container, itemId, count, actuallyAdded, flags, tier, isMarket)`
+     * (player.hpp) seam. The pair is `(ReturnValue, actuallyAdded)`; the default
+     * refuses every insertion because no paginated-container engine is ported
+     * (PARITY GAP).
+     */
+    var addItemBatchToPaginedContainer: (Player, Inbox, Int, Int, Int, Int, Boolean) -> Pair<ReturnValue, Int> =
+        { _, _, _, _, _, _, _ -> ReturnValue.DEPOTISFULL to 0 }
+
+    /** `Player::removeItem(item, count)` (player.cpp:10251) seam; the default only removes inventory items. */
+    var removeItem: (Player, Item, Int) -> ReturnValue = { player, item, count -> player.removeItem(item, count) }
+
+    /** `Player::getAllSaleItemIdAndCount(inventoryMap)` (player.cpp) seam. */
+    var getAllSaleItemIdAndCount: (Player, MutableMap<Int, Int>) -> Map<Int, Int> = { _, map -> map }
+
+    /** `Player::sendSaleItemList(saleItemMap)` protocol seam (game.cpp:11600). */
+    var sendSaleItemList: (Player, Map<Int, Int>) -> Unit = { _, _ -> }
+
+    /** `Player::setScheduledSaleUpdate(false)` (player.hpp) seam (game.cpp:11601). */
+    var setScheduledSaleUpdate: (Player, Boolean) -> Unit = { _, _ -> }
 
     /** `Game::addPlayer` (src/game/game.cpp:11624). */
     fun addPlayer(player: Player) {
@@ -4336,6 +4420,966 @@ class Game(
         }
     }
 
+    /**
+     * `Game::loadItemsPrice` (src/game/game.cpp:1037): refreshes the `IOMarket`
+     * statistics, then replaces the per-item tier map with the purchase
+     * average price (`totalPrice / numTransactions`) and merges the highest
+     * active buy offer per tier. Items absent from the statistics keep their
+     * previous price map, like the C++ in-place member update.
+     */
+    fun loadItemsPrice() {
+        val market = ioMarket ?: return
+        market.updateStatistics()
+
+        val newPriceMap = linkedMapOf<Int, MutableMap<Int, Long>>()
+        for ((itemId, tiers) in itemsPriceMap) {
+            newPriceMap[itemId] = tiers.toMutableMap()
+        }
+
+        for ((itemId, itemStats) in market.getPurchaseStatistics()) {
+            val tierToPrice = linkedMapOf<Int, Long>()
+            for ((tier, tierStats) in itemStats) {
+                tierToPrice[tier] = tierStats.totalPrice / tierStats.numTransactions
+            }
+            newPriceMap[itemId] = tierToPrice
+        }
+
+        for (offer in market.getActiveOffers(MarketOfferType.Buy)) {
+            val tierToPrice = newPriceMap.getOrPut(offer.itemId) { linkedMapOf() }
+            tierToPrice[offer.tier] = maxOf(tierToPrice[offer.tier] ?: 0L, offer.price)
+        }
+
+        itemsPriceMap = newPriceMap
+    }
+
+    /**
+     * `Game::updatePlayerSaleItems` (src/game/game.cpp:11596): send the
+     * player's sale item list and clear the scheduled-sale-update flag.
+     */
+    fun updatePlayerSaleItems(playerId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+
+        val inventoryMap = linkedMapOf<Int, Int>()
+        sendSaleItemList(player, getAllSaleItemIdAndCount(player, inventoryMap))
+        setScheduledSaleUpdate(player, false)
+    }
+
+    /**
+     * `Game::checkCanInitCreateMarketOffer` (src/game/game.cpp:10653, anonymous
+     * namespace): the ordered creation gates. The C++ `type` is a raw byte and
+     * validates the `MARKETACTION_*` cast; the Kotlin enum makes that check
+     * unreachable.
+     */
+    private fun checkCanInitCreateMarketOffer(
+        player: Player?,
+        type: MarketOfferType,
+        itemType: ItemType,
+        amount: Int,
+        price: Long,
+        offerStatus: StringBuilder,
+    ): Boolean {
+        if (player == null) {
+            offerStatus.append("Failed to load player")
+            return false
+        }
+
+        if (player.account == null) {
+            offerStatus.append("Failed to load player account")
+            return false
+        }
+
+        if (!player.isInMarket()) {
+            offerStatus.append("Failed to load market for player ${player.name}")
+            return false
+        }
+
+        if (price == 0L) {
+            offerStatus.append("Failed to process price for player ${player.name}")
+            return false
+        }
+
+        if (price > MAX_MARKET_OFFER_PRICE) {
+            offerStatus.append("Player ${player.name} is trying to sell an item with a higher than allowed value")
+            return false
+        }
+
+        if (isUIExhausted(player)) {
+            sendCancelMessage(player, ReturnValue.YOUAREEXHAUSTED)
+            return false
+        }
+
+        if (itemType.id == 0 || itemType.wareId == 0) {
+            offerStatus.append("Failed to load offer or item id")
+            return false
+        }
+
+        if (amount == 0 || (!itemType.isStackable && amount > 2000) || (itemType.isStackable && amount > 64000)) {
+            offerStatus.append("Failed to load amount $amount for player ${player.name}")
+            return false
+        }
+
+        logger.debug { "[checkCanInitCreateMarketOffer] - Offer amount: $amount" }
+
+        if (marketPremium && !player.isPremium()) {
+            sendTextMessage(player, MessageClass.MESSAGE_MARKET, "Only premium accounts may create offers for that object.")
+            return false
+        }
+
+        val maxOfferCount = maxMarketOffersAtATimePerPlayer
+        if (maxOfferCount != 0 && (ioMarket?.getPlayerOfferCount(player.getGUID()) ?: 0) >= maxOfferCount) {
+            offerStatus.append("Player ${player.name}excedeed max offer count $maxOfferCount")
+            return false
+        }
+
+        return true
+    }
+
+    /**
+     * `Game::playerCreateMarketOffer` (src/game/game.cpp:10717): validates the
+     * request, removes the sold items (stash then depot locker) or charges the
+     * buy price plus the 2% fee, persists the offer through [IOMarket] and
+     * refreshes the browse window. Metrics counters and the `g_saveManager`
+     * global are not ported (PARITY GAPS); [savePlayer] is the injected seam.
+     */
+    fun playerCreateMarketOffer(
+        playerId: Long,
+        type: MarketOfferType,
+        itemId: Int,
+        amount: Int,
+        price: Long,
+        tier: Int,
+        anonymous: Boolean,
+    ) {
+        val offerStatus = StringBuilder()
+        val player = getPlayerByID(playerId)
+        val itemType = itemTypes?.get(itemId) ?: ItemType(id = 0, name = "")
+
+        if (!checkCanInitCreateMarketOffer(player, type, itemType, amount, price, offerStatus)) {
+            logger.error {
+                "[playerCreateMarketOffer] - Player ${player?.name ?: playerId} had an error on init offer on the market, " +
+                    "error code: $offerStatus"
+            }
+            return
+        }
+
+        checkNotNull(player)
+        checkNotNull(itemType)
+
+        var offerTier = tier
+        if (offerTier > forgeMaxItemTier) {
+            offerTier = forgeMaxItemTier
+        }
+
+        if (offerTier > 0 && itemType.upgradeClassification == 0) {
+            offerTier = 0
+        }
+
+        val totalPrice = price * amount
+        val totalFee = (totalPrice * 0.02).toLong()
+        val minFee = 20L
+        var maxFee = minOf(1_000_000L, totalFee)
+        if (maxFee < minFee) {
+            maxFee = minFee
+        }
+        val fee = totalFee.coerceIn(minFee, maxFee)
+
+        if (type == MarketOfferType.Sell) {
+            if (fee > getMoney(player) + getBankBalance(player)) {
+                offerStatus.append("Fee is greater than player money")
+                return
+            }
+
+            val depotLocker = player.getDepotLocker(player.getLastDepotId())
+            if (itemType.id == ITEM_STORE_COIN) {
+                val account = player.account ?: return
+                val (transferableCoins, _) = account.getCoins(CoinType.Transferable)
+                if (amount.toUInt() > transferableCoins) {
+                    offerStatus.append("Amount is greater than coins for player ${player.name}")
+                    return
+                }
+
+                account.removeCoins(CoinType.Transferable, amount.toUInt(), "")
+            } else if (!removeOfferItems(player, depotLocker, itemType, amount, offerTier, offerStatus)) {
+                logger.error {
+                    "[playerCreateMarketOffer] failed to remove item with id ${itemType.id}, from player ${player.name}, " +
+                        "errorcode: $offerStatus"
+                }
+                return
+            }
+
+            removeMoney(player, fee, 0, true)
+        } else {
+            var totalPriceWithFee = price * amount
+            totalPriceWithFee += fee
+            if (totalPriceWithFee > getMoney(player) + getBankBalance(player)) {
+                offerStatus.append("Fee is greater than player money (buy offer)")
+                return
+            }
+
+            removeMoney(player, totalPriceWithFee, 0, true)
+        }
+
+        sendMarketEnter(player, player.getLastDepotId())
+
+        if (offerStatus.isNotEmpty()) {
+            if (offerStatus.toString() == ITEM_MARKET_INCORRECT_MESSAGE) {
+                sendTextMessage(player, MessageClass.MESSAGE_MARKET, offerStatus.toString())
+            } else {
+                sendTextMessage(
+                    player,
+                    MessageClass.MESSAGE_MARKET,
+                    "There was an error processing your offer, please contact the administrator.",
+                )
+            }
+            logger.error {
+                "[playerCreateMarketOffer] - Player ${player.name} had an error creating an offer on the market, " +
+                    "error code: $offerStatus"
+            }
+            return
+        }
+
+        val market = ioMarket ?: return
+        market.createOffer(player.getGUID(), type, itemType.id.toLong(), amount, price, offerTier, anonymous)
+
+        val buyOffers = market.getActiveOffers(MarketOfferType.Buy, itemType.id, offerTier)
+        val sellOffers = market.getActiveOffers(MarketOfferType.Sell, itemType.id, offerTier)
+        sendMarketBrowseItem(player, itemType.id, buyOffers, sellOffers, offerTier)
+
+        updateUIExhausted(player)
+        savePlayer(player)
+    }
+
+    /**
+     * `Game::removeOfferItems` (src/game/game.cpp:10338, anonymous namespace):
+     * tier-0 offers take the count from the stash first, then the remaining
+     * count is removed from the depot locker item vector.
+     *
+     * PARITY GAP: the Kotlin [Player] only removes inventory items directly;
+     * [removeItem] is the injected seam for locker-cylinder removal.
+     */
+    private fun removeOfferItems(
+        player: Player,
+        depotLocker: DepotLocker,
+        itemType: ItemType,
+        amount: Int,
+        tier: Int,
+        offerStatus: StringBuilder,
+    ): Boolean {
+        var removeAmount = amount
+        if (tier == 0) {
+            val stashItemCount = getStashItemCount(player, itemType.wareId)
+            if (stashItemCount > 0) {
+                if (removeAmount > stashItemCount && withdrawItem(player, itemType.wareId, stashItemCount)) {
+                    removeAmount -= stashItemCount
+                } else if (withdrawItem(player, itemType.wareId, removeAmount)) {
+                    removeAmount = 0
+                } else {
+                    offerStatus.append("Failed to remove stash items from player ${player.name}")
+                    return false
+                }
+            }
+        }
+
+        val (itemVector, totalCount) = getLockerItemsAndCountById(player, depotLocker, tier, itemType.id)
+        if (removeAmount > 0) {
+            if (totalCount == 0 || itemVector.isEmpty()) {
+                offerStatus.append("Player ${player.name} not have item for create offer")
+                return false
+            }
+
+            var removedCount = 0
+            for (item in itemVector) {
+                if (removedCount >= removeAmount) {
+                    break
+                }
+
+                val thisRemove = minOf(removeAmount - removedCount, item.getItemCount())
+                val ret = removeItem(player, item, thisRemove)
+                if (ret != ReturnValue.NOERROR) {
+                    offerStatus.append(
+                        "Failed to remove: $amount items of id: ${itemType.id} from player ${player.name} error: $ret",
+                    )
+                    return false
+                }
+
+                removedCount += thisRemove
+            }
+
+            updateState(player)
+
+            if (removedCount < removeAmount) {
+                logger.error { "Player ${player.name} tried to sell an item ${itemType.id} without this item" }
+                offerStatus.append(ITEM_MARKET_INCORRECT_MESSAGE)
+                return false
+            }
+        }
+        return true
+    }
+
+    /**
+     * `Game::playerCancelMarketOffer` (src/game/game.cpp:10819): refunds a buy
+     * offer to the bank or returns the sold items to the inbox, then moves the
+     * offer to the cancelled history.
+     */
+    fun playerCancelMarketOffer(playerId: Long, timestamp: Long, counter: Int) {
+        val player = getPlayerByID(playerId)
+        if (player == null || player.account == null) {
+            return
+        }
+
+        if (!player.isInMarket()) {
+            return
+        }
+
+        if (isUIExhausted(player)) {
+            sendCancelMessage(player, ReturnValue.YOUAREEXHAUSTED)
+            return
+        }
+
+        val market = ioMarket ?: return
+        val offer = market.getOfferByCounter(timestamp, counter)
+        if (offer.id == 0L || offer.playerId != player.getGUID()) {
+            return
+        }
+
+        if (offer.type == MarketOfferType.Buy) {
+            setBankBalance(player, getBankBalance(player) + offer.price * offer.amount)
+            sendMarketEnter(player, player.getLastDepotId())
+        } else {
+            val itemType = itemTypes?.get(offer.itemId) ?: return
+            if (itemType.id == 0) {
+                return
+            }
+
+            val offerTier = if (itemType.upgradeClassification > 0) minOf(offer.tier, forgeMaxItemTier) else 0
+
+            if (itemType.id == ITEM_STORE_COIN) {
+                player.account?.addCoins(CoinType.Transferable, offer.amount.toUInt(), "")
+            } else {
+                val inboxCheckResult = queryItemInsertion(player, itemType.id, offer.amount, offerTier)
+                if (handleInboxPrecheckFailure(player, inboxCheckResult, "playerCancelMarketOffer")) {
+                    return
+                }
+
+                val inboxInsertResult = processItemInsertion(player, itemType.id, offer.amount, offerTier)
+                if (inboxInsertResult != ReturnValue.NOERROR) {
+                    sendTextMessage(
+                        player,
+                        MessageClass.MESSAGE_MARKET,
+                        "There was an error returning your items, please contact the administrator.",
+                    )
+                    logger.error {
+                        "[playerCancelMarketOffer] - Failed to return cancelled offer item ${itemType.id} total amount " +
+                            "${offer.amount} to inbox for player ${player.name}, error code: $inboxInsertResult"
+                    }
+                    return
+                }
+            }
+        }
+
+        market.moveOfferToHistory(offer.id, MarketOfferState.Cancelled)
+
+        val cancelledOffer = offer.copy(
+            tier = if (offer.type == MarketOfferType.Sell) {
+                if ((itemTypes?.get(offer.itemId)?.upgradeClassification ?: 0) > 0) {
+                    minOf(offer.tier, forgeMaxItemTier)
+                } else {
+                    0
+                }
+            } else {
+                offer.tier
+            },
+            amount = 0,
+            timestamp = offer.timestamp + marketOfferDuration,
+        )
+        sendMarketCancelOffer(player, cancelledOffer)
+        sendMarketEnter(player, player.getLastDepotId())
+        updateUIExhausted(player)
+        savePlayer(player)
+    }
+
+    /**
+     * `Game::playerAcceptMarketOffer` (src/game/game.cpp:10884): matches a
+     * market offer counter, moves the goods between seller locker and buyer
+     * inbox (or the store-coin accounts), settles the price on the bank
+     * balances and writes both history rows.
+     *
+     * PARITY GAPS: the item movement and inbox insertions are injected seams
+     * ([getLockerItemsAndCountById], [addItemBatchToPaginedContainer],
+     * [removeItem]) because the Kotlin [Player] does not model the locker
+     * cylinder removal nor the paginated inbox engine; the metrics counters
+     * are not ported.
+     */
+    @Suppress("CyclomaticComplexMethod", "LongMethod")
+    fun playerAcceptMarketOffer(playerId: Long, timestamp: Long, counter: Int, amount: Int) {
+        val offerStatus = StringBuilder()
+        val player = getPlayerByID(playerId)
+        if (player == null || player.account == null) {
+            offerStatus.append("Failed to load player")
+            return
+        }
+
+        if (!player.isInMarket()) {
+            offerStatus.append("Failed to load market")
+            return
+        }
+
+        if (isUIExhausted(player)) {
+            sendCancelMessage(player, ReturnValue.YOUAREEXHAUSTED)
+            return
+        }
+
+        val market = ioMarket ?: return
+        val offer = market.getOfferByCounter(timestamp, counter)
+        if (offer.id == 0L) {
+            offerStatus.append("Failed to load offer id")
+            return
+        }
+
+        val itemType = itemTypes?.get(offer.itemId) ?: ItemType(id = 0, name = "")
+        if (itemType.id == 0) {
+            offerStatus.append("Failed to load item id")
+            return
+        }
+
+        val offerTier = if (itemType.upgradeClassification > 0) minOf(offer.tier, forgeMaxItemTier) else 0
+
+        if (amount == 0 || (!itemType.isStackable && amount > 2000) || (itemType.isStackable && amount > 64000) ||
+            amount > offer.amount
+        ) {
+            offerStatus.append("Invalid offer amount $amount for player ${player.name}")
+            return
+        }
+
+        val totalPrice = offer.price * amount
+
+        if (offer.type == MarketOfferType.Buy) {
+            val depotLocker = player.getDepotLocker(player.getLastDepotId())
+
+            val buyerPlayer = getPlayerByGUID(offer.playerId, true)
+            if (buyerPlayer == null) {
+                offerStatus.append("Failed to load buyer player ${player.name}")
+                return
+            }
+
+            val buyerPlayerAccount = buyerPlayer.account
+            if (buyerPlayerAccount == null) {
+                sendTextMessage(player, MessageClass.MESSAGE_MARKET, "Cannot accept offer.")
+                return
+            }
+
+            val playerAccount = player.account ?: return
+            if (player === buyerPlayer || playerAccount === buyerPlayerAccount) {
+                sendTextMessage(player, MessageClass.MESSAGE_MARKET, "You cannot accept your own offer.")
+                return
+            }
+
+            if (itemType.id != ITEM_STORE_COIN) {
+                val inboxCheckResult = queryItemInsertion(buyerPlayer, itemType.id, amount, offerTier)
+                if (handleBuyerInboxPrecheckFailure(player, buyerPlayer, inboxCheckResult, "playerAcceptMarketOffer")) {
+                    return
+                }
+
+                val inboxInsertResult = processItemInsertion(buyerPlayer, itemType.id, amount, offerTier)
+                if (inboxInsertResult != ReturnValue.NOERROR) {
+                    offerStatus.append(
+                        "Failed to add item ${itemType.id} total amount $amount to inbox for player " +
+                            "${buyerPlayer.name} error: $inboxInsertResult",
+                    )
+                }
+            }
+
+            if (offerStatus.isNotEmpty()) {
+                sendTextMessage(
+                    player,
+                    MessageClass.MESSAGE_MARKET,
+                    "There was an error processing your offer, please contact the administrator.",
+                )
+                logger.error {
+                    "[playerAcceptMarketOffer] - Player ${player.name} had an error accepting an offer on the market, " +
+                        "error code: $offerStatus"
+                }
+                sendMarketEnter(player, player.getLastDepotId())
+                return
+            }
+
+            if (itemType.id == ITEM_STORE_COIN) {
+                val (transferableCoins, error) = playerAccount.getCoins(CoinType.Transferable)
+                if (error != AccountErrors.Ok) {
+                    offerStatus.append("Failed to load transferable coins for player ${player.name}")
+                    return
+                }
+
+                if (amount.toUInt() > transferableCoins) {
+                    offerStatus.append("Amount is greater than coins")
+                    return
+                }
+
+                playerAccount.removeCoins(CoinType.Transferable, amount.toUInt(), "Sold on Market")
+            } else if (!removeOfferItems(player, depotLocker, itemType, amount, offerTier, offerStatus)) {
+                val rollbackResult =
+                    if (rollbackInboxInsertion(buyerPlayer, itemType.id, amount, offerTier)) {
+                        ReturnValue.NOERROR
+                    } else {
+                        ReturnValue.NOTPOSSIBLE
+                    }
+                if (rollbackResult != ReturnValue.NOERROR) {
+                    offerStatus.append("; rollback from buyer inbox failed: $rollbackResult")
+                    logger.error {
+                        "[playerAcceptMarketOffer] - Failed to rollback delivered market items ${itemType.id} amount " +
+                            "$amount from buyer ${buyerPlayer.name} inbox after seller removal error, rollback code: " +
+                            rollbackResult
+                    }
+                } else {
+                    logger.warn {
+                        "[playerAcceptMarketOffer] - Rolled back delivered market items ${itemType.id} amount $amount " +
+                            "from buyer ${buyerPlayer.name} inbox after seller removal error"
+                    }
+                }
+                logger.error {
+                    "[playerAcceptMarketOffer] failed to remove item with id ${itemType.id}, from player " +
+                        "${player.name}, errorcode: $offerStatus"
+                }
+            }
+
+            if (offerStatus.isNotEmpty()) {
+                if (offerStatus.toString() == ITEM_MARKET_INCORRECT_MESSAGE) {
+                    sendTextMessage(player, MessageClass.MESSAGE_MARKET, offerStatus.toString())
+                } else {
+                    sendTextMessage(
+                        player,
+                        MessageClass.MESSAGE_MARKET,
+                        "There was an error processing your offer, please contact the administrator.",
+                    )
+                }
+                logger.error {
+                    "[playerAcceptMarketOffer] - Player ${player.name} had an error accepting an offer on the market, " +
+                        "error code: $offerStatus"
+                }
+                sendMarketEnter(player, player.getLastDepotId())
+                return
+            }
+
+            if (itemType.id == ITEM_STORE_COIN) {
+                buyerPlayer.account?.addCoins(CoinType.Transferable, amount.toUInt(), "Purchased on Market")
+            }
+
+            if (offerStatus.isEmpty()) {
+                setBankBalance(player, getBankBalance(player) + totalPrice)
+
+                if (isOffline(buyerPlayer)) {
+                    savePlayer(buyerPlayer)
+                }
+            }
+        } else if (offer.type == MarketOfferType.Sell) {
+            val sellerPlayer = getPlayerByGUID(offer.playerId, true)
+            if (sellerPlayer == null) {
+                offerStatus.append("Failed to load seller player")
+                return
+            }
+
+            if (player === sellerPlayer || player.account === sellerPlayer.account) {
+                sendTextMessage(player, MessageClass.MESSAGE_MARKET, "You cannot accept your own offer.")
+                return
+            }
+
+            if (totalPrice > getBankBalance(player) + getMoney(player)) {
+                return
+            }
+
+            if (itemType.id != ITEM_STORE_COIN) {
+                val inboxCheckResult = queryItemInsertion(player, itemType.id, amount, offerTier)
+                if (handleInboxPrecheckFailure(player, inboxCheckResult, "playerAcceptMarketOffer")) {
+                    return
+                }
+            }
+
+            val buyerWithdrawnFunds = withdrawMarketFunds(player, totalPrice)
+            if (buyerWithdrawnFunds == null) {
+                sendTextMessage(
+                    player,
+                    MessageClass.MESSAGE_MARKET,
+                    "There was an error processing your offer, please contact the administrator.",
+                )
+                logger.error {
+                    "[playerAcceptMarketOffer] - Failed to debit buyer funds for accepted market offer " +
+                        "(player: ${player.name}, price: $totalPrice)"
+                }
+                return
+            }
+
+            if (itemType.id == ITEM_STORE_COIN) {
+                player.account?.addCoins(CoinType.Transferable, amount.toUInt(), "Purchased on Market")
+            } else {
+                val inboxInsertResult = processItemInsertion(player, itemType.id, amount, offerTier)
+                if (inboxInsertResult != ReturnValue.NOERROR) {
+                    refundMarketFunds(player, buyerWithdrawnFunds)
+                    offerStatus.append(
+                        "Failed to add item ${itemType.id} total amount $amount to inbox for player " +
+                            "${player.name} error: $inboxInsertResult",
+                    )
+                }
+            }
+
+            if (offerStatus.isEmpty()) {
+                setBankBalance(sellerPlayer, getBankBalance(sellerPlayer) + totalPrice)
+                if (itemType.id == ITEM_STORE_COIN) {
+                    sellerPlayer.account?.registerCoinTransaction(
+                        CoinTransactionType.Remove,
+                        CoinType.Transferable,
+                        amount.toUInt(),
+                        "Sold on Market",
+                    )
+                }
+
+                if (itemType.id != ITEM_STORE_COIN) {
+                    onReceiveMail(player)
+                }
+
+                if (isOffline(sellerPlayer)) {
+                    savePlayer(sellerPlayer)
+                }
+            }
+        }
+
+        sendMarketEnter(player, player.getLastDepotId())
+
+        if (offerStatus.isNotEmpty()) {
+            sendTextMessage(
+                player,
+                MessageClass.MESSAGE_MARKET,
+                "There was an error processing your offer, please contact the administrator.",
+            )
+            logger.error {
+                "[playerAcceptMarketOffer] - Player ${player.name} had an error accepting an offer on the market, " +
+                    "error code: $offerStatus"
+            }
+            return
+        }
+
+        market.appendHistory(
+            player.getGUID(),
+            if (offer.type == MarketOfferType.Buy) MarketOfferType.Sell else MarketOfferType.Buy,
+            offer.itemId,
+            amount,
+            offer.price,
+            marketTimeNow(),
+            offerTier,
+            MarketOfferState.AcceptedEx,
+        )
+        market.appendHistory(
+            offer.playerId,
+            offer.type,
+            offer.itemId,
+            amount,
+            offer.price,
+            marketTimeNow(),
+            offerTier,
+            MarketOfferState.Accepted,
+        )
+
+        val remainingAmount = offer.amount - amount
+        if (remainingAmount == 0) {
+            market.deleteOffer(offer.id)
+        } else {
+            market.acceptOffer(offer.id, amount)
+        }
+
+        sendMarketAcceptOffer(
+            player,
+            offer.copy(amount = remainingAmount, tier = offerTier, timestamp = offer.timestamp + marketOfferDuration),
+        )
+        updateUIExhausted(player)
+        savePlayer(player)
+    }
+
+    /** `Game::queryItemInsertion` (src/game/game.cpp:10400, anonymous namespace). */
+    private fun queryItemInsertion(recipient: Player, itemId: Int, amount: Int, tier: Int): ReturnValue {
+        val (result, _) = addItemBatchToPaginedContainer(
+            recipient,
+            recipient.inbox,
+            itemId,
+            amount,
+            CylinderFlags.FLAG_NOLIMIT,
+            tier,
+            true,
+        )
+        return result
+    }
+
+    /**
+     * `Game::processItemInsertion` (src/game/game.cpp:10458, anonymous
+     * namespace): a mismatch between requested and actually added items rolls
+     * the partial insertion back and reports `NOTPOSSIBLE`.
+     */
+    private fun processItemInsertion(recipient: Player, itemId: Int, amount: Int, tier: Int): ReturnValue {
+        val (returnValue, actuallyAdded) = addItemBatchToPaginedContainer(
+            recipient,
+            recipient.inbox,
+            itemId,
+            amount,
+            0,
+            tier,
+            false,
+        )
+        if (returnValue != ReturnValue.NOERROR) {
+            logger.warn {
+                "processItemInsertion - Failed to add item $itemId total amount $amount to inbox for player " +
+                    "${recipient.name}, error code: $returnValue"
+            }
+            return returnValue
+        }
+
+        if (actuallyAdded != amount) {
+            logger.error {
+                "processItemInsertion - Atomic inbox insertion mismatch for item $itemId total amount $amount, " +
+                    "currently added: $actuallyAdded to inbox for player ${recipient.name}"
+            }
+            if (actuallyAdded > 0 && !rollbackInboxInsertion(recipient, itemId, actuallyAdded, tier)) {
+                logger.error {
+                    "processItemInsertion - Failed to rollback partial inbox insertion mismatch for item $itemId " +
+                        "total amount $amount, currently added: $actuallyAdded to inbox for player ${recipient.name}"
+                }
+            }
+            return ReturnValue.NOTPOSSIBLE
+        }
+
+        return ReturnValue.NOERROR
+    }
+
+    /**
+     * `Game::rollbackInboxInsertion` (src/game/game.cpp:10415, anonymous
+     * namespace): removes up to [amount] inbox items of [itemId] and [tier].
+     *
+     * PARITY GAP: the C++ `Item::equals` probe also compares every integer
+     * attribute and the store/owner flags; the Kotlin port matches id and tier
+     * and removes through the [removeItem] seam.
+     */
+    private fun rollbackInboxInsertion(recipient: Player, itemId: Int, amount: Int, tier: Int): Boolean {
+        if (amount == 0) {
+            return true
+        }
+
+        val inbox = recipient.inbox
+        val candidates = inbox.getItemList().filter { it.id == itemId && it.getTier() == tier }
+        var removedCount = 0
+        for (rollbackItem in candidates) {
+            if (removedCount >= amount) {
+                break
+            }
+
+            val toRemove = minOf(amount - removedCount, rollbackItem.getItemCount())
+            val removeResult = removeItem(recipient, rollbackItem, toRemove)
+            if (removeResult != ReturnValue.NOERROR) {
+                logger.error {
+                    "rollbackInboxInsertion - Failed to rollback inbox item $itemId amount $toRemove for player " +
+                        "${recipient.name}, error code: $removeResult"
+                }
+                return false
+            }
+
+            removedCount += toRemove
+        }
+
+        if (removedCount < amount) {
+            logger.error {
+                "rollbackInboxInsertion - Incomplete inbox rollback for player ${recipient.name}, item $itemId, " +
+                    "expected remove $amount, removed $removedCount"
+            }
+            return false
+        }
+
+        return true
+    }
+
+    /** `Game::sendInboxSpaceMessage` (src/game/game.cpp:10469, anonymous namespace). */
+    private fun sendInboxSpaceMessage(recipient: Player) {
+        if (!isOffline(recipient)) {
+            sendTextMessage(recipient, MessageClass.MESSAGE_MARKET, "Not enough space in your inbox.")
+        }
+    }
+
+    /** `Game::sendBuyerInboxSpaceMessage` (src/game/game.cpp:10475, anonymous namespace). */
+    private fun sendBuyerInboxSpaceMessage(seller: Player, buyer: Player) {
+        sendTextMessage(seller, MessageClass.MESSAGE_MARKET, "The buyer does not have enough space in the inbox.")
+        sendInboxSpaceMessage(buyer)
+    }
+
+    /** `Game::isInboxCapacityError` (src/game/game.cpp:10483, anonymous namespace). */
+    private fun isInboxCapacityError(returnValue: ReturnValue): Boolean =
+        returnValue == ReturnValue.DEPOTISFULL ||
+            returnValue == ReturnValue.CONTAINERNOTENOUGHROOM ||
+            returnValue == ReturnValue.NOTENOUGHROOM
+
+    /** `Game::handleInboxPrecheckFailure` (src/game/game.cpp:10489, anonymous namespace). */
+    private fun handleInboxPrecheckFailure(recipient: Player, returnValue: ReturnValue, context: String): Boolean {
+        if (returnValue == ReturnValue.NOERROR) {
+            return false
+        }
+
+        if (isInboxCapacityError(returnValue)) {
+            sendInboxSpaceMessage(recipient)
+        } else {
+            if (!isOffline(recipient)) {
+                sendTextMessage(
+                    recipient,
+                    MessageClass.MESSAGE_MARKET,
+                    "There was an error processing your offer, please contact the administrator.",
+                )
+            }
+
+            logger.warn {
+                "$context - Unexpected inbox precheck failure for player ${recipient.name}, error code: $returnValue"
+            }
+        }
+
+        return true
+    }
+
+    /** `Game::handleBuyerInboxPrecheckFailure` (src/game/game.cpp:10507, anonymous namespace). */
+    private fun handleBuyerInboxPrecheckFailure(
+        seller: Player,
+        buyer: Player,
+        returnValue: ReturnValue,
+        context: String,
+    ): Boolean {
+        if (returnValue == ReturnValue.NOERROR) {
+            return false
+        }
+
+        if (isInboxCapacityError(returnValue)) {
+            sendBuyerInboxSpaceMessage(seller, buyer)
+        } else {
+            sendTextMessage(
+                seller,
+                MessageClass.MESSAGE_MARKET,
+                "There was an error processing your offer, please contact the administrator.",
+            )
+            if (!isOffline(buyer)) {
+                sendTextMessage(
+                    buyer,
+                    MessageClass.MESSAGE_MARKET,
+                    "There was an error processing your offer, please contact the administrator.",
+                )
+            }
+
+            logger.warn {
+                "$context - Unexpected buyer inbox precheck failure (seller: ${seller.name}, buyer: ${buyer.name}), " +
+                    "error code: $returnValue"
+            }
+        }
+
+        return true
+    }
+
+    /**
+     * `Game::removeInventoryMoneyToBank` (src/game/game.cpp:10560, anonymous
+     * namespace): removes carried money worth [money] from the inventory and
+     * banks any change from an oversized coin stack. Returns whether the
+     * inventory held enough worth.
+     *
+     * PARITY GAP: the C++ skip `item->getContainer()` becomes
+     * `getParent() is Container`, and `Item::getWorth`/`Game::internalRemoveItem`
+     * are the ported item methods.
+     */
+    private fun removeInventoryMoneyToBank(player: Player, money: Long): Boolean {
+        if (money == 0L) {
+            return true
+        }
+
+        val moneyMap = sortedMapOf<Long, MutableList<Item>>()
+        var inventoryMoney = 0L
+
+        for (item in player.getAllInventoryItems()) {
+            if (item.getParent() is Container) {
+                continue
+            }
+
+            val worth = item.getWorth()
+            if (worth == 0L) {
+                continue
+            }
+
+            inventoryMoney += worth
+            moneyMap.getOrPut(worth) { mutableListOf() }.add(item)
+        }
+
+        if (inventoryMoney < money) {
+            return false
+        }
+
+        var remaining = money
+        for ((worth, items) in moneyMap) {
+            for (item in items) {
+                if (worth < remaining) {
+                    internalRemoveItem(item)
+                    remaining -= worth
+                    continue
+                }
+
+                if (worth > remaining) {
+                    val singleWorth = worth / item.getItemCount()
+                    val removeCount = kotlin.math.ceil(remaining / singleWorth.toDouble()).toInt()
+                    val change = singleWorth * removeCount - remaining
+                    internalRemoveItem(item, removeCount)
+                    if (change > 0) {
+                        setBankBalance(player, getBankBalance(player) + change)
+                    }
+                    return true
+                }
+
+                internalRemoveItem(item)
+                return true
+            }
+        }
+
+        return true
+    }
+
+    /**
+     * `Game::withdrawMarketFunds` (src/game/game.cpp:10593, anonymous
+     * namespace): debits the bank first, then the inventory; a failed inventory
+     * withdrawal restores the bank and returns `null`.
+     */
+    private fun withdrawMarketFunds(player: Player, amount: Long): WithdrawnFunds? {
+        if (amount == 0L) {
+            return WithdrawnFunds()
+        }
+
+        var withdrawnFunds = WithdrawnFunds()
+        withdrawnFunds.bank = minOf(getBankBalance(player), amount)
+        if (withdrawnFunds.bank > 0) {
+            setBankBalance(player, getBankBalance(player) - withdrawnFunds.bank)
+        }
+
+        withdrawnFunds.inventory = amount - withdrawnFunds.bank
+        if (withdrawnFunds.inventory > 0 && !removeInventoryMoneyToBank(player, withdrawnFunds.inventory)) {
+            if (withdrawnFunds.bank > 0) {
+                setBankBalance(player, getBankBalance(player) + withdrawnFunds.bank)
+            }
+            return null
+        }
+
+        return withdrawnFunds
+    }
+
+    /** `Game::refundMarketFunds` (src/game/game.cpp:10622, anonymous namespace). */
+    private fun refundMarketFunds(player: Player, withdrawnFunds: WithdrawnFunds) {
+        if (withdrawnFunds.total() == 0L) {
+            return
+        }
+
+        setBankBalance(player, getBankBalance(player) + withdrawnFunds.total())
+    }
+
+    /** `Game::WithdrawnFunds` (src/game/game.cpp:10544, anonymous namespace). */
+    private data class WithdrawnFunds(
+        var bank: Long = 0,
+        var inventory: Long = 0,
+    ) {
+        fun total(): Long = bank + inventory
+    }
+
     /** `Game::playerCloseImbuementWindow` (src/game/game.cpp:7178). */
     fun playerCloseImbuementWindow(playerId: Long) {
         val player = getPlayerByID(playerId) ?: return
@@ -4639,6 +5683,16 @@ class Game(
     companion object {
         /** `INDEX_WHEREEVER` (src/items/cylinder.hpp:18). */
         const val INDEX_WHEREEVER = -1
+
+        /** `ITEM_STORE_COIN` (src/utils/utils_definitions.hpp:611). */
+        private const val ITEM_STORE_COIN = 22118
+
+        /** `checkCanInitCreateMarketOffer` price ceiling (src/game/game.cpp:10677). */
+        private const val MAX_MARKET_OFFER_PRICE = 999_999_999_999L
+
+        /** `removeOfferItems` wrong-item status (src/game/game.cpp:10394). */
+        private const val ITEM_MARKET_INCORRECT_MESSAGE =
+            "The item you tried to market is not correct. Check the item again."
 
         /**
          * `Game::calculateHighscorePages` (src/game/game.cpp:10033): a zero page
