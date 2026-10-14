@@ -4,6 +4,7 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import org.opentibia.canary.account.Account
 import org.opentibia.canary.account.AccountErrors
 import org.opentibia.canary.account.getTimeNow
+import org.opentibia.canary.creatures.OpenContainer
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerPronoun_t
 import org.opentibia.canary.creatures.Slots_t
@@ -27,8 +28,10 @@ import org.opentibia.canary.database.PlayerSpellsRepository
 import org.opentibia.canary.database.PlayerStashRepository
 import org.opentibia.canary.database.PlayerStorageRepository
 import org.opentibia.canary.database.VipLoginRepository
+import org.opentibia.canary.database.deserializeItemAttributes
 import org.opentibia.canary.database.serializeItemAttributes
 import org.opentibia.canary.io.PropStream
+import org.opentibia.canary.io.PropWriteStream
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
@@ -71,15 +74,21 @@ typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
  * `Container` trees in Canary's descending-`sid` order and re-arming decay
  * and imbuement decay through the injected seams.
  *
+ * The live inventory walk is ported as [saveItems] / [savePlayerItem(player)]:
+ * the rows are built from the player's inventory slots with Canary's BFS `sid`
+ * assignment from 101 and the `OPENCONTAINER` attributes are re-armed from
+ * `Player::getOpenContainers` before the attributes are captured. The depot,
+ * reward and inbox trees still take caller-built rows ([savePlayerItem]'s
+ * row-based seam) because their live `Player` sinks are not composed yet.
+ *
  * PARITY GAPS (reported by the wave): `savePlayer` cannot wrap every
  * repository in one shared transaction because each JDBC repository owns its
  * connection; the Canary offline guard (`Player::isOffline`) has no Kotlin
  * equivalent yet, so [saveOnlyDataForOnlinePlayer] always flushes; the
  * `PlayerPvp` kill list, stash and reward chest have no live `Player` sink in
- * this port, so those helpers take the persisted values directly; the
- * `OPENCONTAINER` re-arming `IOLoginDataSave::saveItems` performs from
- * `Player::getOpenContainers` has no Kotlin save walk yet, so inventory rows
- * reach [savePlayerItem] already built; and the item type registry, imbuement
+ * this port, so those helpers take the persisted values directly;
+ * [savePlayerGuard] still does not call the live [savePlayerItem(player)],
+ * depot, reward or inbox saves; and the item type registry, imbuement
  * registry and decay/imbuement-decay seams default to unwired until the
  * composition root supplies them.
  */
@@ -333,13 +342,120 @@ class IOLoginData(
 
     /**
      * `IOLoginDataSave::savePlayerItem` / `saveItems`
-     * (iologindata_save_player.cpp:34-188, 534-564) row write: the caller
-     * supplies the `(pid, sid)` tree rows the C++ `saveItems` walk builds from
-     * the live inventory, including every nested container child.
+     * (iologindata_save_player.cpp:34-188, 534-564) row write for callers that
+     * already hold the `(pid, sid)` tree rows (the depot/reward/inbox helpers
+     * without a live `Player` sink). The live inventory walk is
+     * [savePlayerItem(player)]/[saveItems].
      */
     fun savePlayerItem(playerId: Long, itemList: List<PlayerItemState>): Boolean {
         items.save(playerId, itemList)
         return true
+    }
+
+    /**
+     * `IOLoginDataSave::savePlayerItem` (iologindata_save_player.cpp:534-564):
+     * the rows are built from `player->inventory[CONST_SLOT_FIRST..
+     * CONST_SLOT_LAST]` (each direct slot item keyed by its slot id) through
+     * [saveItems] and replace the persisted inventory in one transaction. The
+     * delete+insert pair of the C++ `DELETE` query and `DBInsert` is owned by
+     * [PlayerItemsRepository.save].
+     */
+    fun savePlayerItem(player: Player): Boolean {
+        val itemList = mutableListOf<Pair<Int, Item>>()
+        for (slot in Slots_t.FIRST..Slots_t.LAST) {
+            val item = player.getInventoryItem(Slots_t.fromValue(slot) ?: continue) ?: continue
+            itemList.add(slot to item)
+        }
+
+        items.save(player.id, saveItems(player, itemList))
+        return true
+    }
+
+    /**
+     * `IOLoginDataSave::saveItems` (iologindata_save_player.cpp:34-188): walks
+     * the given `(pid, item)` blocks (ascending slot order for the inventory)
+     * and their containers in BFS order, assigning the running `sid` from 101.
+     * Each container item re-arms its `OPENCONTAINER` attribute from
+     * `Player::getOpenContainers` (item attribute first cleared when positive,
+     * then the matching open container id plus one) before both the live item
+     * mutation and the row attributes are captured, exactly like the C++
+     * helper serializes `item->serializeAttr` after the same update. The C++
+     * `query_insert`/`propWriteStream` out-parameters become the returned row
+     * list and a local stream.
+     */
+    fun saveItems(player: Player, itemList: List<Pair<Int, Item>>): List<PlayerItemState> {
+        val rows = mutableListOf<PlayerItemState>()
+        val queue = ArrayDeque<Pair<Container, Int>>()
+        var runningId = 100
+        val openContainers = player.getOpenContainers()
+
+        for ((pid, item) in itemList) {
+            ++runningId
+
+            val container = item.getContainer()
+            if (container != null) {
+                rearmOpenContainer(container, openContainers)
+                queue.addLast(container to runningId)
+            }
+
+            rows.add(itemRow(player.id, pid, runningId, item))
+        }
+
+        while (queue.isNotEmpty()) {
+            val (container, parentId) = queue.removeFirst()
+
+            for (item in container.getItemList()) {
+                ++runningId
+
+                val subContainer = item.getContainer()
+                if (subContainer != null) {
+                    rearmOpenContainer(subContainer, openContainers)
+                    queue.addLast(subContainer to runningId)
+                }
+
+                rows.add(itemRow(player.id, parentId, runningId, item))
+            }
+        }
+
+        return rows
+    }
+
+    /**
+     * The container attribute update block `IOLoginDataSave::saveItems`
+     * (iologindata_save_player.cpp:69-83, 137-151) runs for every container
+     * item before the row is serialized.
+     */
+    private fun rearmOpenContainer(container: Container, openContainers: Map<Int, OpenContainer>) {
+        val current = (container.getAttribute(ItemAttribute.OPENCONTAINER) as? Number)?.toLong() ?: 0L
+        if (current > 0L) {
+            container.setAttribute(ItemAttribute.OPENCONTAINER, 0L)
+        }
+
+        for ((containerId, openContainer) in openContainers) {
+            if (openContainer.container === container) {
+                container.setAttribute(ItemAttribute.OPENCONTAINER, (containerId + 1).toLong())
+                break
+            }
+        }
+    }
+
+    /**
+     * One `(pid, sid, itemtype, count, attributes)` row of
+     * iologindata_save_player.cpp:98-107: the id and subtype come from the live
+     * item (`item->getID()`, `item->getSubType()`) and the attributes are
+     * `item->serializeAttr`, decoded into the flat row shape the shared codec
+     * re-encodes on write.
+     */
+    private fun itemRow(playerId: Long, pid: Int, sid: Int, item: Item): PlayerItemState {
+        val stream = PropWriteStream()
+        item.serializeAttr(stream)
+        return PlayerItemState(
+            pid = pid,
+            sid = sid,
+            itemId = item.id,
+            count = item.getSubType(),
+            attributes = deserializeItemAttributes(stream.getStream()),
+        )
     }
 
     /** `IOLoginDataLoad::loadPlayerDepotItems` (iologindata_load_player.cpp:663-708) row read. */
