@@ -285,7 +285,7 @@ class GameNpcPodiumTest {
         val tasks = mutableListOf<Any?>()
         game.setNextWalkActionTask = { _, task -> tasks.add(task) }
         val browsed = mutableListOf<Position>()
-        game.playerBrowseField = { _, pos -> browsed.add(pos) }
+        game.playerBrowseFieldHandler = { _, pos -> browsed.add(pos) }
 
         game.playerSetMonsterPodium(player.id, 5, center, 0, ITEM_PODIUM, 0, 1 to 1)
 

@@ -173,7 +173,7 @@ class GameShowOffSocketTest {
         val tasks = mutableListOf<Any?>()
         game.setNextWalkActionTask = { _, task -> tasks.add(task) }
         val browsed = mutableListOf<Position>()
-        game.playerBrowseField = { _, pos -> browsed.add(pos) }
+        game.playerBrowseFieldHandler = { _, pos -> browsed.add(pos) }
 
         game.playerSetShowOffSocket(player.id, Outfit(lookType = 128), center, 0, ITEM_PODIUM_OF_RENOWN1, 1, 0)
 
