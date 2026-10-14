@@ -1,6 +1,8 @@
 package org.opentibia.canary.config
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import org.luaj.vm2.LuaValue
+import org.luaj.vm2.lib.jse.JsePlatform
 import java.io.StringReader
 import java.nio.file.Files
 import java.nio.file.Path
@@ -49,8 +51,71 @@ fun interface ConfigSource {
 
         /** `identifier = value` properties file, re-read on every [ConfigManager.reload]. */
         fun of(path: Path): ConfigSource = ConfigSource { propertiesOf(Files.readString(path)) }
+
+        /**
+         * Lua `config.lua` executed through LuaJ like `ConfigManager::load`
+         * (configmanager.cpp:26-417): the file runs in a fresh Lua state and the
+         * `ConfigKeys` identifiers plus the `OTCRFeatures` table are read from the
+         * resulting globals. Re-read on every [ConfigManager.reload].
+         */
+        fun ofLua(path: Path): ConfigSource =
+            ConfigSource { luaConfigOf(Files.readString(path), path.toString()) }
     }
 }
+
+/**
+ * Executes a Canary `config.lua` and returns the globals the config surface reads,
+ * stringified for the typed getters: numbers and booleans as-is, strings unquoted,
+ * tables as Lua-like `{...}` text (the `OTCRFeatures` shape consumed by
+ * [ConfigManager.getEnabledFeaturesOTC]).
+ */
+internal fun luaConfigOf(content: String, chunkName: String = "config.lua"): Map<String, String> {
+    val globals = JsePlatform.standardGlobals()
+    globals.load(content, chunkName).call()
+    val values = LinkedHashMap<String, String>()
+    for (key in ConfigKeys.all) {
+        configStringOf(globals.get(key.luaIdentifier))?.let { values[key.luaIdentifier] = it }
+    }
+    configStringOf(globals.get("OTCRFeatures"))?.let { values["OTCRFeatures"] = it }
+    return values
+}
+
+private fun configStringOf(value: LuaValue): String? = when {
+    value.isnil() -> null
+    value.isboolean() -> value.toboolean().toString()
+    value.isint() -> value.toint().toString()
+    value.isnumber() -> value.todouble().toString()
+    value.isstring() -> value.tojstring()
+    value.istable() -> tableConfigStringOf(value)
+    else -> null
+}
+
+private fun tableConfigStringOf(table: LuaValue): String {
+    val parts = mutableListOf<String>()
+    var entryKey: LuaValue = LuaValue.NIL
+    while (true) {
+        val entry = table.next(entryKey)
+        entryKey = entry.arg1()
+        if (entryKey.isnil()) {
+            break
+        }
+        val entryValue = configStringOf(entry.arg(2)) ?: continue
+        parts += if (entryKey.isint()) {
+            entryValue
+        } else {
+            "${entryKey.tojstring()} = $entryValue"
+        }
+    }
+    return "{" + parts.joinToString(", ") + "}"
+}
+
+/** Resolves the [ConfigSource] for a `--config` path: `.lua` runs as Lua, anything else parses as properties. */
+internal fun configSourceOf(path: String): ConfigSource =
+    if (path.endsWith(".lua", ignoreCase = true)) {
+        ConfigSource.ofLua(Path.of(path))
+    } else {
+        ConfigSource.of(Path.of(path))
+    }
 
 private fun propertiesOf(content: String): Map<String, String> {
     val properties = Properties().apply {
@@ -155,7 +220,11 @@ class ConfigManager(
 
         /**
          * Resolves the effective server config with Canary boot precedence:
-         * defaults < environment (`CANARY_*`) < `--config` properties file < CLI options.
+         * defaults < environment (`CANARY_*`) < `--config` file < CLI options.
+         *
+         * A `--config` path ending in `.lua` is executed like Canary's `config.lua`
+         * and its globals (`serverName`, `loginProtocolPort`, `dataPackDirectory`, ...)
+         * are applied; any other path is parsed as an `identifier = value` properties file.
          */
         fun load(
             environment: Map<String, String> = System.getenv(),
@@ -163,7 +232,11 @@ class ConfigManager(
         ): ServerConfig {
             val baseConfig = fromEnvironment(environment)
             val fileConfig = options.configPath?.let { path ->
-                applyProperties(baseConfig, Files.readString(Path.of(path)))
+                if (path.endsWith(".lua", ignoreCase = true)) {
+                    applyLuaConfig(baseConfig, luaConfigOf(Files.readString(Path.of(path)), path))
+                } else {
+                    applyProperties(baseConfig, Files.readString(Path.of(path)))
+                }
             } ?: baseConfig
             return fileConfig.copy(dataDir = options.dataDir ?: fileConfig.dataDir)
         }
@@ -184,6 +257,19 @@ class ConfigManager(
                 dataDir = environment["CANARY_DATA_DIR"] ?: "data-canary"
             )
         }
+
+        /** Canary `config.lua` globals consumed by the listener (`canary_server.cpp`). */
+        private fun applyLuaConfig(baseConfig: ServerConfig, values: Map<String, String>): ServerConfig =
+            baseConfig.copy(
+                serverName = values["serverName"] ?: baseConfig.serverName,
+                ip = values["ip"] ?: baseConfig.ip,
+                loginPort = values["loginProtocolPort"]?.toIntOrNull() ?: baseConfig.loginPort,
+                gamePort = values["gameProtocolPort"]?.toIntOrNull() ?: baseConfig.gamePort,
+                statusPort = values["statusProtocolPort"]?.toIntOrNull() ?: baseConfig.statusPort,
+                maxPlayers = values["maxPlayers"]?.toIntOrNull() ?: baseConfig.maxPlayers,
+                motd = values["serverMotd"] ?: baseConfig.motd,
+                dataDir = values["dataPackDirectory"] ?: baseConfig.dataDir
+            )
 
         private fun applyProperties(baseConfig: ServerConfig, content: String): ServerConfig {
             val properties = propertiesOf(content)

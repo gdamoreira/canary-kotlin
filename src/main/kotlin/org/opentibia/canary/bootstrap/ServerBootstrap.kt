@@ -7,6 +7,7 @@ import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
 import org.opentibia.canary.config.ConfigSource
 import org.opentibia.canary.config.ServerConfig
+import org.opentibia.canary.config.configSourceOf
 import org.opentibia.canary.creatures.monsters.LootBlock
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.monsters.Monsters
@@ -92,7 +93,7 @@ private fun defaultConfigManagerBoot(environment: Map<String, String>, options: 
     ConfigManager(
         keyMap = ConfigKeys.all.associateWith { it.luaIdentifier },
         environment = environment,
-        properties = options.configPath?.let { path -> ConfigSource.of(Path.of(path)) } ?: ConfigSource.EMPTY,
+        properties = options.configPath?.let { path -> configSourceOf(path) } ?: ConfigSource.EMPTY,
     )
 
 /**
