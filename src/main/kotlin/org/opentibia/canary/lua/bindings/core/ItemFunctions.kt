@@ -5,6 +5,7 @@ import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.items.Item
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
 
@@ -12,9 +13,10 @@ import org.opentibia.canary.map.Position
  * Engine seam for the `Item` metatable family. Mirrors the primitives in
  * src/lua/functions/items/item_functions.cpp.
  *
- * Members whose state the Kotlin domain does not model yet (parent links, cloning,
- * custom attribute bags, owner names, imbuement payloads, tile residence) carry a
- * documented default so scripts keep running instead of failing.
+ * Members whose state the Kotlin domain does not model yet (cloning, owner names,
+ * imbuement payloads, tile residence) carry a documented default so scripts keep
+ * running instead of failing; the custom-attribute trio is backed by the real
+ * [Item] custom-attribute store.
  */
 interface ItemOperations {
     /** Resolves an item name to its id, returning 0 when unknown. */
@@ -83,14 +85,45 @@ interface ItemOperations {
     /** Mirrors `item:removeAttribute(key)`; false for protected or absent attributes. */
     fun removeAttribute(item: Any, attribute: Int): Boolean = false
 
-    /** Mirrors `item:getCustomAttribute(key)`; null when the custom bag is not modeled. */
-    fun getCustomAttribute(item: Any, key: String): Any? = null
+    /**
+     * Mirrors `item:getCustomAttribute(key)` over the real [Item] store: the variant
+     * is pushed like `CustomAttribute::pushToLua` (string, then integer/double as a
+     * Lua number, then boolean); null (nil) when the key is absent or the receiver
+     * is not a modeled item. The lookup is case-insensitive.
+     */
+    fun getCustomAttribute(item: Any, key: String): Any? {
+        val customAttribute = (item as? Item)?.getCustomAttribute(key) ?: return null
+        return when {
+            customAttribute.hasValue<String>() -> customAttribute.getString()
+            customAttribute.hasValue<Long>() -> customAttribute.getInteger()
+            customAttribute.hasValue<Double>() -> customAttribute.getDouble()
+            customAttribute.hasValue<Boolean>() -> customAttribute.getBool()
+            else -> null
+        }
+    }
 
-    /** Mirrors `item:setCustomAttribute(key, value)`; false when the custom bag is not modeled. */
-    fun setCustomAttribute(item: Any, key: String, value: Any?): Boolean = false
+    /**
+     * Mirrors `item:setCustomAttribute(key, value)` over the real [Item] store,
+     * keeping the Lua variant (`int64_t` for integral numbers, `double`, string or
+     * boolean). False only for a non-item receiver or an unsupported variant.
+     */
+    fun setCustomAttribute(item: Any, key: String, value: Any?): Boolean {
+        val target = item as? Item ?: return false
+        when (value) {
+            is Boolean -> target.setCustomAttribute(key, value)
+            is Int -> target.setCustomAttribute(key, value.toLong())
+            is Long -> target.setCustomAttribute(key, value)
+            is Float -> target.setCustomAttribute(key, value.toDouble())
+            is Double -> target.setCustomAttribute(key, value)
+            is String -> target.setCustomAttribute(key, value)
+            else -> return false
+        }
+        return true
+    }
 
-    /** Mirrors `item:removeCustomAttribute(key)`; false when the custom bag is not modeled. */
-    fun removeCustomAttribute(item: Any, key: String): Boolean = false
+    /** Mirrors `item:removeCustomAttribute(key)` over the real [Item] store. */
+    fun removeCustomAttribute(item: Any, key: String): Boolean =
+        (item as? Item)?.removeCustomAttribute(key) ?: false
 
     /** Mirrors `item:canBeMoved()`; false when movability is not modeled. */
     fun canBeMoved(item: Any): Boolean = false

@@ -2,7 +2,10 @@ package org.opentibia.canary.lua.bindings.core
 
 import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
+import org.opentibia.canary.combat.condition.ConditionType
+import org.opentibia.canary.combat.condition.Skill as ImbuementSkill
 import org.opentibia.canary.combat.condition.SpellGroup
+import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerPronoun_t
 import org.opentibia.canary.creatures.appearance.outfit.OutfitPlayer
@@ -21,10 +24,15 @@ import org.opentibia.canary.spells.Spells
 import org.opentibia.canary.systems.bestiary.CharmRune
 import org.opentibia.canary.systems.bestiary.IOBestiary
 import org.opentibia.canary.systems.bestiary.MonsterBestiaryInfo
+import org.opentibia.canary.systems.imbuement.ImbuementAction
+import org.opentibia.canary.systems.imbuement.ImbuementEngine
+import org.opentibia.canary.systems.imbuement.ImbuementItem
+import org.opentibia.canary.systems.imbuement.ImbuementPlayer
 import org.opentibia.canary.systems.mount.Mounts
 import org.opentibia.canary.systems.offlinetraining.Skill
 import org.opentibia.canary.systems.prey.PreyBonus
 import org.opentibia.canary.systems.prey.PreyDataState
+import org.opentibia.canary.systems.rewardchest.ReturnValue
 import org.opentibia.canary.systems.taskhunting.PreyTaskDataState
 import java.util.WeakHashMap
 import kotlin.math.max
@@ -1976,12 +1984,22 @@ interface PlayerBatch3Operations {
 
     fun clearSpellCooldowns(player: Any, spenders: Boolean, builders: Boolean, ticks: Int): Boolean?
 
+    /**
+     * `PlayerFunctions::luaPlayerApplyImbuementScroll` ->
+     * `Player::applyScrollImbuement` (player.cpp:2564). Null mirrors Canary's
+     * no-value success return; false mirrors the missing player/item pushes.
+     */
     fun applyImbuementScroll(player: Any, item: Any, scrollItem: Any): Boolean?
 
     fun openImbuementWindow(player: Any, action: Int, item: Any?): Boolean?
 
     fun closeImbuementWindow(player: Any): Boolean?
 
+    /**
+     * `PlayerFunctions::luaPlayerClearAllImbuements` ->
+     * `Player::clearAllImbuements` (player.cpp:2676); the boolean is Canary's
+     * pushed result and null mirrors a missing receiver.
+     */
     fun clearAllImbuements(player: Any, item: Any): Boolean?
 
     fun getWheelInstantSkill(player: Any, name: String): Boolean?
@@ -2466,9 +2484,16 @@ private class PlayerAchievementView(private val player: Player) : AchievementPla
  *
  * PARITY GAPS (recorded, not invented):
  *  - The Kotlin `PlayerWheel` does not model instant spells, upgrades, stages,
- *    avatar timers or scroll unlocks, and `Player` has no imbuement engine, so
- *    all wheel/imbuement primitives are inert (`false`/`0`/`true` no-op) instead
- *    of applying state; `clearAllImbuements` answers `false`.
+ *    avatar timers or scroll unlocks, so all wheel primitives are inert
+ *    (`false`/`0`/`true` no-op) instead of applying state.
+ *  - `applyImbuementScroll`/`clearAllImbuements` run the real [ImbuementEngine]
+ *    over the item's `ITEM_IMBUEMENT_SLOT` custom attributes when an engine is
+ *    injected or the item carries an `Item.imbuementRegistry` assigned at the
+ *    composition root; without either engine source they keep the documented
+ *    inert `true`/`false`. An engine built from the registry is not the
+ *    dispatcher-backed production engine, so Lua-applied imbuements are stored
+ *    but not tracked by the shared decay ticker (PARITY GAP).
+ *    `openImbuementWindow`/`closeImbuementWindow` remain inert protocol seams.
  *  - `Player` models no faction, magic shield, stomping idle timer, ghost mode,
  *    attached map shader, exercise training or stash/depot/inbox/store-inbox/loot
  *    pouch ownership. Faction reports `FACTION_PLAYER` (1); the magic shield,
@@ -2501,6 +2526,20 @@ class WorldPlayerBatch3Operations(
     private val monsterTypesByRaceId: Map<Int, Any> = emptyMap(),
     private val bestiary: IOBestiary = IOBestiary(),
     private val spells: Spells? = null,
+    /**
+     * `g_imbuements()` engine seam for the two Lua imbuement-scroll primitives.
+     * When null the engine is resolved from the live item's
+     * [org.opentibia.canary.items.Item.imbuementRegistry] (assigned at the
+     * composition root); when neither exists the methods keep their inert
+     * no-op results.
+     */
+    private val imbuementEngine: ImbuementEngine? = null,
+    /**
+     * Overrides the live [Player] -> [ImbuementPlayer] bridge (the default
+     * [PlayerImbuementAdapter]); the composition root can supply the
+     * `Game`-backed `ImbuementPlayerAdapter` instead.
+     */
+    private val imbuementPlayerFactory: ((Player) -> ImbuementPlayer)? = null,
 ) : PlayerBatch3Operations {
 
     private val achievements = mutableMapOf<Long, PlayerAchievement>()
@@ -2531,17 +2570,57 @@ class WorldPlayerBatch3Operations(
     override fun clearSpellCooldowns(player: Any, spenders: Boolean, builders: Boolean, ticks: Int): Boolean? =
         (player as? Player)?.let { true }
 
-    /** PARITY GAP: no imbuement engine on the Kotlin `Player`; normalized no-op. */
-    override fun applyImbuementScroll(player: Any, item: Any, scrollItem: Any): Boolean? =
-        (player as? Player)?.let { true }
+    /**
+     * `Player::applyScrollImbuement` (player.cpp:2564) through the injected
+     * [imbuementEngine] or the engine built over the item's assigned registry.
+     * The wired path mirrors Canary's no-value return (`null` normalized to
+     * `nil`); the unwired no-op keeps the legacy `true`.
+     */
+    override fun applyImbuementScroll(player: Any, item: Any, scrollItem: Any): Boolean? {
+        val target = player as? Player ?: return null
+        val realItem = item as? Item ?: return null
+        val realScroll = scrollItem as? Item ?: return null
+        val engine = imbuementEngineFor(realItem, realScroll) ?: return true
+        val adapter = imbuementPlayerFor(target)
+        val view = ImbuementItem(realItem).also {
+            it.parent = adapter
+            it.holdingPlayer = adapter
+        }
+        engine.applyScrollImbuement(view, ImbuementItem(realScroll), adapter)
+        return null
+    }
 
     override fun openImbuementWindow(player: Any, action: Int, item: Any?): Boolean? =
         (player as? Player)?.let { true }
 
     override fun closeImbuementWindow(player: Any): Boolean? = (player as? Player)?.let { true }
 
-    override fun clearAllImbuements(player: Any, item: Any): Boolean? =
-        (player as? Player)?.let { false }
+    /**
+     * `Player::clearAllImbuements` (player.cpp:2676) through the injected
+     * [imbuementEngine] or the item's assigned registry; false (Canary's result)
+     * when neither engine source exists.
+     */
+    override fun clearAllImbuements(player: Any, item: Any): Boolean? {
+        val target = player as? Player ?: return null
+        val realItem = item as? Item ?: return null
+        val engine = imbuementEngineFor(realItem) ?: return false
+        val adapter = imbuementPlayerFor(target)
+        val view = ImbuementItem(realItem).also {
+            it.parent = adapter
+            it.holdingPlayer = adapter
+        }
+        return engine.clearAllImbuements(view, adapter)
+    }
+
+    /** Injected engine first, then the registry the composition root assigned to the items. */
+    private fun imbuementEngineFor(vararg items: Item): ImbuementEngine? {
+        imbuementEngine?.let { return it }
+        val registry = items.firstNotNullOfOrNull { it.imbuementRegistry } ?: return null
+        return ImbuementEngine(registry)
+    }
+
+    private fun imbuementPlayerFor(player: Player): ImbuementPlayer =
+        imbuementPlayerFactory?.invoke(player) ?: PlayerImbuementAdapter(player)
 
     override fun getWheelInstantSkill(player: Any, name: String): Boolean? =
         (player as? Player)?.let { false }
@@ -3010,6 +3089,131 @@ class WorldPlayerBatch3Operations(
         /** `FACTION_PLAYER` (`src/game/game_definitions.hpp:45`). */
         const val FACTION_PLAYER = 1
     }
+}
+
+/**
+ * Live [ImbuementPlayer] bridge over a [Player] for the Lua
+ * `player:applyImbuementScroll`/`player:clearAllImbuements` bindings. It mirrors
+ * the `Game`-backed `ImbuementPlayerAdapter` (network/protocol/GameHandler.kt)
+ * for the primitives those two C++ entry points reach
+ * (`Player::applyScrollImbuement`/`Player::clearAllImbuements`), without the
+ * `Game` dependency the other handler paths carry.
+ *
+ * PARITY GAPS (recorded, not invented):
+ *  - `Player::setVarSkill` and `Player::setBonusCapacity` have no Kotlin domain
+ *    counterparts and the speed change needs `Game`; the stat callbacks the
+ *    scroll path can trigger are inert.
+ *  - `Player::getStorageValue` lives in the Lua operations layer, so the shrine
+ *    gate reports -1 (unset) and `Player::updateImbuementTrackerStats` has no
+ *    protocol seam; `removeMoney` has no player-level money store.
+ *  - `internalRemoveItem` only removes items held directly in an inventory slot
+ *    (`Player::removeItem`), not items nested in containers (the C++
+ *    `Game::internalRemoveItem` walks the parent chain), and `internalAddItem`
+ *    cannot create the crafted scroll without the item-type catalog.
+ *  - `isInProtectionZone` cannot resolve the player's tile without the map and
+ *    reports false.
+ */
+internal class PlayerImbuementAdapter(private val player: Player) : ImbuementPlayer {
+
+    override fun getCapacity(): Int = player.capacity.toInt()
+
+    /** PARITY GAP: `Player` models no `varSkills` array. */
+    override fun setVarSkill(skill: ImbuementSkill, value: Int) = Unit
+
+    override fun setVarStats(stat: Stat, value: Int) {
+        player.setVarStats(stat, value)
+    }
+
+    /** PARITY GAP: `Game::changeSpeed` needs the `Game`. */
+    override fun changeSpeed(value: Int) = Unit
+
+    /** PARITY GAP: `Player` models no `bonusCapacity` field. */
+    override fun setBonusCapacity(value: Int) = Unit
+
+    override fun sendStats() = player.sendStats()
+
+    override fun sendSkills() = player.sendSkills()
+
+    /** PARITY GAP: storage lives in the Lua operations layer, not on `Player`. */
+    override fun getStorageValue(key: Int): Int = -1
+
+    override fun sendImbuementResult(message: String) = player.sendTextMessage(message)
+
+    override fun sendTextMessage(message: String) = player.sendTextMessage(message)
+
+    /** PARITY GAP: `Player` has no money store; only reached by the shrine path. */
+    override fun removeMoney(amount: Long): Boolean = false
+
+    override fun getItemTypeCount(itemId: Int): Int = player.getItemCount(itemId).toInt()
+
+    override fun getStashItemCount(itemId: Int): Int = player.stash.getStashItemCount(itemId)
+
+    /** PARITY GAP: no item-type catalog on this seam; Canary reads `Item::items[id].name`. */
+    override fun getItemTypeName(itemId: Int): String = ""
+
+    override fun removeItemOfType(itemId: Int, count: Int, subType: Int, ignoreEquipped: Boolean): Boolean {
+        var remaining = count
+        for (item in player.getInventoryItemsFromId(itemId, ignoreEquipped)) {
+            if (remaining <= 0) {
+                break
+            }
+            if (subType != -1 && item.getSubType() != subType) {
+                continue
+            }
+            val remove = minOf(remaining, item.getItemCount())
+            player.removeItem(item, remove)
+            remaining -= remove
+        }
+        return remaining <= 0
+    }
+
+    override fun withdrawItem(itemId: Int, amount: Int) {
+        player.stash.withdrawItem(itemId, amount)
+    }
+
+    override fun internalRemoveItem(item: ImbuementItem, count: Int): Boolean {
+        val realItem = item.sourceItem ?: return false
+        return player.removeItem(realItem, count) == ReturnValue.NOERROR
+    }
+
+    override fun removeItemCountById(itemId: Int, itemAmount: Int, removeFromStash: Boolean): Boolean {
+        var remaining = itemAmount
+        val inventoryItemCount = getItemTypeCount(itemId)
+        if (inventoryItemCount > 0) {
+            val removeFromInventory = minOf(inventoryItemCount, itemAmount)
+            if (!removeItemOfType(itemId, removeFromInventory, -1, false)) {
+                return false
+            }
+            remaining -= removeFromInventory
+        }
+
+        if (remaining <= 0) {
+            return true
+        }
+        if (!removeFromStash) {
+            return false
+        }
+        if (getStashItemCount(itemId) < remaining) {
+            return false
+        }
+        withdrawItem(itemId, remaining)
+        return true
+    }
+
+    /** PARITY GAP: creating the crafted scroll needs the item-type catalog. */
+    override fun internalAddItem(item: ImbuementItem, count: Int): Boolean = false
+
+    override fun openImbuementWindow(action: ImbuementAction, item: ImbuementItem?) {
+        player.setImbuingItem(item?.sourceItem)
+    }
+
+    /** PARITY GAP: no imbuement-tracker protocol seam. */
+    override fun updateImbuementTrackerStats() = Unit
+
+    /** PARITY GAP: no map/tile seam on the binding adapter. */
+    override fun isInProtectionZone(): Boolean = false
+
+    override fun hasConditionInFight(): Boolean = player.hasCondition(ConditionType.CONDITION_INFIGHT)
 }
 
 /**
