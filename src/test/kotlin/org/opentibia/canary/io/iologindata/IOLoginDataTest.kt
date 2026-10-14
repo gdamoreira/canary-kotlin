@@ -391,7 +391,7 @@ class IOLoginDataTest {
 
     @Test
     fun `inventory depot and inbox helpers round trip through their repositories`() {
-        val items = listOf(org.opentibia.canary.database.PlayerItemState(slot = 3, itemId = 2148, count = 100))
+        val items = listOf(org.opentibia.canary.database.PlayerItemState(pid = 3, sid = 101, itemId = 2148, count = 100))
         assertThat(loginData.savePlayerItem(101L, items)).isTrue()
         assertThat(loginData.loadPlayerInventoryItems(101L)).containsExactlyElementsOf(items)
 

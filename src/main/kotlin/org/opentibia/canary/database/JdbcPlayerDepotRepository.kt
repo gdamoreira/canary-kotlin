@@ -7,12 +7,13 @@ import javax.sql.DataSource
 private val logger = KotlinLogging.logger {}
 
 /**
- * Persisted state of one depot or inbox item row, mirroring the tuple Canary
- * writes in `IOLoginDataSave::saveItems`
+ * Persisted state of one tree item row, mirroring the tuple Canary writes in
+ * `IOLoginDataSave::saveItems`
  * (src/io/functions/iologindata_save_player.cpp:46-112): `pid` is the parent
- * container `sid` (below 100 it is the depot chest id), `sid` is the running
- * item id assigned from 100 upward, and `attributes` is the serialized
- * `Item::serializeAttr` blob.
+ * container `sid` (below 100 it is the inventory slot or depot chest id),
+ * `sid` is the running item id assigned from 100 upward, and `attributes` is
+ * the serialized `Item::serializeAttr` blob. Shared by the depot, inbox,
+ * reward and inventory trees (`PlayerItemState`).
  */
 data class PlayerContainerItemState(
     val pid: Int,

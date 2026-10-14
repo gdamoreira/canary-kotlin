@@ -9,11 +9,12 @@ import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.ItemDecayState
 
 /**
- * H2 (Flyway V1-V5) round-trip tests for [JdbcPlayerItemsRepository],
+ * H2 (Flyway V1-V17) round-trip tests for [JdbcPlayerItemsRepository],
  * transcribed from Canary's inventory persistence:
- * `IOLoginDataSave::savePlayerItems` (src/io/functions/iologindata_save_player.cpp:530-564),
+ * `IOLoginDataSave::savePlayerItem` / `saveItems`
+ * (src/io/functions/iologindata_save_player.cpp:34-188, 534-564),
  * `IOLoginDataLoad::loadPlayerInventoryItems` / `loadItems`
- * (src/io/functions/iologindata_load_player.cpp:34-65, 543-561) and
+ * (src/io/functions/iologindata_load_player.cpp:34-65, 543-632) and
  * `Item::serializeAttr` / `Item::unserializeAttr`
  * (src/items/item.cpp:912-1349, 1368-1539; wire codes from
  * src/items/items_definitions.hpp:202-252).
@@ -27,7 +28,7 @@ class JdbcPlayerItemsRepositoryTest {
     fun setUp() {
         dataSource = DatabaseConnectionFactory.createInMemoryDataSource("canary_items_${System.nanoTime()}")
         val applied = DatabaseConnectionFactory.migrate(dataSource)
-        assertThat(applied).isGreaterThanOrEqualTo(5)
+        assertThat(applied).isGreaterThanOrEqualTo(16)
         repository = JdbcPlayerItemsRepository(dataSource)
     }
 
@@ -37,17 +38,17 @@ class JdbcPlayerItemsRepositoryTest {
     }
 
     @Test
-    fun `round-trips a stackable item count through the slot table`() {
-        repository.save(1L, listOf(PlayerItemState(slot = 3, itemId = 2148, count = 100)))
+    fun `round-trips a stackable item count through the item tree table`() {
+        repository.save(1L, listOf(PlayerItemState(pid = 3, sid = 101, itemId = 2148, count = 100)))
 
-        assertThat(repository.load(1L)).containsExactly(PlayerItemState(slot = 3, itemId = 2148, count = 100))
+        assertThat(repository.load(1L)).containsExactly(PlayerItemState(pid = 3, sid = 101, itemId = 2148, count = 100))
     }
 
     @Test
     fun `serializes a stackable subtype with Canary's ATTR_COUNT wire code`() {
-        repository.save(1L, listOf(PlayerItemState(slot = 3, itemId = 2148, count = 100)))
+        repository.save(1L, listOf(PlayerItemState(pid = 3, sid = 101, itemId = 2148, count = 100)))
 
-        assertThat(rawAttributes(1L, 3)).containsExactly(15, 100)
+        assertThat(rawAttributes(1L, 101)).containsExactly(15, 100)
     }
 
     @Test
@@ -56,7 +57,8 @@ class JdbcPlayerItemsRepositoryTest {
             1L,
             listOf(
                 PlayerItemState(
-                    slot = 6,
+                    pid = 6,
+                    sid = 106,
                     itemId = 2376,
                     attributes = mapOf(
                         ItemAttribute.ACTIONID to 1234L,
@@ -67,7 +69,7 @@ class JdbcPlayerItemsRepositoryTest {
             ),
         )
 
-        assertThat(rawAttributes(1L, 6)).containsExactly(
+        assertThat(rawAttributes(1L, 106)).containsExactly(
             4, 0xD2, 0x04,
             6, 2, 0x00, 'H'.code, 'i'.code,
             40, 3,
@@ -106,7 +108,7 @@ class JdbcPlayerItemsRepositoryTest {
             ItemAttribute.OWNER to 1L,
             ItemAttribute.OBTAINCONTAINER to 2L,
         )
-        val item = PlayerItemState(slot = 6, itemId = 2376, count = 1, attributes = attributes)
+        val item = PlayerItemState(pid = 6, sid = 106, itemId = 2376, count = 1, attributes = attributes)
 
         repository.save(1L, listOf(item))
 
@@ -119,7 +121,8 @@ class JdbcPlayerItemsRepositoryTest {
             1L,
             listOf(
                 PlayerItemState(
-                    slot = 6,
+                    pid = 6,
+                    sid = 106,
                     itemId = 2376,
                     attributes = mapOf(
                         ItemAttribute.DURATION to 3600L,
@@ -129,7 +132,7 @@ class JdbcPlayerItemsRepositoryTest {
             ),
         )
 
-        assertThat(rawAttributes(1L, 6)).containsExactly(
+        assertThat(rawAttributes(1L, 106)).containsExactly(
             16, 0x10, 0x0E, 0x00, 0x00,
             17, 1,
         )
@@ -141,7 +144,8 @@ class JdbcPlayerItemsRepositoryTest {
             1L,
             listOf(
                 PlayerItemState(
-                    slot = 6,
+                    pid = 6,
+                    sid = 106,
                     itemId = 2376,
                     attributes = mapOf(
                         ItemAttribute.DURATION to 3600L,
@@ -159,18 +163,51 @@ class JdbcPlayerItemsRepositoryTest {
     }
 
     @Test
-    fun `loads inventory slots in ascending order`() {
-        repository.save(1L, listOf(PlayerItemState(slot = 6, itemId = 2376), PlayerItemState(slot = 3, itemId = 2148, count = 5)))
+    fun `loads inventory rows in Canary's descending sid order`() {
+        repository.save(
+            1L,
+            listOf(
+                PlayerItemState(pid = 3, sid = 101, itemId = 2148, count = 5),
+                PlayerItemState(pid = 4, sid = 103, itemId = 2160),
+                PlayerItemState(pid = 5, sid = 102, itemId = 2376),
+            ),
+        )
 
-        assertThat(repository.load(1L).map { it.slot }).containsExactly(3, 6)
+        assertThat(repository.load(1L).map { it.sid }).containsExactly(103, 102, 101)
+    }
+
+    @Test
+    fun `round-trips item rows nested under a container sid`() {
+        val nested = PlayerItemState(pid = 101, sid = 102, itemId = 2160, count = 7)
+
+        repository.save(1L, listOf(PlayerItemState(pid = 3, sid = 101, itemId = 1987), nested))
+
+        assertThat(repository.load(1L)).contains(nested)
+    }
+
+    @Test
+    fun `round-trips a multi-level inventory container tree`() {
+        val tree = listOf(
+            PlayerItemState(pid = 3, sid = 101, itemId = 2376),
+            PlayerItemState(pid = 101, sid = 102, itemId = 1987),
+            PlayerItemState(pid = 102, sid = 103, itemId = 2160, count = 50),
+            PlayerItemState(pid = 102, sid = 104, itemId = 2400),
+        )
+
+        repository.save(1L, tree)
+
+        assertThat(repository.load(1L)).containsExactlyInAnyOrderElementsOf(tree)
     }
 
     @Test
     fun `replaces the persisted inventory on resave`() {
-        repository.save(1L, listOf(PlayerItemState(slot = 3, itemId = 2148, count = 100), PlayerItemState(slot = 6, itemId = 2376)))
-        repository.save(1L, listOf(PlayerItemState(slot = 3, itemId = 2148, count = 50)))
+        repository.save(
+            1L,
+            listOf(PlayerItemState(pid = 3, sid = 101, itemId = 2148, count = 100), PlayerItemState(pid = 6, sid = 102, itemId = 2376)),
+        )
+        repository.save(1L, listOf(PlayerItemState(pid = 3, sid = 101, itemId = 2148, count = 50)))
 
-        assertThat(repository.load(1L)).containsExactly(PlayerItemState(slot = 3, itemId = 2148, count = 50))
+        assertThat(repository.load(1L)).containsExactly(PlayerItemState(pid = 3, sid = 101, itemId = 2148, count = 50))
     }
 
     @Test
@@ -180,18 +217,18 @@ class JdbcPlayerItemsRepositoryTest {
 
     @Test
     fun `skips persisted items whose blob carries an unsupported attribute code`() {
-        insertRawItem(2L, slot = 5, itemId = 2376, count = 1, blob = byteArrayOf(99, 0))
+        insertRawItem(2L, pid = 5, sid = 101, itemId = 2376, count = 1, blob = byteArrayOf(99, 0))
 
         assertThat(repository.load(2L)).isEmpty()
     }
 
-    private fun rawAttributes(playerId: Long, slot: Int): ByteArray {
+    private fun rawAttributes(playerId: Long, sid: Int): ByteArray {
         dataSource.connection.use { conn ->
             conn.prepareStatement(
-                "SELECT attributes FROM player_inventory_items WHERE player_id = ? AND slot = ?",
+                "SELECT attributes FROM player_inventory_items WHERE player_id = ? AND sid = ?",
             ).use { stmt ->
                 stmt.setLong(1, playerId)
-                stmt.setInt(2, slot)
+                stmt.setInt(2, sid)
                 stmt.executeQuery().use { rs ->
                     assertThat(rs.next()).isTrue()
                     return rs.getBytes("attributes")
@@ -200,16 +237,17 @@ class JdbcPlayerItemsRepositoryTest {
         }
     }
 
-    private fun insertRawItem(playerId: Long, slot: Int, itemId: Int, count: Int, blob: ByteArray) {
+    private fun insertRawItem(playerId: Long, pid: Int, sid: Int, itemId: Int, count: Int, blob: ByteArray) {
         dataSource.connection.use { conn ->
             conn.prepareStatement(
-                "INSERT INTO player_inventory_items (player_id, slot, item_id, count, attributes) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO player_inventory_items (player_id, pid, sid, item_id, count, attributes) VALUES (?, ?, ?, ?, ?, ?)",
             ).use { stmt ->
                 stmt.setLong(1, playerId)
-                stmt.setInt(2, slot)
-                stmt.setInt(3, itemId)
-                stmt.setInt(4, count)
-                stmt.setBytes(5, blob)
+                stmt.setInt(2, pid)
+                stmt.setInt(3, sid)
+                stmt.setInt(4, itemId)
+                stmt.setInt(5, count)
+                stmt.setBytes(6, blob)
                 stmt.executeUpdate()
             }
         }

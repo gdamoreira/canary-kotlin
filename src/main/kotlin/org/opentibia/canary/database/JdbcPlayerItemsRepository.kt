@@ -1,23 +1,20 @@
 package org.opentibia.canary.database
 
 import io.github.oshai.kotlinlogging.KotlinLogging
-import org.opentibia.canary.items.ItemAttribute
 import javax.sql.DataSource
 
 private val logger = KotlinLogging.logger {}
 
 /**
- * Persisted state of one equipped inventory item, mirroring the row Canary
- * writes per inventory slot (`pid`/`sid`/`itemtype`/`count`/`attributes` in
- * `IOLoginDataSave::savePlayerItems`, src/io/functions/iologindata_save_player.cpp:98-107)
- * as the flat `player_inventory_items` layout.
+ * Persisted state of one inventory row: the `(pid, sid, itemtype, count,
+ * attributes)` tuple Canary writes into `player_items` in
+ * `IOLoginDataSave::saveItems` (src/io/functions/iologindata_save_player.cpp:34-188).
+ * `pid` is the inventory slot (`CONST_SLOT_FIRST..CONST_SLOT_LAST`) for a direct
+ * slot item and otherwise the parent container's `sid`, and `sid` is the running
+ * item id assigned from 101 upward. The tree row shape is shared with the
+ * depot, inbox and reward trees ([PlayerContainerItemState]).
  */
-data class PlayerItemState(
-    val slot: Int,
-    val itemId: Int,
-    val count: Int = 1,
-    val attributes: Map<ItemAttribute, Any> = emptyMap(),
-)
+typealias PlayerItemState = PlayerContainerItemState
 
 interface PlayerItemsRepository {
     fun load(playerId: Long): List<PlayerItemState>
@@ -25,12 +22,18 @@ interface PlayerItemsRepository {
 }
 
 /**
- * JDBC persistence for a player's equipped inventory slots.
+ * JDBC persistence for a player's inventory item tree.
  *
  * Saving replaces the player's rows in one transaction, mirroring Canary's
  * `DELETE FROM player_items` + batched `INSERT` in
- * `IOLoginDataSave::savePlayerItems` (src/io/functions/iologindata_save_player.cpp:543-563).
- * The `attributes` blob uses the shared [serializeItemAttributes] wire codec.
+ * `IOLoginDataSave::savePlayerItem` (src/io/functions/iologindata_save_player.cpp:534-564);
+ * the whole `(pid, sid)` container tree is persisted, so a backpack with nested
+ * bags round-trips. Loading mirrors `IOLoginDataLoad::loadPlayerInventoryItems`
+ * (src/io/functions/iologindata_load_player.cpp:543-632) and returns the rows
+ * in Canary's `ORDER BY sid DESC` order; a row whose attribute blob fails to
+ * deserialize is warn-skipped like `IOLoginDataLoad::loadItems`
+ * (iologindata_load_player.cpp:46-60). The `attributes` blob reuses the shared
+ * [serializeItemAttributes] V5 codec.
  */
 class JdbcPlayerItemsRepository(private val dataSource: DataSource) : PlayerItemsRepository {
 
@@ -43,16 +46,17 @@ class JdbcPlayerItemsRepository(private val dataSource: DataSource) : PlayerItem
                     stmt.executeUpdate()
                 }
                 val sql = """
-                    INSERT INTO player_inventory_items (player_id, slot, item_id, count, attributes)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO player_inventory_items (player_id, pid, sid, item_id, count, attributes)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 """.trimIndent()
                 conn.prepareStatement(sql).use { stmt ->
-                    items.sortedBy { it.slot }.forEach { item ->
+                    items.sortedBy { it.sid }.forEach { item ->
                         stmt.setLong(1, playerId)
-                        stmt.setInt(2, item.slot)
-                        stmt.setInt(3, item.itemId)
-                        stmt.setInt(4, item.count)
-                        stmt.setBytes(5, serializeItemAttributes(item.count, item.attributes))
+                        stmt.setInt(2, item.pid)
+                        stmt.setInt(3, item.sid)
+                        stmt.setInt(4, item.itemId)
+                        stmt.setInt(5, item.count)
+                        stmt.setBytes(6, serializeItemAttributes(item.count, item.attributes))
                         stmt.addBatch()
                     }
                     stmt.executeBatch()
@@ -70,24 +74,33 @@ class JdbcPlayerItemsRepository(private val dataSource: DataSource) : PlayerItem
         dataSource.connection.use { conn ->
             conn.prepareStatement(
                 """
-                SELECT slot, item_id, count, attributes
+                SELECT pid, sid, item_id, count, attributes
                 FROM player_inventory_items
                 WHERE player_id = ?
-                ORDER BY slot
+                ORDER BY sid DESC
                 """.trimIndent(),
             ).use { stmt ->
                 stmt.setLong(1, playerId)
                 stmt.executeQuery().use { rs ->
                     while (rs.next()) {
-                        val slot = rs.getInt("slot")
+                        val pid = rs.getInt("pid")
+                        val sid = rs.getInt("sid")
                         val itemId = rs.getInt("item_id")
                         val count = rs.getInt("count")
                         try {
-                            result.add(PlayerItemState(slot, itemId, count, deserializeItemAttributes(rs.getBytes("attributes"))))
+                            result.add(
+                                PlayerItemState(
+                                    pid = pid,
+                                    sid = sid,
+                                    itemId = itemId,
+                                    count = count,
+                                    attributes = deserializeItemAttributes(rs.getBytes("attributes")),
+                                ),
+                            )
                         } catch (ex: IllegalArgumentException) {
                             // `IOLoginDataLoad::loadItems` (iologindata_load_player.cpp:46-60)
                             // warns and skips a row whose attributes fail to deserialize.
-                            logger.warn { "Skipping item $itemId in slot $slot of player $playerId: ${ex.message}" }
+                            logger.warn { "Skipping item $itemId in row $sid of player $playerId: ${ex.message}" }
                         }
                     }
                 }
