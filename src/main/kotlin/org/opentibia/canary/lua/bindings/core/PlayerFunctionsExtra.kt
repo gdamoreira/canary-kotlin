@@ -414,7 +414,7 @@ interface PlayerExtraOperations {
  * metatable and is intentionally not shadowed here.
  */
 object PlayerFunctionsExtra {
-    fun install(env: LuaEnvironment, operations: PlayerExtraOperations = UnwiredPlayerExtraOperations) {
+    fun install(env: LuaEnvironment, operations: PlayerExtraOperations = WorldPlayerExtraOperations()) {
         val registry = env.userdata
         val register: (String, LuaValue) -> Unit = { name, fn ->
             registry.registerMethod(PlayerFunctions.PLAYER_TYPE, name, fn)
@@ -937,11 +937,15 @@ object PlayerFunctionsExtra {
  *   is retained in memory and the name-lock/save path is unported.
  * - Exaltation Forge slivers/cores need `Player::getForgeSliversAndCores`'s history scan;
  *   the seam keeps per-player counters (default 0).
- * - Faction, UI exhaustion, bosstiary, store inbox, achievements/badges/titles, store
- *   summary, screenshots, creature icons, animus mastery, concoction/food, the Wheel of
+ * - Faction, UI exhaustion, bosstiary, store inbox, badges/titles, store
+ *   summary, screenshots, creature icons, concoction/food, the Wheel of
  *   Destiny spell/gem queries and OTCR attached effects are protocol/component sends or
  *   state the Kotlin components do not expose through `Player`; they persist in memory
  *   (empty defaults) rather than inventing gameplay decisions.
+ * - Achievements and animus mastery delegate to the composed
+ *   `PlayerFeatures.achievement`/`animusMastery` components (player.cpp:12758,
+ *   12812) instead of keeping per-operations maps, so Lua mutations are visible
+ *   to the engine and vice versa.
  * - `Player::getBossBonus` needs `g_ioBosstiary().calculateLootBonus`; 0 until wired.
  * - `Player::weaponProficiency` has no `Player` accessor yet; the call is acknowledged
  *   without applying experience.
@@ -975,14 +979,11 @@ class WorldPlayerExtraOperations(
     private val concoctions = mutableMapOf<Long, MutableMap<Int, Int>>()
     private val foods = mutableMapOf<Long, MutableMap<Int, Long>>()
     private val storeInboxes = mutableMapOf<Long, Any>()
-    private val unlockedAchievements = mutableMapOf<Long, MutableSet<Int>>()
-    private val achievementPoints = mutableMapOf<Long, Int>()
     private val badges = mutableMapOf<Long, MutableSet<Int>>()
     private val titles = mutableMapOf<Long, MutableSet<Int>>()
     private val currentTitles = mutableMapOf<Long, Int>()
     private val mapShaders = mutableMapOf<Long, String>()
     private val customOutfits = mutableMapOf<Long, MutableSet<String>>()
-    private val animusMasteries = mutableMapOf<Long, MutableSet<String>>()
     private val livestreamStates = mutableMapOf<Long, LuaLivestreamViewers>()
     private val livestreamViewers = mutableSetOf<Long>()
     private val names = mutableMapOf<Long, String>()
@@ -1256,35 +1257,40 @@ class WorldPlayerExtraOperations(
 
     override fun getStoreInbox(player: Any): Any? = playerId(player)?.let { storeInboxes[it] }
 
+    /** PARITY GAP: this seam has no `g_game()` registry; names resolve to 0. */
     override fun achievementIdByName(name: String): Int = 0
 
     override fun hasAchievement(player: Any, achievementId: Int): Boolean? {
         val target = player as? Player ?: return null
-        return achievementId in (unlockedAchievements[target.id] ?: emptySet())
+        return target.features.achievement.isUnlocked(achievementId)
     }
 
     override fun addAchievement(player: Any, achievementId: Int, sendMessage: Boolean): Boolean? {
         val target = player as? Player ?: return null
-        unlockedAchievements.getOrPut(target.id) { mutableSetOf() } += achievementId
-        return true
+        return target.features.achievement.add(achievementId, sendMessage)
     }
 
     override fun removeAchievement(player: Any, achievementId: Int): Boolean? {
         val target = player as? Player ?: return null
-        return unlockedAchievements.getOrPut(target.id) { mutableSetOf() }.remove(achievementId)
+        return target.features.achievement.remove(achievementId)
     }
 
-    override fun getAchievementPoints(player: Any): Int? = playerId(player)?.let { achievementPoints[it] ?: 0 }
+    override fun getAchievementPoints(player: Any): Int? =
+        (player as? Player)?.features?.achievement?.getPoints()
 
     override fun addAchievementPoints(player: Any, amount: Int): Boolean? {
         val target = player as? Player ?: return null
-        achievementPoints[target.id] = (achievementPoints[target.id] ?: 0) + amount
+        if (amount > 0) {
+            target.features.achievement.addPoints(amount)
+        }
         return true
     }
 
     override fun removeAchievementPoints(player: Any, amount: Int): Boolean? {
         val target = player as? Player ?: return null
-        achievementPoints[target.id] = ((achievementPoints[target.id] ?: 0) - amount).coerceAtLeast(0)
+        if (amount > 0) {
+            target.features.achievement.removePoints(amount)
+        }
         return true
     }
 
@@ -1347,19 +1353,19 @@ class WorldPlayerExtraOperations(
 
     override fun addAnimusMastery(player: Any, monsterType: String): Boolean? {
         val target = player as? Player ?: return null
-        animusMasteries.getOrPut(target.id) { mutableSetOf() } += monsterType
+        target.features.animusMastery.add(monsterType)
         return true
     }
 
     override fun removeAnimusMastery(player: Any, monsterType: String): Boolean? {
         val target = player as? Player ?: return null
-        animusMasteries.getOrPut(target.id) { mutableSetOf() }.remove(monsterType)
+        target.features.animusMastery.remove(monsterType)
         return true
     }
 
     override fun hasAnimusMastery(player: Any, monsterType: String): Boolean? {
         val target = player as? Player ?: return null
-        return monsterType in (animusMasteries[target.id] ?: emptySet())
+        return target.features.animusMastery.has(monsterType)
     }
 
     override fun setSerene(player: Any, set: Boolean, ticks: Int): Boolean? {
@@ -1460,8 +1466,9 @@ class WorldPlayerExtraOperations(
 }
 
 /**
- * Default [PlayerExtraOperations] used before [WorldLuaOperations] wires the real seam.
- * Every call fails loudly, mirroring [UnwiredPlayerOperations].
+ * Explicit "not wired" [PlayerExtraOperations] for callers that want every call to fail
+ * loudly instead of falling back to [WorldPlayerExtraOperations]; [PlayerFunctionsExtra.install]
+ * wires the world implementation by default, mirroring `PlayerFunctions.install`.
  */
 internal object UnwiredPlayerExtraOperations : PlayerExtraOperations {
     override fun getIdleTime(player: Any): Long? =
