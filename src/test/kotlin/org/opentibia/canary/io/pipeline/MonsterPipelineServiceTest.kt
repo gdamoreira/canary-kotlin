@@ -2,6 +2,7 @@ package org.opentibia.canary.io.pipeline
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.systems.imbuement.Imbuements
 import kotlin.random.Random
 
 class MonsterPipelineServiceTest {
@@ -32,5 +33,21 @@ class MonsterPipelineServiceTest {
 
         assertThat(droppedItems).isNotEmpty()
         assertThat(droppedItems.map { it.id }).contains(2148)
+    }
+
+    @Test
+    fun `rollLoot assigns the imbuement registry to every rolled item`() {
+        val imbuements = Imbuements()
+
+        val droppedItems = LootEngine.rollLoot(
+            listOf(LootEntry(itemId = 2148, chanceBasisPoints = 100000)),
+            Random(123),
+            imbuements,
+        )
+
+        assertThat(droppedItems).isNotEmpty()
+        assertThat(droppedItems).allSatisfy { item ->
+            assertThat(item.imbuementRegistry).isSameAs(imbuements)
+        }
     }
 }

@@ -17,6 +17,9 @@ class ItemImbuementRegistryTest {
         assertThat(loadFromXml(TEST_XML)).isTrue()
     }
     private val knownId: Int = imbuements.imbuementMap.keys.single()
+    private val itemTypes = ItemTypeRegistry().apply {
+        register(ItemType(id = 2400, name = "Sword", imbuementSlot = 2))
+    }
 
     private fun sword(): Item =
         Item(id = 2400, type = ItemType(id = 2400, name = "Sword", imbuementSlot = 2))
@@ -67,6 +70,33 @@ class ItemImbuementRegistryTest {
         item.setImbuement(0, 4242, 1000)
 
         assertThat(item.clone().hasImbuements()).isFalse()
+    }
+
+    @Test
+    fun `Item create assigns the imbuement registry creation hub`() {
+        val item = Item.create(id = 2400, registry = itemTypes, imbuements = imbuements)
+
+        assertThat(item.imbuementRegistry).isSameAs(imbuements)
+    }
+
+    @Test
+    fun `Item create without imbuements keeps the presence fallback`() {
+        val item = Item.create(id = 2400, registry = itemTypes)
+        item.setImbuement(0, 4242, 1000)
+
+        assertThat(item.imbuementRegistry).isNull()
+        assertThat(item.hasImbuements()).isTrue()
+    }
+
+    @Test
+    fun `Item create validates packed imbuement ids through the assigned registry`() {
+        val item = Item.create(id = 2400, registry = itemTypes, imbuements = imbuements)
+
+        item.setImbuement(0, 200, 1000)
+        assertThat(item.hasImbuements()).isFalse()
+
+        item.setImbuement(0, knownId, 1000)
+        assertThat(item.hasImbuements()).isTrue()
     }
 }
 

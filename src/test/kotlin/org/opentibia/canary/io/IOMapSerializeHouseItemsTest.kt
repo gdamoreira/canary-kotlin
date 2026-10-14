@@ -17,6 +17,7 @@ import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.house.Door
 import org.opentibia.canary.map.house.GUEST_LIST
 import org.opentibia.canary.map.house.Houses
+import org.opentibia.canary.systems.imbuement.Imbuements
 
 /**
  * H2 (Flyway V1-V11) round-trip tests for the house-item half of
@@ -39,6 +40,12 @@ class IOMapSerializeHouseItemsTest {
         register(ItemType(1750, "bed", isBed = true, isMovable = false, bedPartOf = 1751))
         register(ItemType(1751, "bed partner", isBed = true, isMovable = false, bedPartOf = 1750))
         register(ItemType(1210, "door", isDoor = true, isMovable = false))
+        register(ItemType(2400, "sword", isMovable = true, imbuementSlot = 2))
+        register(ItemType(1300, "imbueable door", isDoor = true, isMovable = false, imbuementSlot = 2))
+    }
+
+    private val imbuements = Imbuements().apply {
+        assertThat(loadFromXml(TEST_XML)).isTrue()
     }
 
     @BeforeEach
@@ -61,6 +68,7 @@ class IOMapSerializeHouseItemsTest {
         transformItem: (Item, Int) -> Unit = { _, _ -> },
         removeBedSleeper: (Long) -> Unit = {},
         nextBedItem: (BedItem) -> BedItem? = { null },
+        imbuements: Imbuements? = null,
     ): IOMapSerialize = IOMapSerialize(
         dataSource = dataSource,
         map = map,
@@ -69,6 +77,7 @@ class IOMapSerializeHouseItemsTest {
         transformItem = transformItem,
         removeBedSleeper = removeBedSleeper,
         nextBedItem = nextBedItem,
+        imbuements = imbuements,
     )
 
     /** `Map::save` (src/map/map.cpp:262-273): info first, then items. */
@@ -321,4 +330,78 @@ class IOMapSerializeHouseItemsTest {
         assertThat(target.getTile(position)?.items).containsExactly(existingDoor)
         assertThat(transformed).containsExactly(1210 to 1210)
     }
+
+    @Test
+    fun `loadHouseItems assigns the imbuement registry to restored movable items`() {
+        val source = newMap()
+        val position = Position(8, 8, 7)
+        houseTile(source, 1, position)
+        source.getOrCreateTile(position).addItem(
+            Item(2400, type = itemTypes.get(2400)).apply { setImbuement(0, 200, 1000) },
+        )
+        assertThat(saveHouse(source)).isTrue()
+
+        val target = newMap()
+        houseTile(target, 1, position)
+        target.houses.getHouse(1)?.owner = 5
+        newSerializer(target, imbuements = imbuements).loadHouseItems()
+
+        val restored = target.getTile(position)?.items?.first { it.id == 2400 }
+        assertThat(restored?.imbuementRegistry).isSameAs(imbuements)
+        assertThat(restored?.hasImbuements()).isFalse()
+    }
+
+    @Test
+    fun `loadHouseItems assigns the imbuement registry to an existing stationary item`() {
+        val source = newMap()
+        val position = Position(9, 9, 7)
+        houseTile(source, 1, position)
+        source.getOrCreateTile(position).addItem(
+            Door(1300, type = itemTypes.get(1300)).apply {
+                setDoorId(3)
+                setImbuement(0, 200, 1000)
+            },
+        )
+        assertThat(saveHouse(source)).isTrue()
+
+        val target = newMap()
+        houseTile(target, 1, position)
+        target.houses.getHouse(1)?.owner = 5
+        val existingDoor = Door(1300, type = itemTypes.get(1300)).apply { setDoorId(3) }
+        target.getOrCreateTile(position).addItem(existingDoor)
+        newSerializer(target, imbuements = imbuements).loadHouseItems()
+
+        assertThat(existingDoor.imbuementRegistry).isSameAs(imbuements)
+        assertThat(existingDoor.hasImbuements()).isFalse()
+    }
+
+    @Test
+    fun `loadHouseItems without a registry keeps the imbuement presence fallback`() {
+        val source = newMap()
+        val position = Position(8, 8, 7)
+        houseTile(source, 1, position)
+        source.getOrCreateTile(position).addItem(
+            Item(2400, type = itemTypes.get(2400)).apply { setImbuement(0, 200, 1000) },
+        )
+        assertThat(saveHouse(source)).isTrue()
+
+        val target = newMap()
+        houseTile(target, 1, position)
+        target.houses.getHouse(1)?.owner = 5
+        newSerializer(target).loadHouseItems()
+
+        val restored = target.getTile(position)?.items?.first { it.id == 2400 }
+        assertThat(restored?.imbuementRegistry).isNull()
+        assertThat(restored?.hasImbuements()).isTrue()
+    }
 }
+
+private const val TEST_XML = """
+<imbuements>
+    <base id="1" name="Basic" price="5000" protectionPrice="10000" percent="90" removecost="15000" duration="72000"/>
+    <category id="3" name="Critical Hit" agressive="1"/>
+    <imbuement name="Strike" base="1" category="3" iconid="1">
+        <attribute key="effect" type="skill" value="critical" bonus="1500" chance="1000"/>
+    </imbuement>
+</imbuements>
+"""

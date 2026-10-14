@@ -9,6 +9,7 @@ import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemTypeRegistry
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.systems.imbuement.Imbuements
 
 object OtbmConstants {
     const val NODE_START: Byte = 0xFE.toByte()
@@ -99,12 +100,16 @@ object OtbmMapLoader {
      * `IOMap::parseTileArea` (src/io/iomap.cpp:48-261) over the parsed node
      * tree. [path] is `Map::path`, used to resolve the external file
      * attributes; [itemTypes] enables the `isGroundTile`/house classification
-     * of tile items.
+     * of tile items. [imbuements] is the `g_imbuements()` composition seam:
+     * when supplied, every item created by the loader carries the registry so
+     * `hasImbuements` resolves packed ids like `Item::getImbuementInfo`
+     * (src/items/item.cpp:472-483) instead of the attribute-presence fallback.
      */
     fun load(
         buffer: ByteBuf,
         path: String = "",
         itemTypes: ItemTypeRegistry? = null,
+        imbuements: Imbuements? = null,
     ): GameMap {
         val rootNode = OtbmNodeReader.read(buffer)
         val map = GameMap()
@@ -156,6 +161,9 @@ object OtbmMapLoader {
                             val id = tileProps.readUnsignedShortLE()
                             val itemType = itemTypes?.get(id)
                             val item = Item(id, type = itemType)
+                            if (imbuements != null) {
+                                item.imbuementRegistry = imbuements
+                            }
                             if (itemTypes == null || itemType?.isGroundTile == true) {
                                 tile.ground = item
                             } else {
@@ -170,7 +178,7 @@ object OtbmMapLoader {
                 for (childNode in tileNode.children) {
                     when (childNode.type) {
                         OtbmConstants.OTBM_ITEM -> {
-                            val item = parseItem(childNode.props, itemTypes)
+                            val item = parseItem(childNode.props, itemTypes, imbuements)
                             val itemType = itemTypes?.get(item.id)
                             if (tile.isHouse() && (itemType?.isBed == true || itemType?.isTrashHolder == true)) {
                                 // House beds and trash holders keep their map position
@@ -239,9 +247,9 @@ object OtbmMapLoader {
         return path.substring(0, separator + 1) + file
     }
 
-    private fun parseItem(props: ByteBuf, itemTypes: ItemTypeRegistry?): Item {
+    private fun parseItem(props: ByteBuf, itemTypes: ItemTypeRegistry?, imbuements: Imbuements?): Item {
         val id = props.readUnsignedShortLE()
-        val item = Item.create(id, registry = itemTypes)
+        val item = Item.create(id, registry = itemTypes, imbuements = imbuements)
         val remaining = ByteArray(props.readableBytes())
         props.readBytes(remaining)
         item.unserializeAttr(PropStream(remaining))
