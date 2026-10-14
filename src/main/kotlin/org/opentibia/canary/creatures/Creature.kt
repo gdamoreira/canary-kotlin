@@ -17,6 +17,7 @@ import org.opentibia.canary.combat.condition.Outfit
 import org.opentibia.canary.combat.condition.Skill
 import org.opentibia.canary.combat.condition.SpellGroup
 import org.opentibia.canary.combat.condition.Stat
+import org.opentibia.canary.creatures.appearance.outfit.OutfitEntry
 import org.opentibia.canary.creatures.grouping.Group
 import org.opentibia.canary.creatures.grouping.Party
 import org.opentibia.canary.creatures.grouping.PartyShields_t
@@ -35,6 +36,7 @@ import org.opentibia.canary.creatures.players.components.KV
 import org.opentibia.canary.creatures.players.components.PlayerAsyncTask
 import org.opentibia.canary.creatures.players.components.PlayerCyclopedia
 import org.opentibia.canary.creatures.players.components.PlayerSex_t
+import org.opentibia.canary.creatures.players.components.PlayerStorage
 import org.opentibia.canary.creatures.players.components.RecentDeathEntry
 import org.opentibia.canary.creatures.players.components.RecentPvPKillEntry
 import org.opentibia.canary.creatures.players.getCapacity
@@ -4133,6 +4135,24 @@ class Player(
 
     /** `PlayerForgeHistory m_forgeHistoryPlayer` (player.hpp:1969); `Player::forgeHistory()` (player.cpp:12794-12796). */
     fun forgeHistory(): PlayerForgeHistory = features.forgeHistory
+
+    /**
+     * `PlayerStorage m_storage` (player.hpp:1968); `Player::storage()`
+     * (player.hpp:1541-1542). The same instance the storage reserved ranges,
+     * the `player:getStorageValue`/`setStorageValue` bindings and
+     * `PlayerAttachedEffects` mutate.
+     */
+    fun storage(): PlayerStorage = features.storage
+
+    /**
+     * `Player::outfits` (player.hpp:1686) through `Player::getOutfits()`
+     * (player.hpp:1564-1566): the composed `PlayerOutfitState` view the
+     * `player:addOutfit` family and the storage reserved range share.
+     */
+    fun getOutfits(): List<OutfitEntry> = features.outfits.getOutfits()
+
+    /** `Player::getBankBalance()` (player.cpp:8299-8301): the composed `Player::bankBalance` field. */
+    fun getBankBalance(): Long = features.vitals.getBankBalance()
 
     // forge dust ledger (player.cpp:11825-11866)
 

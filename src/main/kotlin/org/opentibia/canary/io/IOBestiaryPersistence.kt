@@ -183,6 +183,50 @@ class IOBestiaryPersistence(
         masteries
     }
 
+    /**
+     * The `players`.`animus_mastery` blob read of
+     * `IOLoginDataLoad::loadPlayerAnimusMastery`
+     * (iologindata_load_player.cpp:277-289): the interim [loadAnimusMastery]
+     * rows are encoded with `AnimusMastery::serialize`'s `PropWriteStream`
+     * format (animus_mastery.cpp:62-66). `null` when no names are stored, which
+     * the loader treats like an absent column.
+     *
+     * PARITY NOTE: Canary reads the single `players.animus_mastery` BYTEA
+     * column; the port schema maps the same ordered lowercased names to
+     * `player_animus_mastery` (V13), so the Canary blob codec is applied on
+     * this edge until the column is added (PARITY GAP, io/schema).
+     */
+    fun loadAnimusMasteryBlob(playerId: Long): ByteArray? {
+        val masteries = loadAnimusMastery(playerId)
+        if (masteries.isEmpty()) {
+            return null
+        }
+
+        val stream = PropWriteStream()
+        for (mastery in masteries) {
+            stream.writeString(mastery)
+        }
+        return stream.getStream()
+    }
+
+    /**
+     * The `players`.`animus_mastery` blob write of the inline
+     * `IOLoginDataSave::savePlayerFirst` block
+     * (iologindata_save_player.cpp:293-299): the blob is decoded with
+     * `AnimusMastery::unserialize`'s `PropStream` format
+     * (animus_mastery.cpp:68-73) into the interim [saveAnimusMastery] rows.
+     */
+    fun saveAnimusMasteryBlob(playerId: Long, blob: ByteArray) {
+        val stream = PropStream(blob)
+        val masteries = mutableListOf<String>()
+        while (true) {
+            val mastery = stream.readString() ?: break
+            masteries.add(mastery)
+        }
+
+        saveAnimusMastery(playerId, masteries)
+    }
+
     /** `players`.`animus_mastery` serialize (`AnimusMastery::serialize`). */
     fun saveAnimusMastery(playerId: Long, masteries: List<String>) {
         dataSource.connection.use { conn ->

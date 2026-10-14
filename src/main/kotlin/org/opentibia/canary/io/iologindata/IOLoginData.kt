@@ -10,6 +10,7 @@ import org.opentibia.canary.creatures.PlayerPronoun_t
 import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.creatures.monsters.MonsterType
+import org.opentibia.canary.creatures.players.animus_mastery.PlayerAnimusMasteryPersistence
 import org.opentibia.canary.creatures.players.components.PlayerSex_t
 import org.opentibia.canary.creatures.players.components.PlayerStorage
 import org.opentibia.canary.creatures.players.pvp.Kill
@@ -81,14 +82,15 @@ typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
  * `Container` trees in Canary's descending-`sid` order and re-arming decay
  * and imbuement decay through the injected seams. [loadPlayer] drives the
  * whole login load: the persisted row (vitals/experience/blessings), the
- * conditions, default outfit, skull, skills, kills, guild and stash, the
- * bestiary charms, inventory, store inbox, depot chests, reward chest, inbox,
- * storage map, VIP, prey/task hunting and instant spell list, plus the
- * advanced feature state and exiva restrictions when `disableIrrelevantInfo`
- * is unset. The part-1 sub-loads live in [IOLoginDataSubloads] and the
- * part-2 sub-loads in [IOLoginDataSubloads2], both reached through injected
- * seams. The `loadPlayerAnimusMastery` blob has no Kotlin state holder yet
- * (PARITY GAP).
+ * conditions, animus mastery, default outfit, skull, skills, kills, guild and
+ * stash, the bestiary charms, inventory, store inbox, depot chests, reward
+ * chest, inbox, storage map, VIP, prey/task hunting and instant spell list,
+ * plus the advanced feature state and exiva restrictions when
+ * `disableIrrelevantInfo` is unset. The part-1 sub-loads live in
+ * [IOLoginDataSubloads] and the part-2 sub-loads in [IOLoginDataSubloads2],
+ * both reached through injected seams. `IOLoginDataLoad::loadPlayerAnimusMastery`
+ * is wired through [loadPlayerAnimusMastery] over the composed
+ * `Player::animusMastery()` and the [PlayerAnimusMasteryPersistence] codec.
  *
  * The live item walks are ported as [saveItems] plus [savePlayerItem(player)]
  * (inventory), [savePlayerDepotItems(player)], [saveRewardItems(player)] and
@@ -174,6 +176,18 @@ class IOLoginData(
      * the other unwired seams.
      */
     private val bestiaryPersistence: IOBestiaryPersistence? = null,
+    /**
+     * `IOLoginDataLoad::loadPlayerAnimusMastery` (iologindata_load_player.cpp:
+     * 277-289) and the inline `players.animus_mastery` write of
+     * `IOLoginDataSave::savePlayerFirst` (iologindata_save_player.cpp:293-299)
+     * codec seam. The bytes go through [IOBestiaryPersistence]'s interim
+     * `player_animus_mastery` mapping (the port schema has no
+     * `players.animus_mastery` column yet, see
+     * [IOBestiaryPersistence.loadAnimusMasteryBlob]); a `null`
+     * [bestiaryPersistence] keeps both directions inert like the other unwired
+     * seams.
+     */
+    private val animusMasteryPersistence: PlayerAnimusMasteryPersistence = PlayerAnimusMasteryPersistence(),
     /**
      * `IOLoginDataSave::savePlayerPreyClass` / `savePlayerTaskHuntingClass`
      * (src/io/functions/iologindata_save_player.cpp:661-775) sink: the wave-36
@@ -314,13 +328,11 @@ class IOLoginData(
      * mirrors the missing-result guard.
      *
      * The ported sub-loads keep Canary's order for the systems the Kotlin state
-     * models: basic info, experience, blessings, conditions, default outfit,
-     * skull, skills, kills, guild, stash, bestiary charms, inventory tree,
-     * store inbox, depot chests, reward chest, inbox, storage map, VIP,
-     * prey/task hunting, instant spell list and (when the login is not a
-     * preload) the advanced feature state plus the exiva restrictions. The
-     * `loadPlayerAnimusMastery` blob is the remaining `IOLoginDataLoad` step
-     * without a Kotlin state holder (PARITY GAP).
+     * models: basic info, experience, blessings, conditions, animus mastery,
+     * default outfit, skull, skills, kills, guild, stash, bestiary charms,
+     * inventory tree, store inbox, depot chests, reward chest, inbox, storage
+     * map, VIP, prey/task hunting, instant spell list and (when the login is not
+     * a preload) the advanced feature state plus the exiva restrictions.
      */
     fun loadPlayer(player: Player, record: PlayerRecord?, disableIrrelevantInfo: Boolean = false): Boolean {
         if (record == null) {
@@ -332,6 +344,7 @@ class IOLoginData(
         loadPlayerExperience(player, record)
         loadPlayerBlessings(player, record)
         subloads?.loadPlayerConditions(player)
+        loadPlayerAnimusMastery(player)
         subloads?.loadPlayerDefaultOutfit(player)
         subloads?.loadPlayerSkullSystem(player)
         loadPlayerSkill(player, record)
@@ -400,8 +413,45 @@ class IOLoginData(
         }
     }
 
-    /** `IOLoginData::savePlayerFirst` (src/io/functions/iologindata_save_player.cpp:191-372). */
-    fun savePlayerFirst(player: Player): Boolean = players.savePlayerRecord(player)
+    /**
+     * `IOLoginData::savePlayerFirst` (src/io/functions/iologindata_save_player.cpp:191-372):
+     * the `players` row write plus the inline `players.animus_mastery` blob
+     * block (:293-299) through [savePlayerAnimusMastery].
+     */
+    fun savePlayerFirst(player: Player): Boolean {
+        if (!players.savePlayerRecord(player)) {
+            return false
+        }
+        return savePlayerAnimusMastery(player)
+    }
+
+    /**
+     * `IOLoginDataLoad::loadPlayerAnimusMastery`
+     * (iologindata_load_player.cpp:277-289): the persisted blob is passed to
+     * [PlayerAnimusMasteryPersistence.loadPlayerAnimusMastery], which appends
+     * the monster names to the composed `Player::animusMastery()`
+     * (player.cpp:12812) through `AnimusMastery::unserialize`. A missing
+     * bestiary store or an empty blob leaves the component untouched, like the
+     * C++ null-column path.
+     */
+    fun loadPlayerAnimusMastery(player: Player) {
+        val blob = bestiaryPersistence?.loadAnimusMasteryBlob(player.id) ?: return
+        animusMasteryPersistence.loadPlayerAnimusMastery(player, blob)
+    }
+
+    /**
+     * The inline `players.animus_mastery` write of
+     * `IOLoginDataSave::savePlayerFirst` (iologindata_save_player.cpp:293-299):
+     * [PlayerAnimusMasteryPersistence.savePlayerAnimusMastery] serializes the
+     * composed `Player::animusMastery()` and the bytes replace the persisted
+     * blob. A missing bestiary store stays inert and reports success like the
+     * other unwired seams.
+     */
+    fun savePlayerAnimusMastery(player: Player): Boolean {
+        val persistence = bestiaryPersistence ?: return true
+        persistence.saveAnimusMasteryBlob(player.id, animusMasteryPersistence.savePlayerAnimusMastery(player))
+        return true
+    }
 
     /**
      * `IOLoginData::savePlayer` (src/io/iologindata.cpp:195-211). The

@@ -87,7 +87,7 @@ class WorldLuaOperationsTest {
     }
 
     @Test
-    fun `Player storage uses a per-player map`() {
+    fun `Player storage delegates to the composed PlayerStorage`() {
         val environment = envWith()
         val player = Player(id = 7, name = "Hero", maxHealth = 100, health = 100, position = Position(0, 0, 7))
         environment.globals.set("p", environment.userdata.wrap("Player", player))
