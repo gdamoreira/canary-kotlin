@@ -1,0 +1,15 @@
+---
+# Adapted from canary/metrics/prometheus/prometheus.yml.
+#
+# Scrapes the Canary Kotlin server's Prometheus exporter
+# (`metricsEnablePrometheus = true`, `metricsPrometheusAddress` default
+# `localhost:9464`). When Prometheus runs in this compose stack, the server is
+# reached through `host.docker.internal` (host-gateway).
+global:
+  scrape_interval: 30s
+  scrape_timeout: 25s
+  evaluation_interval: 30s
+scrape_configs:
+  - job_name: canary
+    static_configs:
+      - targets: ['host.docker.internal:9464']

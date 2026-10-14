@@ -55,6 +55,8 @@ import org.opentibia.canary.lua.runtime.WorldLootOperations
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.network.CanaryServer
 import org.opentibia.canary.network.ListenerBoot
+import org.opentibia.canary.monitoring.MetricsRegistry
+import org.opentibia.canary.monitoring.PrometheusEndpoint
 import org.opentibia.canary.network.crypto.RsaCipher
 import org.opentibia.canary.systems.imbuement.Imbuements
 import org.opentibia.canary.systems.prey.IOPreyPersistence
@@ -360,6 +362,7 @@ class ServerBootstrap(
     private var saveManager: SaveManager? = null
     private var activeDispatcher: GameDispatcher? = null
     private var activeMonsterComputeService: MonsterComputeService? = null
+    private var prometheusEndpoint: PrometheusEndpoint? = null
 
     val isStarted: Boolean get() = started.get()
     val isShutdown: Boolean get() = drain.isDrained
@@ -370,6 +373,10 @@ class ServerBootstrap(
 
         val config = configBoot.load(environment, options)
         val configManager = configManagerBoot.load(environment, options)
+
+        // `metricsEnablePrometheus` HTTP exporter over the in-process registry
+        // (`metrics/README.md`); best-effort like the C++ boot.
+        prometheusEndpoint = PrometheusEndpoint.startIfEnabled(configManager, MetricsRegistry())
 
         val source = databaseBoot.connect(databaseConfig)
         dataSource = source
@@ -452,6 +459,8 @@ class ServerBootstrap(
 
     /** Idempotent drain: listeners -> connections -> monster compute -> dispatcher -> SaveManager -> database. */
     fun shutdown() {
+        prometheusEndpoint?.close()
+        prometheusEndpoint = null
         drain.drain()
         shutdownLatch.countDown()
     }
