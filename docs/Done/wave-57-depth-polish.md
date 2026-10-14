@@ -27,3 +27,7 @@
 ## Post-wave (§6)
 
 Update §1–§3, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+
+## Completion
+
+Completed: datapack monster-type registration at boot (67/67), outfit sub-load + Reward Container shape, PlayerWheel APIs, player storage/animus composition. 682 suites / 7556 tests.
