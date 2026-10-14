@@ -11,11 +11,22 @@ import org.opentibia.canary.database.JdbcAccountRepository
 import org.opentibia.canary.database.JdbcPlayerRepository
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.scheduling.SaveManager
+import org.opentibia.canary.io.appearances.Appearances
+import org.opentibia.canary.items.ItemAttributeParse
+import org.opentibia.canary.items.ItemType
+import org.opentibia.canary.items.Items
+import org.opentibia.canary.items.functions.ItemParse
+import org.opentibia.canary.items.functions.ItemParseRegistry
+import org.opentibia.canary.items.functions.XmlAttribute
+import org.opentibia.canary.items.functions.XmlNode
 import org.opentibia.canary.lua.loader.Scripts
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.network.CanaryServer
 import org.opentibia.canary.network.ListenerBoot
+import org.opentibia.canary.systems.imbuement.Imbuements
+import org.opentibia.canary.systems.proficiency.WeaponProficiencyLoader
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
@@ -48,10 +59,44 @@ fun interface ScriptingBoot {
     fun boot(config: ServerConfig): LuaEnvironment
 }
 
-/** Appearance/protobuf load hook (`Game::loadAppearanceProtobuf`); supplied by the appearances wave. */
+/**
+ * Loads `{CORE_DIRECTORY}/items/appearances.dat` (`Game::loadAppearanceProtobuf`,
+ * src/game/game.cpp:1657). The parsed tables are the boot artifact consumed by
+ * [ItemBoot] and the appearance-driven subsystems (`Items::loadFromProtobuf`,
+ * src/items/items.cpp:153).
+ */
 fun interface AppearanceBoot {
-    fun load(config: ServerConfig)
+    fun load(config: ServerConfig): Appearances
 }
+
+/**
+ * Loads `Item::items` (`src/items/items.hpp:389`): the protobuf merge over the
+ * [Appearances] tables followed by `{CORE_DIRECTORY}/items/items.xml`
+ * (`Items::loadFromXml`, src/items/items.cpp:281).
+ */
+fun interface ItemBoot {
+    fun load(config: ServerConfig, appearances: Appearances): Items
+}
+
+/** Loads `g_imbuements()` (`Imbuements::loadFromXml`, imbuements.cpp:47). */
+fun interface ImbuementBoot {
+    fun load(config: ServerConfig): Imbuements
+}
+
+/**
+ * Booted services shared by every game connection (`g_game()`, `Item::items`,
+ * `g_imbuements()`, `IOMarket::getInstance()`): created by [ServerBootstrap] from
+ * the connected [DataSource] and the registries loaded by [ItemBoot]/[ImbuementBoot],
+ * then injected into the [ListenerFactory].
+ */
+class GameComposition(
+    /** `g_database()` source backing `IOMarket::getInstance()` (src/io/iomarket.cpp). */
+    val dataSource: DataSource,
+    /** `Item::items` registry (`src/items/items.hpp:389`). */
+    val itemTypes: Items,
+    /** `g_imbuements()` registry (`src/creatures/players/imbuements/imbuements.hpp:44`). */
+    val imbuements: Imbuements,
+)
 
 /** Creates the network listener (`CanaryServer`) from the booted services. */
 fun interface ListenerFactory {
@@ -60,7 +105,8 @@ fun interface ListenerFactory {
         accountRepository: AccountRepository,
         gameMap: GameMap,
         dispatcher: GameDispatcher,
-        luaEnvironment: LuaEnvironment
+        luaEnvironment: LuaEnvironment,
+        composition: GameComposition
     ): ListenerBoot
 }
 
@@ -100,15 +146,28 @@ class ServerBootstrap(
     private val databaseBoot: DatabaseBoot = JdbcDatabaseBoot,
     private val mapBoot: MapBoot = MapBoot { GameMap() },
     private val scriptingBoot: ScriptingBoot = ScriptingBoot(::defaultScriptingBoot),
-    private val appearanceBoot: AppearanceBoot = AppearanceBoot { },
-    private val listenerFactory: ListenerFactory = ListenerFactory { config, accountRepository, gameMap, dispatcher, luaEnvironment ->
+    private val appearanceBoot: AppearanceBoot = AppearanceBoot {
+        Appearances.load(Path.of(DEFAULT_CORE_DIRECTORY, "items", "appearances.dat").toFile())
+    },
+    private val itemBoot: ItemBoot = ItemBoot { _, appearances -> defaultItemBoot(appearances) },
+    private val imbuementBoot: ImbuementBoot = ImbuementBoot {
+        Imbuements().apply {
+            if (!loadFromFile(Path.of(DEFAULT_CORE_DIRECTORY, "XML", "imbuements.xml"))) {
+                logger.warn { "Failed to load $DEFAULT_CORE_DIRECTORY/XML/imbuements.xml" }
+            }
+        }
+    },
+    private val listenerFactory: ListenerFactory = ListenerFactory { config, accountRepository, gameMap, dispatcher, luaEnvironment, composition ->
         CanaryServer(
             loginPort = config.loginPort,
             gamePort = config.gamePort,
             accountRepository = accountRepository,
             gameMap = gameMap,
             dispatcher = dispatcher,
-            luaEnvironment = luaEnvironment
+            luaEnvironment = luaEnvironment,
+            itemTypes = composition.itemTypes,
+            imbuements = composition.imbuements,
+            dataSource = composition.dataSource,
         )
     },
     private val dispatcher: GameDispatcher = GameDispatcher()
@@ -142,7 +201,9 @@ class ServerBootstrap(
 
         val gameMap = mapBoot.load(config)
         val luaEnvironment = scriptingBoot.boot(config)
-        appearanceBoot.load(config)
+        val appearances = appearanceBoot.load(config)
+        val imbuements = imbuementBoot.load(config)
+        val itemTypes = itemBoot.load(config, appearances)
 
         saveManager = SaveManager(JdbcPlayerRepository(source))
 
@@ -153,7 +214,8 @@ class ServerBootstrap(
             JdbcAccountRepository(source),
             gameMap,
             dispatcher,
-            luaEnvironment
+            luaEnvironment,
+            GameComposition(source, itemTypes, imbuements),
         )
         listener = server
         server.start()
@@ -181,4 +243,37 @@ private fun defaultScriptingBoot(config: ServerConfig): LuaEnvironment {
         loadScripts(Path.of(config.dataDir, "scripts"))
     }
     return environment
+}
+
+/**
+ * `Items::loadFromProtobuf` + `Items::loadFromXml` (`src/items/items.cpp:153,281`)
+ * over the booted [appearances] and `{CORE_DIRECTORY}/items/items.xml`. The
+ * `ItemParse` port applies the XML attributes; the unported
+ * `ItemParseAttributesMap` known-key dispatch (item_parse.hpp:19) reports every
+ * key as known (PARITY GAP), and the weapon registry built by
+ * `parseUnscriptedItems` is not shared with the combat host yet (PARITY GAP).
+ * The known proficiency ids come from `proficiencies.json`, mirroring
+ * `WeaponProficiency::loadFromJson` (weapon_proficiency.cpp:79).
+ */
+private fun defaultItemBoot(appearances: Appearances): Items {
+    val items = Items()
+    val knownProficiencyIds = WeaponProficiencyLoader.loadFromFile().keys
+    items.loadFromProtobuf(appearances, knownProficiencyIds = knownProficiencyIds)
+
+    val itemParse = ItemParse(registry = ItemsParseRegistry(items))
+    val xml = Files.readString(Path.of(DEFAULT_CORE_DIRECTORY, "items", "items.xml"))
+    items.loadFromXml(xml, ItemAttributeParse { key, node, value, itemType ->
+        itemParse.initParse(key, XmlNode(node), XmlAttribute(value), itemType)
+        true
+    })
+    return items
+}
+
+/** `Items` view over the `ItemParseRegistry` seam (`src/items/functions/item/item_parse.hpp:267`). */
+private class ItemsParseRegistry(private val items: Items) : ItemParseRegistry {
+    override fun getItemType(id: Int): ItemType = items.getItemType(id)
+
+    override fun addLadderId(newId: Int) = items.addLadderId(newId)
+
+    override fun addDummyId(newId: Int, rate: Int) = items.addDummyId(newId, rate)
 }

@@ -7,9 +7,12 @@ import org.opentibia.canary.config.ServerConfig
 import org.opentibia.canary.database.DatabaseConfig
 import org.opentibia.canary.database.DatabaseConnectionFactory
 import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.io.appearances.Appearances
+import org.opentibia.canary.items.Items
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.network.ListenerBoot
+import org.opentibia.canary.systems.imbuement.Imbuements
 import javax.sql.DataSource
 
 class ServerBootstrapTest {
@@ -55,7 +58,18 @@ class ServerBootstrapTest {
     private fun bootstrap(
         events: MutableList<String>,
         dataSource: DataSource,
-        dispatcher: GameDispatcher
+        dispatcher: GameDispatcher,
+        itemBoot: ItemBoot = ItemBoot { _, _ ->
+            events += "item.load"
+            Items()
+        },
+        imbuementBoot: ImbuementBoot = ImbuementBoot {
+            events += "imbuement.load"
+            Imbuements()
+        },
+        listenerFactory: ListenerFactory = ListenerFactory { _, _, _, bootedDispatcher, _, _ ->
+            RecordingListener(events, bootedDispatcher)
+        },
     ): ServerBootstrap {
         return ServerBootstrap(
             configBoot = ConfigBoot { _, _ ->
@@ -71,10 +85,13 @@ class ServerBootstrapTest {
                 events += "scripting.boot"
                 LuaEnvironment()
             },
-            appearanceBoot = AppearanceBoot { events += "appearance.load" },
-            listenerFactory = ListenerFactory { _, _, _, bootedDispatcher, _ ->
-                RecordingListener(events, bootedDispatcher)
+            appearanceBoot = AppearanceBoot {
+                events += "appearance.load"
+                Appearances.load(ByteArray(0))
             },
+            itemBoot = itemBoot,
+            imbuementBoot = imbuementBoot,
+            listenerFactory = listenerFactory,
             dispatcher = dispatcher
         )
     }
@@ -96,6 +113,8 @@ class ServerBootstrapTest {
                 "map.load",
                 "scripting.boot",
                 "appearance.load",
+                "imbuement.load",
+                "item.load",
                 "dispatcher.started",
                 "listeners.start"
             )
@@ -171,5 +190,91 @@ class ServerBootstrapTest {
 
         assertThat(events.count { it == "listeners.start" }).isEqualTo(1)
         assertThat(events.count { it == "database.connect" }).isEqualTo(1)
+    }
+
+    @Test
+    fun `boot passes the connected data source and booted registries to the listener factory`() {
+        val events = mutableListOf<String>()
+        val dataSource = DatabaseConnectionFactory.createInMemoryDataSource("bootstrap_composition")
+        val registry = Items()
+        val imbuements = Imbuements()
+        var composition: GameComposition? = null
+        val bootstrap = bootstrap(
+            events,
+            dataSource,
+            GameDispatcher(),
+            itemBoot = ItemBoot { _, _ ->
+                events += "item.load"
+                registry
+            },
+            imbuementBoot = ImbuementBoot {
+                events += "imbuement.load"
+                imbuements
+            },
+            listenerFactory = ListenerFactory { _, _, _, bootedDispatcher, _, booted ->
+                composition = booted
+                RecordingListener(events, bootedDispatcher)
+            },
+        )
+
+        try {
+            bootstrap.run()
+        } finally {
+            bootstrap.shutdown()
+        }
+
+        val booted = composition
+        assertThat(booted).isNotNull
+        assertThat(booted!!.dataSource).isSameAs(dataSource)
+        assertThat(booted.itemTypes).isSameAs(registry)
+        assertThat(booted.imbuements).isSameAs(imbuements)
+        assertThat(events).containsSubsequence(
+            "appearance.load",
+            "imbuement.load",
+            "item.load",
+            "listeners.start",
+        )
+    }
+
+    @Test
+    fun `default registries boot loads the core appearances items and imbuements`() {
+        val events = mutableListOf<String>()
+        val dataSource = DatabaseConnectionFactory.createInMemoryDataSource("bootstrap_core_files")
+        var composition: GameComposition? = null
+        val bootstrap = ServerBootstrap(
+            configBoot = ConfigBoot { _, _ ->
+                events += "config.load"
+                ServerConfig()
+            },
+            databaseBoot = RecordingDatabaseBoot(events, dataSource),
+            mapBoot = MapBoot {
+                events += "map.load"
+                GameMap()
+            },
+            scriptingBoot = ScriptingBoot {
+                events += "scripting.boot"
+                LuaEnvironment()
+            },
+            listenerFactory = ListenerFactory { _, _, _, _, _, booted ->
+                composition = booted
+                RecordingListener(events, GameDispatcher())
+            },
+            dispatcher = GameDispatcher(),
+        )
+
+        try {
+            bootstrap.run()
+        } finally {
+            bootstrap.shutdown()
+        }
+
+        val booted = composition
+        assertThat(booted).isNotNull
+        assertThat(booted!!.dataSource).isSameAs(dataSource)
+        assertThat(booted.itemTypes.getItemType(3031).name).isEqualTo("gold coin")
+        assertThat(booted.itemTypes.getItemType(813).name).isEqualTo("terra boots")
+        assertThat(booted.itemTypes.getItemType(813).weight).isEqualTo(750.0)
+        assertThat(booted.itemTypes.getItemType(813).imbuementSlot).isEqualTo(1)
+        assertThat(booted.imbuements.imbuementMap).isNotEmpty()
     }
 }
