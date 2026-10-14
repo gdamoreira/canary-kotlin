@@ -154,9 +154,20 @@ class CreatureAsyncTaskBuckets(
             scheduleBucket(bucketIndex, playerVisible)
         }
 
-        creatureAsyncBucketTelemetry.observe(clockUs() - startedAtUs, processedCreatures.toLong())
+        // `g_dispatcher().observeInternalWork` (creature.cpp:2122-2129): the
+        // dispatcher sink gates on queue-latency logging and enforces its own
+        // bounds; the local sinks keep the embedded (no-dispatcher) read views
+        // populated.
+        val elapsedUs = clockUs() - startedAtUs
+        creatureAsyncBucketTelemetry.observe(elapsedUs, processedCreatures.toLong())
+        dispatcher()?.observeInternalWork(
+            DispatcherInternalWork.CreatureAsyncBucket,
+            processedCreatures.toLong(),
+            elapsedUs,
+        )
         if (requeuedCreatures > 0) {
             creatureAsyncRequeueTelemetry.observe(0, requeuedCreatures.toLong())
+            dispatcher()?.observeInternalWork(DispatcherInternalWork.CreatureAsyncRequeue, requeuedCreatures.toLong(), 0)
         }
     }
 

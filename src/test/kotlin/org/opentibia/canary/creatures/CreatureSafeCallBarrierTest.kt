@@ -1,6 +1,8 @@
 package org.opentibia.canary.creatures
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.assertj.core.api.Assertions.assertThat
@@ -9,6 +11,7 @@ import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.map.Position
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.CoroutineContext
 
 /**
  * Transcript tests for the `Creature::safeCall` barrier continuation
@@ -26,6 +29,12 @@ class CreatureSafeCallBarrierTest {
         health = 100,
         position = Position(100, 100, 7),
     )
+
+    private class FreshThreadDispatcher : CoroutineDispatcher() {
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            Thread(block, "safe-call-context-test").start()
+        }
+    }
 
     @Test
     fun `safeCall inside a barrier task hops to the barrier continuation lane`() = runBlocking<Unit> {
@@ -64,6 +73,33 @@ class CreatureSafeCallBarrierTest {
             ).isTrue()
 
             assertThat(withTimeout(2_000) { continuationLane.await() }).isEqualTo(DispatcherLane.Deferred)
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    @Test
+    fun `safeCall after a suspension inside a barrier task still hops to the continuation lane`() = runBlocking<Unit> {
+        val dispatcher = GameDispatcher(barrierDispatcher = FreshThreadDispatcher(), barrierWorkerCount = 2)
+        dispatcher.start()
+        val creature = TestCreature()
+        creature.asyncTaskDispatcher = dispatcher
+        try {
+            val marker = CompletableDeferred<Unit>()
+            val continuationLane = CompletableDeferred<DispatcherLane>()
+            assertThat(
+                dispatcher.dispatch(DispatcherLane.GenericParallel, "safe-call-marker") { marker.complete(Unit) },
+            ).isTrue()
+            assertThat(
+                dispatcher.dispatch(DispatcherLane.GenericParallel, "safe-call-after-suspend") {
+                    delay(20)
+                    val admitted = creature.safeCall { continuationLane.complete(dispatcher.context().lane) }
+                    assertThat(admitted).isTrue()
+                },
+            ).isTrue()
+
+            withTimeout(2_000) { marker.await() }
+            assertThat(withTimeout(2_000) { continuationLane.await() }).isEqualTo(DispatcherLane.WorldCommit)
         } finally {
             dispatcher.shutdown()
         }

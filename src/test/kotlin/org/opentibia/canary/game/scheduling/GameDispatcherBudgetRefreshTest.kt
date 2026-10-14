@@ -54,7 +54,9 @@ class GameDispatcherBudgetRefreshTest {
         val values = mutableMapOf("creatureAsyncTasksPerBucket" to "32")
         val config = config(values)
         val dispatcher = GameDispatcher(clock = { now }, config = config)
-        dispatcher.start()
+        // The cadence belongs to `refreshAdaptiveBudgets` itself; driving it
+        // directly (without a worker thread racing the same fields) keeps the
+        // injected clock deterministic.
         try {
             dispatcher.setQueueLatencyLoggingEnabled(true)
             dispatcher.refreshAdaptiveBudgets()

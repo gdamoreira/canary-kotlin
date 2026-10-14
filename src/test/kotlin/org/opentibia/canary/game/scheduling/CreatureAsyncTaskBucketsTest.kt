@@ -232,6 +232,50 @@ class CreatureAsyncTaskBucketsTest {
     }
 
     @Test
+    fun `bucket and requeue work feed the dispatcher internal telemetry when reachable`() = runBlocking<Unit> {
+        dispatcher.setQueueLatencyLoggingEnabled(true)
+        val gate = gateDispatcher()
+        dispatcher.visibleCreatureAsyncSliceLimits = CreatureAsyncSliceLimits(tasksPerBucket = 16, maxRuntimeUs = 0)
+        val executed = Collections.synchronizedList(mutableListOf<Long>())
+        val done = CompletableDeferred<Unit>()
+        for (creatureId in longArrayOf(0, 64, 128)) {
+            buckets.enqueueAsyncTask(
+                creatureId = creatureId,
+                task = {
+                    executed.add(creatureId)
+                    if (executed.size == 3) done.complete(Unit)
+                },
+                playerVisible = true,
+            )
+        }
+
+        gate.countDown()
+        withTimeout(2_000) { done.await() }
+        delay(50)
+
+        assertThat(dispatcher.internalWorkSnapshot(DispatcherInternalWork.CreatureAsyncBucket).workUnits).isEqualTo(3)
+        assertThat(dispatcher.internalWorkSnapshot(DispatcherInternalWork.CreatureAsyncRequeue).workUnits).isEqualTo(3)
+    }
+
+    @Test
+    fun `bucket work is dropped by disabled dispatcher telemetry while the local sink records`() = runBlocking<Unit> {
+        val gate = gateDispatcher()
+        val done = CompletableDeferred<Unit>()
+        buckets.enqueueAsyncTask(
+            creatureId = 0,
+            task = { done.complete(Unit) },
+            playerVisible = true,
+        )
+
+        gate.countDown()
+        withTimeout(2_000) { done.await() }
+        delay(50)
+
+        assertThat(dispatcher.internalWorkSnapshot(DispatcherInternalWork.CreatureAsyncBucket).empty).isTrue()
+        assertThat(buckets.creatureAsyncBucketTelemetry.snapshotAndReset().workUnits).isEqualTo(1)
+    }
+
+    @Test
     fun `bucket index and lane selection follow the creature ai reservation`() {
         assertThat(CreatureAsyncTaskBuckets.getCreatureAsyncTaskBucketIndex(0)).isZero()
         assertThat(CreatureAsyncTaskBuckets.getCreatureAsyncTaskBucketIndex(31)).isEqualTo(31)
