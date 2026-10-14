@@ -18,6 +18,9 @@ import org.opentibia.canary.account.InMemoryAccountRepository
 import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
 import org.opentibia.canary.creatures.monsters.MonsterPipelinesHost
+import org.opentibia.canary.creatures.monsters.Monsters
+import org.opentibia.canary.creatures.spawns.MonsterSpawnPath
+import org.opentibia.canary.creatures.spawns.dispatcherSpawnScheduler
 import org.opentibia.canary.game.Game
 import org.opentibia.canary.game.scheduling.CreatureAsyncTaskBuckets
 import org.opentibia.canary.game.scheduling.DispatcherLane
@@ -88,6 +91,13 @@ class CanaryServer(
      * the dispatcher's adaptive budgets. `null` keeps the getter defaults.
      */
     private val configManager: ConfigManager? = null,
+    /**
+     * `g_monsters()` (`src/creatures/monsters/monsters.hpp:242`) composed by the
+     * bootstrap; the production monster spawn path resolves block names and
+     * builds each spawned monster from its registered type. `null` keeps the
+     * spawn path uncomposed (embedded/test use).
+     */
+    private val monsters: Monsters? = null,
     /**
      * `Creature::getCreatureAsyncTaskBuckets` shared world state
      * (creature.cpp:34-55) composed by the bootstrap; when absent the listener
@@ -199,6 +209,32 @@ class CanaryServer(
         }
     }
 
+    // --- monster spawn path (`IOMap::loadMonsters` + `SpawnsMonster::startup`) ---
+
+    /**
+     * Production monster spawn path: `IOMap::loadMonsters`
+     * (src/io/iomap.hpp:32-46) over the booted `g_monsters()` registry plus the
+     * `map.spawnsMonster.startup()` half of `Game::setGameState(GAME_STATE_INIT)`
+     * (src/game/game.cpp:970). [start] loads the map's spawn XML and starts the
+     * engine on the WorldCommit lane so every block places through
+     * `Game::internalPlaceCreature` (src/game/game.cpp:1495) confined to the
+     * world thread (AGENTS.md 1.2); [stop] drains it like `Game::shutdown`
+     * (src/game/game.cpp:9502). Composed only when a `Monsters` registry and a
+     * config manager are injected.
+     */
+    internal val monsterSpawnPath: MonsterSpawnPath? =
+        if (monsters != null && configManager != null) {
+            MonsterSpawnPath(
+                game = game,
+                map = gameMap,
+                monsterTypes = monsters,
+                spawnScheduler = dispatcherSpawnScheduler(this.dispatcher),
+                config = configManager,
+            )
+        } else {
+            null
+        }
+
     /**
      * `g_game().transformItem(item, item->getID(), charges - 1)` binding
      * (player.cpp:1065, 7588, 7697, 7718) shared by every session's
@@ -296,6 +332,23 @@ class CanaryServer(
             dispatcher.dispatch(DispatcherLane.WorldCommit) { market.checkExpiredOffers() }
         }
 
+        // `Map::loadMap(loadMonsters=true)` -> `IOMap::loadMonsters`
+        // (src/map/map.cpp:199-201) parses the spawn XML during map boot, then
+        // `Game::setGameState(GAME_STATE_INIT)` starts the engine
+        // (src/game/game.cpp:970). The start is dispatched to the WorldCommit
+        // lane so `SpawnMonster::startup` places every block through
+        // `Game::internalPlaceCreature` on the world thread (AGENTS.md 1.2); a
+        // listener without a running dispatcher (embedded use) starts inline,
+        // mirroring `Game::addCreatureCheck` (game.cpp:7676-7684).
+        monsterSpawnPath?.let { spawns ->
+            spawns.load()
+            if (dispatcher.isRunning) {
+                dispatcher.dispatch(DispatcherLane.WorldCommit) { spawns.startup() }
+            } else {
+                spawns.startup()
+            }
+        }
+
         // Canary fires the `startup` global events during `GAME_STATE_INIT`
         // (g_globalEvents().startup(), src/game/game.cpp:988) before the world serves
         // players. Confined to the WorldCommit lane by ScriptingDispatch.
@@ -361,6 +414,11 @@ class CanaryServer(
 
     override fun stop() {
         if (!stopped.compareAndSet(false, true)) return
+        // `Game::shutdown` clears the spawns (src/game/game.cpp:9502): cancel
+        // every pending spawn check before the bootstrap drains the dispatcher,
+        // so no callback can outlive its owner (AGENTS.md deferred-callback
+        // lifetime safety).
+        monsterSpawnPath?.shutdown()
         // Drain the shared decay engine before the listener/event-loop teardown;
         // the bootstrap shuts the dispatcher down after the listeners
         // (ShutdownDrain order), so no callback can outlive its owner.

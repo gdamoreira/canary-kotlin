@@ -42,9 +42,16 @@ fun interface MonsterTypeLookup {
     fun getMonsterType(name: String): MonsterType?
 }
 
-/** `std::make_shared<Monster>(monsterType)` (src/creatures/monsters/spawns/spawn_monster.cpp:199). */
+/**
+ * `std::make_shared<Monster>(monsterType)` plus the world-entry tail of
+ * `SpawnMonster::spawnMonster` (src/creatures/monsters/spawns/spawn_monster.cpp:199-210):
+ * the factory creates the monster and places it
+ * (`g_game().internalPlaceCreature` on startup, `g_game().placeCreature` on a
+ * respawn), because the port keeps the engine free of the `g_game()` global.
+ * `null` mirrors the C++ `return false` when the monster cannot enter the world.
+ */
 fun interface MonsterFactory {
-    fun create(monsterType: MonsterType, position: Position): Monster
+    fun create(monsterType: MonsterType, position: Position, startup: Boolean): Monster?
 }
 
 /** `spawnBlock_t` (src/creatures/monsters/spawns/spawn_monster.hpp:19). */
@@ -322,11 +329,34 @@ class SpawnMonster(
             return false
         }
 
-        val monster = monsterFactory.create(monsterType, sb.pos)
+        val monster = monsterFactory.create(monsterType, sb.pos, startup) ?: return false
         monster.direction = sb.direction
         spawnedMonsterMap[spawnMonsterId] = monster
         sb.lastSpawn = now()
+        bindSpawnOwner(monster)
         return true
+    }
+
+    /**
+     * Kotlin seam replacing `Monster::setSpawnMonster` (spawn_monster.cpp:215)
+     * and the `Monster::spawnMonster` weak-pointer read of
+     * `Monster::onRemoveCreature` (src/creatures/monsters/monster.cpp:414-416).
+     * `Monster` does not carry the spawn-owner link yet (PARITY GAP), so the
+     * engine wraps the removal hook instead: when the spawned monster is
+     * removed from the world, the block's respawn check is armed and the engine
+     * replaces it after the interval. The weak self keeps a dropped spawn from
+     * being retained by its monsters (AGENTS.md deferred-callback lifetime
+     * safety).
+     */
+    private fun bindSpawnOwner(monster: Monster) {
+        val previous = monster.onRemoveCreatureHost
+        val weakSelf = WeakReference(this)
+        monster.onRemoveCreatureHost = { creature, isLogout ->
+            previous(creature, isLogout)
+            if (creature === monster) {
+                weakSelf.get()?.startSpawnMonsterCheck()
+            }
+        }
     }
 
     /** `SpawnMonster::cleanup` (src/creatures/monsters/spawns/spawn_monster.cpp:345). */
