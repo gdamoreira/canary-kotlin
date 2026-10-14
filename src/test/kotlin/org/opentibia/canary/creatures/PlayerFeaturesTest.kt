@@ -4,6 +4,9 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionType
+import org.opentibia.canary.creatures.players.animus_mastery.AnimusMastery
+import org.opentibia.canary.creatures.players.components.Achievement
+import org.opentibia.canary.creatures.players.components.InMemoryAchievementRegistry
 import org.opentibia.canary.items.Abilities
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemType
@@ -13,6 +16,15 @@ import org.opentibia.canary.systems.concoction.ConcoctionType
 import org.opentibia.canary.systems.dailyreward.DailyRewardStatus
 import org.opentibia.canary.systems.forge.ForgeHistory
 import org.opentibia.canary.systems.offlinetraining.Skill
+
+private val CASTLEMANIA = Achievement(
+    id = 1,
+    name = "Castlemania",
+    description = "You have an eye for suspicious places and love to read other people's diaries.",
+    secret = true,
+    grade = 2,
+    points = 5,
+)
 
 class PlayerFeaturesTest {
 
@@ -177,5 +189,88 @@ class PlayerFeaturesTest {
 
         assertThat(features.messageBuffer.messageBufferCount).isZero()
         assertThat(player.getCondition(ConditionType.CONDITION_MUTED)).isNull()
+    }
+
+    // --- composed achievement component (player.cpp:12758, player_achievement.cpp) ---
+
+    @Test
+    fun `player features compose one achievement component per player`() {
+        val features = newPlayer().features
+
+        assertThat(features.achiev()).isSameAs(features.achievement)
+    }
+
+    @Test
+    fun `the composed achievement resolves its registry and persists through the player kv`() {
+        val player = newPlayer()
+        val features = PlayerFeatures(
+            playerId = player.id,
+            wheelPlayer = player,
+            achievementRegistry = InMemoryAchievementRegistry(listOf(CASTLEMANIA)),
+        )
+
+        assertThat(features.achiev().add(1, timestamp = 77L)).isTrue()
+
+        assertThat(features.achiev().isUnlocked(1)).isTrue()
+        assertThat(features.achiev().getPoints()).isEqualTo(5)
+        assertThat(player.kv.scoped("achievements").scoped("unlocked").get("Castlemania")).isEqualTo(77L)
+    }
+
+    @Test
+    fun `the composed achievement sends the unlock message through the owning player typed seam`() {
+        val player = newPlayer()
+        val messages = mutableListOf<Pair<MessageClass, String>>()
+        player.sendTextMessageTyped = { type, text -> messages.add(type to text) }
+        val features = PlayerFeatures(
+            playerId = player.id,
+            wheelPlayer = player,
+            achievementRegistry = InMemoryAchievementRegistry(listOf(CASTLEMANIA)),
+        )
+
+        assertThat(features.achiev().add(1)).isTrue()
+
+        assertThat(messages).containsExactly(
+            MessageClass.MESSAGE_EVENT_ADVANCE to
+                "Congratulations! You earned the achievement Castlemania.",
+        )
+    }
+
+    @Test
+    fun `the composed achievement forwards unlocked secrets through the send seam`() {
+        val player = newPlayer()
+        val sends = mutableListOf<Pair<Int, List<Pair<Achievement, Long>>>>()
+        val features = PlayerFeatures(
+            playerId = player.id,
+            wheelPlayer = player,
+            achievementRegistry = InMemoryAchievementRegistry(listOf(CASTLEMANIA)),
+            sendCyclopediaCharacterAchievements = { secrets, achievements -> sends.add(secrets to achievements) },
+        )
+
+        features.achiev().add(1, message = false, timestamp = 77L)
+        features.achiev().sendUnlockedSecretAchievements()
+
+        assertThat(sends).containsExactly(1 to listOf(CASTLEMANIA to 77L))
+    }
+
+    // --- composed animus mastery component (player.cpp:12812) -----------------------
+
+    @Test
+    fun `player features compose one animus mastery component per player`() {
+        val features = newPlayer().features
+
+        assertThat(features.animusMastery()).isSameAs(features.animusMastery)
+        assertThat(features.animusMastery().getPoints()).isZero()
+
+        features.animusMastery().add("Dragon")
+
+        assertThat(features.animusMastery().has("DRAGON")).isTrue()
+    }
+
+    @Test
+    fun `player features expose the injected animus mastery instance`() {
+        val injected = AnimusMastery(monsterXpMultiplier = 100f, monstersXpMultiplier = 0.1f)
+        val features = PlayerFeatures(playerId = 7, animusMastery = injected)
+
+        assertThat(features.animusMastery()).isSameAs(injected)
     }
 }

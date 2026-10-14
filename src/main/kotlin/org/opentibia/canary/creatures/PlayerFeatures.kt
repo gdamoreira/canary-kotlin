@@ -12,9 +12,15 @@ import org.opentibia.canary.creatures.players.PlayerCyclopediaTrackerState
 import org.opentibia.canary.creatures.players.PlayerItemAbilityState
 import org.opentibia.canary.creatures.players.PlayerMagicAffinityState
 import org.opentibia.canary.creatures.players.PlayerMessageBuffer
+import org.opentibia.canary.creatures.players.animus_mastery.AnimusMastery
+import org.opentibia.canary.creatures.players.components.Achievement
+import org.opentibia.canary.creatures.players.components.AchievementPlayer
+import org.opentibia.canary.creatures.players.components.AchievementRegistry
 import org.opentibia.canary.creatures.players.components.CyclopediaPlayer
+import org.opentibia.canary.creatures.players.components.InMemoryAchievementRegistry
 import org.opentibia.canary.creatures.players.components.InMemoryKV
 import org.opentibia.canary.creatures.players.components.KV
+import org.opentibia.canary.creatures.players.components.PlayerAchievement
 import org.opentibia.canary.creatures.players.components.PlayerAsyncTask
 import org.opentibia.canary.creatures.players.components.PlayerCyclopedia
 import org.opentibia.canary.creatures.players.components.RecentDeathEntry
@@ -76,11 +82,13 @@ import org.opentibia.canary.creatures.vocations.Vocations
  * (`Player::inventoryAbilities`), [bossPoints] (`Player::bossPoints`),
  * [cyclopediaTracker] (`Player::m_bestiaryMonsterTracker`/
  * `m_bosstiaryMonsterTracker`), [aimAtTarget]
- * (`Player::aimAtTargetSpellIds`) and [magicAffinity]
- * (`Player::specializedMagicLevel`/`magicShieldCapacity*`). Their
+ * (`Player::aimAtTargetSpellIds`), [magicAffinity]
+ * (`Player::specializedMagicLevel`/`magicShieldCapacity*`), [achievement]
+ * (`Player::achiev()`, player.cpp:12758) and [animusMastery]
+ * (`Player::animusMastery()`, player.cpp:12812). Their
  * `Player`-backed seams ([getEquippedItems], [cannotBeMuted], [addCondition],
- * [sendTextMessage]) default to the injected [wheelPlayer] view, which the
- * `Player` always supplies as itself.
+ * [sendTextMessage], [achievementKv]) default to the injected [wheelPlayer]
+ * view, which the `Player` always supplies as itself.
  *
  * COMPOSITION (`CanaryServer` composition root):
  *  - the `Player` feeds [maxMessageBuffer] from its own `maxMessageBuffer`
@@ -202,6 +210,31 @@ class PlayerFeatures(
      * tests can observe that every `Player` gets the same instance.
      */
     val muteCountMap: MutableMap<Long, Int> = mutableMapOf(),
+    /**
+     * `AnimusMastery m_animusMastery` (player.hpp:1966); accessor
+     * `Player::animusMastery()` (player.cpp:12812-12818). The default carries
+     * Canary's `ANIMUS_MASTERY_*` defaults (configmanager.cpp:222-224, 390);
+     * the composition root injects an instance built from the loaded config.
+     */
+    val animusMastery: AnimusMastery = AnimusMastery(),
+    /**
+     * `Player&` view of [achievement] (`player_achievement.hpp:31`); when
+     * absent the holder adapts the injected [wheelPlayer] host.
+     */
+    private val achievementPlayer: AchievementPlayer? = null,
+    /**
+     * `m_player.kv()` root of [achievement] (player_achievement.cpp:81, 87, 92,
+     * 136); defaults to the host's `kv` (player.cpp:1398-1400).
+     */
+    private val achievementKv: KV? = null,
+    /** `g_game()` achievement registry seam of [achievement] (game.cpp:12481-12503). */
+    val achievementRegistry: AchievementRegistry = InMemoryAchievementRegistry(),
+    /**
+     * `Player::sendCyclopediaCharacterAchievements(secretsUnlocked, achievements)`
+     * (player.cpp:8438-8441) seam of [achievement]. The Kotlin `Player` has no
+     * such protocol method yet, so the default is inert (PARITY GAP).
+     */
+    private val sendCyclopediaCharacterAchievements: (Int, List<Pair<Achievement, Long>>) -> Unit = { _, _ -> },
 ) {
     /** `PlayerWheel m_wheelPlayer` (player.hpp:1959); accessor `wheel()`. */
     val wheel: PlayerWheel by lazy(LazyThreadSafetyMode.NONE) {
@@ -350,6 +383,30 @@ class PlayerFeatures(
         sendTextMessage = sendTextMessage,
         muteCountMap = muteCountMap,
     )
+
+    /**
+     * `PlayerAchievement m_playerAchievement` (player.hpp:1961); accessor
+     * `Player::achiev()` (player.cpp:12758-12764). Created lazily so the host's
+     * `kv` (player.cpp:1398-1400) is only resolved after the `Player` finished
+     * constructing; [wheelPlayer] is the live host the C++ member embeds.
+     */
+    val achievement: PlayerAchievement by lazy(LazyThreadSafetyMode.NONE) {
+        PlayerAchievement(
+            player = achievementPlayer ?: HostAchievementPlayer(
+                wheelPlayer,
+                sendTextMessage,
+                sendCyclopediaCharacterAchievements,
+            ),
+            kv = achievementKv ?: wheelPlayer?.kv ?: InMemoryKV(),
+            registry = achievementRegistry,
+        )
+    }
+
+    /** `Player::achiev()` (player.cpp:12758): the composed [achievement] component. */
+    fun achiev(): PlayerAchievement = achievement
+
+    /** `Player::animusMastery()` (player.cpp:12812): the composed [animusMastery] component. */
+    fun animusMastery(): AnimusMastery = animusMastery
 }
 
 /**
@@ -411,5 +468,34 @@ private class HostCyclopediaTrackerClient(
 
     override fun refreshCyclopediaMonsterTracker(trackerList: Set<MonsterType?>, isBoss: Boolean) {
         client()?.refreshCyclopediaMonsterTracker(trackerList.filterNotNull().toSet(), isBoss)
+    }
+}
+
+/**
+ * [AchievementPlayer] adapter of [PlayerFeatures.achievement] over the live
+ * [wheelPlayer] host. The unlock message is sent as
+ * `MESSAGE_EVENT_ADVANCE` (player_achievement.cpp:30) through the injected
+ * typed-text seam, and the cyclopedia send through
+ * [PlayerFeatures.sendCyclopediaCharacterAchievements]. Reads resolve per
+ * call, so rebinding `Player.sendTextMessageTyped` is observed immediately; a
+ * `null` host (tooling/tests) yields the inert projection.
+ */
+private class HostAchievementPlayer(
+    private val player: Player?,
+    private val sendTypedTextMessage: (MessageClass, String) -> Unit,
+    private val sendAchievements: (Int, List<Pair<Achievement, Long>>) -> Unit,
+) : AchievementPlayer {
+
+    override fun getName(): String = player?.name ?: ""
+
+    override fun sendTextMessage(message: String) {
+        sendTypedTextMessage(MessageClass.MESSAGE_EVENT_ADVANCE, message)
+    }
+
+    override fun sendCyclopediaCharacterAchievements(
+        secretsUnlocked: Int,
+        achievementsUnlocked: List<Pair<Achievement, Long>>,
+    ) {
+        sendAchievements(secretsUnlocked, achievementsUnlocked)
     }
 }
