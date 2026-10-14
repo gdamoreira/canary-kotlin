@@ -27,3 +27,7 @@
 ## Post-wave (§6)
 
 Update §1–§3, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+
+## Completion
+
+Completed: game remainder 3 (~39 members left), player depth 5 + async follow (659/821), monster composition, item registry hubs. 617 suites / 6858 tests.

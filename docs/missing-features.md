@@ -20,11 +20,11 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | Inbound `ProtocolGame` opcodes | 141 active (148 cases − 7 commented-out) | 141 decoded | **100%** | ~46/141 (**~33%**) fully applied; the rest decode + WorldCommit confinement boundary (engine state machine unapplied) |
 | Outbound `ProtocolGame` senders | 187 `ProtocolGame::send*` | 187 ported + wired | **100%** | wave 45 added the `ProtocolSink` and wired creature/item/container/stats state changes to frames |
 | Lua bindings (`src/lua/functions/*`) | 1,961 registrations (1,246 methods + 34 meta + 673 enums + 8 classes) | 1,246 methods + ~1,300 enums | **100%** methods | remaining: a few `SOUND_EFFECT_TYPE_*` names; `luascript.cpp` sandboxing partial |
-| `Player` methods (`player.cpp`) | 821 `Player::` methods | 648 functions in `creatures/players/**` | **~79%** raw count | +57 wave 46, +52 wave 47 (spell cooldown, container/UI, interaction, light, race icons) |
+| `Player` methods (`player.cpp`) | 821 `Player::` methods | 659 functions in `creatures/players/**` | **~80%** raw count | +52 wave 47, +11 wave 48 (inventory weight, exiva, saySpell, kill tracking, reward chest, menu) |
 | Monster engine (`monster.cpp`, 4,014 lines) | 198 unique `Monster::` methods | 89 name-matched + async pipelines + host + type state | **~80%** | wave 46: forge/hazard/soul-pit state, attack/defense spells, strategies, `canUseAttack`/`castSpell` |
 | Map engine (`map.cpp`) | — | — | **~85%** | sight/`canWalkTo`/pathing/caches/spectators/houses/towns (wave 38) |
 | Persistence (`iologindata*`, `iomapserialize`) | — | — | **~80%** | 24/24 iologindata, 10/10 iomapserialize, market/prey/bestiary/bosstiary/guild/storage (V10–V14) |
-| **Estimated full-parity completion** | — | — | **~95%** | weighted across the above |
+| **Estimated full-parity completion** | — | — | **~96%** | weighted across the above |
 
 ### 1.2 Module completion (by inventory rows in §2)
 
@@ -132,7 +132,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 ### `src/game/`
 | C++ | Status | Missing |
 |---|---|---|
-| `game.cpp` (13,141, ~352 methods) | PARTIAL | waves 35–47 added combat pipeline, channels, quick-loot/managed containers (15), say family (6), updaters/effects (22), records/helpers (13), map/monster seam wiring; ~84 real members remain (stash/depot-search, use-item, item batch creation, cyclopedia, maps/start/shutdown) |
+| `game.cpp` (13,141, ~352 methods) | PARTIAL | waves 35–48 added combat pipeline, channels, quick-loot, say family, updaters, records, stash/depot-search (9), item batch (6), use-item/container (11), cyclopedia helpers (26); ~39 real members remain (`loadMap`/`start`/`shutdown`, `playerMove*`/`playerMoveThing`, `playerEquipItem`/`playerWrapableItem`/`playerLookInShop`/`playerChangeOutfit`/`playerInspectItem`, reward chest ×2, big cyclopedia info, `combatBlockHit`/`applyCharmRune`, misc) |
 | `functions/game_reload.cpp` | **IMPLEMENTED** | `game/reload/GameReload.kt` (generation-checked reload, `Reload_t`) |
 | `modal_window/*` | **IMPLEMENTED** | `game/modal/ModalWindow.kt` (per-player tracking + answer routing) |
 | `movement/position.cpp` | **IMPLEMENTED** | `game/movement/Position.kt` (offsets/distances/rectangles/directions) |
@@ -242,10 +242,10 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 ## 3. Highest-Impact Gaps (ranked, verified)
 
-1. **`game.cpp` remainder** — ~84 real `Game::` members (stash/depot-search, use-item, item batch creation, cyclopedia info, maps/start/shutdown, team-finder/NPC helpers).
-2. **`Player` domain model** — 648/821 raw (~79%).
-3. **Host composition** — remaining seam bindings (monster check-attack/has-extra-swing, `Game` placement notification tails, trade/sale single-source-of-truth, imbuement registry at all item-creation hubs).
-4. **Async follow** — `goToFollowCreature_async` pipeline.
+1. **`game.cpp` remainder** — ~39 real members (map/start/shutdown, movement `playerMove*`, use-item extras, reward chest, big cyclopedia info, `combatBlockHit`/`applyCharmRune`, misc).
+2. **`Player` domain model** — 659/821 raw (~80%).
+3. **Composition roots** — `Game`/`GameHandler` imbuement-registry assignment at their `Item.create` sites; monster host production seams; `Creature.kt` async-batch routing.
+4. **Item materialization on login** — `IOLoginData` item paths return attribute maps; C++ `loadItems` materialization + `ATTR_CUSTOM` codec unported.
 
 ---
 
