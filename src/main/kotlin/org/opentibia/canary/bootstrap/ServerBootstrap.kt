@@ -53,6 +53,7 @@ import org.opentibia.canary.lua.runtime.WorldLootOperations
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.network.CanaryServer
 import org.opentibia.canary.network.ListenerBoot
+import org.opentibia.canary.network.crypto.RsaCipher
 import org.opentibia.canary.systems.imbuement.Imbuements
 import org.opentibia.canary.systems.prey.IOPreyPersistence
 import org.opentibia.canary.systems.proficiency.WeaponProficiencyLoader
@@ -252,7 +253,7 @@ fun interface ListenerFactory {
  * login-load seam so the listener composes the `MonsterPipelinesHost` and the
  * game sessions over the same world instances.
  */
-internal fun defaultListenerFactory(): ListenerFactory =
+internal fun defaultListenerFactory(rsaCipher: RsaCipher = RsaCipher.fromEnvironment()): ListenerFactory =
     ListenerFactory { config, accountRepository, gameMap, dispatcher, luaEnvironment, composition ->
         CanaryServer(
             loginPort = config.loginPort,
@@ -260,6 +261,7 @@ internal fun defaultListenerFactory(): ListenerFactory =
             accountRepository = accountRepository,
             gameMap = gameMap,
             dispatcher = dispatcher,
+            rsaCipher = rsaCipher,
             luaEnvironment = luaEnvironment,
             itemTypes = composition.itemTypes,
             imbuements = composition.imbuements,

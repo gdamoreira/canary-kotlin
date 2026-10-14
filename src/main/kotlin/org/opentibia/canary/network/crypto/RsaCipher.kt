@@ -18,10 +18,51 @@ class RsaCipher(
     companion object {
         const val BLOCK_SIZE = 128
 
+        /** Environment variable naming the first RSA prime factor (port bootstrap; not a Canary symbol). */
+        const val ENV_P = "CANARY_RSA_P"
+
+        /** Environment variable naming the second RSA prime factor (port bootstrap; not a Canary symbol). */
+        const val ENV_Q = "CANARY_RSA_Q"
+
         // Default OpenTibia / Canary RSA keys (decimal strings)
         const val DEFAULT_P = "14299623962416399520070177382898895550795403345466153217470516082934737582776038882967213386204600674145392845853859217990626450972452084065728686565928113"
         const val DEFAULT_Q = "7630979195970404721891201847792002125535401292779123937207447574596692788513647179235335529307251350570728407373705564708871762033017096809910315212884101"
         private val E = BigInteger.valueOf(65537L)
+
+        /**
+         * Resolves the handshake key pair from `CANARY_RSA_P`/`CANARY_RSA_Q`, defaulting to
+         * Canary's built-in OpenTibia key material when neither is configured. Both variables
+         * must be supplied together; invalid values fail the boot fast with a clear error.
+         *
+         * Port bootstrap factory (not a Canary symbol): Canary compiles `key.pem` at build
+         * time (`src/security/rsa.cpp`), while the port keeps the same decimal key pair as
+         * the default and allows overriding it through configuration.
+         */
+        fun fromEnvironment(environment: Map<String, String> = System.getenv()): RsaCipher {
+            val pString = environment[ENV_P]?.trim()?.takeIf { it.isNotEmpty() }
+            val qString = environment[ENV_Q]?.trim()?.takeIf { it.isNotEmpty() }
+            if (pString == null && qString == null) {
+                return RsaCipher()
+            }
+            require(pString != null && qString != null) {
+                "CANARY_RSA_P and CANARY_RSA_Q must be configured together"
+            }
+            val p = pString.toBigIntegerOrNull()
+                ?: throw IllegalArgumentException("CANARY_RSA_P is not a decimal integer")
+            val q = qString.toBigIntegerOrNull()
+                ?: throw IllegalArgumentException("CANARY_RSA_Q is not a decimal integer")
+            require(p > BigInteger.ONE) { "CANARY_RSA_P must be greater than 1" }
+            require(q > BigInteger.ONE) { "CANARY_RSA_Q must be greater than 1" }
+            require(p != q) { "CANARY_RSA_P and CANARY_RSA_Q must differ" }
+            return try {
+                RsaCipher(p.toString(), q.toString())
+            } catch (exception: ArithmeticException) {
+                throw IllegalArgumentException(
+                    "Invalid CANARY_RSA_P/CANARY_RSA_Q key material: ${exception.message}",
+                    exception,
+                )
+            }
+        }
     }
 
     private val n: BigInteger
