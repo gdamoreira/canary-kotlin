@@ -67,7 +67,9 @@ data class PlayerOutfitRecord(
 /**
  * Port of the `players` column reads of `IOLoginDataLoad::loadPlayerConditions`
  * / `loadPlayerSkullSystem` (iologindata_load_player.cpp:257-342) and
- * `loadPlayerDefaultOutfit` (:291-317).
+ * `loadPlayerDefaultOutfit` (:291-317), plus the `players.conditions` write of
+ * `IOLoginDataSave::savePlayerFirst`
+ * (iologindata_save_player.cpp:279-291).
  */
 interface PlayerSubloadRepository {
     /** `null` when the player row is missing, mirroring the C++ null result. */
@@ -75,6 +77,14 @@ interface PlayerSubloadRepository {
 
     /** `null` when the player row is missing, mirroring the C++ null result. */
     fun loadOutfit(playerId: Long): PlayerOutfitRecord?
+
+    /**
+     * `IOLoginDataSave::savePlayerFirst` `players`.`conditions` write
+     * (iologindata_save_player.cpp:279-291): the serialized blob replaces the
+     * stored stream. Returns `false` when the player row is missing or the
+     * update fails, mirroring the guard's failure contract.
+     */
+    fun saveConditions(playerId: Long, blob: ByteArray): Boolean
 }
 
 /**
@@ -131,6 +141,24 @@ class DbPlayerSubloadRepository(private val dataSource: DataSource) : PlayerSubl
         null
     }
 
+    /**
+     * `IOLoginDataSave::savePlayerFirst` `players`.`conditions` write
+     * (iologindata_save_player.cpp:279-291). Like the record write of
+     * `savePlayerFirst`, a missing player row leaves the guard failed.
+     */
+    override fun saveConditions(playerId: Long, blob: ByteArray): Boolean = try {
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(SAVE_CONDITIONS_SQL).use { statement ->
+                statement.setBytes(1, blob)
+                statement.setLong(2, playerId)
+                statement.executeUpdate() > 0
+            }
+        }
+    } catch (ex: SQLException) {
+        logger.error(ex) { "player condition save failed for player $playerId" }
+        false
+    }
+
     private companion object {
         const val CONDITIONS_COLUMN = "conditions"
         const val SKULL_COLUMN = "skull"
@@ -143,6 +171,8 @@ class DbPlayerSubloadRepository(private val dataSource: DataSource) : PlayerSubl
         const val LOOK_ADDONS_COLUMN = "lookaddons"
 
         const val LOAD_SQL = """SELECT "conditions", "skull", "skulltime" FROM players WHERE id = ?"""
+
+        const val SAVE_CONDITIONS_SQL = """UPDATE players SET "conditions" = ? WHERE id = ?"""
 
         const val OUTFIT_SQL =
             """SELECT "looktype", "lookhead", "lookbody", "looklegs", "lookfeet", "lookaddons" FROM players WHERE id = ?"""
@@ -286,12 +316,14 @@ class DbGuildMembershipRepository(private val dataSource: DataSource) : GuildMem
  *    decodes the base attributes, the regeneration/mana-shield/soul/damage/
  *    speed/outfit/light/charm payloads and skips a condition whose
  *    representation is impossible (matching the C++ failure semantics).
- *  - `Player::storage()`, `Player::vip()`, `Player::kv()` (full ValueWrapper
- *    store) and `Player::guildNick` are not composed into the Kotlin `Player`
- *    yet, so the sub-loads take their owners as seams.
+ *  - `Player::vip()`, `Player::kv()` (full ValueWrapper store) and
+ *    `Player::guildNick` are not composed into the Kotlin `Player` yet, so the
+ *    sub-loads take their owners as seams. `Player::storage()` is composed
+ *    (`Player.features.storage`, player.hpp:1968), so [playerStorage] defaults
+ *    to it and only an explicit `null` keeps the sub-load inert.
  */
 class IOLoginDataSubloads(
-    /** The `players.conditions`/`skull`/`skulltime` reads. */
+    /** The `players.conditions`/`skull`/`skulltime` reads and the `conditions` write. */
     private val subloadRepository: PlayerSubloadRepository? = null,
     /** `g_playerStorageRepository()` (wave-36). */
     private val storageRepository: PlayerStorageRepository? = null,
@@ -301,8 +333,13 @@ class IOLoginDataSubloads(
     private val guildMemberships: GuildMembershipRepository? = null,
     /** `IOGuild::loadGuild` / `getWarList` (src/io/ioguild.cpp:15-77). */
     private val ioGuild: IOGuild? = null,
-    /** `Player::storage()`; `null` models the un-composed component. */
-    private val playerStorage: ((Player) -> PlayerStorage?)? = null,
+    /**
+     * `Player::storage()` (player.hpp:1541-1542). The composed component is
+     * reached through `Player.features.storage`, so the default binds the live
+     * accessor; an explicit `null` keeps the sub-load inert for callers that
+     * need the pre-wiring behavior.
+     */
+    private val playerStorage: ((Player) -> PlayerStorage?)? = { player -> player.features.storage },
     /** `Player::vip()`; `null` models the un-composed component. */
     private val playerVip: ((Player) -> PlayerVip?)? = null,
     /** `Player::guildNick` (`PlayerSocialState`); `null` leaves the nick unset. */
@@ -813,8 +850,17 @@ class IOLoginDataSubloads(
                     (condition as? ConditionOutfit)?.setOutfit(outfit) != null
                 } ?: false
 
-                CONDITION_ATTR_PERIODDAMAGE ->
-                    readParam(stream, condition, ConditionParam.CONDITION_PARAM_PERIODICDAMAGE) { it.readI32() }
+                CONDITION_ATTR_PERIODDAMAGE -> if (condition is ConditionDamage) {
+                    // `ConditionDamage::unserializeProp` reads the field directly
+                    // and returns the read result (condition.cpp:1810-1812); the
+                    // Kotlin `ConditionDamage::setParam` returns the base result
+                    // for `CONDITION_PARAM_PERIODICDAMAGE` (condition.cpp:1783-1785),
+                    // so the value applies through `readBaseParam` exactly like
+                    // the C++ override.
+                    readBaseParam(stream, condition, ConditionParam.CONDITION_PARAM_PERIODICDAMAGE) { it.readI32() }
+                } else {
+                    false
+                }
 
                 CONDITION_ATTR_MANASHIELD ->
                     readParam(stream, condition, ConditionParam.CONDITION_PARAM_MANASHIELD) { it.readU32()?.toInt() }

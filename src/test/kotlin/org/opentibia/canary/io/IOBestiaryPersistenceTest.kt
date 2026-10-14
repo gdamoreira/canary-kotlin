@@ -8,11 +8,12 @@ import org.junit.jupiter.api.Test
 import org.opentibia.canary.database.DatabaseConnectionFactory
 import org.opentibia.canary.database.JdbcFeatureStateRepository
 import org.opentibia.canary.database.PlayerFeatureState
+import org.opentibia.canary.io.PropWriteStream
 import org.opentibia.canary.systems.bestiary.CharmRune
 import org.opentibia.canary.systems.bestiary.PlayerBestiaryState
 
 /**
- * H2 (Flyway V1-V13) round-trip tests for [IOBestiaryPersistence], transcribed
+ * H2 (Flyway V1-V21) round-trip tests for [IOBestiaryPersistence], transcribed
  * from Canary's bestiary persistence:
  *
  *  - `IOLoginDataLoad::loadPlayerBestiaryCharms`
@@ -189,5 +190,62 @@ class IOBestiaryPersistenceTest {
         persistence.saveAnimusMastery(1, listOf("rat"))
 
         assertThat(persistence.loadAnimusMastery(1)).containsExactly("rat")
+    }
+
+    @Test
+    fun `saveAnimusMastery writes the canary single column blob`() {
+        persistence.saveAnimusMastery(1, listOf("demon", "dragon lord"))
+
+        val expected = PropWriteStream().apply {
+            writeString("demon")
+            writeString("dragon lord")
+        }.getStream()
+
+        assertThat(readAnimusMasteryColumn(1)).isEqualTo(expected)
+        assertThat(countAnimusMasteryInterimRows(1)).isZero()
+    }
+
+    @Test
+    fun `loadAnimusMastery decodes the single column blob in order`() {
+        val blob = PropWriteStream().apply {
+            writeString("demon")
+            writeString("rat")
+        }.getStream()
+        writeAnimusMasteryColumn(1, blob)
+
+        assertThat(persistence.loadAnimusMastery(1)).containsExactly("demon", "rat")
+    }
+
+    @Test
+    fun `loadAnimusMastery returns an empty list for a missing player row`() {
+        assertThat(persistence.loadAnimusMastery(999_999)).isEmpty()
+    }
+
+    private fun readAnimusMasteryColumn(playerId: Long): ByteArray? = dataSource.connection.use { conn ->
+        conn.prepareStatement("SELECT animus_mastery FROM players WHERE id = ?").use { stmt ->
+            stmt.setLong(1, playerId)
+            stmt.executeQuery().use { rs ->
+                if (rs.next()) rs.getBytes("animus_mastery") else null
+            }
+        }
+    }
+
+    private fun writeAnimusMasteryColumn(playerId: Long, blob: ByteArray) {
+        dataSource.connection.use { conn ->
+            conn.prepareStatement("UPDATE players SET animus_mastery = ? WHERE id = ?").use { stmt ->
+                stmt.setBytes(1, blob)
+                stmt.setLong(2, playerId)
+                stmt.executeUpdate()
+            }
+        }
+    }
+
+    private fun countAnimusMasteryInterimRows(playerId: Long): Int = dataSource.connection.use { conn ->
+        conn.prepareStatement("SELECT COUNT(*) FROM player_animus_mastery WHERE player_id = ?").use { stmt ->
+            stmt.setLong(1, playerId)
+            stmt.executeQuery().use { rs ->
+                if (rs.next()) rs.getInt(1) else 0
+            }
+        }
     }
 }
