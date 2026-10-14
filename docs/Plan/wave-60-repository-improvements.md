@@ -31,7 +31,7 @@ All items are **sequential on `main`** (they overlap files; parallel worktrees w
 
 **Evidence (measured):** 59 tracked files contain the literal home prefix; ~60 occurrences.
 
-- `AGENTS.md` (§5.1 template: "Canary Repository Root: `/Users/damoreira/.projects/canary`")
+- `AGENTS.md` (§5.1 template: "Canary Repository Root: `/Users/<name>/.projects/canary`")
 - `docs/TEMPLATE_FEATURE.md` (same template)
 - `docs/Done/050-…` – `docs/Done/064-…` (15 feature docs)
 - `docs/missing-features.md`, `docs/improvements.md`
@@ -124,7 +124,7 @@ All items are **sequential on `main`** (they overlap files; parallel worktrees w
 3. Replace C++ `building/*` with Kotlin/Gradle equivalents (`docs/building/kotlin-local-validation.md` etc.); skip `python-scripts/`, `Doxyfile.in`, `config.ld.in` (C++ tooling), or port only if useful for Lua API docs.
 4. Every ported file carries an "Adapted from `canary/docs/<path>`" provenance line and uses the I1 relative-path convention.
 
-**Validation:** index links resolve; `git grep "Users/damoreira"` still 0; no stale C++ build claims.
+**Validation:** index links resolve; `git grep -nE "Users/[A-Za-z0-9._-]+"` still 0; no stale C++ build claims.
 
 **Commit:** `docs: port and adapt canary documentation for the Kotlin engine`
 
