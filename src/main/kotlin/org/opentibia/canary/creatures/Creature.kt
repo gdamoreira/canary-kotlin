@@ -2220,12 +2220,16 @@ class Player(
     }
 
     /**
-     * `Player::storedConditionList` (player.hpp:1698). Canary fills it from the
-     * persisted conditions (`IOLoginDataLoad::loadPlayer`, iologindata_load_player.cpp:271);
-     * the port's login loader does not collect conditions yet, so the replay
-     * loop stays empty until that seam lands (PARITY GAP).
+     * `Player::storedConditionList` (player.hpp:1698). Canary keeps the vector
+     * private and grants `IOLoginDataLoad` friend access (player.hpp:1948);
+     * the port models that friendship as `internal`, exactly like the
+     * friend-parity `skills` view, and
+     * [org.opentibia.canary.io.iologindata.IOLoginDataSubloads.loadPlayerConditions]
+     * fills it from the persisted `conditions` blob. The
+     * [onCreatureAppear] replay keeps applying them on login
+     * (player.cpp:12220-12316).
      */
-    private val storedConditionList = mutableListOf<Condition>()
+    internal val storedConditionList = mutableListOf<Condition>()
 
     /** `Player::clearPartyInvitations` (player.cpp:7816-7821). */
     fun clearPartyInvitations() {
