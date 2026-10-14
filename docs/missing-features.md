@@ -24,7 +24,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | Monster engine (`monster.cpp`, 4,014 lines) | 198 unique `Monster::` methods | 89 name-matched + async pipelines + host + type state + barrier buckets | **~85%** | wave 51: barrier-parallel creature async buckets, budget/requeue/promotion/rollback |
 | Map engine (`map.cpp`) | — | — | **~85%** | sight/`canWalkTo`/pathing/caches/spectators/houses/towns (wave 38) |
 | Persistence (`iologindata*`, `iomapserialize`) | — | — | **~80%** | 24/24 iologindata, 10/10 iomapserialize, market/prey/bestiary/bosstiary/guild/storage (V10–V14) |
-| **Estimated full-parity completion** | — | — | **~99.5%** | tracked inventory complete; registry injection, spawn path, persistence sub-loads (conditions/skull/guild/storage/VIP/exiva + bestiary/store/reward/prey/task), and Lua extra-ops delegation all wired |
+| **Estimated full-parity completion** | — | — | **~99.5%** | tracked inventory complete; boot registers 67/67 datapack monster types via Lua, spawn path live, all persistence sub-loads wired, wheel APIs + storage composition done |
 
 ### 1.2 Module completion (by inventory rows in §2)
 
@@ -244,9 +244,10 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 **The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Remaining work is depth polish:
 
-1. **Monster-type XML depth** — the booted `Monsters` registry currently maps name/experience/speed/health/loot only; the datapack populates types via Lua `Game.createMonsterType` (Lua path not composed at boot).
-2. **Outfit sub-load + remaining `Reward`-as-`Container` shape** — small pre-existing shape gaps.
-3. **Depth seams** — wheel upgrade APIs, `Player::m_storage` host composition, `AnimusMastery` blob persistence vs relational, host title/badge player reads.
+1. **Combat spell actors in monster types** — `sb.spell`/`CombatSpell` actor for attack blocks (combat type/effect/shoot) and nested `childLoot`.
+2. **Remaining `PlayerWheel` checks** — healing link/major stat/beam mastery/cooldown reduction/augments/persistence serialization.
+3. **Host accessors** — `Player::storage()`/`getOutfits`/`getBankBalance` composition in `Creature.kt`; io binding of the animus blob.
+4. **Lua shadows** — Lua outfit/storage maps still shadow the composed `PlayerFeatures` state.
 
 ---
 
