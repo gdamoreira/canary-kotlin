@@ -48,6 +48,21 @@ application {
     mainClass.set("org.opentibia.canary.MainKt")
 }
 
+// Bundle the config template and the game data next to the executable so the
+// installed distribution resolves them through APP_HOME (AppPaths): a runnable
+// `build/install/canary-kotlin/bin/canary-kotlin` finds `config.lua` and the
+// data folders in its own directory.
+distributions {
+    main {
+        contents {
+            from("config.lua.dist")
+            from("data") { into("data") }
+            from("data-canary") { into("data-canary") }
+            from("data-otservbr-global") { into("data-otservbr-global") }
+        }
+    }
+}
+
 kotlin {
     jvmToolchain(25)
 }

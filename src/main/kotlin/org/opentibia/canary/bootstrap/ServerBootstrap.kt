@@ -5,6 +5,7 @@ import org.opentibia.canary.account.AccountRepository
 import org.opentibia.canary.config.CliOptions
 import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
+import org.opentibia.canary.config.AppPaths
 import org.opentibia.canary.config.ConfigSource
 import org.opentibia.canary.config.ServerConfig
 import org.opentibia.canary.config.configSourceOf
@@ -66,9 +67,6 @@ import javax.sql.DataSource
 
 private val logger = KotlinLogging.logger {}
 
-/** Canary `CORE_DIRECTORY` default (config.lua.dist): engine Lua core lives under `data/`. */
-private const val DEFAULT_CORE_DIRECTORY = "data"
-
 /** Resolves the effective config (`ConfigManager` precedence: CLI > file > env > defaults). */
 fun interface ConfigBoot {
     fun load(environment: Map<String, String>, options: CliOptions): ServerConfig
@@ -93,7 +91,9 @@ private fun defaultConfigManagerBoot(environment: Map<String, String>, options: 
     ConfigManager(
         keyMap = ConfigKeys.all.associateWith { it.luaIdentifier },
         environment = environment,
-        properties = options.configPath?.let { path -> configSourceOf(path) } ?: ConfigSource.EMPTY,
+        properties = options.configPath?.let { path -> configSourceOf(path) }
+            ?: AppPaths.defaultConfigFile(environment)?.let { ConfigSource.ofLua(it) }
+            ?: ConfigSource.EMPTY,
     )
 
 /**
@@ -183,7 +183,7 @@ fun interface MonsterBoot {
  * (vocation.cpp:337-367).
  */
 fun interface VocationsBoot {
-    fun load(itemTypes: Items, configManager: ConfigManager): Vocations
+    fun load(config: ServerConfig, itemTypes: Items, configManager: ConfigManager): Vocations
 }
 
 /**
@@ -314,14 +314,14 @@ class ServerBootstrap(
     private val databaseBoot: DatabaseBoot = JdbcDatabaseBoot,
     private val mapBoot: MapBoot = MapBoot { GameMap() },
     private val scriptingBoot: ScriptingBoot = ScriptingBoot(::defaultScriptingBoot),
-    private val appearanceBoot: AppearanceBoot = AppearanceBoot {
-        Appearances.load(Path.of(DEFAULT_CORE_DIRECTORY, "items", "appearances.dat").toFile())
+    private val appearanceBoot: AppearanceBoot = AppearanceBoot { config ->
+        Appearances.load(Path.of(config.coreDir, "items", "appearances.dat").toFile())
     },
-    private val itemBoot: ItemBoot = ItemBoot { _, appearances -> defaultItemBoot(appearances) },
-    private val imbuementBoot: ImbuementBoot = ImbuementBoot {
+    private val itemBoot: ItemBoot = ItemBoot { config, appearances -> defaultItemBoot(config, appearances) },
+    private val imbuementBoot: ImbuementBoot = ImbuementBoot { config ->
         Imbuements().apply {
-            if (!loadFromFile(Path.of(DEFAULT_CORE_DIRECTORY, "XML", "imbuements.xml"))) {
-                logger.warn { "Failed to load $DEFAULT_CORE_DIRECTORY/XML/imbuements.xml" }
+            if (!loadFromFile(Path.of(config.coreDir, "XML", "imbuements.xml"))) {
+                logger.warn { "Failed to load ${config.coreDir}/XML/imbuements.xml" }
             }
         }
     },
@@ -381,7 +381,7 @@ class ServerBootstrap(
         val imbuements = imbuementBoot.load(config)
         val itemTypes = itemBoot.load(config, appearances)
         val monsters = monsterBoot.load(config, luaEnvironment, configManager, itemTypes)
-        val vocations = vocationsBoot.load(itemTypes, configManager)
+        val vocations = vocationsBoot.load(config, itemTypes, configManager)
 
         // `g_monsterComputeService().start(monsterComputeConfig)` after
         // `loadMaps` (src/canary_server.cpp:212-216); the dispatcher is
@@ -461,7 +461,7 @@ class ServerBootstrap(
 private fun defaultScriptingBoot(config: ServerConfig): LuaEnvironment {
     val environment = LuaEnvironment().apply { initState() }
     Scripts(environment).apply {
-        setDirectories(Path.of(config.dataDir), Path.of(DEFAULT_CORE_DIRECTORY))
+        setDirectories(Path.of(config.dataDir), Path.of(config.coreDir))
         loadLibs()
         loadScripts(Path.of(config.dataDir, "scripts"))
     }
@@ -478,13 +478,15 @@ private fun defaultScriptingBoot(config: ServerConfig): LuaEnvironment {
  * The known proficiency ids come from `proficiencies.json`, mirroring
  * `WeaponProficiency::loadFromJson` (weapon_proficiency.cpp:79).
  */
-private fun defaultItemBoot(appearances: Appearances): Items {
+private fun defaultItemBoot(config: ServerConfig, appearances: Appearances): Items {
     val items = Items()
-    val knownProficiencyIds = WeaponProficiencyLoader.loadFromFile().keys
+    val knownProficiencyIds = WeaponProficiencyLoader.loadFromFile(
+        Path.of(config.coreDir, "items", "proficiencies.json")
+    ).keys
     items.loadFromProtobuf(appearances, knownProficiencyIds = knownProficiencyIds)
 
     val itemParse = ItemParse(registry = ItemsParseRegistry(items))
-    val xml = Files.readString(Path.of(DEFAULT_CORE_DIRECTORY, "items", "items.xml"))
+    val xml = Files.readString(Path.of(config.coreDir, "items", "items.xml"))
     items.loadFromXml(xml, ItemAttributeParse { key, node, value, itemType ->
         itemParse.initParse(key, XmlNode(node), XmlAttribute(value), itemType)
         true
@@ -563,9 +565,9 @@ private fun loadMonsterTypesFromLua(
     LootFunctions.install(luaEnvironment, WorldLootOperations(itemIdsByName))
 
     val scripts = Scripts(luaEnvironment)
-    scripts.setDirectories(Path.of(config.dataDir), Path.of(DEFAULT_CORE_DIRECTORY))
+    scripts.setDirectories(Path.of(config.dataDir), Path.of(config.coreDir))
 
-    val coreLib = Path.of(DEFAULT_CORE_DIRECTORY, "scripts", "lib")
+    val coreLib = Path.of(config.coreDir, "scripts", "lib")
     if (!Files.isDirectory(coreLib)) {
         logger.warn { "[defaultMonsterBoot] - Core monster registration libs missing under $coreLib" }
     } else {
@@ -644,9 +646,9 @@ private fun monsterTypeOf(definition: MonsterTypeDefinition): MonsterType =
  * values behind the `Vocation` regen getters (vocation.cpp:337-367) and
  * `Item::items.getItemIdByName` for the wheel gem ids (vocation.cpp:405-411).
  */
-internal fun defaultVocationsBoot(itemTypes: Items, configManager: ConfigManager): Vocations {
+internal fun defaultVocationsBoot(config: ServerConfig, itemTypes: Items, configManager: ConfigManager): Vocations {
     val registry = Vocations(rates = vocationRates(configManager), itemIdByName = itemTypes::getItemIdByName)
-    val path = Path.of(DEFAULT_CORE_DIRECTORY, "XML", "vocations.xml")
+    val path = Path.of(config.coreDir, "XML", "vocations.xml")
     val xml = try {
         Files.readString(path)
     } catch (exception: Exception) {

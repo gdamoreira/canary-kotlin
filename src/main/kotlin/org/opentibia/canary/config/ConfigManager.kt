@@ -27,7 +27,8 @@ data class ServerConfig(
     val statusPort: Int = 7171,
     val maxPlayers: Int = 1000,
     val motd: String = "Welcome to Canary Kotlin Edition!",
-    val dataDir: String = "data-canary"
+    val dataDir: String = "data-canary",
+    val coreDir: String = "data"
 )
 
 /**
@@ -231,14 +232,18 @@ class ConfigManager(
             options: CliOptions = CliOptions()
         ): ServerConfig {
             val baseConfig = fromEnvironment(environment)
-            val fileConfig = options.configPath?.let { path ->
+            val configPath = options.configPath ?: AppPaths.defaultConfigFile(environment)?.toString()
+            val fileConfig = configPath?.let { path ->
                 if (path.endsWith(".lua", ignoreCase = true)) {
                     applyLuaConfig(baseConfig, luaConfigOf(Files.readString(Path.of(path)), path))
                 } else {
                     applyProperties(baseConfig, Files.readString(Path.of(path)))
                 }
             } ?: baseConfig
-            return fileConfig.copy(dataDir = options.dataDir ?: fileConfig.dataDir)
+            return fileConfig.copy(
+                dataDir = AppPaths.resolveDirectory(options.dataDir ?: fileConfig.dataDir, environment),
+                coreDir = AppPaths.resolveDirectory(fileConfig.coreDir, environment),
+            )
         }
 
         fun loadFromPropertiesString(content: String, environment: Map<String, String> = emptyMap()): ServerConfig {
@@ -254,7 +259,8 @@ class ConfigManager(
                 statusPort = environment["CANARY_STATUS_PORT"]?.toIntOrNull() ?: 7171,
                 maxPlayers = environment["CANARY_MAX_PLAYERS"]?.toIntOrNull() ?: 1000,
                 motd = environment["CANARY_MOTD"] ?: "Welcome to Canary Kotlin Edition!",
-                dataDir = environment["CANARY_DATA_DIR"] ?: "data-canary"
+                dataDir = environment["CANARY_DATA_DIR"] ?: "data-canary",
+                coreDir = environment["CANARY_CORE_DIR"] ?: "data"
             )
         }
 
@@ -268,7 +274,8 @@ class ConfigManager(
                 statusPort = values["statusProtocolPort"]?.toIntOrNull() ?: baseConfig.statusPort,
                 maxPlayers = values["maxPlayers"]?.toIntOrNull() ?: baseConfig.maxPlayers,
                 motd = values["serverMotd"] ?: baseConfig.motd,
-                dataDir = values["dataPackDirectory"] ?: baseConfig.dataDir
+                dataDir = values["dataPackDirectory"] ?: baseConfig.dataDir,
+                coreDir = values["coreDirectory"] ?: baseConfig.coreDir
             )
 
         private fun applyProperties(baseConfig: ServerConfig, content: String): ServerConfig {
@@ -282,7 +289,8 @@ class ConfigManager(
                 statusPort = properties["server.statusPort"]?.toIntOrNull() ?: baseConfig.statusPort,
                 maxPlayers = properties["server.maxPlayers"]?.toIntOrNull() ?: baseConfig.maxPlayers,
                 motd = properties["server.motd"] ?: baseConfig.motd,
-                dataDir = properties["server.dataDir"] ?: baseConfig.dataDir
+                dataDir = properties["server.dataDir"] ?: baseConfig.dataDir,
+                coreDir = properties["server.coreDir"] ?: baseConfig.coreDir
             )
         }
     }
