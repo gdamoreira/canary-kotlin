@@ -7779,7 +7779,7 @@ class Game(
             handleHazardSystemAttack(damage, attackerPlayer, targetMonster, true)
 
             if ((damage.primaryValue == 0 && damage.secondaryValue == 0) || damage.hazardDodge) {
-                notifyHazardDodge(spectators, targetPos, attackerPlayer, targetMonster)
+                notifySpectators(spectators, targetPos, attackerPlayer, targetMonster)
                 return true
             }
         }
@@ -7928,8 +7928,7 @@ class Game(
 
     /**
      * `Game::sendDamageMessageAndEffects` (src/game/game.cpp:8788): the
-     * `sendEffects` + `sendMessages` pair. `shouldSendMessage` is reduced to
-     * always true because the Kotlin `TextMessage` color model is not ported.
+     * `sendEffects` + `sendMessages` pair gated by [shouldSendMessage].
      */
     fun sendDamageMessageAndEffects(
         attacker: Creature?,
@@ -7942,8 +7941,19 @@ class Game(
         realDamage: Int,
     ) {
         sendEffects(attacker, target, damage, targetPos, spectators)
-        sendMessages(attacker, target, damage, targetPos, attackerPlayer, targetPlayer, spectators, realDamage)
+
+        if (shouldSendMessage()) {
+            sendMessages(attacker, target, damage, targetPos, attackerPlayer, targetPlayer, spectators, realDamage)
+        }
     }
+
+    /**
+     * `Game::shouldSendMessage` (src/game/game.cpp:8797): Canary gates the
+     * fanout on the `TextMessage` colors assigned by `combatGetTypeInfo`. The
+     * Kotlin message model carries no colors, so the reduced port always
+     * passes (PARITY GAP).
+     */
+    private fun shouldSendMessage(): Boolean = true
 
     /** `Game::sendEffects` (src/game/game.cpp:8943) over the injected [combatGetTypeInfo]. */
     private fun sendEffects(
@@ -8089,7 +8099,7 @@ class Game(
      * `Game::notifySpectators` (src/game/game.cpp:8203): the hazard dodge
      * fanout. The cancel message is not ported (PARITY GAP).
      */
-    private fun notifyHazardDodge(
+    private fun notifySpectators(
         spectators: List<Creature>,
         targetPos: Position,
         attackerPlayer: Player,
