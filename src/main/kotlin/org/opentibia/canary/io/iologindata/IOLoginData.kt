@@ -6,6 +6,7 @@ import org.opentibia.canary.account.AccountErrors
 import org.opentibia.canary.account.getTimeNow
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerPronoun_t
+import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.players.components.PlayerSex_t
 import org.opentibia.canary.creatures.players.components.PlayerStorage
 import org.opentibia.canary.creatures.players.pvp.Kill
@@ -26,10 +27,26 @@ import org.opentibia.canary.database.PlayerSpellsRepository
 import org.opentibia.canary.database.PlayerStashRepository
 import org.opentibia.canary.database.PlayerStorageRepository
 import org.opentibia.canary.database.VipLoginRepository
+import org.opentibia.canary.database.serializeItemAttributes
+import org.opentibia.canary.io.PropStream
+import org.opentibia.canary.items.Container
+import org.opentibia.canary.items.Item
+import org.opentibia.canary.items.ItemAttribute
+import org.opentibia.canary.items.ItemTypeRegistry
+import org.opentibia.canary.items.ObjectCategory_t
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.persistence.PlayerFeatureStateLoader
+import org.opentibia.canary.systems.imbuement.ImbuementItem
+import org.opentibia.canary.systems.imbuement.Imbuements
 
 private val logger = KotlinLogging.logger {}
+
+/**
+ * `IOLoginDataLoad::ItemsMap` (`src/io/functions/iologindata_load_player.hpp:50`):
+ * the stored row id (`sid`) mapped to the materialized item and its parent
+ * (`pid`). Canary's `std::map` ordering (ascending `sid`) is the caller's map.
+ */
+typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
 
 /**
  * Kotlin port of `IOLoginData` (src/io/iologindata.cpp, 24 methods) wired to
@@ -48,12 +65,22 @@ private val logger = KotlinLogging.logger {}
  * `removeVIPGroupEntry`/`addGuidVIPGroupEntry`/`removeGuidVIPGroupEntry`).
  * [savePlayerGuard] stays private like the C++ helper.
  *
+ * The `IOLoginDataLoad` item paths also materialize the stored rows into live
+ * items through [loadItems] (plus [loadPlayerInventoryItems],
+ * [loadPlayerDepotItems] and [loadPlayerInboxItems]), rebuilding the
+ * `Container` trees in Canary's descending-`sid` order and re-arming decay
+ * and imbuement decay through the injected seams.
+ *
  * PARITY GAPS (reported by the wave): `savePlayer` cannot wrap every
  * repository in one shared transaction because each JDBC repository owns its
  * connection; the Canary offline guard (`Player::isOffline`) has no Kotlin
- * equivalent yet, so [saveOnlyDataForOnlinePlayer] always flushes; and the
+ * equivalent yet, so [saveOnlyDataForOnlinePlayer] always flushes; the
  * `PlayerPvp` kill list, stash and reward chest have no live `Player` sink in
- * this port, so those helpers take the persisted values directly.
+ * this port, so those helpers take the persisted values directly; the flat
+ * `player_inventory_items` layout stores no `pid`/`sid`, so nested inventory
+ * containers cannot be materialized; and the item type registry, imbuement
+ * registry and decay/imbuement-decay seams default to unwired until the
+ * composition root supplies them.
  */
 class IOLoginData(
     private val players: PlayerLoginRepository,
@@ -68,6 +95,10 @@ class IOLoginData(
     private val rewards: PlayerRewardsRepository,
     private val features: FeatureStateRepository? = null,
     private val authType: String = AUTH_TYPE_PASSWORD,
+    private val itemTypes: ItemTypeRegistry? = null,
+    private val imbuements: Imbuements? = null,
+    private val startDecaying: (Item) -> Unit = {},
+    private val startImbuementDecay: (ImbuementItem) -> Unit = {},
 ) {
 
     private val featureLoader: PlayerFeatureStateLoader? by lazy(LazyThreadSafetyMode.NONE) {
@@ -316,6 +347,236 @@ class IOLoginData(
 
     /** `IOLoginDataLoad::loadPlayerInboxItems` (iologindata_load_player.cpp:710-758) row read. */
     fun loadPlayerInboxItems(playerId: Long): List<PlayerContainerItemState> = depots.loadInbox(playerId)
+
+    // --- IOLoginDataLoad item materialization (iologindata_load_player.cpp:34-758) ---
+
+    /**
+     * `IOLoginDataLoad::loadItems` (iologindata_load_player.cpp:34-65):
+     * materializes one [Item] per stored row, applies its attribute map through
+     * `Item::unserializeAttr` (src/items/item.cpp:1351-1366) and keys the
+     * result by `sid` with its `pid`. Canary's guards are preserved: a row
+     * whose item type is not registered is skipped like a null
+     * `Item::CreateItem`, a row whose attributes fail to deserialize is
+     * skipped, and an exception during creation or deserialization is logged
+     * and the row skipped.
+     */
+    fun loadItems(
+        itemsMap: ItemsMap,
+        rows: List<PlayerContainerItemState>,
+        player: Player? = null,
+    ): ItemsMap {
+        for (row in rows) {
+            try {
+                val item = materializeItem(row.itemId, row.count, row.attributes)
+                if (item == null) {
+                    logger.warn {
+                        "[loadItems] - Failed to create item of type ${row.itemId} for player ${player?.name}"
+                    }
+                    continue
+                }
+                itemsMap[row.sid] = item to row.pid
+            } catch (ex: Exception) {
+                logger.warn(ex) { "[loadItems] - Exception during the creation or deserialization of the item" }
+            }
+        }
+        return itemsMap
+    }
+
+    /**
+     * `Item::CreateItem` plus `Item::unserializeAttr`
+     * (src/items/item.cpp:393-472, 1351-1366): the decoded attribute map is
+     * re-encoded with the shared persistence codec and replayed through
+     * `readAttr`, so every attribute follows Canary's exact deserialization
+     * semantics (subtype, decaying state, custom attributes/imbuements).
+     * Returns `null` when the type is unknown or the attributes are rejected,
+     * mirroring Canary's null-item and failed-`unserializeAttr` paths.
+     */
+    private fun materializeItem(itemId: Int, count: Int, attributes: Map<ItemAttribute, Any>): Item? {
+        val registry = itemTypes
+        if (registry != null && registry.get(itemId) == null) {
+            return null
+        }
+
+        val item = Item.create(itemId, count, registry, imbuements)
+        if (!item.unserializeAttr(PropStream(serializeItemAttributes(count, attributes)))) {
+            logger.warn { "[loadItems] - Failed to deserialize item attributes ${item.id}" }
+            return null
+        }
+        return item
+    }
+
+    /**
+     * `IOLoginDataLoad::loadPlayerInventoryItems`
+     * (iologindata_load_player.cpp:543-632): items are attached in descending
+     * `sid` order, direct slot items start decaying immediately and the packed
+     * imbuement store arms `g_imbuementDecay().startImbuementDecay` after the
+     * loop. Containers carrying `QUICKLOOTCONTAINER`/`OBTAINCONTAINER` bits
+     * register through `Player::refreshManagedContainer(..., loading = true)`.
+     *
+     * PARITY GAP: the flat `player_inventory_items` layout stores no `pid`/`sid`,
+     * so a nested inventory container cannot be represented and only the direct
+     * slot branch of the Canary loop is reachable; `internalAddThing` replaces
+     * `Player::internalAddThing` as a caller seam.
+     */
+    fun loadPlayerInventoryItems(
+        player: Player,
+        rows: List<PlayerItemState>,
+        internalAddThing: (slot: Int, item: Item) -> Unit = { _, _ -> },
+    ): ItemsMap {
+        val flatRows = rows.map {
+            PlayerContainerItemState(
+                pid = it.slot,
+                sid = it.slot,
+                itemId = it.itemId,
+                count = it.count,
+                attributes = it.attributes,
+            )
+        }
+        val inventoryItems = sortedMapOf<Int, Pair<Item, Int>>()
+        val itemsToStartDecaying = mutableListOf<Item>()
+        val imbuedItemsToStartDecay = mutableListOf<Item>()
+
+        try {
+            loadItems(inventoryItems, flatRows, player)
+
+            for ((_, pair) in inventoryItems.entries.reversed()) {
+                val (item, slot) = pair
+                if (slot < Slots_t.FIRST || slot > Slots_t.LAST) {
+                    // The C++ parent-container branch needs pid/sid rows the
+                    // flat layout cannot carry; an unknown parent is skipped.
+                    continue
+                }
+
+                internalAddThing(slot, item)
+                startDecaying(item)
+                if (item.hasImbuements()) {
+                    imbuedItemsToStartDecay.add(item)
+                }
+
+                val itemContainer = item.getContainer()
+                if (itemContainer == null) {
+                    continue
+                }
+
+                if (itemContainer !== item && itemContainer.hasImbuements()) {
+                    imbuedItemsToStartDecay.add(itemContainer)
+                }
+
+                for (isLootContainer in listOf(true, false)) {
+                    val checkAttribute =
+                        if (isLootContainer) ItemAttribute.QUICKLOOTCONTAINER else ItemAttribute.OBTAINCONTAINER
+                    if (!item.hasAttribute(checkAttribute)) {
+                        continue
+                    }
+
+                    val flags = (item.getAttribute(checkAttribute) as? Number)?.toLong() ?: 0L
+                    for (category in 1..31) {
+                        if (flags and (1L shl category) == 0L) {
+                            continue
+                        }
+                        val resolvedCategory =
+                            ObjectCategory_t.entries.firstOrNull { it.value == category } ?: continue
+                        player.refreshManagedContainer(resolvedCategory, itemContainer, isLootContainer, true)
+                    }
+                }
+            }
+
+            for (item in itemsToStartDecaying) {
+                startDecaying(item)
+            }
+
+            for (item in imbuedItemsToStartDecay) {
+                startImbuementDecay(ImbuementItem(item))
+            }
+        } catch (ex: Exception) {
+            logger.error(ex) {
+                "[IOLoginDataLoad::loadPlayerInventoryItems] - Exception during inventory loading"
+            }
+        }
+
+        return inventoryItems
+    }
+
+    /**
+     * `IOLoginDataLoad::loadPlayerDepotItems`
+     * (iologindata_load_player.cpp:663-708): `pid` below 100 targets the town
+     * depot chest (`Player::getDepotChest(pid, true)`), any other `pid` is the
+     * `sid` of the parent container. Direct chest children start decaying
+     * immediately, nested items only after the whole parent chain is attached.
+     */
+    fun loadPlayerDepotItems(
+        player: Player,
+        rows: List<PlayerContainerItemState>,
+        getDepotChest: (depotId: Int) -> Container?,
+    ): ItemsMap {
+        val depotItems = sortedMapOf<Int, Pair<Item, Int>>()
+        loadItems(depotItems, rows, player)
+
+        val itemsToStartDecaying = mutableListOf<Item>()
+        for ((_, pair) in depotItems.entries.reversed()) {
+            val (item, pid) = pair
+            if (pid >= 0 && pid < 100) {
+                val depotChest = getDepotChest(pid)
+                if (depotChest != null) {
+                    depotChest.internalAddThing(item)
+                    startDecaying(item)
+                }
+            } else {
+                val parentItem = depotItems[pid]?.first ?: continue
+                val container = parentItem.getContainer() ?: continue
+                container.internalAddThing(item)
+                itemsToStartDecaying.add(item)
+            }
+        }
+
+        for (item in itemsToStartDecaying) {
+            startDecaying(item)
+        }
+
+        return depotItems
+    }
+
+    /**
+     * `IOLoginDataLoad::loadPlayerInboxItems`
+     * (iologindata_load_player.cpp:710-758): `pid` below 100 targets the
+     * player inbox, any other `pid` is the `sid` of the parent container. A
+     * missing inbox warns and skips the whole attachment (and the deferred
+     * decay loop), exactly like the C++ early return.
+     */
+    fun loadPlayerInboxItems(
+        player: Player,
+        rows: List<PlayerContainerItemState>,
+        getInbox: () -> Container?,
+    ): ItemsMap {
+        val inboxItems = sortedMapOf<Int, Pair<Item, Int>>()
+        loadItems(inboxItems, rows, player)
+
+        val playerInbox = getInbox()
+        if (playerInbox == null) {
+            logger.warn { "[loadPlayerInboxItems] - Player inbox nullptr" }
+            return inboxItems
+        }
+
+        val itemsToStartDecaying = mutableListOf<Item>()
+        for ((_, pair) in inboxItems.entries.reversed()) {
+            val (item, pid) = pair
+            if (pid >= 0 && pid < 100) {
+                playerInbox.internalAddThing(item)
+                startDecaying(item)
+            } else {
+                val parentItem = inboxItems[pid]?.first ?: continue
+                val container = parentItem.getContainer() ?: continue
+                container.internalAddThing(item)
+                itemsToStartDecaying.add(item)
+            }
+        }
+
+        for (item in itemsToStartDecaying) {
+            startDecaying(item)
+        }
+
+        return inboxItems
+    }
 
     /** `IOLoginDataSave::savePlayerInbox` (iologindata_save_player.cpp:634-659). */
     fun savePlayerInbox(playerId: Long, inboxList: List<PlayerContainerItemState>): Boolean {
