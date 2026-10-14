@@ -16,11 +16,14 @@ import org.opentibia.canary.game.movement.getOffsetX
 import org.opentibia.canary.game.movement.getOffsetY
 import org.opentibia.canary.game.scheduling.CoalescedTaskState
 import org.opentibia.canary.game.scheduling.DispatcherPolicy
+import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.scheduling.MonsterComputeCompletion
 import org.opentibia.canary.game.scheduling.MonsterComputePriority
 import org.opentibia.canary.game.scheduling.MonsterComputeService
+import org.opentibia.canary.game.scheduling.barrierContinuationLane
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.cache.NavRegionSnapshot
+import java.lang.ref.WeakReference
 
 /**
  * Host seam for the game-side state and mutations the deferred `Monster` pipelines
@@ -301,6 +304,14 @@ class MonsterAsyncPipelines(
     private val behaviorState: MonsterBehaviorState,
     private val host: MonsterAsyncHost,
 ) {
+    /**
+     * `g_dispatcher()` provider for the [safeCall] continuation
+     * (`Creature::safeCall`, creature.cpp:2195-2209): the host binds the live
+     * composition-root dispatcher, and `null` (or a world-lane context) keeps
+     * the inline path for embedded/test hosts.
+     */
+    var dispatcher: (() -> GameDispatcher?) = { null }
+
     /** `Monster::targetSearchComputeOutstanding` (monster.hpp:400). */
     var targetSearchComputeOutstanding: Boolean = false
         private set
@@ -1675,7 +1686,31 @@ class MonsterAsyncPipelines(
         }
     }
 
+    /**
+     * `Creature::safeCall` (`creature.cpp:2195-2217`). Inside a barrier-parallel
+     * dispatcher context the action hops to
+     * `barrierContinuationLane(context lane)` through `Dispatcher::addEvent`
+     * (creature.cpp:2196-2209); the deferred callback re-resolves the owning
+     * pipeline and drops the action once it was removed or replaced (AGENTS.md
+     * deferred-callback lifetime safety). Outside that context the action runs
+     * immediately, and a removed owner refuses it (creature.cpp:2210-2216).
+     */
     private fun safeCall(action: () -> Unit): Boolean {
+        val activeDispatcher = dispatcher()
+        if (activeDispatcher != null) {
+            val context = activeDispatcher.context()
+            if (context.isBarrierParallel()) {
+                val weakSelf = WeakReference(this)
+                return activeDispatcher.dispatch(barrierContinuationLane(context.lane), context.taskName) {
+                    val self = weakSelf.get() ?: return@dispatch
+                    if (self.host.resolveMonster(self.monsterId) !== self || self.host.isRemoved()) {
+                        return@dispatch
+                    }
+                    action()
+                }
+            }
+        }
+
         if (host.isRemoved()) {
             return false
         }

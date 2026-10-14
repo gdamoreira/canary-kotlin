@@ -10,6 +10,7 @@ import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.game.scheduling.ConcurrentTimedWork
 import org.opentibia.canary.game.scheduling.CreatureAsyncTaskBuckets
+import org.opentibia.canary.game.scheduling.DispatcherInternalWork
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.scheduling.MonsterComputeService
@@ -54,7 +55,9 @@ import java.lang.ref.WeakReference
  * - [postThinkLateness]/[movementRefreshLateness]: the
  *   `g_dispatcher().observeInternalWork(MonsterPostThinkLateness/
  *   MonsterMovementRefreshLateness, 1, elapsed)` observations
- *   (monster.cpp:1668 and 513, dispatcher.cpp:378).
+ *   (monster.cpp:1668 and 513, dispatcher.cpp:378-388). A host with an
+ *   attached [dispatcher] observes through it; the local
+ *   [ConcurrentTimedWork] sinks are the embedded/test fallback.
  *
  * COORDINATOR WIRING (outside the monster package):
  * - `Game.checkCreatures` (game.cpp:7719-7741): after `creature.onThink(...)`
@@ -97,10 +100,12 @@ import java.lang.ref.WeakReference
  *   Canary revision; the attack entry is `Creature::checkCreatureAttack`
  *   (creature.cpp:174-186), bound by `register` and scheduled through
  *   [dispatcher] when present.
- * - `GameDispatcher` has no `observeInternalWork` yet (PARITY GAP); the two
- *   [ConcurrentTimedWork] sinks below are the ported dispatcher telemetry
- *   primitives, and the coordinator rebinds the two host lambdas when the
- *   dispatcher exposes the sink.
+ * - The creature async buckets, the post-think queue lane hops, the lateness
+ *   observations and the `Creature::safeCall` continuation all observe through
+ *   the attached [GameDispatcher] when one is reachable; the embedded/test
+ *   paths fall back to the local sinks and inline execution. The coordinator
+ *   must attach [dispatcher] before the world runs (the providers re-read it
+ *   per observation, so a late attach is visible without re-registering).
  * - The type-dependent seams of each entry's [MonsterAsyncHost]
  *   (`attackSpells`, `castSpell`, `canUseAttack`, `strategiesTarget*`,
  *   `changeTargetChance`) are bound when [register] receives the monster's
@@ -215,10 +220,20 @@ class MonsterPipelinesHost(
         schedulePostThinkQueueOnLane(playerVisible, task)
     }
 
-    /** `DispatcherInternalWork::MonsterPostThinkLateness` sink (monster.cpp:1668). */
+    /**
+     * `DispatcherInternalWork::MonsterPostThinkLateness` sink (monster.cpp:1668):
+     * observations go through [dispatcher]'s `observeInternalWork` when a
+     * dispatcher is attached, otherwise into this local fallback for
+     * embedded/test hosts.
+     */
     val postThinkLateness = ConcurrentTimedWork()
 
-    /** `DispatcherInternalWork::MonsterMovementRefreshLateness` sink (monster.cpp:513). */
+    /**
+     * `DispatcherInternalWork::MonsterMovementRefreshLateness` sink
+     * (monster.cpp:513): observations go through [dispatcher]'s
+     * `observeInternalWork` when a dispatcher is attached, otherwise into this
+     * local fallback for embedded/test hosts.
+     */
     val movementRefreshLateness = ConcurrentTimedWork()
 
     /**
@@ -356,6 +371,7 @@ class MonsterPipelinesHost(
         val monster = entry.monster
         val host = entry.host
 
+        entry.pipeline.dispatcher = { dispatcher }
         host.resolveMonster = { id -> entries[id]?.pipeline }
         host.isRemoved = { monster.isRemoved() }
         host.isDead = { monster.isDead }
@@ -413,10 +429,42 @@ class MonsterPipelinesHost(
         host.goToFollowCreatureAsync = { runGoToFollowCreature(entry) }
         host.onFollowCreatureComplete = { target -> runOnFollowCreatureComplete(entry, target) }
         host.observePostThinkLateness = { elapsedMs ->
-            postThinkLateness.observe(elapsedMs * 1_000, 1, "MonsterPostThinkLateness")
+            observeLateness(
+                DispatcherInternalWork.MonsterPostThinkLateness,
+                elapsedMs,
+                postThinkLateness,
+                "MonsterPostThinkLateness",
+            )
         }
         host.observeMovementRefreshLateness = { elapsedMs ->
-            movementRefreshLateness.observe(elapsedMs * 1_000, 1, "MonsterMovementRefreshLateness")
+            observeLateness(
+                DispatcherInternalWork.MonsterMovementRefreshLateness,
+                elapsedMs,
+                movementRefreshLateness,
+                "MonsterMovementRefreshLateness",
+            )
+        }
+    }
+
+    /**
+     * `Monster::executePostThink`/`Monster::executeMovementAiRefresh` observe
+     * their coalesced lateness through `g_dispatcher().observeInternalWork`
+     * (monster.cpp:1668, 513). The attached dispatcher owns the production sink
+     * (and its queue-latency logging gate, dispatcher.cpp:378-388); without a
+     * dispatcher the local [ConcurrentTimedWork] keeps the embedded/test read
+     * view populated.
+     */
+    private fun observeLateness(
+        work: DispatcherInternalWork,
+        elapsedMs: Long,
+        fallback: ConcurrentTimedWork,
+        context: String,
+    ) {
+        val dispatcher = dispatcher
+        if (dispatcher != null) {
+            dispatcher.observeInternalWork(work, 1, elapsedMs * 1_000, context)
+        } else {
+            fallback.observe(elapsedMs * 1_000, 1, context)
         }
     }
 
