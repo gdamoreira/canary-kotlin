@@ -169,16 +169,18 @@ class IOLoginDataItemMaterializationTest {
         loginData.savePlayerItem(
             101L,
             listOf(
-                PlayerItemState(slot = 10, itemId = 2160, count = 100),
+                PlayerItemState(pid = 10, sid = 110, itemId = 2160, count = 100),
                 PlayerItemState(
-                    slot = 6,
+                    pid = 6,
+                    sid = 106,
                     itemId = 2400,
                     attributes = mapOf(
                         ItemAttribute.CUSTOM to mapOf("500" to ((72000L shl 8) or 300L)),
                     ),
                 ),
                 PlayerItemState(
-                    slot = 3,
+                    pid = 3,
+                    sid = 103,
                     itemId = 2376,
                     attributes = mapOf(
                         ItemAttribute.QUICKLOOTCONTAINER to (1L shl ObjectCategory_t.OBJECTCATEGORY_ARMORS.value),
@@ -191,7 +193,7 @@ class IOLoginDataItemMaterializationTest {
 
         val materialized = loginData.loadPlayerInventoryItems(player, rows) { slot, item -> slots[slot] = item }
 
-        assertThat(materialized.keys).containsExactly(3, 6, 10)
+        assertThat(materialized.keys).containsExactly(103, 106, 110)
         assertThat(slots.keys).containsExactly(3, 6, 10)
         assertThat(slots[10]!!.count).isEqualTo(100)
         assertThat(slots[6]!!.getImbuementAttribute(0)).isEqualTo((72000L shl 8) or 300L)
@@ -202,6 +204,55 @@ class IOLoginDataItemMaterializationTest {
 
         assertThat(decayingItems.map { it.id }).containsExactly(2160, 2400, 2376)
         assertThat(imbuementDecayItems.map { it.id }).containsExactly(2400)
+    }
+
+    @Test
+    fun `backpack with a nested bag round-trips through inventory persistence`() {
+        loginData.savePlayerItem(
+            101L,
+            listOf(
+                PlayerItemState(pid = 3, sid = 101, itemId = 2376),
+                PlayerItemState(pid = 101, sid = 102, itemId = 1987),
+                PlayerItemState(pid = 102, sid = 103, itemId = 2160, count = 50),
+                PlayerItemState(pid = 102, sid = 104, itemId = 2400),
+            ),
+        )
+        val rows = loginData.loadPlayerInventoryItems(101L)
+        val slots = sortedMapOf<Int, Item>()
+
+        val materialized = loginData.loadPlayerInventoryItems(player, rows) { slot, item -> slots[slot] = item }
+
+        assertThat(materialized.keys).containsExactly(101, 102, 103, 104)
+        assertThat(slots.keys).containsExactly(3)
+
+        val backpack = slots.getValue(3) as Container
+        assertThat(backpack.items.map { it.id }).containsExactly(1987)
+
+        val bag = backpack.items.single() as Container
+        assertThat(bag.items.map { it.id }).containsExactly(2160, 2400)
+
+        // The direct slot item decays immediately; the nested items decay only
+        // after the whole parent chain is attached, in descending sid order.
+        assertThat(decayingItems.map { it.id }).containsExactly(2376, 2400, 2160, 1987)
+    }
+
+    @Test
+    fun `loadPlayerInventoryItems skips a nested row whose parent sid is missing`() {
+        loginData.savePlayerItem(
+            101L,
+            listOf(
+                PlayerItemState(pid = 3, sid = 101, itemId = 2376),
+                PlayerItemState(pid = 999, sid = 102, itemId = 2160, count = 50),
+            ),
+        )
+        val rows = loginData.loadPlayerInventoryItems(101L)
+        val slots = sortedMapOf<Int, Item>()
+
+        val materialized = loginData.loadPlayerInventoryItems(player, rows) { slot, item -> slots[slot] = item }
+
+        assertThat(materialized.keys).containsExactly(101, 102)
+        assertThat(slots.keys).containsExactly(3)
+        assertThat(decayingItems.map { it.id }).containsExactly(2376)
     }
 
     @Test

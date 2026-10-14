@@ -76,9 +76,10 @@ typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
  * connection; the Canary offline guard (`Player::isOffline`) has no Kotlin
  * equivalent yet, so [saveOnlyDataForOnlinePlayer] always flushes; the
  * `PlayerPvp` kill list, stash and reward chest have no live `Player` sink in
- * this port, so those helpers take the persisted values directly; the flat
- * `player_inventory_items` layout stores no `pid`/`sid`, so nested inventory
- * containers cannot be materialized; and the item type registry, imbuement
+ * this port, so those helpers take the persisted values directly; the
+ * `OPENCONTAINER` re-arming `IOLoginDataSave::saveItems` performs from
+ * `Player::getOpenContainers` has no Kotlin save walk yet, so inventory rows
+ * reach [savePlayerItem] already built; and the item type registry, imbuement
  * registry and decay/imbuement-decay seams default to unwired until the
  * composition root supplies them.
  */
@@ -327,10 +328,15 @@ class IOLoginData(
         return true
     }
 
-    /** `IOLoginDataLoad::loadPlayerInventoryItems` (iologindata_load_player.cpp:543-561) row read. */
+    /** `IOLoginDataLoad::loadPlayerInventoryItems` (iologindata_load_player.cpp:543-632) row read. */
     fun loadPlayerInventoryItems(playerId: Long): List<PlayerItemState> = items.load(playerId)
 
-    /** `IOLoginDataSave::savePlayerItem` (iologindata_save_player.cpp:534-564). */
+    /**
+     * `IOLoginDataSave::savePlayerItem` / `saveItems`
+     * (iologindata_save_player.cpp:34-188, 534-564) row write: the caller
+     * supplies the `(pid, sid)` tree rows the C++ `saveItems` walk builds from
+     * the live inventory, including every nested container child.
+     */
     fun savePlayerItem(playerId: Long, itemList: List<PlayerItemState>): Boolean {
         items.save(playerId, itemList)
         return true
@@ -408,49 +414,47 @@ class IOLoginData(
     /**
      * `IOLoginDataLoad::loadPlayerInventoryItems`
      * (iologindata_load_player.cpp:543-632): items are attached in descending
-     * `sid` order, direct slot items start decaying immediately and the packed
-     * imbuement store arms `g_imbuementDecay().startImbuementDecay` after the
-     * loop. Containers carrying `QUICKLOOTCONTAINER`/`OBTAINCONTAINER` bits
-     * register through `Player::refreshManagedContainer(..., loading = true)`.
+     * `sid` order. A `pid` in `CONST_SLOT_FIRST..CONST_SLOT_LAST` is a direct
+     * slot item and starts decaying immediately; any other `pid` is the `sid`
+     * of the parent container, whose child is attached and only starts decaying
+     * after the whole parent chain is established. The packed imbuement store
+     * arms `g_imbuementDecay().startImbuementDecay` after the loop. Containers
+     * carrying `QUICKLOOTCONTAINER`/`OBTAINCONTAINER` bits register through
+     * `Player::refreshManagedContainer(..., loading = true)`.
      *
-     * PARITY GAP: the flat `player_inventory_items` layout stores no `pid`/`sid`,
-     * so a nested inventory container cannot be represented and only the direct
-     * slot branch of the Canary loop is reachable; `internalAddThing` replaces
-     * `Player::internalAddThing` as a caller seam.
+     * `internalAddThing` replaces `Player::internalAddThing` as a caller seam.
      */
     fun loadPlayerInventoryItems(
         player: Player,
         rows: List<PlayerItemState>,
         internalAddThing: (slot: Int, item: Item) -> Unit = { _, _ -> },
     ): ItemsMap {
-        val flatRows = rows.map {
-            PlayerContainerItemState(
-                pid = it.slot,
-                sid = it.slot,
-                itemId = it.itemId,
-                count = it.count,
-                attributes = it.attributes,
-            )
-        }
         val inventoryItems = sortedMapOf<Int, Pair<Item, Int>>()
         val itemsToStartDecaying = mutableListOf<Item>()
         val imbuedItemsToStartDecay = mutableListOf<Item>()
 
         try {
-            loadItems(inventoryItems, flatRows, player)
+            loadItems(inventoryItems, rows, player)
 
             for ((_, pair) in inventoryItems.entries.reversed()) {
-                val (item, slot) = pair
-                if (slot < Slots_t.FIRST || slot > Slots_t.LAST) {
-                    // The C++ parent-container branch needs pid/sid rows the
-                    // flat layout cannot carry; an unknown parent is skipped.
-                    continue
-                }
-
-                internalAddThing(slot, item)
-                startDecaying(item)
-                if (item.hasImbuements()) {
-                    imbuedItemsToStartDecay.add(item)
+                val (item, pid) = pair
+                if (pid >= Slots_t.FIRST && pid <= Slots_t.LAST) {
+                    internalAddThing(pid, item)
+                    startDecaying(item)
+                    if (item.hasImbuements()) {
+                        imbuedItemsToStartDecay.add(item)
+                    }
+                } else {
+                    val parentItem = inventoryItems[pid]?.first ?: continue
+                    val container = parentItem.getContainer() ?: continue
+                    container.internalAddThing(item)
+                    // The sub-containers do not have a parent yet, since the
+                    // main backpack has not been added to the player, so the
+                    // decay start must be postponed until the chain is built.
+                    itemsToStartDecaying.add(item)
+                    if (item.hasImbuements()) {
+                        imbuedItemsToStartDecay.add(item)
+                    }
                 }
 
                 val itemContainer = item.getContainer()
