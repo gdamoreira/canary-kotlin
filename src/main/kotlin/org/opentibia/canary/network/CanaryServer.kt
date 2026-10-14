@@ -347,6 +347,8 @@ class CanaryServer(
         muteCountMap = muteCountMap,
         transformItemCharges = transformItemCharges,
         ioLoginData = ioLoginData,
+        vocations = vocations,
+        monsterTypeProvider = { name -> monsters?.getMonsterType(name) },
     )
 
     /**

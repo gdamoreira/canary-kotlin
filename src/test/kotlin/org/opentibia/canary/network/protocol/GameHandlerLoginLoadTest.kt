@@ -13,6 +13,7 @@ import org.opentibia.canary.account.AccountRepository
 import org.opentibia.canary.account.CharacterEntry
 import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.skills_t
+import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.database.DatabaseConnectionFactory
 import org.opentibia.canary.database.JdbcAccountRepository
@@ -73,6 +74,7 @@ class GameHandlerLoginLoadTest {
     private lateinit var loginData: IOLoginData
     private lateinit var gameMap: GameMap
     private lateinit var dispatcher: GameDispatcher
+    private lateinit var vocations: Vocations
     private var channel: EmbeddedChannel? = null
 
     @BeforeEach
@@ -81,7 +83,7 @@ class GameHandlerLoginLoadTest {
         DatabaseConnectionFactory.migrate(dataSource)
         insertPlayer(101L, "Login Knight")
 
-        val vocations = Vocations().apply { loadFromXml(VOCATIONS_XML) }
+        vocations = Vocations().apply { loadFromXml(VOCATIONS_XML) }
         val itemTypes = ItemTypeRegistry().apply {
             register(ItemType(2376, "backpack", isContainer = true, capacity = 20, isMovable = true))
             register(ItemType(2160, "crystal coin", isStackable = true))
@@ -221,6 +223,34 @@ class GameHandlerLoginLoadTest {
         assertThat(stubPlayer).isNotNull
         assertThat(stubPlayer!!.name).isEqualTo("Login Knight")
         assertThat(stubPlayer.getInventoryItem(Slots_t.CONST_SLOT_BACKPACK)).isNull()
+    }
+
+    @Test
+    fun `login binds the injected vocation and monster registries to the session player`() {
+        val rat = MonsterType("Rat")
+        val handler = GameHandler(
+            rsaCipher,
+            MockAccountRepo(),
+            gameMap,
+            dispatcher,
+            ioLoginData = loginData,
+            vocations = vocations,
+            monsterTypeProvider = { name -> if (name.equals("Rat", ignoreCase = true)) rat else null },
+        )
+        val ch = EmbeddedChannel(TibiaFrameDecoder(), TibiaMessageEncoder(), handler)
+        channel = ch
+
+        ch.writeInbound(loginPacket())
+        assertThat(ch.readOutbound<ByteBuf>()).isNotNull
+
+        val ran = CountDownLatch(1)
+        dispatcher.dispatch { ran.countDown() }
+        assertThat(ran.await(2, TimeUnit.SECONDS)).isTrue()
+
+        val sessionPlayer = handler.game.getPlayerByID(101L)
+        assertThat(sessionPlayer).isNotNull
+        assertThat(sessionPlayer!!.vocations).isSameAs(vocations)
+        assertThat(sessionPlayer.monsterTypeProvider("Rat")).isSameAs(rat)
     }
 
     private companion object {

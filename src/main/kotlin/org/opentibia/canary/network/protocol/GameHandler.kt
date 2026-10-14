@@ -10,7 +10,9 @@ import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.Skill
 import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.players.PlayerTask
+import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.game.Game
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
@@ -104,6 +106,21 @@ class GameHandler(
      * shell so directly constructed handlers (and tests) still serve a session.
      */
     private val ioLoginData: IOLoginData? = null,
+    /**
+     * `g_vocations()` registry (src/creatures/players/vocations/vocation.hpp:122)
+     * attached to every session [Player] before the persisted load so
+     * `IOLoginDataLoad::loadPlayerSkill` (iologindata_load_player.cpp:344, the
+     * `player.vocations` first lookup) and `Player::getPlayerVocationEnum`
+     * (player.cpp:13030) resolve through the booted registry.
+     */
+    private val vocations: Vocations? = null,
+    /**
+     * `g_monsters().getMonsterType` provider (`Monsters::getMonsterType`,
+     * src/creatures/monsters/monsters.cpp:363) attached to every session
+     * [Player]'s `Creature.monsterTypeProvider` seam (monster.hpp:363) for the
+     * death-loot type resolution (`Player::death`, player.cpp:4035).
+     */
+    private val monsterTypeProvider: (String) -> MonsterType? = { null },
 ) : SimpleChannelInboundHandler<ByteBuf>() {
 
     private var player: Player? = null
@@ -337,7 +354,7 @@ class GameHandler(
             // `g_game().transformItem` binding are shared across sessions.
             muteCountMap = muteCountMap,
             transformItemCharges = transformItemCharges,
-        )
+        ).also(::bindRegistries)
 
         val guid = loader.getGuidByName(characterName)
         if (guid == 0L) {
@@ -357,10 +374,27 @@ class GameHandler(
             transformItemCharges = transformItemCharges,
         )
 
+        // The registry/provider must be attached before the persisted load:
+        // `IOLoginDataLoad::loadPlayerSkill` (iologindata_load_player.cpp:344)
+        // reads `player.vocations` first.
+        bindRegistries(loaded)
+
         if (!loader.loadPlayerById(loaded, guid, disableIrrelevantInfo = false)) {
             return null
         }
         return loaded
+    }
+
+    /**
+     * Attaches the booted `g_vocations()`/`g_monsters().getMonsterType` seams to
+     * a session player exactly like the C++ globals they replace: the vocation
+     * registry backs `Player::getPlayerVocationEnum` (player.cpp:13030) and the
+     * persisted skill load, the monster provider backs the death-loot type
+     * resolution (`Player::death`, player.cpp:4035).
+     */
+    private fun bindRegistries(player: Player) {
+        vocations?.let { player.vocations = it }
+        player.monsterTypeProvider = monsterTypeProvider
     }
 
     override fun channelInactive(ctx: ChannelHandlerContext) {

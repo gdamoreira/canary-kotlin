@@ -401,6 +401,7 @@ class ServerBootstrap(
                 features = JdbcFeatureStateRepository(saveTransaction),
                 itemTypes = itemTypes,
                 imbuements = imbuements,
+                vocations = vocations,
                 saveTransaction = saveTransaction,
                 depotChests = { player -> player.getDepotChests() },
                 bestiaryPersistence = IOBestiaryPersistence(saveTransaction),
