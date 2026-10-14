@@ -608,8 +608,16 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 62: Docker Folder & Metrics Delivery (16:00 – 18:00)
+- **Docker folder ported** — canonical `docker/docker-compose.yml` (root compose now includes it), `.env.dist`, `config.sh`, adapted PostgreSQL test-account dumps + `data/start.sh`, `Dockerfile.dev`/`.x86`/`.arm`, guarded `up.sh`/`up.ps1`, `DOCKER.md`, MyAAC reference files; upstream extras (MyAAC/login-server) documented as not applicable.
+- **Metrics stack** — `metrics/` folder ported and the Prometheus scrape endpoint implemented (`PrometheusEndpoint`, `metricsEnablePrometheus`/`metricsPrometheusAddress`), wired into the boot (5 new tests).
+- **PostgreSQL portability fix** — V1/V2 used H2-only `MERGE ... KEY` syntax that cannot run on real PostgreSQL; rewritten to portable SQL so the Flyway chain works on both engines.
+- **694 suites / 7653 tests, all green.**
+
+---
+
 ### Current Status
-- **Automated Tests**: **693 test suites / 7648 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **694 test suites / 7653 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/game-play-features.md`.

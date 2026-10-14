@@ -125,14 +125,23 @@ When running in local mode:
 For production-like environments using real PostgreSQL:
 
 ```bash
-# Start PostgreSQL 16 and Canary Kotlin Server
+cp docker/.env.dist .env      # optional; defaults work out of the box
 docker compose up -d --build
 ```
+
+The canonical stack lives in [`docker/docker-compose.yml`](docker/docker-compose.yml)
+(the upstream Canary layout); the repository-root `docker-compose.yml` includes
+it. The `docker/` folder also ships `.env.dist`, `config.sh`, the adapted
+test-account dumps (`data/`), guarded `up.sh`/`up.ps1` start scripts,
+`Dockerfile.dev`/`.x86`/`.arm` variants and [`docker/DOCKER.md`](docker/DOCKER.md).
+Upstream quickstart extras that do not apply to this port (MyAAC, login-server)
+are documented there.
 
 Default container ports:
 - **Login / Status Port**: `7171`
 - **Game World Port**: `7172`
 - **PostgreSQL Database**: `5432`
+- **Prometheus exporter** (optional): `9464` — see [`metrics/README.md`](metrics/README.md)
 
 ---
 
