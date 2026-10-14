@@ -2,6 +2,7 @@ package org.opentibia.canary.creatures.players
 
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.creatures.Creature
+import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
 
 /**
@@ -82,4 +83,83 @@ fun Player.drainMana(
 fun Player.onCleanseCondition(type: ConditionType) {
     val conditionName = CLEANSE_CONDITION_MESSAGES[type] ?: return
     sendTextMessage("You are no longer $conditionName. (cleanse charm)")
+}
+
+/**
+ * `Player::onAttackedCreatureDrainHealth(target, points)` (player.cpp:6563-6575):
+ * after the `Creature::` base hook, a partnered attacker credits
+ * `Party::updatePlayerTicks` for a hostile monster target. The unported host
+ * members (`Creature::onAttackedCreatureDrainHealth`, `Creature::getMonster`,
+ * `Monster::isHostile`, `Combat::isPlayerCombat`) are seams per AGENTS.md 1.1.
+ */
+fun Player.onAttackedCreatureDrainHealth(
+    /** The `target` argument (player.cpp:6563); null is a no-op past the base. */
+    target: Creature?,
+    /** The `points` argument (player.cpp:6563). */
+    points: Int,
+    /** `Creature::onAttackedCreatureDrainHealth(target, points)` (creature.cpp). */
+    base: () -> Unit = {},
+    /** `Combat::isPlayerCombat(target)` (combat.cpp:309-319). */
+    isPlayerCombat: (Creature) -> Boolean = { false },
+    /** `Creature::getMonster()` (monster.cpp); the port models monsters as [Monster]. */
+    getMonster: (Creature) -> Monster? = { it as? Monster },
+    /** `Monster::isHostile()` (monster.cpp:295-297). */
+    isHostile: (Monster) -> Boolean = { false },
+    /** `Party::updatePlayerTicks(player, points)` (party.cpp:720-725). */
+    updatePlayerTicks: (Int) -> Unit = { credited ->
+        getParty()?.updatePlayerTicks(this, credited)
+    },
+) {
+    base()
+
+    if (target != null) {
+        if (getParty() != null && !isPlayerCombat(target)) {
+            val monster = getMonster(target)
+            if (monster != null && isHostile(monster)) {
+                // We have fulfilled a requirement for shared experience
+                updatePlayerTicks(points)
+            }
+        }
+    }
+}
+
+/**
+ * `Player::onTargetCreatureGainHealth(target, points)` (player.cpp:6577-6594):
+ * with a party, the target's (or its master's) player must be a partner for
+ * the shared-experience credit. The C++ `isPartner(tmpPlayer)` first branch is
+ * dead code because `isPartner(nullptr)` is always false; it is transcribed
+ * anyway so the flow stays auditable. `Player::getPlayer()` on an arbitrary
+ * creature is unported on the host, so it is the [getPlayer] seam.
+ */
+fun Player.onTargetCreatureGainHealth(
+    /** The `target` argument (player.cpp:6577). */
+    target: Creature?,
+    /** The `points` argument (player.cpp:6577). */
+    points: Int,
+    /** `Creature::getPlayer()` (player.cpp:6581, 6585). */
+    getPlayer: (Creature) -> Player? = { null },
+    /** `Party::updatePlayerTicks(player, points)` (party.cpp:720-725). */
+    updatePlayerTicks: (Int) -> Unit = { credited ->
+        getParty()?.updatePlayerTicks(this, credited)
+    },
+) {
+    if (target != null && getParty() != null) {
+        var tmpPlayer: Player? = null
+
+        if (isPartner(tmpPlayer) && tmpPlayer !== this) {
+            tmpPlayer = getPlayer(target)
+        } else {
+            val targetMaster = target.getMaster()
+            if (targetMaster != null) {
+                val targetMasterPlayer = getPlayer(targetMaster)
+                if (targetMasterPlayer != null) {
+                    tmpPlayer = targetMasterPlayer
+                }
+            }
+        }
+
+        if (isPartner(tmpPlayer)) {
+            updatePlayerTicks(points)
+        }
+    }
 }

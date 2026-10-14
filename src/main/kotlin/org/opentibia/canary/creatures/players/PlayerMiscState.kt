@@ -1,5 +1,6 @@
 package org.opentibia.canary.creatures.players
 
+import org.opentibia.canary.combat.CombatType
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.FindPathParams
@@ -246,6 +247,67 @@ fun Player.getAttackSoundEffect(): SoundEffect {
  * other shoot types, so it falls through to `SILENCE`; that behavior is
  * transcribed.
  */
+/**
+ * `Player::updatePartyTrackerAnalyzer(force)` (player.cpp:1743-1747): with a
+ * client and a party, the party tracker frame is refreshed through the client.
+ * The `Player::client` sink and the `m_party` read are seams per AGENTS.md 1.1.
+ */
+fun Player.updatePartyTrackerAnalyzer(
+    /** The `force` argument (player.cpp:1743). */
+    force: Boolean = false,
+    /** `Player::client != nullptr` (player.cpp:1744). */
+    hasClient: () -> Boolean = { false },
+    /** `Player::m_party` (player.hpp). */
+    party: () -> Party? = { getParty() },
+    /** `client->updatePartyTrackerAnalyzer(m_party, force)` (player.cpp:1745). */
+    clientUpdatePartyTrackerAnalyzer: (Party, Boolean) -> Unit = { _, _ -> },
+) {
+    if (hasClient()) {
+        party()?.let { clientUpdatePartyTrackerAnalyzer(it, force) }
+    }
+}
+
+/**
+ * `Player::updateImpactTracker(type, amount)` (player.cpp:1790-1794): the
+ * client impact-tracker frame. `Player::client` is the [hasClient] seam.
+ */
+fun Player.updateImpactTracker(
+    /** The `type` argument (player.cpp:1790). */
+    type: CombatType,
+    /** The `amount` argument (player.cpp:1790). */
+    amount: Int,
+    /** `Player::client != nullptr` (player.cpp:1791). */
+    hasClient: () -> Boolean = { false },
+    /** `client->sendUpdateImpactTracker(type, amount)` (player.cpp:1792). */
+    clientSendUpdateImpactTracker: (CombatType, Int) -> Unit = { _, _ -> },
+) {
+    if (hasClient()) {
+        clientSendUpdateImpactTracker(type, amount)
+    }
+}
+
+/**
+ * `Player::updateInputAnalyzer(type, amount, target)` (player.cpp:1796-1800):
+ * the client hunt-analyser input frame. `Player::client` is the [hasClient]
+ * seam.
+ */
+fun Player.updateInputAnalyzer(
+    /** The `type` argument (player.cpp:1796). */
+    type: CombatType,
+    /** The `amount` argument (player.cpp:1796). */
+    amount: Int,
+    /** The `target` argument (player.cpp:1796). */
+    target: String,
+    /** `Player::client != nullptr` (player.cpp:1797). */
+    hasClient: () -> Boolean = { false },
+    /** `client->sendUpdateInputAnalyzer(type, amount, target)` (player.cpp:1798). */
+    clientSendUpdateInputAnalyzer: (CombatType, Int, String) -> Unit = { _, _, _ -> },
+) {
+    if (hasClient()) {
+        clientSendUpdateInputAnalyzer(type, amount, target)
+    }
+}
+
 fun Player.getHitSoundEffect(): SoundEffect {
     val tool = getWeapon() ?: return SoundEffect.SILENCE
 

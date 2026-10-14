@@ -2,6 +2,7 @@ package org.opentibia.canary.creatures.players
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.combat.CombatType
 import org.opentibia.canary.combat.condition.ConditionGeneric
 import org.opentibia.canary.combat.condition.ConditionId
 import org.opentibia.canary.combat.condition.ConditionType
@@ -352,5 +353,84 @@ class PlayerMiscStateTest {
         /** `SPEECHBUBBLE_HIRELING` (`src/creatures/creatures_definitions.hpp:341`). */
         private const val SPEECHBUBBLE_HIRELING = 7
 
+    }
+
+    // --- client tracker seams (player.cpp:1743-1800) -----------------------------
+
+    @Test
+    fun `updatePartyTrackerAnalyzer requires a client and a party`() {
+        // player.cpp:1743-1747: `if (client && m_party)`.
+        val player = newPlayer()
+        var forwarded = 0
+
+        player.updatePartyTrackerAnalyzer(
+            force = true,
+            hasClient = { false },
+            party = { Party(player) },
+            clientUpdatePartyTrackerAnalyzer = { _, _ -> forwarded++ },
+        )
+        player.updatePartyTrackerAnalyzer(
+            force = true,
+            hasClient = { true },
+            party = { null },
+            clientUpdatePartyTrackerAnalyzer = { _, _ -> forwarded++ },
+        )
+
+        assertThat(forwarded).isZero()
+    }
+
+    @Test
+    fun `updatePartyTrackerAnalyzer forwards the party and force flag`() {
+        // player.cpp:1745: client->updatePartyTrackerAnalyzer(m_party, force).
+        val player = newPlayer()
+        val party = Party(player)
+        var forwardedParty: Party? = null
+        var forwardedForce: Boolean? = null
+
+        player.updatePartyTrackerAnalyzer(
+            force = true,
+            hasClient = { true },
+            party = { party },
+            clientUpdatePartyTrackerAnalyzer = { sentParty, force ->
+                forwardedParty = sentParty
+                forwardedForce = force
+            },
+        )
+
+        assertThat(forwardedParty).isSameAs(party)
+        assertThat(forwardedForce).isTrue()
+    }
+
+    @Test
+    fun `updateImpactTracker forwards to the client`() {
+        // player.cpp:1790-1794.
+        val player = newPlayer()
+        var forwarded: Pair<CombatType, Int>? = null
+
+        player.updateImpactTracker(
+            type = CombatType.FIREDAMAGE,
+            amount = 42,
+            hasClient = { true },
+            clientSendUpdateImpactTracker = { type, amount -> forwarded = type to amount },
+        )
+
+        assertThat(forwarded).isEqualTo(CombatType.FIREDAMAGE to 42)
+    }
+
+    @Test
+    fun `updateInputAnalyzer forwards the target`() {
+        // player.cpp:1796-1800.
+        val player = newPlayer()
+        var forwarded: Triple<CombatType, Int, String>? = null
+
+        player.updateInputAnalyzer(
+            type = CombatType.ENERGYDAMAGE,
+            amount = 7,
+            target = "Rat",
+            hasClient = { true },
+            clientSendUpdateInputAnalyzer = { type, amount, target -> forwarded = Triple(type, amount, target) },
+        )
+
+        assertThat(forwarded).isEqualTo(Triple(CombatType.ENERGYDAMAGE, 7, "Rat"))
     }
 }

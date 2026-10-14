@@ -6,6 +6,7 @@ import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionId
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.players.livestream.IconBakragore
 import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Tile
@@ -20,6 +21,9 @@ import org.opentibia.canary.network.protocol.PlayerIcon
  * (player.cpp:356-364), `Player::pzLocked` (player.hpp:1869) and
  * `Creature::getTile()` already live on the port's `Player`; the client
  * `sendRestingStatus` call (player.cpp:930, 935) is the only seam.
+ *
+ * The Bakragore icon removals are transcribed too:
+ * `Player::removeBakragoreIcons`/`removeBakragoreIcon` (player.cpp:2266-2278).
  */
 class PlayerClientIconsTest {
 
@@ -133,5 +137,49 @@ class PlayerClientIconsTest {
 
         assertThat(icons).hasSize(9)
         assertThat(icons).doesNotContain(PlayerIcon.PartyBuff, PlayerIcon.Powerless)
+    }
+
+    // --- Player::removeBakragoreIcons / removeBakragoreIcon ----------------------
+
+    @Test
+    fun `removeBakragoreIcon force-removes every bakragore subtitle`() {
+        // player.cpp:2274-2278: the guard is hasCondition(type, enumToValue(icon)),
+        // but `Creature::removeCondition(type, CONDITIONID_DEFAULT, force)`
+        // (creature.cpp:1435-1467) erases every condition of that type+id pair,
+        // so all subtitles fall together.
+        val player = newPlayer()
+        addCondition(player, ConditionType.CONDITION_BAKRAGORE, subId = IconBakragore.Taint3.value)
+        addCondition(player, ConditionType.CONDITION_BAKRAGORE, subId = IconBakragore.Taint5.value)
+
+        player.removeBakragoreIcon(IconBakragore.Taint3)
+
+        assertThat(player.hasCondition(ConditionType.CONDITION_BAKRAGORE, IconBakragore.Taint3.value)).isFalse()
+        assertThat(player.hasCondition(ConditionType.CONDITION_BAKRAGORE, IconBakragore.Taint5.value)).isFalse()
+    }
+
+    @Test
+    fun `removeBakragoreIcon is inert without the matching condition`() {
+        // The `if (hasCondition(...))` guard (2275).
+        val player = newPlayer()
+        addCondition(player, ConditionType.CONDITION_BAKRAGORE, subId = IconBakragore.Taint1.value)
+
+        player.removeBakragoreIcon(IconBakragore.Taint9)
+
+        assertThat(player.hasCondition(ConditionType.CONDITION_BAKRAGORE, IconBakragore.Taint1.value)).isTrue()
+    }
+
+    @Test
+    fun `removeBakragoreIcons clears every taint subtitle`() {
+        // player.cpp:2266-2272: magic_enum::enum_values<IconBakragore>() = None..Taint9.
+        val player = newPlayer()
+        for (icon in IconBakragore.entries) {
+            addCondition(player, ConditionType.CONDITION_BAKRAGORE, subId = icon.value)
+        }
+
+        player.removeBakragoreIcons()
+
+        for (icon in IconBakragore.entries) {
+            assertThat(player.hasCondition(ConditionType.CONDITION_BAKRAGORE, icon.value)).isFalse()
+        }
     }
 }

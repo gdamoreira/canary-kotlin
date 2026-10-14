@@ -423,3 +423,49 @@ fun Player.attackRawTotal(flatBonus: Int, equipment: Int, skill: Int): Int {
     val skillFactor = (skill + 4) / 28.0
     return (flatBonus + equipment * skillFactor).toInt()
 }
+
+/**
+ * `Player::onEquipInventory()` (player.cpp:12427-12435): every occupied
+ * `CONST_SLOT_FIRST..CONST_SLOT_LAST` slot item starts decaying and runs the
+ * `g_moveEvents().onPlayerEquip(player, item, slot, false)` hook.
+ * `Item::startDecaying` (item.cpp:3501-3541) and the move-event dispatch are
+ * the Lua move-event layer seams, exactly like `IOMapSerialize.kt:51`.
+ */
+fun Player.onEquipInventory(
+    /** `item->startDecaying()` (player.cpp:12431). */
+    startDecaying: (Item) -> Unit = {},
+    /** `g_moveEvents().onPlayerEquip(player, item, slot, isRemove = false)` (player.cpp:12432). */
+    onPlayerEquip: (Player, Item, Slots_t, Boolean) -> Unit = { _, _, _, _ -> },
+) {
+    for (slot in Slots_t.entries) {
+        if (slot.value < Slots_t.FIRST || slot.value > Slots_t.LAST) {
+            continue
+        }
+
+        val item = getInventoryItem(slot) ?: continue
+        startDecaying(item)
+        onPlayerEquip(this, item, slot, false)
+    }
+}
+
+/**
+ * `Player::onDeEquipInventory()` (player.cpp:12437-12446): every occupied
+ * `CONST_SLOT_FIRST..CONST_SLOT_LAST` slot item runs the
+ * `g_moveEvents().onPlayerDeEquip(player, item, slot)` hook; a zero return
+ * skips the (empty) rest of the loop body exactly like the C++ `continue`.
+ */
+fun Player.onDeEquipInventory(
+    /** `g_moveEvents().onPlayerDeEquip(player, item, slot)` (player.cpp:12441). */
+    onPlayerDeEquip: (Player, Item, Slots_t) -> Int = { _, _, _ -> 0 },
+) {
+    for (slot in Slots_t.entries) {
+        if (slot.value < Slots_t.FIRST || slot.value > Slots_t.LAST) {
+            continue
+        }
+
+        val item = getInventoryItem(slot) ?: continue
+        if (onPlayerDeEquip(this, item, slot) == 0) {
+            continue
+        }
+    }
+}

@@ -3,7 +3,10 @@ package org.opentibia.canary.creatures.players
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.combat.condition.ConditionType
+import org.opentibia.canary.creatures.Creature
+import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.grouping.Party
 import org.opentibia.canary.map.Position
 
 /**
@@ -20,9 +23,17 @@ import org.opentibia.canary.map.Position
  * - `Player::onCleanseCondition` (player.cpp:6322-6348) prints the
  *   "(cleanse charm)" party message for the mapped condition types.
  *
+ * The party shared-experience hooks are transcribed too:
+ *
+ * - `Player::onAttackedCreatureDrainHealth` (player.cpp:6563-6575)
+ * - `Player::onTargetCreatureGainHealth` (player.cpp:6577-6594)
+ *
  * `g_game().sendSingleSoundEffect` and `Player::sendStats()` are call-site
  * seams; the port's `Creature::drainMana` is not separately modelled, so the
- * three base steps are transcribed inline.
+ * three base steps are transcribed inline. `Creature::onAttackedCreatureDrainHealth`
+ * (creature.cpp), `Creature::getMonster`/`Monster::isHostile` (monster.cpp:295)
+ * and `Creature::getPlayer` are unported host members, so they are injected
+ * seams.
  */
 class PlayerCombatHooksStateTest {
 
@@ -108,5 +119,175 @@ class PlayerCombatHooksStateTest {
         player.onCleanseCondition(ConditionType.CONDITION_INFIGHT)
 
         assertThat(messages).isEmpty()
+    }
+
+    // --- Player::onAttackedCreatureDrainHealth -----------------------------------
+
+    @Test
+    fun `onAttackedCreatureDrainHealth runs the base hook without a target`() {
+        // player.cpp:6563-6575.
+        val player = newPlayer()
+        var base = 0
+        var ticks = 0
+
+        player.onAttackedCreatureDrainHealth(
+            target = null,
+            points = 25,
+            base = { base++ },
+            updatePlayerTicks = { ticks++ },
+        )
+
+        assertThat(base).isEqualTo(1)
+        assertThat(ticks).isZero()
+    }
+
+    @Test
+    fun `onAttackedCreatureDrainHealth skips player combat targets`() {
+        // `m_party && !Combat::isPlayerCombat(target)` (6567).
+        val player = newPlayer()
+        Party(player)
+        val other = newPlayer()
+        var ticks = 0
+
+        player.onAttackedCreatureDrainHealth(
+            target = other,
+            points = 25,
+            isPlayerCombat = { true },
+            updatePlayerTicks = { ticks++ },
+        )
+
+        assertThat(ticks).isZero()
+    }
+
+    @Test
+    fun `onAttackedCreatureDrainHealth credits the party for hostile monsters`() {
+        // `tmpMonster->isHostile()` (6571-6574).
+        val player = newPlayer()
+        Party(player)
+        val monster = Monster(id = 2, name = "Rat", maxHealth = 20, health = 20, position = Position(101, 100, 7))
+        var ticks = 0
+
+        player.onAttackedCreatureDrainHealth(
+            target = monster,
+            points = 25,
+            getMonster = { it as? Monster },
+            isHostile = { true },
+            updatePlayerTicks = { ticks++ },
+        )
+
+        assertThat(ticks).isEqualTo(1)
+    }
+
+    @Test
+    fun `onAttackedCreatureDrainHealth ignores non-hostile monsters`() {
+        // 6571-6572.
+        val player = newPlayer()
+        Party(player)
+        val monster = Monster(id = 2, name = "Rat", maxHealth = 20, health = 20, position = Position(101, 100, 7))
+        var ticks = 0
+
+        player.onAttackedCreatureDrainHealth(
+            target = monster,
+            points = 25,
+            getMonster = { it as? Monster },
+            isHostile = { false },
+            updatePlayerTicks = { ticks++ },
+        )
+
+        assertThat(ticks).isZero()
+    }
+
+    // --- Player::onTargetCreatureGainHealth --------------------------------------
+
+    @Test
+    fun `onTargetCreatureGainHealth requires a party`() {
+        // `if (target && m_party)` (6577).
+        val player = newPlayer()
+        val monster = Monster(id = 2, name = "Rat", maxHealth = 20, health = 20, position = Position(101, 100, 7))
+        var ticks = 0
+
+        player.onTargetCreatureGainHealth(
+            target = monster,
+            points = 30,
+            getPlayer = { null },
+            updatePlayerTicks = { ticks++ },
+        )
+
+        assertThat(ticks).isZero()
+    }
+
+    @Test
+    fun `onTargetCreatureGainHealth credits a partnered summon master`() {
+        // 6579-6593: the target's master player decides the shared-exp credit.
+        val leader = newPlayer()
+        val member = newPlayer()
+        val party = Party(leader)
+        party.invitePlayer(member)
+        party.joinParty(member)
+
+        val summon = Monster(id = 2, name = "Summon", maxHealth = 20, health = 20, position = Position(101, 100, 7))
+        summon.setMaster(member)
+        var ticks = 0
+
+        leader.onTargetCreatureGainHealth(
+            target = summon,
+            points = 30,
+            getPlayer = { creature -> if (creature === member) member else null },
+            updatePlayerTicks = { ticks++ },
+        )
+
+        assertThat(ticks).isEqualTo(1)
+    }
+
+    @Test
+    fun `onTargetCreatureGainHealth ignores non-partner masters`() {
+        // `if (isPartner(tmpPlayer))` (6592).
+        val leader = newPlayer()
+        val outsider = newPlayer()
+        val party = Party(leader)
+        party.invitePlayer(outsider)
+        party.joinParty(outsider)
+
+        val stranger = newPlayer()
+        val summon = Monster(id = 2, name = "Summon", maxHealth = 20, health = 20, position = Position(101, 100, 7))
+        summon.setMaster(stranger)
+        var ticks = 0
+
+        leader.onTargetCreatureGainHealth(
+            target = summon,
+            points = 30,
+            getPlayer = { creature -> if (creature === stranger) stranger else null },
+            updatePlayerTicks = { ticks++ },
+        )
+
+        assertThat(ticks).isZero()
+    }
+
+    // --- Player::isPartner -------------------------------------------------------
+
+    @Test
+    fun `isPartner rejects null and self`() {
+        // player.cpp:7790-7795.
+        val player = newPlayer()
+        Party(player)
+
+        assertThat(player.isPartner(null)).isFalse()
+        assertThat(player.isPartner(player)).isFalse()
+    }
+
+    @Test
+    fun `isPartner requires the same party`() {
+        // `m_party == player->m_party` (7794).
+        val leader = newPlayer()
+        val member = newPlayer()
+        val party = Party(leader)
+        party.invitePlayer(member)
+        party.joinParty(member)
+
+        val outsider = newPlayer()
+        Party(outsider)
+
+        assertThat(leader.isPartner(member)).isTrue()
+        assertThat(leader.isPartner(outsider)).isFalse()
     }
 }

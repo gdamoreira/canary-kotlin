@@ -68,3 +68,14 @@ fun Player.getPremiumLastDay(): Long = account?.getPremiumLastDay() ?: 0
  */
 fun Player.isVip(vipSystemEnabled: Boolean = false, now: Long = getTimeNow()): Boolean =
     vipSystemEnabled && (getPremiumDays(now) > 0 || getPremiumLastDay() > now)
+
+/**
+ * `Player::isPartner(player)` (player.cpp:7790-7795): null, self and partyless
+ * comparisons are false; otherwise both players must share the same party.
+ */
+fun Player.isPartner(player: Player?): Boolean {
+    if (player == null || getParty() == null || player === this) {
+        return false
+    }
+    return getParty() === player.getParty()
+}

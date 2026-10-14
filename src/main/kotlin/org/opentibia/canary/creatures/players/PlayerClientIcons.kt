@@ -1,7 +1,10 @@
 package org.opentibia.canary.creatures.players
 
+import org.opentibia.canary.combat.condition.ConditionId
+import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.PlayerIcon as ConditionPlayerIcon
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.players.livestream.IconBakragore
 import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.network.protocol.PlayerIcon
 
@@ -58,3 +61,27 @@ fun Player.getClientIcons(
 /** `enums/player_icons.hpp` values are shared by both port enums. */
 private fun ConditionPlayerIcon.toWireIcon(): PlayerIcon =
     PlayerIcon.entries.first { it.value == value }
+
+/**
+ * `Player::removeBakragoreIcons()` (player.cpp:2266-2272): every
+ * `magic_enum::enum_values<IconBakragore>()` subtitle (`None`..`Taint9`) whose
+ * `CONDITION_BAKRAGORE` condition exists is force-removed with the default
+ * condition id.
+ */
+fun Player.removeBakragoreIcons() {
+    for (icon in IconBakragore.entries) {
+        if (hasCondition(ConditionType.CONDITION_BAKRAGORE, icon.value)) {
+            removeCondition(ConditionType.CONDITION_BAKRAGORE, ConditionId.CONDITIONID_DEFAULT, true)
+        }
+    }
+}
+
+/**
+ * `Player::removeBakragoreIcon(icon)` (player.cpp:2274-2278): the same force
+ * removal for one `IconBakragore` subtitle.
+ */
+fun Player.removeBakragoreIcon(icon: IconBakragore) {
+    if (hasCondition(ConditionType.CONDITION_BAKRAGORE, icon.value)) {
+        removeCondition(ConditionType.CONDITION_BAKRAGORE, ConditionId.CONDITIONID_DEFAULT, true)
+    }
+}
