@@ -10,6 +10,7 @@ import org.opentibia.canary.chat.NoopChatClient
 import org.opentibia.canary.chat.SpeakClasses
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.LightInfo
+import org.opentibia.canary.combat.condition.Outfit
 import org.opentibia.canary.creatures.ChaseMode
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.FightMode
@@ -25,11 +26,15 @@ import org.opentibia.canary.creatures.players.components.NullCyclopediaDatabaseT
 import org.opentibia.canary.creatures.players.components.PlayerAsyncTask
 import org.opentibia.canary.creatures.players.vip.PlayerVip
 import org.opentibia.canary.creatures.players.vip.VipStatus
+import org.opentibia.canary.creatures.monsters.MonsterType
+import org.opentibia.canary.creatures.npcs.NpcInfo
+import org.opentibia.canary.creatures.players.PlayerTask
 import org.opentibia.canary.creatures.vocations.Vocation
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.database.Database
 import org.opentibia.canary.database.PlayerLoginRepository
 import org.opentibia.canary.economy.market.MarketOfferType
+import org.opentibia.canary.game.modal.ModalWindowManager
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.game.movement.areInRange
 import org.opentibia.canary.game.movement.getDirectionTo
@@ -244,12 +249,20 @@ data class HighscoreSkillName(
  *    `setCreatureSpeed` game.cpp:7759, `changePlayerSpeed` game.cpp:7768)
  *  - market (`playerBrowseMarket` game.cpp:10282, `playerBrowseMarketOwnOffers` game.cpp:10307,
  *    `playerBrowseMarketOwnHistory` game.cpp:10322, `getItemMarketPrice` game.cpp:4027,
- *    `getItemMarketAveragePrice` game.cpp:4078)
+ *    `getItemMarketAveragePrice` game.cpp:4078, `loadItemsPrice` game.cpp:1037,
+ *    `updatePlayerSaleItems` game.cpp:11596, `playerCreateMarketOffer` game.cpp:10717,
+ *    `playerCancelMarketOffer` game.cpp:10819, `playerAcceptMarketOffer` game.cpp:10884)
  *  - quest/forge/bosstiary/task (`playerShowQuestLog` game.cpp:7391,
  *    `playerShowQuestLine` game.cpp:7401, `playerPreyAction` game.cpp:10218,
  *    `playerTaskHuntingAction` game.cpp:10227, `playerBosstiarySlot` game.cpp:11256,
  *    `playerForgeResourceConversion` game.cpp:11226, `playerBrowseForgeHistory` game.cpp:11241,
- *    `playerForgeTransferItemTier` game.cpp:11211)
+ *    `playerForgeFuseItems` game.cpp:11178, `playerForgeTransferItemTier` game.cpp:11211)
+ *  - wheel (`playerOpenWheel` game.cpp:11525, `playerSaveWheel` game.cpp:11538,
+ *    `playerWheelGemAction` game.cpp:11554)
+ *  - NPC/podium (`playerNpcGreet` game.cpp:10236, `getNpcByID` game.cpp:1326,
+ *    `playerSetMonsterPodium` game.cpp:11283, `playerRotatePodium` game.cpp:11395)
+ *  - `playerAnswerModalWindow` (game.cpp:11144) through the injected
+ *    `ModalWindowManager`
  *  - remaining player handlers (`playerApplyImbuement` game.cpp:7116,
  *    `playerClearImbuement` game.cpp:7153, `playerRequestInventoryImbuements` game.cpp:11487,
  *    `playerToggleMount` game.cpp:7219, `playerRequestOutfit` game.cpp:7206,
@@ -314,6 +327,11 @@ class Game(
     private val forgeRandom: ForgeRandom = ForgeRandom { minNumber, _ -> minNumber },
     /** `Player::wheel()` command engine (player_wheel.cpp) for the wheel handlers. */
     private val wheelApplication: WheelApplication = WheelApplication(),
+    /**
+     * `Game::offlineTrainingWindow` / `Player::hasModalWindowOpen` host, the
+     * `Game::playerAnswerModalWindow` routing target (game.cpp:11144).
+     */
+    private val modalWindowManager: ModalWindowManager? = null,
 ) {
     private val players = mutableMapOf<Long, Player>()
 
@@ -736,6 +754,48 @@ class Game(
      */
     var wheelPlayer: (Player) -> WheelPlayer = { WheelPlayer.UNWIRED }
 
+    // --- NPC greet / podium seams (game.cpp:10236-11480) ----------------------
+
+    /** `Player::canSpeakWithHireling(speechBubble)` (player.cpp:13020) seam. */
+    var canSpeakWithHireling: (Player, Int) -> Boolean = { _, _ -> true }
+
+    /** `Npc::getSpeechBubble()` (npc.cpp) seam; the Kotlin [Npc] exposes the bubble through its type. */
+    var getNpcSpeechBubble: (Npc) -> Int = { npc -> npc.npcType?.info?.speechBubble ?: NpcInfo.SPEECHBUBBLE_NORMAL }
+
+    /**
+     * `Game::internalCreatureSay(speaker, type, text, ghostMode, spectators)`
+     * (game.cpp:7643) seam; the ported spectator/channel machinery lives in
+     * `ChatManager` and is injected by the host.
+     */
+    var internalCreatureSay: (Creature, SpeakClasses, String, Boolean, List<Creature>) -> Unit =
+        { _, _, _, _, _ -> }
+
+    /** `g_configManager().getBoolean(ONLY_INVITED_CAN_MOVE_HOUSE_ITEMS)` default (configmanager.cpp). */
+    var onlyInvitedCanMoveHouseItems: Boolean = false
+
+    /** `InternalGame::playerCanUseItemOnHouseTile(player, item)` (game.cpp) seam. */
+    var playerCanUseItemOnHouseTile: (Player, Item) -> Boolean = { _, _ -> true }
+
+    /** `Player::sendUpdateTileItem(tile, pos, item)` protocol seam (game.cpp:11385). */
+    var sendUpdateTileItem: (Player, Tile, Position, Item) -> Unit = { _, _, _, _ -> }
+
+    /** `g_monsters().getMonsterTypeByRaceId(raceId, isBoss)` (monsters.cpp:375) seam. */
+    var getMonsterTypeByRaceId: (Int, Boolean) -> MonsterType? = { _, _ -> null }
+
+    /** `Creature::getPathTo(toPosition, listDir, 0, 1, true, false/true)` (creature.cpp:449) seam. */
+    var getPathTo: (Player, Position, Int, Int, Boolean, Boolean) -> List<Direction>? =
+        { _, _, _, _, _, _ -> null }
+
+    /** `Game::queuePlayerAutoWalk(playerId, listDir)` (game.cpp) seam. */
+    var queuePlayerAutoWalk: (Player, List<Direction>) -> Boolean = { _, _ -> false }
+
+    /** `Game::playerBrowseField(playerId, pos)` (game.cpp:5104) seam used by the podium walk tasks. */
+    var playerBrowseField: (Long, Position) -> Unit = { _, _ -> }
+
+    /** `Game::playerSetShowOffSocket(playerId, outfit, pos, stackPos, itemId, podiumVisible, direction)` (game.cpp:5227) seam. */
+    var playerSetShowOffSocket: (Long, Outfit, Position, Int, Int, Int, Int) -> Unit =
+        { _, _, _, _, _, _, _ -> }
+
     // --- remaining player handler seams (game.cpp:4310-11487) -----------------
 
     /** `Player::imbuingItem` accessor (player.hpp:1761) seam; the Kotlin `Player` only exposes `hasImbuingItem`/`setImbuingItem`. */
@@ -821,6 +881,14 @@ class Game(
      * [unwrapItem].
      */
     private val itemUnWrapIds = IdentityHashMap<Item, Int>()
+
+    /**
+     * Facade storage for the string-keyed `Item` custom attributes
+     * (`Item::getCustomAttribute`/`setCustomAttribute`, custom_attribute.cpp);
+     * the Kotlin [Item] has no custom-attribute store (PARITY GAP). Written by
+     * the podium handlers.
+     */
+    private val itemCustomAttributes = IdentityHashMap<Item, MutableMap<String, Long>>()
 
     /** `Game::motdNum` (game.hpp:942). */
     private var motdNum: Long = 0
@@ -4599,7 +4667,6 @@ class Game(
         }
 
         checkNotNull(player)
-        checkNotNull(itemType)
 
         var offerTier = tier
         if (offerTier > forgeMaxItemTier) {
@@ -4778,6 +4845,7 @@ class Game(
             return
         }
 
+        var offerTier = offer.tier
         if (offer.type == MarketOfferType.Buy) {
             setBankBalance(player, getBankBalance(player) + offer.price * offer.amount)
             sendMarketEnter(player, player.getLastDepotId())
@@ -4787,7 +4855,7 @@ class Game(
                 return
             }
 
-            val offerTier = if (itemType.upgradeClassification > 0) minOf(offer.tier, forgeMaxItemTier) else 0
+            offerTier = if (itemType.upgradeClassification > 0) minOf(offer.tier, forgeMaxItemTier) else 0
 
             if (itemType.id == ITEM_STORE_COIN) {
                 player.account?.addCoins(CoinType.Transferable, offer.amount.toUInt(), "")
@@ -4815,19 +4883,8 @@ class Game(
 
         market.moveOfferToHistory(offer.id, MarketOfferState.Cancelled)
 
-        val cancelledOffer = offer.copy(
-            tier = if (offer.type == MarketOfferType.Sell) {
-                if ((itemTypes?.get(offer.itemId)?.upgradeClassification ?: 0) > 0) {
-                    minOf(offer.tier, forgeMaxItemTier)
-                } else {
-                    0
-                }
-            } else {
-                offer.tier
-            },
-            amount = 0,
-            timestamp = offer.timestamp + marketOfferDuration,
-        )
+        val cancelledOffer =
+            offer.copy(tier = offerTier, amount = 0, timestamp = offer.timestamp + marketOfferDuration)
         sendMarketCancelOffer(player, cancelledOffer)
         sendMarketEnter(player, player.getLastDepotId())
         updateUIExhausted(player)
@@ -5665,6 +5722,291 @@ class Game(
         updateUIExhausted(player)
     }
 
+    /** `Game::getNpcByID` (src/game/game.cpp:1326): linear scan of the placed NPCs by id. */
+    fun getNpcByID(npcId: Long): Npc? =
+        placedCreatures.keys.firstOrNull { it is Npc && it.id == npcId } as? Npc
+
+    /**
+     * `Game::playerNpcGreet` (src/game/game.cpp:10236): the exhaustion gate and
+     * the hireling speech check run first, then the greeting is said to the
+     * player and NPC spectators of the player's position; trade/sailor NPCs
+     * answer with their private keyword. `Spectators` becomes the facade's
+     * [spectatorsOf] plus the greeted NPC.
+     */
+    fun playerNpcGreet(playerId: Long, npcId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+
+        val npc = getNpcByID(npcId) ?: return
+
+        if (isUIExhausted(player)) {
+            sendCancelMessage(player, ReturnValue.YOUAREEXHAUSTED)
+            return
+        }
+
+        val speechBubble = getNpcSpeechBubble(npc)
+        if (!canSpeakWithHireling(player, speechBubble)) {
+            return
+        }
+
+        val spectators = (spectatorsOf(player.position, multifloor = true).filterIsInstance<Player>() + npc).distinct()
+        internalCreatureSay(player, SpeakClasses.TALKTYPE_SAY, "hi", false, spectators)
+
+        val npcsSpectators = spectators.filterIsInstance<Npc>()
+
+        if (speechBubble == SPEECHBUBBLE_TRADE) {
+            internalCreatureSay(player, SpeakClasses.TALKTYPE_PRIVATE_PN, "trade", false, npcsSpectators)
+        } else if (speechBubble == SPEECHBUBBLE_SAILOR) {
+            internalCreatureSay(player, SpeakClasses.TALKTYPE_PRIVATE_PN, "sail", false, npcsSpectators)
+        }
+
+        updateUIExhausted(player)
+    }
+
+    /**
+     * `Game::playerAnswerModalWindow` (src/game/game.cpp:11144): the player
+     * lookup wraps the ported [ModalWindowManager.playerAnswerModalWindow]
+     * (the offline-training branch and the `onModalWindow` creature events).
+     */
+    fun playerAnswerModalWindow(playerId: Long, modalWindowId: Long, button: Int, choice: Int) {
+        val player = getPlayerByID(playerId) ?: return
+
+        modalWindowManager?.playerAnswerModalWindow(player, modalWindowId, button, choice)
+    }
+
+    /**
+     * `Item::getCustomAttribute` facade (`src/items/functions/item/custom_attribute.cpp`):
+     * the Kotlin [Item] has no string-keyed custom attribute store (PARITY GAP),
+     * so the podium attributes live in this identity map.
+     */
+    internal fun getItemCustomAttribute(item: Item, key: String): Long? = itemCustomAttributes[item]?.get(key)
+
+    /** `Item::setCustomAttribute` facade (`src/items/functions/item/custom_attribute.cpp`). */
+    internal fun setItemCustomAttribute(item: Item, key: String, value: Long) {
+        itemCustomAttributes.getOrPut(item) { mutableMapOf() }[key] = value
+    }
+
+    /** `Item::removeCustomAttribute` facade (`src/items/functions/item/custom_attribute.cpp`). */
+    internal fun removeItemCustomAttribute(item: Item, key: String) {
+        itemCustomAttributes[item]?.remove(key)
+    }
+
+    /**
+     * `Game::playerSetMonsterPodium` (src/game/game.cpp:11283): validates the
+     * top-down podium item, walks the player into range when needed, stores the
+     * monster race/outfit custom attributes and renames the podium. The
+     * `Item::getCustomAttribute` store is the [getItemCustomAttribute] facade
+     * and the monster registry is the [getMonsterTypeByRaceId] seam.
+     */
+    @Suppress("CyclomaticComplexMethod", "LongMethod")
+    fun playerSetMonsterPodium(
+        playerId: Long,
+        monsterRaceId: Int,
+        pos: Position,
+        stackPos: Int,
+        itemId: Int,
+        direction: Int,
+        podiumAndMonsterVisible: Pair<Int, Int>,
+    ) {
+        val player = getPlayerByID(playerId) ?: return
+        if (pos.x == 0xFFFF) {
+            return
+        }
+
+        val item = internalGetThing(player, pos, stackPos, itemId, StackPosType_t.STACKPOS_TOPDOWN_ITEM) ?: return
+
+        if (item.id != itemId || item.type?.isPodium != true || item.hasAttribute(ItemAttribute.UNIQUEID)) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        val tile = item.getParent()?.getTile()
+        if (tile == null) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        if (!areInRange(pos, player.position, 1, 1, 0)) {
+            val listDir = getPathTo(player, pos, 0, 1, true, false)
+            if (listDir != null) {
+                if (!queuePlayerAutoWalk(player, listDir)) {
+                    return
+                }
+                val task = PlayerTask(400, "Game::playerSetMonsterPodium") { playerBrowseField(playerId, pos) }
+                setNextWalkActionTask(player, task)
+            } else {
+                sendCancelMessage(player, ReturnValue.THEREISNOWAY)
+            }
+            return
+        }
+
+        if (isUIExhausted(player)) {
+            sendCancelMessage(player, ReturnValue.YOUAREEXHAUSTED)
+            return
+        }
+
+        if (onlyInvitedCanMoveHouseItems && !playerCanUseItemOnHouseTile(player, item)) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        var raceId = monsterRaceId
+        if (monsterRaceId != 0) {
+            setItemCustomAttribute(item, "PodiumMonsterRaceId", monsterRaceId.toLong())
+        } else {
+            raceId = (getItemCustomAttribute(item, "PodiumMonsterRaceId") ?: 0L).toInt()
+        }
+
+        val mType = getMonsterTypeByRaceId(raceId, itemId == ITEM_PODIUM_OF_VIGOUR)
+        if (mType == null) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            logger.debug { "[playerSetMonsterPodium] player ${player.name} is trying to add invalid monster to podium" }
+            return
+        }
+
+        val (podiumVisible, monsterVisible) = podiumAndMonsterVisible
+        var changeTentuglyName = false
+        val monsterOutfit = mType.info.outfit.copy()
+        if ((monsterOutfit.lookType != 0 || monsterOutfit.lookTypeEx != 0) && monsterVisible != 0) {
+            // "Tantugly's Head" boss have to send other looktype to the podium
+            if (monsterOutfit.lookTypeEx == TENTUGLY_HEAD_LOOK_TYPE_EX) {
+                monsterOutfit.lookTypeEx = TENTUGLY_PODIUM_LOOK_TYPE_EX
+                changeTentuglyName = true
+            }
+            setItemCustomAttribute(item, "LookTypeEx", monsterOutfit.lookTypeEx.toLong())
+            setItemCustomAttribute(item, "LookType", monsterOutfit.lookType.toLong())
+            setItemCustomAttribute(item, "LookHead", monsterOutfit.lookHead.toLong())
+            setItemCustomAttribute(item, "LookBody", monsterOutfit.lookBody.toLong())
+            setItemCustomAttribute(item, "LookLegs", monsterOutfit.lookLegs.toLong())
+            setItemCustomAttribute(item, "LookFeet", monsterOutfit.lookFeet.toLong())
+            setItemCustomAttribute(item, "LookAddons", monsterOutfit.lookAddons.toLong())
+        } else {
+            removeItemCustomAttribute(item, "LookType")
+        }
+
+        setItemCustomAttribute(item, "PodiumVisible", podiumVisible.toLong())
+        setItemCustomAttribute(item, "LookDirection", direction.toLong())
+        setItemCustomAttribute(item, "MonsterVisible", monsterVisible.toLong())
+
+        item.removeAttribute(ItemAttribute.NAME)
+        if (monsterVisible != 0) {
+            val name = StringBuilder(item.getName())
+            name.append(" displaying ")
+            if (changeTentuglyName) {
+                name.append("Tentugly")
+            } else {
+                name.append(mType.name)
+            }
+            item.setAttribute(ItemAttribute.NAME, name.toString())
+        }
+
+        for (spectator in spectatorsOf(pos, multifloor = true)) {
+            val playerSpectator = spectator as? Player ?: continue
+            sendUpdateTileItem(playerSpectator, tile, pos, item)
+        }
+
+        updateUIExhausted(player)
+    }
+
+    /**
+     * `Game::playerRotatePodium` (src/game/game.cpp:11395): rotates a bestiary
+     * podium by re-running [playerSetMonsterPodium] with the next direction, or
+     * hands the stored outfit of a renown podium to the
+     * [playerSetShowOffSocket] seam.
+     */
+    @Suppress("CyclomaticComplexMethod", "LongMethod")
+    fun playerRotatePodium(playerId: Long, pos: Position, stackPos: Int, itemId: Int) {
+        val player = getPlayerByID(playerId) ?: return
+
+        val item = internalGetThing(player, pos, stackPos, itemId, StackPosType_t.STACKPOS_TOPDOWN_ITEM) ?: return
+
+        if (item.id != itemId || item.hasAttribute(ItemAttribute.UNIQUEID)) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        if (pos.x != 0xFFFF && !areInRange(pos, player.position, 1, 1, 0)) {
+            val listDir = getPathTo(player, pos, 0, 1, true, true)
+            if (listDir != null) {
+                if (!queuePlayerAutoWalk(player, listDir)) {
+                    return
+                }
+                val task = PlayerTask(400, "Game::playerRotatePodium") {
+                    playerRotatePodium(playerId, pos, stackPos, itemId)
+                }
+                setNextWalkActionTask(player, task)
+            } else {
+                sendCancelMessage(player, ReturnValue.THEREISNOWAY)
+            }
+            return
+        }
+
+        if (onlyInvitedCanMoveHouseItems && !playerCanUseItemOnHouseTile(player, item)) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        val podiumRaceId = (getItemCustomAttribute(item, "PodiumMonsterRaceId") ?: 0L).toInt() and 0xFFFF
+        val lookDirection = getItemCustomAttribute(item, "LookDirection")
+        val directionValue = if (lookDirection != null) {
+            if (lookDirection >= 3) 0 else (lookDirection + 1).toInt()
+        } else {
+            2
+        }
+        val isPodiumVisible = (getItemCustomAttribute(item, "PodiumVisible") ?: 0L) != 0L
+        val isMonsterVisible = (getItemCustomAttribute(item, "MonsterVisible") ?: 0L) != 0L
+
+        // Rotate monster podium (bestiary or bosstiary) to the new direction
+        val isPodiumOfRenown = itemId == ITEM_PODIUM_OF_RENOWN1 || itemId == ITEM_PODIUM_OF_RENOWN2
+        if (!isPodiumOfRenown) {
+            val lookTypeEx = getItemCustomAttribute(item, "LookTypeEx")
+            if (!isMonsterVisible || podiumRaceId == 0 ||
+                (lookTypeEx != null && lookTypeEx == TENTUGLY_PODIUM_LOOK_TYPE_EX.toLong())
+            ) {
+                sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+                return
+            }
+
+            playerSetMonsterPodium(
+                playerId,
+                podiumRaceId,
+                pos,
+                stackPos,
+                itemId,
+                directionValue,
+                (if (isPodiumVisible) 1 else 0) to (if (isMonsterVisible) 1 else 0),
+            )
+            return
+        }
+
+        val newOutfit = Outfit()
+        newOutfit.lookType = (getItemCustomAttribute(item, "LookType") ?: 0L).toInt()
+        newOutfit.lookAddons = (getItemCustomAttribute(item, "LookAddons") ?: 0L).toInt()
+        newOutfit.lookHead = (getItemCustomAttribute(item, "LookHead") ?: 0L).toInt()
+        newOutfit.lookBody = (getItemCustomAttribute(item, "LookBody") ?: 0L).toInt()
+        newOutfit.lookLegs = (getItemCustomAttribute(item, "LookLegs") ?: 0L).toInt()
+        newOutfit.lookFeet = (getItemCustomAttribute(item, "LookFeet") ?: 0L).toInt()
+
+        newOutfit.lookMount = (getItemCustomAttribute(item, "LookMount") ?: 0L).toInt()
+        newOutfit.lookMountHead = (getItemCustomAttribute(item, "LookMountHead") ?: 0L).toInt()
+        newOutfit.lookMountBody = (getItemCustomAttribute(item, "LookMountBody") ?: 0L).toInt()
+        newOutfit.lookMountLegs = (getItemCustomAttribute(item, "LookMountLegs") ?: 0L).toInt()
+        newOutfit.lookMountFeet = (getItemCustomAttribute(item, "LookMountFeet") ?: 0L).toInt()
+        if (newOutfit.lookType == 0 && newOutfit.lookMount == 0) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        playerSetShowOffSocket(
+            player.id,
+            newOutfit,
+            pos,
+            stackPos,
+            itemId,
+            if (isPodiumVisible) 1 else 0,
+            directionValue,
+        )
+    }
+
     /**
      * `Game::playerApplyImbuement` (src/game/game.cpp:7116): the exhaustion gate
      * runs first, unknown imbuements are ignored, a player without an imbuing
@@ -5835,6 +6177,27 @@ class Game(
         /** `removeOfferItems` wrong-item status (src/game/game.cpp:10394). */
         private const val ITEM_MARKET_INCORRECT_MESSAGE =
             "The item you tried to market is not correct. Check the item again."
+
+        /** `SPEECHBUBBLE_TRADE` (`src/creatures/creatures_definitions.hpp:336`). */
+        private const val SPEECHBUBBLE_TRADE = 2
+
+        /** `SPEECHBUBBLE_SAILOR` (`src/creatures/creatures_definitions.hpp:339`). */
+        private const val SPEECHBUBBLE_SAILOR = 5
+
+        /** `ITEM_PODIUM_OF_VIGOUR` (`src/utils/utils_definitions.hpp:701`). */
+        private const val ITEM_PODIUM_OF_VIGOUR = 38707
+
+        /** `ITEM_PODIUM_OF_RENOWN1` (`src/utils/utils_definitions.hpp:699`). */
+        private const val ITEM_PODIUM_OF_RENOWN1 = 35973
+
+        /** `ITEM_PODIUM_OF_RENOWN2` (`src/utils/utils_definitions.hpp:700`). */
+        private const val ITEM_PODIUM_OF_RENOWN2 = 35974
+
+        /** `Tantugly's Head` monster outfit lookTypeEx (game.cpp:11329). */
+        private const val TENTUGLY_HEAD_LOOK_TYPE_EX = 35105
+
+        /** Podium lookTypeEx sent for the `Tantugly's Head` boss (game.cpp:11330). */
+        private const val TENTUGLY_PODIUM_LOOK_TYPE_EX = 39003
 
         /**
          * `Game::calculateHighscorePages` (src/game/game.cpp:10033): a zero page
