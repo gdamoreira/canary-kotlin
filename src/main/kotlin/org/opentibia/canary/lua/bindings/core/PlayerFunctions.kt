@@ -11,8 +11,6 @@ import org.opentibia.canary.creatures.PlayerPronoun_t
 import org.opentibia.canary.creatures.appearance.outfit.OutfitPlayer
 import org.opentibia.canary.creatures.appearance.outfit.Outfits
 import org.opentibia.canary.creatures.appearance.outfit.PlayerOutfits
-import org.opentibia.canary.creatures.players.components.Achievement
-import org.opentibia.canary.creatures.players.components.AchievementPlayer
 import org.opentibia.canary.creatures.players.components.AchievementRegistry
 import org.opentibia.canary.creatures.players.components.InMemoryAchievementRegistry
 import org.opentibia.canary.creatures.players.components.PlayerAchievement
@@ -2464,18 +2462,36 @@ object UnwiredPlayerBatch3Operations : PlayerBatch3Operations {
     override fun save(player: Any): Boolean? = notWired("save")
 }
 
-/** `PlayerAchievement` view over a live [Player] (see the component's seams). */
-private class PlayerAchievementView(private val player: Player) : AchievementPlayer {
-    override fun getName(): String = player.name
+/**
+ * Propagates the composition root's achievement registry (`Game::m_achievements`,
+ * game.cpp:12481) into the registry a `PlayerFeatures` component was built with.
+ * `PlayerFeatures` constructs [PlayerAchievement] over its own default
+ * `InMemoryAchievementRegistry` because the Kotlin `Player` cannot receive the
+ * global registry by injection yet (PARITY GAP); copying the entries the first
+ * time a player is reached keeps `player:addAchievement(name)` and the
+ * component's id lookups reading the same table, like `g_game().getAchievementByName`
+ * and `g_game().getAchievementById` do in C++. Weak keys avoid retaining player
+ * registries past their players.
+ */
+internal class AchievementRegistryAdopter(private val source: AchievementRegistry) {
 
-    override fun sendTextMessage(message: String) {
-        player.sendTextMessage(message)
+    private val adopted = WeakHashMap<AchievementRegistry, Boolean>()
+
+    fun adopt(target: AchievementRegistry) {
+        if (target === source || adopted.put(target, true) != null) {
+            return
+        }
+        for (achievement in source.getAchievements()) {
+            target.registerAchievement(
+                achievement.id,
+                achievement.name,
+                achievement.description,
+                achievement.secret,
+                achievement.grade,
+                achievement.points,
+            )
+        }
     }
-
-    override fun sendCyclopediaCharacterAchievements(
-        secretsUnlocked: Int,
-        achievementsUnlocked: List<Pair<Achievement, Long>>,
-    ) = Unit
 }
 
 /**
@@ -2518,6 +2534,11 @@ private class PlayerAchievementView(private val player: Player) : AchievementPla
  *  - `getPreyExperiencePercentage`/`getPreyLootPercentage`/`isMonsterPrey` follow
  *    the ported `PlayerPreyState` exactly; `preyThirdSlot`/`taskHuntingThirdSlot`
  *    mutate the ported slot state without the client reload packets.
+ *  - Achievements read and write the composed `PlayerFeatures.achievement`
+ *    (player.cpp:12758) instead of a per-operations map; the injected
+ *    [achievementRegistry] is merged into the component's registry on first
+ *    touch because `PlayerFeatures` cannot receive the composition root's global
+ *    registry by injection yet (see [AchievementRegistryAdopter]).
  */
 class WorldPlayerBatch3Operations(
     private val itemIdsByName: Map<String, Int> = emptyMap(),
@@ -2542,7 +2563,7 @@ class WorldPlayerBatch3Operations(
     private val imbuementPlayerFactory: ((Player) -> ImbuementPlayer)? = null,
 ) : PlayerBatch3Operations {
 
-    private val achievements = mutableMapOf<Long, PlayerAchievement>()
+    private val achievementAdopter = AchievementRegistryAdopter(achievementRegistry)
 
     override fun itemIdByName(name: String): Int = itemIdsByName[name] ?: 0
 
@@ -3038,13 +3059,13 @@ class WorldPlayerBatch3Operations(
 
     override fun getAchievementPoints(player: Any): Int? {
         val target = player as? Player ?: return null
-        return achievementsOf(target).getPoints()
+        return target.features.achievement.getPoints()
     }
 
     override fun addAchievementPoints(player: Any, amount: Int): Boolean? {
         val target = player as? Player ?: return null
         if (amount > 0) {
-            achievementsOf(target).addPoints(amount)
+            target.features.achievement.addPoints(amount)
         }
         return true
     }
@@ -3052,14 +3073,14 @@ class WorldPlayerBatch3Operations(
     override fun removeAchievementPoints(player: Any, amount: Int): Boolean? {
         val target = player as? Player ?: return null
         if (amount > 0) {
-            achievementsOf(target).removePoints(amount)
+            target.features.achievement.removePoints(amount)
         }
         return true
     }
 
     override fun hasAchievement(player: Any, achievementId: Int): Boolean? {
         val target = player as? Player ?: return null
-        return achievementsOf(target).isUnlocked(achievementId)
+        return target.features.achievement.isUnlocked(achievementId)
     }
 
     override fun addAchievement(player: Any, achievementId: Int, sendMessage: Boolean): Boolean? {
@@ -3077,12 +3098,15 @@ class WorldPlayerBatch3Operations(
     /** PARITY GAP: no save-manager seam; reports success without persisting. */
     override fun save(player: Any): Boolean? = (player as? Player)?.let { true }
 
-    private fun achievementsOf(player: Player): PlayerAchievement = achievements.getOrPut(player.id) {
-        PlayerAchievement(
-            player = PlayerAchievementView(player),
-            kv = player.kv,
-            registry = achievementRegistry,
-        )
+    /**
+     * `Player::achiev()` (player.cpp:12758): the composed [PlayerFeatures.achievement]
+     * component. The injected [achievementRegistry] (the `g_game()` seam, see
+     * [AchievementRegistryAdopter]) is propagated first so the component resolves
+     * the ids the binding resolved by name.
+     */
+    private fun achievementsOf(player: Player): PlayerAchievement {
+        achievementAdopter.adopt(player.features.achievementRegistry)
+        return player.features.achievement
     }
 
     private companion object {
