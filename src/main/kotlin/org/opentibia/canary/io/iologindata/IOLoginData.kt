@@ -30,6 +30,7 @@ import org.opentibia.canary.database.PlayerStorageRepository
 import org.opentibia.canary.database.VipLoginRepository
 import org.opentibia.canary.database.deserializeItemAttributes
 import org.opentibia.canary.database.serializeItemAttributes
+import org.opentibia.canary.io.IOBestiaryPersistence
 import org.opentibia.canary.io.PropStream
 import org.opentibia.canary.io.PropWriteStream
 import org.opentibia.canary.items.Container
@@ -41,6 +42,7 @@ import org.opentibia.canary.map.Position
 import org.opentibia.canary.persistence.PlayerFeatureStateLoader
 import org.opentibia.canary.systems.imbuement.ImbuementItem
 import org.opentibia.canary.systems.imbuement.Imbuements
+import org.opentibia.canary.systems.prey.IOPreyPersistence
 import org.opentibia.canary.systems.rewardchest.Reward
 import org.opentibia.canary.utils.Tools
 
@@ -85,8 +87,18 @@ typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
  * player.cpp:2058-2063) and inbox (`Player::inbox`, player.hpp:1760) sinks are
  * reached through the `Player` itself; the depot chests need the
  * `Player::depotChests` map (see CREATURE.KT ACCESSOR NEEDS) and stay inert
- * until it exists. [savePlayerGuard] calls all four live walks; the row-based
+ * until it exists. [savePlayerGuard] calls all of the live walks; the row-based
  * overloads remain for callers that already hold the `(pid, sid)` rows.
+ *
+ * The remaining guard saves reuse the wave-36/40 persistence classes:
+ * [savePlayerStash(player)] walks `Player::getStashItems` with the C++
+ * decay/ware filters, [savePlayerBestiarySystem(player)] writes the charm
+ * state and cyclopedia tracker through [IOBestiaryPersistence],
+ * [savePlayerPreyClass(player)] and [savePlayerTaskHuntingClass(player)] write
+ * the prey/task slots through [IOPreyPersistence], and
+ * [PlayerSaveTransaction] shares one JDBC transaction across every repository
+ * constructed over it (the port's `DBTransaction::executeWithinTransaction`
+ * equivalent).
  *
  * CREATURE.KT ACCESSOR NEEDS (report to the composition owner):
  *  - `Player::depotChests` (src/creatures/players/player.hpp:1673), a
@@ -99,19 +111,21 @@ typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
  *    the accessor exists the depot save seam defaults to `null` and the walk
  *    stays inert instead of clearing the persisted rows.
  *
- * PARITY GAPS (reported by the wave): `savePlayer` cannot wrap every
- * repository in one shared transaction because each JDBC repository owns its
- * connection; the Canary offline guard (`Player::isOffline`) has no Kotlin
- * equivalent yet, so [saveOnlyDataForOnlinePlayer] always flushes; the
- * `PlayerPvp` kill list and stash have no live `Player` sink in this port, so
- * those helpers take the persisted values directly; [savePlayerGuard] omits
- * the stash, bestiary, prey and task-hunting live saves whose sinks are not
- * ported; `saveItems` resolves [Reward] children through `Reward.items`
- * because the port's reward proxy is not a `Container` (Reward.kt gap), and
- * [saveRewardItems(player)] re-applies the DATE attribute at save time because
- * `RewardChest.getReward` keeps the id in `Reward.date` only; and the item type
- * registry, imbuement registry and decay/imbuement-decay seams default to
- * unwired until the composition root supplies them.
+ * PARITY GAPS (reported by the wave): the shared transaction of [savePlayer]
+ * only covers repositories constructed over the supplied [PlayerSaveTransaction]
+ * (the composition root owns the wiring); with the default `null` every JDBC
+ * repository still opens and commits its own connection, so the guard cannot be
+ * rolled back as a whole; the Canary offline guard (`Player::isOffline`) has no
+ * Kotlin equivalent yet, so [saveOnlyDataForOnlinePlayer] always flushes; the
+ * row-based overloads of the walks remain for callers that already hold the
+ * persisted rows; [savePlayerStash(player)] applies the decay/ware filters only
+ * when the `ItemTypeRegistry` seam is wired (an unknown item id stays unfiltered, exactly
+ * like the default `Item::items` entry); `saveItems` resolves [Reward] children
+ * through `Reward.items` because the port's reward proxy is not a `Container`
+ * (Reward.kt gap), and [saveRewardItems(player)] re-applies the DATE attribute at
+ * save time because `RewardChest.getReward` keeps the id in `Reward.date` only;
+ * and the item type registry, imbuement registry and decay/imbuement-decay seams
+ * default to unwired until the composition root supplies them.
  */
 class IOLoginData(
     private val players: PlayerLoginRepository,
@@ -140,6 +154,28 @@ class IOLoginData(
      * unwired sinks instead of clearing the persisted rows.
      */
     private val depotChests: ((Player) -> Map<Int, Container>)? = null,
+    /**
+     * `IOLoginDataSave::savePlayerBestiarySystem`
+     * (src/io/functions/iologindata_save_player.cpp:478-532) sink: the wave-36
+     * [IOBestiaryPersistence] class. `null` keeps the bestiary save inert like
+     * the other unwired seams.
+     */
+    private val bestiaryPersistence: IOBestiaryPersistence? = null,
+    /**
+     * `IOLoginDataSave::savePlayerPreyClass` / `savePlayerTaskHuntingClass`
+     * (src/io/functions/iologindata_save_player.cpp:661-775) sink: the wave-36
+     * [IOPreyPersistence] class carrying both slot families. `null` keeps both
+     * saves inert like the other unwired seams.
+     */
+    private val preyPersistence: IOPreyPersistence? = null,
+    /**
+     * `DBTransaction::executeWithinTransaction` scope of `IOLoginData::savePlayer`
+     * (src/io/iologindata.cpp:195-211): construct every repository and
+     * persistence class of the save path over this [PlayerSaveTransaction] to
+     * have the whole guard share one JDBC transaction. `null` keeps the
+     * pre-existing per-repository commits (PARITY GAP).
+     */
+    private val saveTransaction: PlayerSaveTransaction? = null,
 ) {
 
     private val featureLoader: PlayerFeatureStateLoader? by lazy(LazyThreadSafetyMode.NONE) {
@@ -251,9 +287,24 @@ class IOLoginData(
     /** `IOLoginData::savePlayerFirst` (src/io/functions/iologindata_save_player.cpp:191-372). */
     fun savePlayerFirst(player: Player): Boolean = players.savePlayerRecord(player)
 
-    /** `IOLoginData::savePlayer` (src/io/iologindata.cpp:195-211). */
+    /**
+     * `IOLoginData::savePlayer` (src/io/iologindata.cpp:195-211). The
+     * `DBTransaction::executeWithinTransaction` scope becomes the injected
+     * [saveTransaction]: when wired the whole guard runs in one JDBC transaction
+     * and a `false`/thrown save rolls every write back.
+     */
     fun savePlayer(player: Player): Boolean = try {
-        savePlayerGuard(player)
+        val transaction = saveTransaction
+        val success = if (transaction != null) {
+            transaction.executeWithinTransaction { savePlayerGuard(player) }
+        } else {
+            savePlayerGuard(player)
+        }
+
+        if (!success) {
+            logger.error { "[savePlayer] Error occurred saving player ${player.name}" }
+        }
+        success
     } catch (ex: Exception) {
         logger.error(ex) { "[savePlayer] Error occurred saving player ${player.name}" }
         false
@@ -266,6 +317,11 @@ class IOLoginData(
             return false
         }
 
+        if (!savePlayerStash(player)) {
+            logger.error { "[savePlayerGuard] - Failed to save player stash: ${player.name}" }
+            return false
+        }
+
         if (!savePlayerSpells(player)) {
             logger.error { "[savePlayerGuard] - Failed to save player spells: ${player.name}" }
             return false
@@ -273,6 +329,11 @@ class IOLoginData(
 
         if (!savePlayerKills(player.id, player.pvpPlayer.getUnjustifiedKills())) {
             logger.error { "[savePlayerGuard] - Failed to save player kills: ${player.name}" }
+            return false
+        }
+
+        if (!savePlayerBestiarySystem(player)) {
+            logger.error { "[savePlayerGuard] - Failed to save player bestiary system: ${player.name}" }
             return false
         }
 
@@ -293,6 +354,16 @@ class IOLoginData(
 
         if (!savePlayerInbox(player)) {
             logger.error { "[savePlayerGuard] - Failed to save player inbox: ${player.name}" }
+            return false
+        }
+
+        if (!savePlayerPreyClass(player)) {
+            logger.error { "[savePlayerGuard] - Failed to save player prey class: ${player.name}" }
+            return false
+        }
+
+        if (!savePlayerTaskHuntingClass(player)) {
+            logger.error { "[savePlayerGuard] - Failed to save player task hunting class: ${player.name}" }
             return false
         }
 
@@ -843,6 +914,85 @@ class IOLoginData(
     fun savePlayerStash(playerId: Long, stashItems: Map<Int, Int>): Boolean {
         stash.save(playerId, stashItems)
         return true
+    }
+
+    /**
+     * `IOLoginDataSave::savePlayerStash` (iologindata_save_player.cpp:374-414):
+     * `Player::getStashItems` (player.cpp:5437) is iterated in its ascending
+     * item-id order, skipping decaying items (`decayTo >= 0 && decayTime > 0`)
+     * and market wares whose `wareId` differs from the item id, then the
+     * remaining counters replace the persisted rows through
+     * [PlayerStashRepository.save]. The C++ `Item::items` lookup becomes the
+     * injected [itemTypes]; an unknown id keeps the default `ItemType`
+     * behavior (no filter), and an unwired registry filters nothing.
+     */
+    fun savePlayerStash(player: Player): Boolean {
+        val stashItems = mutableMapOf<Int, Int>()
+        for ((itemId, itemCount) in player.stash.getStashItems()) {
+            val itemType = itemTypes?.get(itemId)
+            if (itemType != null) {
+                if (itemType.decayTo >= 0 && itemType.decayTime > 0) {
+                    continue
+                }
+                if (itemType.wareId > 0 && itemType.wareId != itemType.id) {
+                    logger.warn {
+                        "[savePlayerStash] - Item ID $itemId is a ware item, for player: ${player.name}, skipping."
+                    }
+                    continue
+                }
+            }
+            stashItems[itemId] = itemCount
+        }
+
+        stash.save(player.id, stashItems)
+        return true
+    }
+
+    /**
+     * `IOLoginDataSave::savePlayerBestiarySystem`
+     * (iologindata_save_player.cpp:478-532): the charm points/echoes/rune bits,
+     * the `charms` blob (raceId + tier per rune) and the tracker list built from
+     * `Player::getCyclopediaMonsterTrackerSet(false)` race ids
+     * (player.cpp:941-943) are persisted through [IOBestiaryPersistence]. A
+     * missing sink stays inert like the other unwired seams.
+     */
+    fun savePlayerBestiarySystem(player: Player): Boolean {
+        val persistence = bestiaryPersistence ?: return true
+        return try {
+            persistence.savePlayerBestiarySystem(
+                player.id,
+                player.features.bestiary,
+                player.getCyclopediaMonsterTrackerSet(false).map { it.info.raceid },
+            )
+            true
+        } catch (ex: Exception) {
+            logger.error(ex) { "[savePlayerBestiarySystem] - Failed to save player bestiary system: ${player.name}" }
+            false
+        }
+    }
+
+    /**
+     * `IOLoginDataSave::savePlayerPreyClass`
+     * (iologindata_save_player.cpp:661-718): every live prey slot of
+     * `Player::features.prey` is upserted through [IOPreyPersistence], which
+     * owns the `PREY_ENABLED` gate and the `raceIdList` blob encoding. A missing
+     * sink stays inert like the other unwired seams.
+     */
+    fun savePlayerPreyClass(player: Player): Boolean {
+        val persistence = preyPersistence ?: return true
+        return persistence.savePlayerPreyClass(player.features.prey, player.id)
+    }
+
+    /**
+     * `IOLoginDataSave::savePlayerTaskHuntingClass`
+     * (iologindata_save_player.cpp:720-775): every live task-hunting slot of
+     * `Player::features.taskHunting` is upserted through [IOPreyPersistence],
+     * which owns the `TASK_HUNTING_ENABLED` gate and the `raceIdList` blob
+     * encoding. A missing sink stays inert like the other unwired seams.
+     */
+    fun savePlayerTaskHuntingClass(player: Player): Boolean {
+        val persistence = preyPersistence ?: return true
+        return persistence.savePlayerTaskHuntingClass(player.features.taskHunting, player.id)
     }
 
     /** `IOLoginDataLoad::loadRewardItems` (iologindata_load_player.cpp:645-661) row read. */
