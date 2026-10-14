@@ -6,12 +6,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.asContextElement
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
@@ -39,6 +41,12 @@ private val DEFAULT_DISPATCHER_BUDGETS = DispatcherBudgetSet()
 
 /** `DISPATCHER_ADAPTIVE_BUDGET_INTERVAL` (src/game/scheduling/dispatcher.cpp:28). */
 private const val DISPATCHER_ADAPTIVE_BUDGET_INTERVAL_MS: Long = 250
+
+/** `DISPATCHER_QUEUE_LATENCY_LOG_THRESHOLD` (src/game/scheduling/dispatcher.cpp:26). */
+private const val DISPATCHER_QUEUE_LATENCY_LOG_THRESHOLD_MS: Long = 250
+
+/** `DISPATCHER_TELEMETRY_LOG_INTERVAL` (src/game/scheduling/dispatcher.cpp:27). */
+internal const val DISPATCHER_TELEMETRY_LOG_INTERVAL_MS: Long = 5_000
 
 /** `DISPATCHER_TELEMETRY_WARMUP` (src/game/scheduling/dispatcher.cpp:30). */
 private const val DISPATCHER_TELEMETRY_WARMUP_MS: Long = 1_000
@@ -85,14 +93,23 @@ class ScheduledTask internal constructor(
  * The worker loop owns `refreshAdaptiveBudgets` (dispatcher.cpp:547-627) on the
  * `DISPATCHER_ADAPTIVE_BUDGET_INTERVAL` cadence, [observeInternalWork]
  * (dispatcher.cpp:378-388) gates every lateness observation behind the
- * queue-latency logging toggle, and [context] exposes the same per-task
- * `DispatcherContext` `Creature::safeCall` reads for its barrier continuation
- * (creature.cpp:2195-2217).
+ * queue-latency logging toggle, [logQueueLatency] (dispatcher.cpp:324-363) and
+ * [logRuntimeTelemetry] (dispatcher.cpp:390-490) emit the periodic debug
+ * logging on the `DISPATCHER_TELEMETRY_LOG_INTERVAL` cadence, and [context]
+ * exposes the same per-task `DispatcherContext` `Creature::safeCall` reads for
+ * its barrier continuation (creature.cpp:2195-2217). The task ThreadLocal is
+ * carried as a coroutine `ThreadContextElement` so the context survives a
+ * suspension resumed on another barrier worker thread.
  *
- * PARITY GAPS: the production `setQueueLatencyLoggingEnabled(true)` call site
- * (`CanaryServer`, canary_server.cpp:311) and the backlog/latency debug logging
- * cadence (`logQueueLatency`/`logRuntimeTelemetry`, dispatcher.cpp:334-361,
- * 390-505) are not wired; telemetry is exposed through the read views instead.
+ * PARITY GAPS:
+ *  - The production `setQueueLatencyLoggingEnabled(true)` call site
+ *    (`CanaryServer`, canary_server.cpp:311) belongs to the composition root
+ *    and is not wired here; tests enable the toggle through
+ *    [setQueueLatencyLoggingEnabled].
+ *  - `MonsterPipelinesHost` still records its lateness lambdas into its own
+ *    `ConcurrentTimedWork` sinks (`postThinkLateness`/
+ *    `movementRefreshLateness`) instead of calling [observeInternalWork]; the
+ *    rebinding is owned by the monster host (out of `game.scheduling` scope).
  */
 class GameDispatcher(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default.limitedParallelism(1)),
@@ -143,6 +160,13 @@ class GameDispatcher(
     private val playerVisibleReadyLatency = ConcurrentLatencyHistogram()
     private val internalWorkTelemetry = Array(DispatcherInternalWork.entries.size) { ConcurrentTimedWork() }
     private var nextAdaptiveBudgetUpdateAt = 0L
+
+    /** Per-lane `logQueueLatency` cadence (`nextLogAt`/`nextProbeAt`, dispatcher.cpp:325-347). */
+    private val laneNextQueueLatencyLogAt = LongArray(DispatcherWeightedDeficitRoundRobin.LANE_COUNT)
+    private val laneNextQueueLatencyProbeAt = LongArray(DispatcherWeightedDeficitRoundRobin.LANE_COUNT)
+
+    /** `logRuntimeTelemetry` cadence (`nextLogAt`, dispatcher.cpp:391-401). */
+    private var nextRuntimeTelemetryLogAt = 0L
 
     @Volatile
     private var queueLatencyLoggingEnabled = false
@@ -201,19 +225,20 @@ class GameDispatcher(
                     if (telemetryEnabled) {
                         observeInternalWork(DispatcherInternalWork.DispatcherPass, 1, timeSourceUs() - passStartedAtUs)
                     }
+                    logRuntimeTelemetry()
 
                     if (hasReadyWork()) {
                         continue
                     }
 
                     val waitMs = timeUntilNextScheduledEvent()
-                    val idleStartedAtUs = if (queueLatencyLoggingEnabled) timeSourceUs() else 0
+                    val idleStartedAtUs = if (telemetryEnabled) timeSourceUs() else 0
                     if (waitMs == null) {
                         wakeSignal.receive()
                     } else {
                         withTimeoutOrNull(waitMs) { wakeSignal.receive() }
                     }
-                    if (queueLatencyLoggingEnabled) {
+                    if (telemetryEnabled) {
                         observeInternalWork(DispatcherInternalWork.DispatcherIdle, 1, timeSourceUs() - idleStartedAtUs)
                     }
                 }
@@ -333,6 +358,140 @@ class GameDispatcher(
     /** `internalWorkTelemetry[work]` snapshot (test/telemetry read view). */
     internal fun internalWorkSnapshot(work: DispatcherInternalWork): TimedWorkSnapshot =
         internalWorkTelemetry[work.ordinal].snapshotAndReset()
+
+    /**
+     * `Dispatcher::logQueueLatency` (src/game/scheduling/dispatcher.cpp:324-363):
+     * the lane's oldest ready task is logged when it exceeds
+     * [DISPATCHER_QUEUE_LATENCY_LOG_THRESHOLD_MS], at most once per
+     * [DISPATCHER_TELEMETRY_LOG_INTERVAL_MS]. Probes are limited to the
+     * `DISPATCHER_ADAPTIVE_BUDGET_INTERVAL` cadence. The Kotlin clock is
+     * milliseconds, so the inspected age is already milliseconds.
+     */
+    internal fun logQueueLatency(lane: DispatcherLane) {
+        val laneId = lane.ordinal
+        val queue = laneQueues[laneId]
+        if (queue.isEmpty()) {
+            return
+        }
+
+        if (!queueLatencyLoggingEnabled) {
+            return
+        }
+
+        if (!isGameStateNormal()) {
+            return
+        }
+
+        val now = clock()
+        if (now < laneNextQueueLatencyLogAt[laneId] || now < laneNextQueueLatencyProbeAt[laneId]) {
+            return
+        }
+        laneNextQueueLatencyProbeAt[laneId] = now + DISPATCHER_ADAPTIVE_BUDGET_INTERVAL_MS
+
+        val snapshot = DispatcherPolicy.inspectQueueAt(queue, now, queueLatencyLoggingStartedAt)
+        if (snapshot.queued == 0 || snapshot.oldestReadyAgeUs < DISPATCHER_QUEUE_LATENCY_LOG_THRESHOLD_MS) {
+            return
+        }
+
+        laneNextQueueLatencyLogAt[laneId] = now + DISPATCHER_TELEMETRY_LOG_INTERVAL_MS
+        logger.debug {
+            "Dispatcher queue latency: lane=${lane.name}, queued=${snapshot.queued}, " +
+                "oldest=${snapshot.oldestReadyAgeUs} ms, oldestContext=${snapshot.oldestContext}"
+        }
+    }
+
+    /**
+     * `Dispatcher::logRuntimeTelemetry` (src/game/scheduling/dispatcher.cpp:390-490):
+     * every five seconds the lane, scheduled, internal-work and monster-compute
+     * snapshots are logged at debug level, each sink reset on snapshot. Only the
+     * enabled queue-latency logging and the normal game state pass.
+     */
+    internal fun logRuntimeTelemetry() {
+        if (!queueLatencyLoggingEnabled || !isGameStateNormal()) {
+            return
+        }
+
+        val now = clock()
+        if (now < nextRuntimeTelemetryLogAt) {
+            return
+        }
+        nextRuntimeTelemetryLogAt = now + DISPATCHER_TELEMETRY_LOG_INTERVAL_MS
+
+        for (laneId in laneTelemetry.indices) {
+            val telemetry = laneTelemetry[laneId]
+            val queue = telemetry.queueWait.snapshotAndReset()
+            val task = telemetry.taskRuntime.snapshotAndReset()
+            val group = telemetry.groupRuntime.snapshotAndReset()
+            val barrier = telemetry.barrierRuntime.snapshotAndReset()
+            if (queue.empty && task.empty && group.empty && barrier.empty) {
+                continue
+            }
+            val longestTaskContext = task.longestContext.ifEmpty { "none" }
+
+            logger.debug {
+                "Dispatcher telemetry: lane=${DispatcherLane.entries[laneId].name}, " +
+                    "queued=${laneReservationCount(DispatcherLane.entries[laneId])}, " +
+                    "rejected=${rejectedLaneTasks.get(laneId)}, " +
+                    "queueSamples=${queue.latency.samples}, " +
+                    "queueP50=${queue.latency.percentile(0.50)} us, " +
+                    "queueP95=${queue.latency.percentile(0.95)} us, " +
+                    "queueP99=${queue.latency.percentile(0.99)} us, " +
+                    "taskSamples=${task.latency.samples}, " +
+                    "taskP50=${task.latency.percentile(0.50)} us, " +
+                    "taskP95=${task.latency.percentile(0.95)} us, " +
+                    "taskP99=${task.latency.percentile(0.99)} us, " +
+                    "laneP99=${group.latency.percentile(0.99)} us, " +
+                    "barrierP99=${barrier.latency.percentile(0.99)} us, " +
+                    "longestTask=${task.longestDurationUs} us, longestTaskContext=$longestTaskContext"
+            }
+        }
+
+        val scheduled = scheduledLatenessTelemetry.snapshotAndReset()
+        if (!scheduled.empty) {
+            val latestContext = scheduled.longestContext.ifEmpty { "none" }
+            logger.debug {
+                "Dispatcher scheduled telemetry: samples=${scheduled.latency.samples}, " +
+                    "latenessP50=${scheduled.latency.percentile(0.50)} us, " +
+                    "latenessP95=${scheduled.latency.percentile(0.95)} us, " +
+                    "latenessP99=${scheduled.latency.percentile(0.99)} us, " +
+                    "maxLateness=${scheduled.latency.maxUs} us, latestContext=$latestContext"
+            }
+        }
+
+        for (workId in internalWorkTelemetry.indices) {
+            val work = internalWorkTelemetry[workId].snapshotAndReset()
+            if (work.empty) {
+                continue
+            }
+
+            logger.debug {
+                "Dispatcher internal telemetry: work=${DispatcherInternalWork.entries[workId].name}, " +
+                    "samples=${work.latency.samples}, units=${work.workUnits}, " +
+                    "runtimeP50=${work.latency.percentile(0.50)} us, " +
+                    "runtimeP95=${work.latency.percentile(0.95)} us, " +
+                    "runtimeP99=${work.latency.percentile(0.99)} us, maxRuntime=${work.latency.maxUs} us"
+            }
+        }
+
+        val computeStats = monsterComputeService?.getStats()
+        if (computeStats?.running == true) {
+            logger.debug {
+                "Monster compute telemetry: visibleQueued=${computeStats.visibleQueued}, " +
+                    "backgroundQueued=${computeStats.backgroundQueued}, " +
+                    "visibleCompletions=${computeStats.visibleCompletionsQueued}, " +
+                    "backgroundCompletions=${computeStats.backgroundCompletionsQueued}, " +
+                    "oldestVisibleCompletion=${computeStats.oldestVisibleCompletionReadyAgeUs} us, " +
+                    "oldestBackgroundCompletion=${computeStats.oldestBackgroundCompletionReadyAgeUs} us, " +
+                    "visibleOutstanding=${computeStats.visibleOutstanding}, " +
+                    "backgroundOutstanding=${computeStats.backgroundOutstanding}, " +
+                    "outstanding=${computeStats.outstanding}, active=${computeStats.active}, " +
+                    "completionsInFlight=${computeStats.completionsInFlight}, capacity=${computeStats.capacity}, " +
+                    "visibleReserve=${computeStats.visibleReserve}, accepted=${computeStats.accepted}, " +
+                    "rejected=${computeStats.rejected}, completed=${computeStats.completed}, " +
+                    "failed=${computeStats.failed}, canceled=${computeStats.canceled}"
+            }
+        }
+    }
 
     /**
      * `Dispatcher::setQueueLatencyLoggingEnabled` (dispatcher.cpp:363-376):
@@ -686,6 +845,8 @@ class GameDispatcher(
             return LaneExecutionResult(0, 0)
         }
 
+        logQueueLatency(lane)
+
         val hasRuntimeBudget = maxRuntimeUs != Long.MAX_VALUE
         val startedAtUs = timeSourceUs()
         val deadlineUs = if (hasRuntimeBudget) startedAtUs + maxRuntimeUs else Long.MAX_VALUE
@@ -753,6 +914,7 @@ class GameDispatcher(
             return LaneExecutionResult(0, 0)
         }
 
+        logQueueLatency(lane)
         val selectedEvents = ArrayList<QueuedEvent>(selected)
         repeat(selected) {
             selectedEvents.add(queue.removeFirst())
@@ -885,35 +1047,30 @@ class GameDispatcher(
             releaseReservedSlot(event)
         }
 
-        val previousContext = contextThreadLocal.get()
-        contextThreadLocal.set(
-            DispatcherContext(
-                type = dispatcherTypeOf(event),
-                lane = event.meta.lane,
-                executionMode = event.meta.executionMode,
-                taskName = event.context,
-            ),
+        val context = DispatcherContext(
+            type = dispatcherTypeOf(event),
+            lane = event.meta.lane,
+            executionMode = event.meta.executionMode,
+            taskName = event.context,
         )
         val startedAtUs = timeSourceUs()
         var executed = false
-        try {
-            if (event.cancelled?.get() == true) {
-                logger.debug { "Skipping cancelled task '${event.context}'" }
-            } else if (event.expiresAt != 0L && clock() > event.expiresAt) {
-                logger.info { "The task '${event.context}' has expired, it has not been executed." }
-            } else {
-                try {
+        if (event.cancelled?.get() == true) {
+            logger.debug { "Skipping cancelled task '${event.context}'" }
+        } else if (event.expiresAt != 0L && clock() > event.expiresAt) {
+            logger.info { "The task '${event.context}' has expired, it has not been executed." }
+        } else {
+            try {
+                // The ThreadLocal is re-applied on every resumption (and
+                // restored on suspension), so `Dispatcher::context()` still
+                // describes the task when a barrier partition resumes on a
+                // different worker thread.
+                withContext(contextThreadLocal.asContextElement(context)) {
                     event.task()
-                    executed = true
-                } catch (e: Exception) {
-                    logger.error(e) { "Unhandled exception during event execution on GameDispatcher" }
                 }
-            }
-        } finally {
-            if (previousContext == null) {
-                contextThreadLocal.remove()
-            } else {
-                contextThreadLocal.set(previousContext)
+                executed = true
+            } catch (e: Exception) {
+                logger.error(e) { "Unhandled exception during event execution on GameDispatcher" }
             }
         }
         laneTelemetry[laneId].taskRuntime.observe(timeSourceUs() - startedAtUs, 1, event.context)

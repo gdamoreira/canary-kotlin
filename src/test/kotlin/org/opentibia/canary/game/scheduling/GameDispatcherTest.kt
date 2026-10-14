@@ -1,6 +1,8 @@
 package org.opentibia.canary.game.scheduling
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -10,6 +12,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -301,14 +304,21 @@ class GameDispatcherTest {
             localDispatcher.wake()
             withTimeout(2_000) { first.await() }
 
-            now += 100
-            localDispatcher.wake()
-            withTimeout(2_000) { second.await() }
+            // The reschedule is measured against the injected clock, which the
+            // test thread may advance between the firing and the reschedule, so
+            // converge on the second firing instead of assuming one step.
+            withTimeout(2_000) {
+                while (!second.isCompleted) {
+                    now += 100
+                    localDispatcher.wake()
+                    delay(5)
+                }
+            }
 
             task.cancel()
-            now += 100
+            now += 300
             localDispatcher.wake()
-            Thread.sleep(50)
+            delay(50)
             assertThat(fires.get()).isEqualTo(2)
         } finally {
             localDispatcher.shutdown()
@@ -319,7 +329,16 @@ class GameDispatcherTest {
     fun `monster compute completions are handed back to the dispatcher thread`() = runBlocking<Unit> {
         val service = MonsterComputeService()
         service.start(MonsterComputeConfig(configuredThreads = 1, capacity = 16, hardwareConcurrency = 8))
-        val localDispatcher = GameDispatcher(monsterComputeService = service)
+        // The production scope is `Dispatchers.Default.limitedParallelism(1)`,
+        // which confines execution to the dispatcher coroutine but may resume
+        // it on another pool worker between passes. The hand-back property under
+        // test is that completions run on the dispatcher coroutine (never on a
+        // compute thread), so pin the scope to one thread here.
+        val executor = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "dispatcher-hand-back-test") }
+        val localDispatcher = GameDispatcher(
+            scope = CoroutineScope(executor.asCoroutineDispatcher()),
+            monsterComputeService = service,
+        )
         localDispatcher.start()
         try {
             val dispatcherThread = CompletableDeferred<Thread>()
@@ -345,6 +364,7 @@ class GameDispatcherTest {
         } finally {
             localDispatcher.shutdown()
             service.shutdown()
+            executor.shutdown()
         }
     }
 
