@@ -11,6 +11,8 @@ import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Npc
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.Slots_t
+import org.opentibia.canary.creatures.players.PlayerFrameSink
+import org.opentibia.canary.creatures.players.PlayerSendSink
 import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
@@ -357,24 +359,27 @@ abstract class ProtocolFrameSink(
 }
 
 /**
- * [ProtocolSink] over a live Netty channel. Frames are allocated from the
- * channel's allocator and queued with `writeAndFlush`, so the caller never
- * blocks and the channel's pipeline (XTEA/checksum encoder) owns encryption.
- * A closed channel releases the frame and drops the write.
+ * [PlayerSendSink] over a live Netty channel: the extended `Player::client`
+ * surface `GameHandler` installs on login. The player senders delegate to a
+ * [PlayerFrameSink] sharing this channel's allocator and writer, so both the
+ * base and the extended frames are serialized by the ported writers and queued
+ * with `writeAndFlush`; the caller never blocks and the channel's pipeline
+ * (XTEA/checksum encoder) owns encryption. A closed channel releases the frame
+ * and drops the write.
  */
 class NettyProtocolSink(
-    private val channel: Channel,
+    channel: Channel,
     player: Player,
     map: GameMap,
-) : ProtocolFrameSink(player, map) {
-
-    override fun frameAllocator(): ByteBufAllocator = channel.alloc()
-
-    override fun writeFrame(frame: ByteBuf) {
-        if (!channel.isActive) {
+) : PlayerSendSink by PlayerFrameSink(
+    player,
+    map,
+    frameAllocatorProvider = { channel.alloc() },
+    frameWriter = { frame ->
+        if (channel.isActive) {
+            channel.writeAndFlush(frame)
+        } else {
             frame.release()
-            return
         }
-        channel.writeAndFlush(frame)
-    }
-}
+    },
+)
