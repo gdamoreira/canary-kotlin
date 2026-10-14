@@ -80,18 +80,15 @@ typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
  * [loadPlayerDepotItems] and [loadPlayerInboxItems]), rebuilding the
  * `Container` trees in Canary's descending-`sid` order and re-arming decay
  * and imbuement decay through the injected seams. [loadPlayer] drives the
- * whole login load: the persisted row (vitals/experience/blessings), skills,
- * kills, stash, inventory, depot chests, inbox, instant spell list and, when
- * `disableIrrelevantInfo` is unset, the advanced feature state. The
- * conditions, skull, guild, storage map, VIP and exiva-restriction sub-loads
- * live in [IOLoginDataSubloads] and run through the injected [subloads] seam;
- * the remaining Canary sub-loads (outfit, store inbox, reward chest,
- * prey/task hunting) are not ported yet (PARITY GAPS).
- * `disableIrrelevantInfo` is unset, the advanced feature state. The bestiary
- * charms, store inbox, reward chest and prey/task hunting sub-loads are driven
- * through [IOLoginDataSubloads2]. The remaining Canary sub-loads (guild,
- * outfit, skull, conditions, storage map, VIP) are not ported yet (PARITY
- * GAPS).
+ * whole login load: the persisted row (vitals/experience/blessings), the
+ * conditions, default outfit, skull, skills, kills, guild and stash, the
+ * bestiary charms, inventory, store inbox, depot chests, reward chest, inbox,
+ * storage map, VIP, prey/task hunting and instant spell list, plus the
+ * advanced feature state and exiva restrictions when `disableIrrelevantInfo`
+ * is unset. The part-1 sub-loads live in [IOLoginDataSubloads] and the
+ * part-2 sub-loads in [IOLoginDataSubloads2], both reached through injected
+ * seams. The `loadPlayerAnimusMastery` blob has no Kotlin state holder yet
+ * (PARITY GAP).
  *
  * The live item walks are ported as [saveItems] plus [savePlayerItem(player)]
  * (inventory), [savePlayerDepotItems(player)], [saveRewardItems(player)] and
@@ -133,12 +130,14 @@ typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
  * row-based overloads of the walks remain for callers that already hold the
  * persisted rows; [savePlayerStash(player)] applies the decay/ware filters only
  * when the `ItemTypeRegistry` seam is wired (an unknown item id stays unfiltered, exactly
- * like the default `Item::items` entry); `saveItems` resolves [Reward] children
- * through `Reward.items` because the port's reward proxy is not a `Container`
- * (Reward.kt gap), and [saveRewardItems(player)] re-applies the DATE attribute at
- * save time because `RewardChest.getReward` keeps the id in `Reward.date` only;
- * and the item type registry, imbuement registry and decay/imbuement-decay seams
- * default to unwired until the composition root supplies them.
+ * like the default `Item::items` entry); the reward proxy is a real `Container`
+ * ([Reward]), so `saveItems`/`childItems` resolve its children through
+ * `getContainer()` like every other container and [saveRewardItems(player)]
+ * serializes the DATE attribute set by `RewardChest.getReward` without a
+ * save-time patch (the chest itself is not a `Cylinder` yet, so the reward's
+ * parent link to the chest is not reachable; RewardChest.kt gap); and the item
+ * type registry, imbuement registry and decay/imbuement-decay seams default to
+ * unwired until the composition root supplies them.
  */
 class IOLoginData(
     private val players: PlayerLoginRepository,
@@ -315,17 +314,13 @@ class IOLoginData(
      * mirrors the missing-result guard.
      *
      * The ported sub-loads keep Canary's order for the systems the Kotlin state
-     * models: basic info, experience, blessings, conditions, skull, skills,
-     * kills, guild, stash, inventory tree, depot chests, inbox, storage map,
-     * VIP, instant spell list and (when the login is not a preload) the
-     * advanced feature state plus the exiva restrictions. The outfit, store
-     * inbox, reward chest, prey and task-hunting loads are not ported yet
-     * (PARITY GAPS): each has no Kotlin state holder or composition seam.
-     * models: basic info, experience, blessings, skills, kills, stash, bestiary
-     * charms, inventory tree, store inbox, depot chests, reward chest, inbox,
+     * models: basic info, experience, blessings, conditions, default outfit,
+     * skull, skills, kills, guild, stash, bestiary charms, inventory tree,
+     * store inbox, depot chests, reward chest, inbox, storage map, VIP,
      * prey/task hunting, instant spell list and (when the login is not a
-     * preload) the advanced feature state. The guild, outfit, skull, conditions,
-     * storage map and VIP loads are not ported yet (PARITY GAPS).
+     * preload) the advanced feature state plus the exiva restrictions. The
+     * `loadPlayerAnimusMastery` blob is the remaining `IOLoginDataLoad` step
+     * without a Kotlin state holder (PARITY GAP).
      */
     fun loadPlayer(player: Player, record: PlayerRecord?, disableIrrelevantInfo: Boolean = false): Boolean {
         if (record == null) {
@@ -337,6 +332,7 @@ class IOLoginData(
         loadPlayerExperience(player, record)
         loadPlayerBlessings(player, record)
         subloads?.loadPlayerConditions(player)
+        subloads?.loadPlayerDefaultOutfit(player)
         subloads?.loadPlayerSkullSystem(player)
         loadPlayerSkill(player, record)
         loadPlayerKills(player)
@@ -623,10 +619,9 @@ class IOLoginData(
      * live item mutation and the row attributes are captured, exactly like the
      * C++ helper serializes `item->serializeAttr` after the same update. The
      * C++ `query_insert`/`propWriteStream` out-parameters become the returned
-     * row list and a local stream. The port's [Reward] proxy is not a
-     * [Container] (Reward.kt parity gap), so [childItems] resolves its children
-     * through `Reward.items` exactly where the C++ `item->getContainer()`
-     * queues the reward's container.
+     * row list and a local stream. The reward proxy is a real [Container], so
+     * [childItems] queues its children through `item->getContainer()` exactly
+     * like every other container.
      */
     fun saveItems(player: Player, itemList: List<Pair<Int, Item>>): List<PlayerItemState> {
         val rows = mutableListOf<PlayerItemState>()
@@ -670,12 +665,10 @@ class IOLoginData(
     /**
      * The `item->getContainer()` child-list lookup the C++
      * `IOLoginDataSave::saveItems` (iologin_data_save_player.cpp:64, 128) uses
-     * to queue an item's children. The port's [Reward] proxy is not a
-     * [Container] (Reward.kt parity gap), so its children are resolved through
-     * `Reward.items`; every [Container] item keeps the plain container list.
+     * to queue an item's children. The reward proxy is a real [Container], so
+     * it needs no special case.
      */
-    private fun childItems(item: Item): List<Item>? =
-        item.getContainer()?.getItemList() ?: (item as? Reward)?.items
+    private fun childItems(item: Item): List<Item>? = item.getContainer()?.getItemList()
 
     /**
      * The container attribute update block `IOLoginDataSave::saveItems`
@@ -1214,10 +1207,10 @@ class IOLoginData(
      * `rewardId`) and kept only when the proxy is non-empty and at most seven
      * days old, then [saveItems] walks each kept reward with `pid` 0.
      * `Player::getReward` stores the id in the DATE attribute
-     * (player.cpp:2067-2083); the port's `RewardChest.getReward` keeps it in
-     * `Reward.date` only (Reward.kt gap), so the attribute is re-applied here
-     * before serialization. The age test mirrors the C++ `uint64_t`
-     * subtraction, which skips a reward whose id is newer than [now].
+     * (player.cpp:2067-2083) and `RewardChest.getReward` sets the same
+     * attribute on the Kotlin proxy, so `serializeAttr` carries it without any
+     * save-time patch. The age test mirrors the C++ `uint64_t` subtraction,
+     * which skips a reward whose id is newer than [now].
      */
     fun saveRewardItems(player: Player, now: Long = Tools.getTimeMsNow()): Boolean {
         val rewardChest = player.getRewardChest()
@@ -1225,10 +1218,9 @@ class IOLoginData(
 
         for (rewardId in rewardChest.getRewardList().sorted()) {
             val reward = rewardChest.getReward(rewardId, autoCreate = false) ?: continue
-            reward.setAttribute(ItemAttribute.DATE, rewardId)
 
             val age = now - rewardId
-            if (!reward.empty && age in 0..REWARD_EXPIRATION_MS) {
+            if (!reward.empty() && age in 0..REWARD_EXPIRATION_MS) {
                 rewardListItems.add(0 to reward)
             }
         }

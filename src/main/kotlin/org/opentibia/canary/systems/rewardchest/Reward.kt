@@ -1,6 +1,8 @@
 package org.opentibia.canary.systems.rewardchest
 
-import org.opentibia.canary.items.Item
+import org.opentibia.canary.creatures.Creature
+import org.opentibia.canary.items.Container
+import org.opentibia.canary.items.Thing
 
 /**
  * Kotlin port of Canary `class Reward final : public Container`.
@@ -9,77 +11,48 @@ import org.opentibia.canary.items.Item
  *         /Users/damoreira/.projects/canary/src/items/containers/rewards/reward.cpp
  *
  * Mirrors the constructor state (`Container(ITEM_REWARD_CONTAINER); maxSize = 32;
- * unlocked = false; pagination = true;`), the `queryAdd` return-value contract and
- * the `canRemove() == true` override. The item list mirrors `Container::itemlist`.
- *
- * Note: the shared Kotlin `org.opentibia.canary.items.Container` is final for the
- * operations this port needs (its backing list is private and read-only), so Reward
- * is modeled directly on top of `Item` while reproducing Container's item-list
- * semantics. This is recorded as a parity gap.
+ * unlocked = false; pagination = true;`) through the shared [Container] port and
+ * the `queryAdd` return-value contract plus the `canRemove() == true` override.
+ * Because it is a real [Container], the load/save paths reach it through
+ * `getContainer()`/`internalAddThing` exactly like Canary: the loaded children
+ * are prepended (restoring the serialized ascending order) and every child gets
+ * its parent link, and `serializeAttr` carries the `DATE` attribute set by
+ * `Player::getReward` without a save-time patch.
  */
-class Reward() : Item(ITEM_REWARD_CONTAINER) {
+class Reward : Container(
+    ITEM_REWARD_CONTAINER,
+    capacity = MAX_SIZE,
+    unlocked = false,
+    pagination = true,
+) {
 
-    val maxSize: Int = MAX_SIZE
-    val unlocked: Boolean = false
-    val pagination: Boolean = true
+    /** `Reward::canRemove()` (reward.hpp:36-38) overridden to always return true. */
+    override fun canRemove(): Boolean = true
 
-    private val itemlist = mutableListOf<Item>()
-
-    val items: List<Item> get() = itemlist
-    val size: Int get() = itemlist.size
+    /**
+     * Port-call-site alias for `Container::empty` (`container.hpp:211-213`):
+     * existing port callers read `reward.empty` while the [Container] port
+     * exposes Canary's `empty()` function. Both read the same item list.
+     */
     val empty: Boolean get() = itemlist.isEmpty()
 
-    /** Mirrors `Container::canRemove()` overridden to always return true. */
-    val canRemove: Boolean = true
-
     /**
-     * Mirrors `Reward::queryAdd`. Attribute `ItemAttribute_t::DATE` is modeled by
-     * [date]; the reward id is stored there by the owner (see [RewardChest.getReward]).
+     * `Reward::queryAdd` (reward.cpp:21-38). The index/count/flags parameters are
+     * unused, exactly like the C++ override; a non-null `actor` or a non-item
+     * `thing` is rejected. An item type that is not registered keeps the default
+     * `ItemType` behavior (`isPickupable == true`), like `Item::items[id]`.
      */
-    var date: Long = 0L
-
-    /** Mirrors `Container::addItem`. Returns false when the container is full. */
-    fun addItem(item: Item): Boolean {
-        if (itemlist.size >= maxSize) {
-            return false
-        }
-        itemlist.add(item)
-        return true
-    }
-
-    /**
-     * Mirrors `Container::internalAddThing` (container.cpp:1072-1087) for the
-     * load path: loaded children arrive in descending `sid` order, so they are
-     * prepended, which restores the serialized ascending order. The C++ method
-     * also sets the child's parent; the port's reward proxy is not a
-     * [org.opentibia.canary.items.Cylinder] yet (Reward.kt parity gap).
-     */
-    fun internalAddThing(item: Item) {
-        itemlist.addFirst(item)
-    }
-
-    /** Mirrors removing an item from `Container::itemlist` and resetting its parent. */
-    fun removeItem(item: Item?) {
-        if (item == null) {
-            return
-        }
-        itemlist.remove(item)
-    }
-
-    /**
-     * Mirrors `Reward::queryAdd(int32_t, thing, count, flags, actor)`.
-     * Only the argument-independent branches are observable here.
-     */
-    fun queryAdd(actor: Any?, thing: Item?): ReturnValue {
+    override fun queryAdd(index: Int, thing: Thing?, count: Int, flags: Int, actor: Creature?): ReturnValue {
         if (actor != null || thing == null) {
             return ReturnValue.NOTPOSSIBLE
         }
 
-        if (thing === this) {
+        val item = thing.getItem() ?: return ReturnValue.NOTPOSSIBLE
+        if (item === this) {
             return ReturnValue.THISISIMPOSSIBLE
         }
 
-        val pickupable = thing.type?.isPickupable ?: true
+        val pickupable = item.type?.isPickupable ?: true
         if (!pickupable) {
             return ReturnValue.CANNOTPICKUP
         }

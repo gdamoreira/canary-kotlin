@@ -24,6 +24,7 @@ import org.opentibia.canary.database.JdbcVipRepository
 import org.opentibia.canary.io.IOBestiaryPersistence
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
+import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.ItemType
 import org.opentibia.canary.items.ItemTypeRegistry
 import org.opentibia.canary.map.Position
@@ -216,8 +217,13 @@ class IOLoginDataSubloads2Test {
         assertThat(loadedChest.getRewardList()).containsExactly(rewardId)
         val loadedReward = loadedChest.getReward(rewardId, autoCreate = false)
         assertThat(loadedReward).isNotNull
-        assertThat(loadedReward!!.items.map { it.id }).containsExactly(2160, 2376)
+        // The proxy is marked with the DATE attribute at `getReward` and the
+        // attribute round-trips through the item codec without a save-time patch.
+        assertThat(loadedReward!!.getAttribute(ItemAttribute.DATE)).isEqualTo(rewardId)
+        assertThat(loadedReward.items.map { it.id }).containsExactly(2160, 2376)
         assertThat(loadedReward.items.first().getSubType()).isEqualTo(50)
+        // `Container::internalAddThing` links every loaded child to the proxy.
+        assertThat(loadedReward.items.first().getParent()).isSameAs(loadedReward)
     }
 
     @Test
@@ -237,6 +243,7 @@ class IOLoginDataSubloads2Test {
         assertThat(loadedReward).isNotNull
         val loadedBackpack = loadedReward!!.items.single()
         assertThat(loadedBackpack.id).isEqualTo(2376)
+        assertThat(loadedBackpack.getParent()).isSameAs(loadedReward)
         assertThat((loadedBackpack as Container).getItemList().single().getSubType()).isEqualTo(25)
     }
 

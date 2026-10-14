@@ -2,8 +2,11 @@ package org.opentibia.canary.systems.rewardchest
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.items.Item
+import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.ItemType
+import org.opentibia.canary.map.Position
 
 /**
  * Transcript tests for the Canary Boss Reward Chest engine core.
@@ -56,11 +59,12 @@ class RewardChestTest {
         val reward = Reward()
 
         assertThat(reward.id).isEqualTo(19202)
-        assertThat(reward.maxSize).isEqualTo(32)
-        assertThat(reward.unlocked).isFalse()
-        assertThat(reward.pagination).isTrue()
-        assertThat(reward.canRemove).isTrue()
-        assertThat(reward.empty).isTrue()
+        assertThat(reward.capacity).isEqualTo(32)
+        assertThat(reward.isUnlocked()).isFalse()
+        assertThat(reward.hasPagination()).isTrue()
+        assertThat(reward.canRemove()).isTrue()
+        assertThat(reward.empty()).isTrue()
+        assertThat(reward.getContainer()).isSameAs(reward)
     }
 
     @Test
@@ -82,10 +86,50 @@ class RewardChestTest {
         val reward = chest.getReward(rewardId = 1_700_000_000L, autoCreate = true)
 
         assertThat(reward).isNotNull()
-        assertThat(reward!!.date).isEqualTo(1_700_000_000L)
+        // `Player::getReward` stores the id in the DATE attribute (player.cpp:2067-2083).
+        assertThat(reward!!.getAttribute(ItemAttribute.DATE)).isEqualTo(1_700_000_000L)
         assertThat(chest.items).containsExactly(reward)
         assertThat(chest.getRewardList()).containsExactly(1_700_000_000L)
         assertThat(chest.getReward(1_700_000_000L, true)).isSameAs(reward)
+    }
+
+    @Test
+    fun `getReward prepends the proxy like Game internalAddItem does`() {
+        val chest = RewardChest()
+
+        val older = chest.getReward(1L, autoCreate = true)!!
+        val newer = chest.getReward(2L, autoCreate = true)!!
+
+        // `Game::internalAddItem` reaches `Container::addThing` which push_front's.
+        assertThat(chest.items).containsExactly(newer, older)
+    }
+
+    @Test
+    fun `reward internalAddThing links the child parent and prepends`() {
+        val reward = Reward()
+        val first = Item(id = 100)
+        val second = Item(id = 200)
+
+        reward.internalAddThing(first)
+        reward.internalAddThing(second)
+
+        // `Container::internalAddThing` sets the parent and push_front's.
+        assertThat(reward.items.map { it.id }).containsExactly(200, 100)
+        assertThat(first.getParent()).isSameAs(reward)
+        assertThat(second.getParent()).isSameAs(reward)
+    }
+
+    @Test
+    fun `reward addItem appends like Container addItem`() {
+        val reward = Reward()
+        val first = Item(id = 100)
+        val second = Item(id = 200)
+
+        reward.addItem(first)
+        reward.addItem(second)
+
+        assertThat(reward.items.map { it.id }).containsExactly(100, 200)
+        assertThat(first.getParent()).isSameAs(reward)
     }
 
     @Test
@@ -111,17 +155,24 @@ class RewardChestTest {
     fun `reward queryAdd mirrors Canary return values`() {
         val reward = Reward()
         val sword = Item(id = 2376)
+        val actor = Player(
+            id = 1,
+            name = "Reward Actor",
+            maxHealth = 10,
+            health = 10,
+            position = Position(1, 1, 7),
+        )
 
-        assertThat(reward.queryAdd(actor = Any(), thing = sword)).isEqualTo(ReturnValue.NOTPOSSIBLE)
-        assertThat(reward.queryAdd(actor = null, thing = null)).isEqualTo(ReturnValue.NOTPOSSIBLE)
-        assertThat(reward.queryAdd(actor = null, thing = reward)).isEqualTo(ReturnValue.THISISIMPOSSIBLE)
+        assertThat(reward.queryAdd(0, sword, 1, 0, actor)).isEqualTo(ReturnValue.NOTPOSSIBLE)
+        assertThat(reward.queryAdd(0, null, 1, 0, null)).isEqualTo(ReturnValue.NOTPOSSIBLE)
+        assertThat(reward.queryAdd(0, reward, 1, 0, null)).isEqualTo(ReturnValue.THISISIMPOSSIBLE)
 
         val notPickupable = Item(
             id = 100,
             type = ItemType(id = 100, name = "Fixture", isPickupable = false)
         )
-        assertThat(reward.queryAdd(actor = null, thing = notPickupable)).isEqualTo(ReturnValue.CANNOTPICKUP)
-        assertThat(reward.queryAdd(actor = null, thing = sword)).isEqualTo(ReturnValue.NOERROR)
+        assertThat(reward.queryAdd(0, notPickupable, 1, 0, null)).isEqualTo(ReturnValue.CANNOTPICKUP)
+        assertThat(reward.queryAdd(0, sword, 1, 0, null)).isEqualTo(ReturnValue.NOERROR)
     }
 
     @Test
@@ -139,7 +190,7 @@ class RewardChestTest {
 
         assertThat(result).isEqualTo(ReturnValue.NOERROR)
         assertThat(owner.collected).containsExactly(first, second)
-        assertThat(reward.empty).isTrue()
+        assertThat(reward.empty()).isTrue()
         assertThat(owner.textMessages).containsExactly("2 of 2 objects were picked up.")
     }
 
