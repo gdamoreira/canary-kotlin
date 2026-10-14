@@ -2092,9 +2092,28 @@ open class Item(
         /** `IMMOVABLE_ACTION_ID` (src/utils/const.hpp:73). */
         const val IMMOVABLE_ACTION_ID = 100
 
-        /** `Item::CreateItem` (src/items/item.cpp:393-472), including the derived item types. */
-        fun create(id: Int, count: Int = 1, registry: ItemTypeRegistry? = null): Item =
-            createLike(registry?.get(id), id, count)
+        /**
+         * `Item::CreateItem` (src/items/item.cpp:393-472), including the derived
+         * item types. [imbuements] is the `g_imbuements()` composition seam:
+         * when supplied, the created item validates its packed imbuement ids
+         * through the registry exactly like `Item::getImbuementInfo`
+         * (src/items/item.cpp:472-483); when omitted the item keeps the
+         * custom-attribute-presence fallback until a hub assigns a registry.
+         * The composition root (Game/GameHandler map, persistence and loot
+         * hubs) must pass the loaded registry here.
+         */
+        fun create(
+            id: Int,
+            count: Int = 1,
+            registry: ItemTypeRegistry? = null,
+            imbuements: Imbuements? = null,
+        ): Item {
+            val item = createLike(registry?.get(id), id, count)
+            if (imbuements != null) {
+                item.imbuementRegistry = imbuements
+            }
+            return item
+        }
 
         private fun createLike(itemType: ItemType?, id: Int, count: Int): Item = when {
             itemType?.isContainer == true -> Container(id, capacity = itemType.capacity, type = itemType)

@@ -1,6 +1,7 @@
 package org.opentibia.canary.io.pipeline
 
 import org.opentibia.canary.items.Item
+import org.opentibia.canary.systems.imbuement.Imbuements
 import org.w3c.dom.Element
 import java.io.ByteArrayInputStream
 import javax.xml.parsers.DocumentBuilderFactory
@@ -21,13 +22,24 @@ data class MonsterTypeDefinition(
 )
 
 object LootEngine {
-    fun rollLoot(table: List<LootEntry>, random: Random = Random): List<Item> {
+    /**
+     * Rolls the loot table into freshly created items. [imbuements] is the
+     * `g_imbuements()` composition seam: when supplied, every rolled item
+     * carries the registry so `hasImbuements` resolves packed ids like
+     * `Item::getImbuementInfo` (src/items/item.cpp:472-483) instead of the
+     * attribute-presence fallback.
+     */
+    fun rollLoot(table: List<LootEntry>, random: Random = Random, imbuements: Imbuements? = null): List<Item> {
         val result = mutableListOf<Item>()
         for (entry in table) {
             val roll = random.nextInt(1, 100001)
             if (roll <= entry.chanceBasisPoints) {
                 val count = if (entry.countMax > 1) random.nextInt(1, entry.countMax + 1) else 1
-                result.add(Item(id = entry.itemId, count = count))
+                val item = Item(id = entry.itemId, count = count)
+                if (imbuements != null) {
+                    item.imbuementRegistry = imbuements
+                }
+                result.add(item)
             }
         }
         return result

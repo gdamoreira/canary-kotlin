@@ -13,6 +13,7 @@ import org.opentibia.canary.map.Tile
 import org.opentibia.canary.map.house.CyclopediaHouseState
 import org.opentibia.canary.map.house.GUEST_LIST
 import org.opentibia.canary.map.house.SUBOWNER_LIST
+import org.opentibia.canary.systems.imbuement.Imbuements
 import java.sql.Connection
 import java.time.Instant
 import javax.sql.DataSource
@@ -48,6 +49,13 @@ class IOMapSerialize(
     private val nextBedItem: (bed: BedItem) -> BedItem? = { null },
     /** `g_decay().startDecay(item)` seam (src/items/item.cpp:3493-3495). */
     private val startDecaying: (item: Item) -> Unit = {},
+    /**
+     * `g_imbuements()` composition seam: assigned to every item this loader
+     * creates or restores from `tile_store` so `hasImbuements` resolves packed
+     * ids like `Item::getImbuementInfo` (src/items/item.cpp:472-483) instead of
+     * the attribute-presence fallback.
+     */
+    private val imbuements: Imbuements? = null,
 ) {
 
     /** `IOMapSerialize::bedsToCheck` (iomapserialize.hpp:30). */
@@ -230,6 +238,9 @@ class IOMapSerialize(
             }
 
             if (item != null) {
+                if (imbuements != null) {
+                    item.imbuementRegistry = imbuements
+                }
                 if (item.unserializeAttr(propStream)) {
                     val container = item.getContainer()
                     if (container != null && !loadContainer(propStream, container)) {
@@ -291,7 +302,11 @@ class IOMapSerialize(
         var count = 0
         for (item in tile.items) {
             if (item.id == ITEM_BATHTUB_FILLED_NOTMOVABLE) {
-                val tub = createItem(ITEM_BATHTUB_FILLED) ?: Item(ITEM_BATHTUB_FILLED)
+                val tub = createItem(ITEM_BATHTUB_FILLED) ?: Item(ITEM_BATHTUB_FILLED).also {
+                    if (imbuements != null) {
+                        it.imbuementRegistry = imbuements
+                    }
+                }
                 items.addFirst(tub)
                 count++
                 continue
@@ -320,7 +335,7 @@ class IOMapSerialize(
         if (itemTypes.get(id) == null) {
             return null
         }
-        return Item.create(id, registry = itemTypes)
+        return Item.create(id, registry = itemTypes, imbuements = imbuements)
     }
 
     /** `IOMapSerialize::loadHouseInfo` (iomapserialize.cpp:296-389). */
