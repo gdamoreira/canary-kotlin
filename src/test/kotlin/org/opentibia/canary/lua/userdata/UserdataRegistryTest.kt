@@ -95,6 +95,29 @@ class UserdataRegistryTest {
     }
 
     @Test
+    fun `revscriptsys __index override keeps methods reachable through getmetatable`() {
+        val env = LuaEnvironment().apply { initState() }
+        val player = Player(7, "Hero", 100, 100, position = Position(1, 1, 7))
+        env.globals.set("p", env.userdata.wrap("Player", player))
+        env.loadChunk(
+            """
+            rawgetmetatable('Player').__index = function(self, key)
+                local methods = getmetatable(self)
+                if key == 'uid' then
+                    return methods.getId(self)
+                end
+                return methods[key]
+            end
+            """.trimIndent(),
+        )
+        env.loadChunk("uid = p.uid")
+        env.loadChunk("hp = p:getHealth()")
+
+        assertThat(env.getGlobal("uid").toint()).isEqualTo(7)
+        assertThat(env.getGlobal("hp").toint()).isEqualTo(100)
+    }
+
+    @Test
     fun `creature classes register the shared __eq on their registry metatables`() {
         val env = LuaEnvironment().apply { initState() }
         env.loadChunk(
