@@ -43,6 +43,59 @@ enum class ExecutionMode {
     BackgroundCompletion,
 }
 
+/**
+ * `enum class DispatcherType` (src/game/scheduling/dispatcher.hpp:31-38).
+ *
+ * The C++ `None`/`Last` sentinel handling is not needed in the Kotlin port.
+ */
+enum class DispatcherType {
+    None,
+    Event,
+    AsyncEvent,
+    ScheduledEvent,
+    CycleEvent,
+    WorkerCompletion,
+}
+
+/**
+ * `enum class DispatcherInternalWork` (src/game/scheduling/dispatcher.hpp:40-49).
+ *
+ * The C++ `Last` sentinel is omitted; [entries] plays its role.
+ */
+enum class DispatcherInternalWork {
+    CreatureAsyncBucket,
+    CreatureAsyncRequeue,
+    MonsterMovementRefreshLateness,
+    MonsterPostThinkLateness,
+    WorkerCompletionBatch,
+    DispatcherPass,
+    DispatcherIdle,
+}
+
+/** `class DispatcherContext` (src/game/scheduling/dispatcher.hpp:54-96). */
+class DispatcherContext(
+    val type: DispatcherType = DispatcherType.None,
+    val lane: DispatcherLane = DispatcherLane.Maintenance,
+    val executionMode: ExecutionMode = ExecutionMode.Serial,
+    val taskName: String = DEFAULT_TASK_NAME,
+) {
+    fun isMovementCommit(): Boolean = org.opentibia.canary.game.scheduling.isMovementCommit(lane)
+
+    fun isBarrierParallel(): Boolean = type == DispatcherType.AsyncEvent && executionMode == ExecutionMode.BarrierParallel
+
+    fun isPlayerVisible(): Boolean = org.opentibia.canary.game.scheduling.isPlayerVisible(lane)
+
+    fun isAsync(): Boolean = isBarrierParallel()
+
+    companion object {
+        /** `DispatcherContext::defaultTaskName` (src/game/scheduling/dispatcher.hpp:77). */
+        const val DEFAULT_TASK_NAME: String = "ThreadPool::call"
+
+        /** `DispatcherContext` default-constructed state (dispatcher.hpp:93-95). */
+        val NONE: DispatcherContext = DispatcherContext()
+    }
+}
+
 /** `struct CreatureAsyncSliceLimits` (src/game/scheduling/dispatcher.hpp:49-52). */
 data class CreatureAsyncSliceLimits(
     val tasksPerBucket: Int = 16,

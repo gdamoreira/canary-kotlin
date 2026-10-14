@@ -13,6 +13,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import org.opentibia.canary.config.ConfigKeys
+import org.opentibia.canary.config.ConfigManager
 import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -25,6 +27,21 @@ private val logger = KotlinLogging.logger {}
 
 /** `DEFAULT_DISPATCHER_SLO` (src/game/scheduling/dispatcher.cpp:32). */
 private const val DEFAULT_DISPATCHER_SLO_US: Long = 50_000
+
+/** `DEFAULT_DISPATCHER_SLO` (src/game/scheduling/dispatcher.cpp:32), milliseconds. */
+private const val DEFAULT_DISPATCHER_SLO_MS: Int = 50
+
+/** `DEFAULT_DISPATCHER_EMERGENCY` (src/game/scheduling/dispatcher.cpp:33), milliseconds. */
+private const val DEFAULT_DISPATCHER_EMERGENCY_MS: Int = 100
+
+/** `defaultDispatcherBudgets` (src/game/scheduling/dispatcher.cpp:31). */
+private val DEFAULT_DISPATCHER_BUDGETS = DispatcherBudgetSet()
+
+/** `DISPATCHER_ADAPTIVE_BUDGET_INTERVAL` (src/game/scheduling/dispatcher.cpp:28). */
+private const val DISPATCHER_ADAPTIVE_BUDGET_INTERVAL_MS: Long = 250
+
+/** `DISPATCHER_TELEMETRY_WARMUP` (src/game/scheduling/dispatcher.cpp:30). */
+private const val DISPATCHER_TELEMETRY_WARMUP_MS: Long = 1_000
 
 /**
  * Handle for a [GameDispatcher.schedule]/[GameDispatcher.cycleEvent] registration.
@@ -59,13 +76,23 @@ class ScheduledTask internal constructor(
  * [barrierDispatcher] partitions, and report rejection to the caller so the
  * shared buckets can `rollbackAsyncTaskBucket`.
  *
- * PARITY GAPS: admission counters are wired for the barrier entry points only;
- * the serial `addEvent` lanes still queue unbounded (`reserveDispatcherSlot`,
- * dispatcher.cpp:750-762). Adaptive budget refresh
- * (`refreshAdaptiveBudgets`, dispatcher.cpp:547-627) and
- * `observeInternalWork` sinks are served by the standalone
- * [DispatcherAdaptiveBudgetController]/[DispatcherAdmissionCounter] components
- * and the owning hosts.
+ * The serial entry points reserve admission the same way (`reserveDispatcherSlot`,
+ * dispatcher.cpp:750-762): [dispatch] mirrors `addEvent` (dispatcher.cpp:1002-1027)
+ * and [schedule]/[cycleEvent] mirror `scheduleEvent` (dispatcher.cpp:1147-1177);
+ * `stopEvent` releases the reservation (dispatcher.cpp:1171-1179) and a cycle
+ * holds its slot across reschedules (dispatcher.cpp:906-939).
+ *
+ * The worker loop owns `refreshAdaptiveBudgets` (dispatcher.cpp:547-627) on the
+ * `DISPATCHER_ADAPTIVE_BUDGET_INTERVAL` cadence, [observeInternalWork]
+ * (dispatcher.cpp:378-388) gates every lateness observation behind the
+ * queue-latency logging toggle, and [context] exposes the same per-task
+ * `DispatcherContext` `Creature::safeCall` reads for its barrier continuation
+ * (creature.cpp:2195-2217).
+ *
+ * PARITY GAPS: the production `setQueueLatencyLoggingEnabled(true)` call site
+ * (`CanaryServer`, canary_server.cpp:311) and the backlog/latency debug logging
+ * cadence (`logQueueLatency`/`logRuntimeTelemetry`, dispatcher.cpp:334-361,
+ * 390-505) are not wired; telemetry is exposed through the read views instead.
  */
 class GameDispatcher(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default.limitedParallelism(1)),
@@ -75,6 +102,12 @@ class GameDispatcher(
     /** `ThreadPool` worker view for `asyncWait` (`generatePartition`, dispatcher.cpp:247-261). */
     private val barrierDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val barrierWorkerCount: Int = Runtime.getRuntime().availableProcessors(),
+    /** `g_configManager().getNumber(ConfigKey_t)` view for `getConfiguredDispatcherBudgets` (dispatcher.cpp:38-49). */
+    private val config: ConfigManager? = null,
+    /** `g_game().getGameState() == GAME_STATE_NORMAL` gate (dispatcher.cpp:548). */
+    private val isGameStateNormal: () -> Boolean = { true },
+    /** `g_game().getPlayersOnline()` gate of the backlog warning (dispatcher.cpp:577). */
+    private val playersOnline: () -> Int = { 0 },
 ) {
     private class QueuedEvent(
         val id: Long,
@@ -88,6 +121,8 @@ class GameDispatcher(
         val task: suspend () -> Unit,
         /** `Task::dispatcherSlotReserved`/`reservedLane` (task.hpp); `null` when unreserved. */
         val reservedLane: DispatcherLane? = null,
+        /** `true` when queued through [scheduleEvent] (`DispatcherType::ScheduledEvent`). */
+        val scheduled: Boolean = false,
     ) : DispatcherQueueEntry {
         override val readyAt: Long get() = meta.readyAt
     }
@@ -101,8 +136,21 @@ class GameDispatcher(
     private val running = AtomicBoolean(false)
     private val weightedScheduler = DispatcherWeightedDeficitRoundRobin()
     private val lastProducerTokens = LongArray(DispatcherWeightedDeficitRoundRobin.LANE_COUNT)
-    private val configuredBudgets = DispatcherBudgetSet()
-    private val activeBudgets = DispatcherBudgetSet()
+    private var configuredBudgets = DispatcherBudgetSet()
+    private var activeBudgets = DispatcherBudgetSet()
+    private val adaptiveBudgetController = DispatcherAdaptiveBudgetController()
+    private val backlogWarningPolicy = DispatcherBacklogWarningPolicy()
+    private val playerVisibleReadyLatency = ConcurrentLatencyHistogram()
+    private val internalWorkTelemetry = Array(DispatcherInternalWork.entries.size) { ConcurrentTimedWork() }
+    private var nextAdaptiveBudgetUpdateAt = 0L
+
+    @Volatile
+    private var queueLatencyLoggingEnabled = false
+
+    @Volatile
+    private var queueLatencyLoggingStartedAt = 0L
+
+    private val contextThreadLocal = ThreadLocal<DispatcherContext>()
 
     /**
      * `visibleCreatureAsyncSliceLimits` / `backgroundCreatureAsyncSliceLimits`
@@ -110,10 +158,13 @@ class GameDispatcher(
      * initialized from the configured/active budgets (`refreshAdaptiveBudgets`,
      * dispatcher.cpp:575-581).
      */
+    @Volatile
     internal var visibleCreatureAsyncSliceLimits = CreatureAsyncSliceLimits(
         tasksPerBucket = configuredBudgets.creatureAsyncTasksPerBucket,
         maxRuntimeUs = configuredBudgets.sliceRuntimeUs,
     )
+
+    @Volatile
     internal var backgroundCreatureAsyncSliceLimits = CreatureAsyncSliceLimits(
         tasksPerBucket = activeBudgets.creatureAsyncTasksPerBucket,
         maxRuntimeUs = activeBudgets.sliceRuntimeUs,
@@ -128,6 +179,9 @@ class GameDispatcher(
 
     internal val laneTelemetry = Array(DispatcherWeightedDeficitRoundRobin.LANE_COUNT) { LaneTelemetry() }
 
+    /** `scheduledLatenessTelemetry` (dispatcher.hpp:308). */
+    internal val scheduledLatenessTelemetry = ConcurrentTimedWork()
+
     /** World-confinement gate: tasks are accepted only while the worker is running. */
     val isRunning: Boolean get() = running.get()
 
@@ -137,30 +191,65 @@ class GameDispatcher(
             monsterComputeService?.setCompletionNotifier { weakSelf.get()?.wake() }
             workerJob = scope.launch {
                 while (isActive && running.get()) {
+                    val telemetryEnabled = queueLatencyLoggingEnabled
+                    val passStartedAtUs = if (telemetryEnabled) timeSourceUs() else 0
                     drainInbox()
                     promoteScheduledEvents()
+                    refreshAdaptiveBudgets()
                     executeReadyEvents()
                     if (!running.get()) break
+                    if (telemetryEnabled) {
+                        observeInternalWork(DispatcherInternalWork.DispatcherPass, 1, timeSourceUs() - passStartedAtUs)
+                    }
 
                     if (hasReadyWork()) {
                         continue
                     }
 
                     val waitMs = timeUntilNextScheduledEvent()
+                    val idleStartedAtUs = if (queueLatencyLoggingEnabled) timeSourceUs() else 0
                     if (waitMs == null) {
                         wakeSignal.receive()
                     } else {
                         withTimeoutOrNull(waitMs) { wakeSignal.receive() }
+                    }
+                    if (queueLatencyLoggingEnabled) {
+                        observeInternalWork(DispatcherInternalWork.DispatcherIdle, 1, timeSourceUs() - idleStartedAtUs)
                     }
                 }
             }
         }
     }
 
-    fun dispatch(lane: DispatcherLane = DispatcherLane.WorldCommit, task: suspend () -> Unit) {
-        if (!running.get()) return
+    /**
+     * `Dispatcher::addEvent` (dispatcher.cpp:1002-1027): reserve the lane
+     * admission slot before enqueueing and report rejection so the caller can
+     * fall back. PARITY NOTE: unlike the C++ lane normalizer, the port keeps a
+     * barrier lane passed to [dispatch] on that barrier execution mode (the
+     * [executeReadyEvents] test surface relies on it); [DispatcherLane.WorkerCompletion]
+     * still maps to [DispatcherLane.WorldCommit].
+     */
+    fun dispatch(lane: DispatcherLane = DispatcherLane.WorldCommit, task: suspend () -> Unit): Boolean =
+        dispatchEvent(lane, DISPATCHER_LANE_QUEUE_CAPACITY, "GameDispatcher::dispatch", task)
+
+    /** `Dispatcher::addEvent` context-carrying form (dispatcher.cpp:1002-1027). */
+    fun dispatch(lane: DispatcherLane, context: String, task: suspend () -> Unit): Boolean =
+        dispatchEvent(lane, DISPATCHER_LANE_QUEUE_CAPACITY, context, task)
+
+    /** `Dispatcher::tryReserveLaneSlot` capacity seam (dispatcher.cpp:719-732). */
+    internal fun dispatch(lane: DispatcherLane, capacity: Int, task: suspend () -> Unit): Boolean =
+        dispatchEvent(lane, capacity, "GameDispatcher::dispatch", task)
+
+    private fun dispatchEvent(lane: DispatcherLane, capacity: Int, context: String, task: suspend () -> Unit): Boolean {
+        if (!running.get()) {
+            return false
+        }
 
         val target = executableLane(lane)
+        if (!tryReserveLaneSlot(target, capacity)) {
+            return false
+        }
+
         val now = clock()
         val id = nextEventId()
         inbox.add(
@@ -172,20 +261,26 @@ class GameDispatcher(
                     readyAt = now,
                     generation = id,
                 ),
-                context = "GameDispatcher::dispatch",
+                context = context,
                 enqueuedAt = now,
                 expiresAt = 0,
                 cycle = false,
                 cycleDelayMs = 0,
                 cancelled = null,
                 task = task,
+                reservedLane = target,
             ),
         )
         wake()
+        return true
     }
 
     fun schedule(delayMs: Long, lane: DispatcherLane = DispatcherLane.WorldCommit, task: suspend () -> Unit): ScheduledTask =
         scheduleEvent(delayMs, lane, "GameDispatcher::schedule", cycle = false, task)
+
+    /** `Dispatcher::tryReserveLaneSlot` capacity seam for [schedule] (dispatcher.cpp:719-732). */
+    internal fun schedule(delayMs: Long, lane: DispatcherLane, capacity: Int, task: suspend () -> Unit): ScheduledTask =
+        scheduleEvent(delayMs, lane, capacity, "GameDispatcher::schedule", cycle = false, task)
 
     fun cycleEvent(
         delayMs: Long,
@@ -220,6 +315,42 @@ class GameDispatcher(
     fun getCreatureAsyncSliceLimits(playerVisible: Boolean): CreatureAsyncSliceLimits =
         if (playerVisible) visibleCreatureAsyncSliceLimits else backgroundCreatureAsyncSliceLimits
 
+    /** `Dispatcher::context()` (dispatcher.hpp:180-182); the no-task default outside the worker. */
+    fun context(): DispatcherContext = contextThreadLocal.get() ?: DispatcherContext.NONE
+
+    /**
+     * `Dispatcher::observeInternalWork` (dispatcher.cpp:378-388): the observation
+     * is dropped unless `queueLatencyLoggingEnabled` is set.
+     */
+    fun observeInternalWork(work: DispatcherInternalWork, units: Long, runtimeUs: Long, context: String = "") {
+        if (!queueLatencyLoggingEnabled) {
+            return
+        }
+
+        internalWorkTelemetry[work.ordinal].observe(runtimeUs, units, context)
+    }
+
+    /** `internalWorkTelemetry[work]` snapshot (test/telemetry read view). */
+    internal fun internalWorkSnapshot(work: DispatcherInternalWork): TimedWorkSnapshot =
+        internalWorkTelemetry[work.ordinal].snapshotAndReset()
+
+    /**
+     * `Dispatcher::setQueueLatencyLoggingEnabled` (dispatcher.cpp:363-376):
+     * enabling restarts the warmup window and clears every runtime sink.
+     */
+    internal fun setQueueLatencyLoggingEnabled(enabled: Boolean) {
+        if (!enabled) {
+            queueLatencyLoggingEnabled = false
+            queueLatencyLoggingStartedAt = 0
+            resetRuntimeTelemetry()
+            return
+        }
+
+        resetRuntimeTelemetry()
+        queueLatencyLoggingStartedAt = clock() + DISPATCHER_TELEMETRY_WARMUP_MS
+        queueLatencyLoggingEnabled = true
+    }
+
     /** `reservedLaneSlots[lane].size()` (test/telemetry read view). */
     internal fun laneReservationCount(lane: DispatcherLane): Int = reservedLaneSlots[lane.ordinal].size
 
@@ -228,6 +359,7 @@ class GameDispatcher(
 
     fun shutdown() {
         if (running.compareAndSet(true, false)) {
+            setQueueLatencyLoggingEnabled(false)
             wake()
             workerJob?.cancel()
             scope.cancel()
@@ -247,6 +379,16 @@ class GameDispatcher(
         context: String,
         cycle: Boolean,
         task: suspend () -> Unit,
+    ): ScheduledTask = scheduleEvent(delayMs, lane, DISPATCHER_LANE_QUEUE_CAPACITY, context, cycle, task)
+
+    /** `Dispatcher::scheduleEvent` (dispatcher.cpp:1147-1177): the reservation is held until execution/cancel. */
+    internal fun scheduleEvent(
+        delayMs: Long,
+        lane: DispatcherLane,
+        capacity: Int,
+        context: String,
+        cycle: Boolean,
+        task: suspend () -> Unit,
     ): ScheduledTask {
         val id = nextEventId()
         val cancelled = AtomicBoolean(false)
@@ -254,6 +396,10 @@ class GameDispatcher(
         val handle = ScheduledTask(id, cancelled) { eventId -> weakSelf.get()?.cancelScheduledEvent(eventId) }
         if (running.get()) {
             val target = executableLane(lane)
+            if (!tryReserveLaneSlot(target, capacity)) {
+                cancelled.set(true)
+                return handle
+            }
             val now = clock()
             scheduledEvents[id] = QueuedEvent(
                 id = id,
@@ -270,6 +416,8 @@ class GameDispatcher(
                 cycleDelayMs = delayMs,
                 cancelled = cancelled,
                 task = task,
+                reservedLane = target,
+                scheduled = true,
             )
             wake()
         } else {
@@ -278,8 +426,15 @@ class GameDispatcher(
         return handle
     }
 
+    /**
+     * `Dispatcher::stopEvent` (dispatcher.cpp:1171-1179): the winner of the
+     * scheduled-map removal releases the admission slot; when the worker already
+     * promoted the event, the promotion owner releases it instead.
+     */
     private fun cancelScheduledEvent(eventId: Long) {
-        scheduledEvents.remove(eventId)
+        val event = scheduledEvents.remove(eventId) ?: return
+        event.cancelled?.set(true)
+        releaseReservedSlot(event)
         wake()
     }
 
@@ -386,6 +541,7 @@ class GameDispatcher(
                 continue
             }
             if (event.cancelled?.get() == true) {
+                releaseReservedSlot(event)
                 continue
             }
             laneQueues[event.meta.lane.ordinal].addLast(event)
@@ -681,34 +837,83 @@ class GameDispatcher(
             return LaneExecutionResult(0, 0)
         }
 
+        val previousContext = contextThreadLocal.get()
+        contextThreadLocal.set(
+            DispatcherContext(
+                type = DispatcherType.WorkerCompletion,
+                lane = DispatcherLane.WorkerCompletion,
+                executionMode = ExecutionMode.BackgroundCompletion,
+            ),
+        )
         val startedAtUs = timeSourceUs()
-        val taskLimit = minOf(maxTasks, maxCost, service.getCompletionCount())
-        val drained = service.drainCompletions(taskLimit) { _, completion -> completion?.invoke() }
+        val drained: Int
+        try {
+            val taskLimit = minOf(maxTasks, maxCost, service.getCompletionCount())
+            drained = service.drainCompletions(taskLimit) { _, completion -> completion?.invoke() }
+        } finally {
+            if (previousContext == null) {
+                contextThreadLocal.remove()
+            } else {
+                contextThreadLocal.set(previousContext)
+            }
+        }
         val runtimeUs = timeSourceUs() - startedAtUs
         laneTelemetry[DispatcherLane.WorkerCompletion.ordinal].groupRuntime.observe(runtimeUs, drained.toLong())
+        observeInternalWork(DispatcherInternalWork.WorkerCompletionBatch, drained.toLong(), runtimeUs)
         dispatcherCycle.addAndGet(drained.toLong())
         return LaneExecutionResult(drained, drained)
     }
 
     private suspend fun executeQueuedEvent(event: QueuedEvent, lane: DispatcherLane) {
-        releaseReservedSlot(event)
-
         val laneId = lane.ordinal
         val queueWaitUs = DispatcherPolicy.elapsed(event.readyAt, clock()) * 1_000
-        laneTelemetry[laneId].queueWait.observe(queueWaitUs, 1, event.context)
+        if (isPlayerVisible(event.meta.lane) && event.enqueuedAt >= queueLatencyLoggingStartedAt) {
+            playerVisibleReadyLatency.observe(queueWaitUs)
+        }
+        if (queueLatencyLoggingEnabled) {
+            laneTelemetry[laneId].queueWait.observe(queueWaitUs, 1, event.context)
+            if (event.scheduled) {
+                scheduledLatenessTelemetry.observe(queueWaitUs, 1, event.context)
+            }
+        }
 
+        // A one-shot event releases admission before its callback runs so a
+        // successor can replace the chain at capacity (dispatcher.cpp:919-922);
+        // a cycle keeps its slot across reschedules (dispatcher.cpp:937-939) and
+        // releases only when it stops (dispatcher.cpp:923-925, 941-943).
+        if (!event.cycle) {
+            releaseReservedSlot(event)
+        }
+
+        val previousContext = contextThreadLocal.get()
+        contextThreadLocal.set(
+            DispatcherContext(
+                type = dispatcherTypeOf(event),
+                lane = event.meta.lane,
+                executionMode = event.meta.executionMode,
+                taskName = event.context,
+            ),
+        )
         val startedAtUs = timeSourceUs()
         var executed = false
-        if (event.cancelled?.get() == true) {
-            logger.debug { "Skipping cancelled task '${event.context}'" }
-        } else if (event.expiresAt != 0L && clock() > event.expiresAt) {
-            logger.info { "The task '${event.context}' has expired, it has not been executed." }
-        } else {
-            try {
-                event.task()
-                executed = true
-            } catch (e: Exception) {
-                logger.error(e) { "Unhandled exception during event execution on GameDispatcher" }
+        try {
+            if (event.cancelled?.get() == true) {
+                logger.debug { "Skipping cancelled task '${event.context}'" }
+            } else if (event.expiresAt != 0L && clock() > event.expiresAt) {
+                logger.info { "The task '${event.context}' has expired, it has not been executed." }
+            } else {
+                try {
+                    event.task()
+                    executed = true
+                } catch (e: Exception) {
+                    logger.error(e) { "Unhandled exception during event execution on GameDispatcher" }
+                }
+            }
+        } finally {
+            if (previousContext == null) {
+                contextThreadLocal.remove()
+            } else {
+                contextThreadLocal.set(previousContext)
             }
         }
         laneTelemetry[laneId].taskRuntime.observe(timeSourceUs() - startedAtUs, 1, event.context)
@@ -717,8 +922,19 @@ class GameDispatcher(
             dispatcherCycle.incrementAndGet()
             if (event.cycle && event.cancelled?.get() != true) {
                 rescheduleCycleEvent(event)
+                return
             }
         }
+        if (event.cycle) {
+            releaseReservedSlot(event)
+        }
+    }
+
+    private fun dispatcherTypeOf(event: QueuedEvent): DispatcherType = when {
+        event.meta.executionMode == ExecutionMode.BarrierParallel -> DispatcherType.AsyncEvent
+        event.cycle -> DispatcherType.CycleEvent
+        event.scheduled -> DispatcherType.ScheduledEvent
+        else -> DispatcherType.Event
     }
 
     private fun rescheduleCycleEvent(event: QueuedEvent) {
@@ -733,8 +949,189 @@ class GameDispatcher(
             cycleDelayMs = event.cycleDelayMs,
             cancelled = event.cancelled,
             task = event.task,
+            reservedLane = event.reservedLane,
+            scheduled = true,
         )
         wake()
+    }
+
+    /** `Dispatcher::refreshAdaptiveBudgets` (dispatcher.cpp:547-627), called once per worker pass. */
+    internal fun refreshAdaptiveBudgets() {
+        if (!queueLatencyLoggingEnabled || !isGameStateNormal()) {
+            return
+        }
+
+        val now = clock()
+        if (now < nextAdaptiveBudgetUpdateAt) {
+            return
+        }
+        nextAdaptiveBudgetUpdateAt = now + DISPATCHER_ADAPTIVE_BUDGET_INTERVAL_MS
+
+        val visibleWindow = playerVisibleReadyLatency.snapshotAndReset()
+        val configured = getConfiguredDispatcherBudgets()
+        configuredBudgets = configured
+        val visibleP99Us = visibleWindow.percentile(0.99)
+        val visibleBacklog = playerVisibleBacklogSnapshot(now)
+        val emergencyThresholdUs = getPositiveConfig("DISPATCHER_EMERGENCY_MS", DEFAULT_DISPATCHER_EMERGENCY_MS) * 1_000L
+        val decision = adaptiveBudgetController.update(
+            configured = configured,
+            visibleP99Us = visibleP99Us,
+            oldestVisibleReadyAgeUs = visibleBacklog.oldestReadyAgeUs,
+            sloUs = getPositiveConfig("DISPATCHER_SLO_MS", DEFAULT_DISPATCHER_SLO_MS) * 1_000L,
+            emergencyUs = emergencyThresholdUs,
+        )
+        activeBudgets = decision.budgets
+        val onlinePlayers = playersOnline()
+        val shouldWarnBacklog = backlogWarningPolicy.update(
+            hasOnlinePlayers = onlinePlayers > 0,
+            backlog = visibleBacklog,
+            now = now,
+            warningThresholdUs = emergencyThresholdUs,
+        )
+
+        visibleCreatureAsyncSliceLimits = CreatureAsyncSliceLimits(
+            tasksPerBucket = configuredBudgets.creatureAsyncTasksPerBucket,
+            maxRuntimeUs = configuredBudgets.sliceRuntimeUs,
+        )
+        backgroundCreatureAsyncSliceLimits = CreatureAsyncSliceLimits(
+            tasksPerBucket = activeBudgets.creatureAsyncTasksPerBucket,
+            maxRuntimeUs = activeBudgets.sliceRuntimeUs,
+        )
+
+        if (!decision.stateChanged && !shouldWarnBacklog) {
+            return
+        }
+        val stateName = when (decision.state) {
+            DispatcherLoadState.Normal -> "normal"
+            DispatcherLoadState.Constrained -> "constrained"
+            DispatcherLoadState.Emergency -> "emergency"
+        }
+        val oldestVisibleContext = visibleBacklog.oldestContext.ifEmpty { "none" }
+        if (shouldWarnBacklog) {
+            logger.warn {
+                "Dispatcher sustained player-visible backlog: state=$stateName, onlinePlayers=$onlinePlayers, " +
+                    "queuedVisible=${visibleBacklog.queued}, oldestVisible=${visibleBacklog.oldestReadyAgeUs} us, " +
+                    "oldestContext=$oldestVisibleContext, visibleSamples=${visibleWindow.samples}, " +
+                    "visibleP99=$visibleP99Us us, visibleMax=${visibleWindow.maxUs} us, " +
+                    "controlLatency=${decision.controlLatencyUs} us, backgroundCreatureWalk=${activeBudgets.creatureWalkTasks}, " +
+                    "backgroundParallel=${activeBudgets.walkParallelTasks}, " +
+                    "backgroundCreatureBucket=${activeBudgets.creatureAsyncTasksPerBucket}, " +
+                    "deferred=${activeBudgets.deferredGameplayTasks}, completions=${activeBudgets.workerCompletions}, " +
+                    "slice=${activeBudgets.sliceRuntimeUs} us"
+            }
+        } else {
+            logger.debug {
+                "Dispatcher adaptive budgets: state=$stateName, onlinePlayers=$onlinePlayers, " +
+                    "queuedVisible=${visibleBacklog.queued}, oldestVisible=${visibleBacklog.oldestReadyAgeUs} us, " +
+                    "oldestContext=$oldestVisibleContext, visibleSamples=${visibleWindow.samples}, " +
+                    "visibleP99=$visibleP99Us us, visibleMax=${visibleWindow.maxUs} us, " +
+                    "controlLatency=${decision.controlLatencyUs} us, backgroundCreatureWalk=${activeBudgets.creatureWalkTasks}, " +
+                    "backgroundParallel=${activeBudgets.walkParallelTasks}, " +
+                    "backgroundCreatureBucket=${activeBudgets.creatureAsyncTasksPerBucket}, " +
+                    "deferred=${activeBudgets.deferredGameplayTasks}, completions=${activeBudgets.workerCompletions}, " +
+                    "slice=${activeBudgets.sliceRuntimeUs} us"
+            }
+        }
+    }
+
+    /** `getConfiguredDispatcherBudgets` (dispatcher.cpp:38-49). */
+    private fun getConfiguredDispatcherBudgets(): DispatcherBudgetSet = DispatcherBudgetSet(
+        creatureWalkTasks = getPositiveConfig("CREATURE_WALK_TASKS_PER_PASS", DEFAULT_DISPATCHER_BUDGETS.creatureWalkTasks),
+        walkParallelTasks = getPositiveConfig("WALK_PARALLEL_TASKS_PER_PASS", DEFAULT_DISPATCHER_BUDGETS.walkParallelTasks),
+        creatureAsyncTasksPerBucket = getPositiveConfig(
+            "CREATURE_ASYNC_TASKS_PER_BUCKET",
+            DEFAULT_DISPATCHER_BUDGETS.creatureAsyncTasksPerBucket,
+        ),
+        deferredGameplayTasks = getPositiveConfig(
+            "DEFERRED_GAMEPLAY_TASKS_PER_PASS",
+            DEFAULT_DISPATCHER_BUDGETS.deferredGameplayTasks,
+        ),
+        workerCompletions = getPositiveConfig("WORKER_COMPLETIONS_PER_PASS", DEFAULT_DISPATCHER_BUDGETS.workerCompletions),
+        sliceRuntimeUs = getPositiveConfig(
+            "DISPATCHER_SLICE_DURATION_MS",
+            (DEFAULT_DISPATCHER_BUDGETS.sliceRuntimeUs / 1_000).toInt(),
+        ) * 1_000L,
+    )
+
+    /** `getPositiveConfig` (dispatcher.cpp:33-39). */
+    private fun getPositiveConfig(name: String, defaultValue: Int): Int {
+        val manager = config ?: return defaultValue
+        val key = ConfigKeys.byName(name) ?: return defaultValue
+        return maxOf(1, manager.getNumber(key, defaultValue))
+    }
+
+    /**
+     * `Dispatcher::playerVisibleBacklogSnapshot` (dispatcher.cpp:508-545).
+     * The Kotlin clock is milliseconds while the policy snapshots are in
+     * microseconds (`Task::Clock`), so queue/scheduled ages are converted here;
+     * the compute-service ages are already microseconds.
+     */
+    private fun playerVisibleBacklogSnapshot(now: Long): DispatcherQueueSnapshot {
+        val loggingStartedAt = queueLatencyLoggingStartedAt
+        var queued = 0
+        var oldestReadyAgeUs = 0L
+        var oldestContext = ""
+
+        fun merge(snapshot: DispatcherQueueSnapshot) {
+            if (snapshot.queued == 0) {
+                return
+            }
+
+            queued += snapshot.queued
+            if (snapshot.oldestReadyAgeUs > oldestReadyAgeUs) {
+                oldestReadyAgeUs = snapshot.oldestReadyAgeUs
+                oldestContext = snapshot.oldestContext
+            }
+        }
+
+        for (queue in laneQueues) {
+            val snapshot = DispatcherPolicy.inspectPlayerVisibleQueueAt(queue, now, loggingStartedAt)
+            merge(snapshot.copy(oldestReadyAgeUs = snapshot.oldestReadyAgeUs * 1_000))
+        }
+        for (event in scheduledEvents.values) {
+            if (event.cancelled?.get() == true || event.enqueuedAt < loggingStartedAt ||
+                !isPlayerVisible(event.meta.lane) || event.readyAt > now
+            ) {
+                continue
+            }
+
+            merge(
+                DispatcherQueueSnapshot(
+                    queued = 1,
+                    oldestReadyAgeUs = DispatcherPolicy.elapsed(event.readyAt, now) * 1_000,
+                    oldestContext = event.context,
+                ),
+            )
+        }
+
+        val computeStats = monsterComputeService?.getStats()
+        if (computeStats != null) {
+            merge(
+                DispatcherQueueSnapshot(
+                    queued = computeStats.visibleCompletionsQueued,
+                    oldestReadyAgeUs = computeStats.oldestVisibleCompletionReadyAgeUs,
+                    oldestContext = if (computeStats.visibleCompletionsQueued > 0) "MonsterComputeCompletion" else "",
+                ),
+            )
+        }
+        return DispatcherQueueSnapshot(queued, oldestReadyAgeUs, oldestContext)
+    }
+
+    /** `Dispatcher::resetRuntimeTelemetry` (dispatcher.cpp:498-513). */
+    private fun resetRuntimeTelemetry() {
+        for (telemetry in laneTelemetry) {
+            telemetry.queueWait.reset()
+            telemetry.taskRuntime.reset()
+            telemetry.groupRuntime.reset()
+            telemetry.barrierRuntime.reset()
+        }
+
+        for (telemetry in internalWorkTelemetry) {
+            telemetry.reset()
+        }
+        scheduledLatenessTelemetry.reset()
+        playerVisibleReadyLatency.reset()
+        backlogWarningPolicy.reset()
     }
 
     private fun laneTaskBudget(lane: DispatcherLane): Int = when (lane) {
