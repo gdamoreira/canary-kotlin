@@ -3,15 +3,33 @@ package org.opentibia.canary.bootstrap
 import io.github.oshai.kotlinlogging.KotlinLogging
 import org.opentibia.canary.account.AccountRepository
 import org.opentibia.canary.config.CliOptions
+import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
+import org.opentibia.canary.config.ConfigSource
 import org.opentibia.canary.config.ServerConfig
 import org.opentibia.canary.database.DatabaseConfig
 import org.opentibia.canary.database.DatabaseConnectionFactory
 import org.opentibia.canary.database.JdbcAccountRepository
+import org.opentibia.canary.database.JdbcFeatureStateRepository
+import org.opentibia.canary.database.JdbcPlayerDepotRepository
+import org.opentibia.canary.database.JdbcPlayerItemsRepository
+import org.opentibia.canary.database.JdbcPlayerKillsRepository
 import org.opentibia.canary.database.JdbcPlayerRepository
+import org.opentibia.canary.database.JdbcPlayerRewardsRepository
+import org.opentibia.canary.database.JdbcPlayerSpellsRepository
+import org.opentibia.canary.database.JdbcPlayerStashRepository
+import org.opentibia.canary.database.JdbcPlayerStorageRepository
+import org.opentibia.canary.database.JdbcVipRepository
+import org.opentibia.canary.game.scheduling.CreatureAsyncTaskBuckets
 import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.game.scheduling.MonsterComputeConfig
+import org.opentibia.canary.game.scheduling.MonsterComputeService
 import org.opentibia.canary.game.scheduling.SaveManager
+import org.opentibia.canary.io.IOBestiaryPersistence
 import org.opentibia.canary.io.appearances.Appearances
+import org.opentibia.canary.io.iologindata.IOLoginData
+import org.opentibia.canary.io.iologindata.PlayerSavePath
+import org.opentibia.canary.io.iologindata.PlayerSaveTransaction
 import org.opentibia.canary.items.ItemAttributeParse
 import org.opentibia.canary.items.ItemType
 import org.opentibia.canary.items.Items
@@ -25,6 +43,7 @@ import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.network.CanaryServer
 import org.opentibia.canary.network.ListenerBoot
 import org.opentibia.canary.systems.imbuement.Imbuements
+import org.opentibia.canary.systems.prey.IOPreyPersistence
 import org.opentibia.canary.systems.proficiency.WeaponProficiencyLoader
 import java.nio.file.Files
 import java.nio.file.Path
@@ -40,6 +59,45 @@ private const val DEFAULT_CORE_DIRECTORY = "data"
 /** Resolves the effective config (`ConfigManager` precedence: CLI > file > env > defaults). */
 fun interface ConfigBoot {
     fun load(environment: Map<String, String>, options: CliOptions): ServerConfig
+}
+
+/**
+ * Builds the typed `g_configManager()` instance (`ConfigManager`, the port's
+ * constructor-injected replacement of the C++ singleton, AGENTS.md 1.1) over
+ * the same environment and `--config` source [ConfigBoot] reads.
+ */
+fun interface ConfigManagerBoot {
+    fun load(environment: Map<String, String>, options: CliOptions): ConfigManager
+}
+
+/**
+ * Production `g_configManager()`: the [ConfigKeys] surface keyed by its
+ * `config.lua` identifier, with the `CANARY_*` environment and the `--config`
+ * properties file applied. `reload` re-reads the same file like
+ * `ConfigManager::reload` (configmanager.cpp:432).
+ */
+private fun defaultConfigManagerBoot(environment: Map<String, String>, options: CliOptions): ConfigManager =
+    ConfigManager(
+        keyMap = ConfigKeys.all.associateWith { it.luaIdentifier },
+        environment = environment,
+        properties = options.configPath?.let { path -> ConfigSource.of(Path.of(path)) } ?: ConfigSource.EMPTY,
+    )
+
+/**
+ * `MonsterComputeConfig` from the `MONSTER_COMPUTE_THREADS` /
+ * `MONSTER_COMPUTE_QUEUE_CAPACITY` values (`CanaryServer::run`,
+ * src/canary_server.cpp:212-215); missing keys keep the [MonsterComputeConfig]
+ * defaults (`0` threads = automatic, `2048` capacity).
+ */
+private fun monsterComputeConfig(configManager: ConfigManager): MonsterComputeConfig {
+    val defaults = MonsterComputeConfig()
+    val threads = ConfigKeys.byName("MONSTER_COMPUTE_THREADS")
+    val capacity = ConfigKeys.byName("MONSTER_COMPUTE_QUEUE_CAPACITY")
+    return MonsterComputeConfig(
+        configuredThreads = threads?.let { configManager.getNumber(it, it.defaultValue as Int) }
+            ?: defaults.configuredThreads,
+        capacity = capacity?.let { configManager.getNumber(it, it.defaultValue as Int) } ?: defaults.capacity,
+    )
 }
 
 /** Connects and migrates the database (`CanaryServer::initializeDatabase`) and releases it on drain. */
@@ -85,9 +143,10 @@ fun interface ImbuementBoot {
 
 /**
  * Booted services shared by every game connection (`g_game()`, `Item::items`,
- * `g_imbuements()`, `IOMarket::getInstance()`): created by [ServerBootstrap] from
- * the connected [DataSource] and the registries loaded by [ItemBoot]/[ImbuementBoot],
- * then injected into the [ListenerFactory].
+ * `g_imbuements()`, `IOMarket::getInstance()`, `g_configManager()`,
+ * `g_monsterComputeService()`): created by [ServerBootstrap] from the connected
+ * [DataSource] and the registries loaded by [ItemBoot]/[ImbuementBoot], then
+ * injected into the [ListenerFactory].
  */
 class GameComposition(
     /** `g_database()` source backing `IOMarket::getInstance()` (src/io/iomarket.cpp). */
@@ -96,6 +155,26 @@ class GameComposition(
     val itemTypes: Items,
     /** `g_imbuements()` registry (`src/creatures/players/imbuements/imbuements.hpp:44`). */
     val imbuements: Imbuements,
+    /** `g_configManager()` typed lookup surface (configmanager.hpp). */
+    val configManager: ConfigManager,
+    /**
+     * `Creature::getCreatureAsyncTaskBuckets` shared world state
+     * (creature.cpp:34-55): one registry per root, shared by `Game`'s
+     * non-monster batches and the `MonsterPipelinesHost` pipelines.
+     */
+    val creatureAsyncTaskBuckets: CreatureAsyncTaskBuckets,
+    /**
+     * `g_monsterComputeService()` (src/game/scheduling/monster_compute_service.hpp:101)
+     * started by the root; the dispatcher's `WorkerCompletion` lane drains its
+     * completions and the monster pipelines submit their computes to it.
+     */
+    val monsterComputeService: MonsterComputeService,
+    /**
+     * `IOLoginData::savePlayer` path (src/io/iologindata.cpp:195-211) composed
+     * over one shared [PlayerSaveTransaction]; `SaveManager` flushes players
+     * through it (`SaveManager::doSavePlayer`, save_manager.cpp:150-171).
+     */
+    val playerSavePath: PlayerSavePath,
 )
 
 /** Creates the network listener (`CanaryServer`) from the booted services. */
@@ -109,6 +188,30 @@ fun interface ListenerFactory {
         composition: GameComposition
     ): ListenerBoot
 }
+
+/**
+ * Production [ListenerFactory]: builds the `CanaryServer` over the booted
+ * services, passing the shared config manager, async buckets, monster compute
+ * service and save path so the listener composes the `MonsterPipelinesHost`
+ * over the same world instances.
+ */
+internal fun defaultListenerFactory(): ListenerFactory =
+    ListenerFactory { config, accountRepository, gameMap, dispatcher, luaEnvironment, composition ->
+        CanaryServer(
+            loginPort = config.loginPort,
+            gamePort = config.gamePort,
+            accountRepository = accountRepository,
+            gameMap = gameMap,
+            dispatcher = dispatcher,
+            luaEnvironment = luaEnvironment,
+            itemTypes = composition.itemTypes,
+            imbuements = composition.imbuements,
+            dataSource = composition.dataSource,
+            configManager = composition.configManager,
+            suppliedCreatureAsyncTaskBuckets = composition.creatureAsyncTaskBuckets,
+            monsterComputeService = composition.monsterComputeService,
+        )
+    }
 
 /** JDBC/Hikari/Flyway implementation of [DatabaseBoot]; `null` config selects local H2. */
 object JdbcDatabaseBoot : DatabaseBoot {
@@ -135,14 +238,16 @@ object JdbcDatabaseBoot : DatabaseBoot {
 /**
  * Canary boot sequence, split out of `Main.kt`/`CanaryServer::run` so it is directly
  * testable: config -> database connect + Flyway -> map -> Lua scripting -> appearance
- * hook -> dispatcher start -> listeners bind. [shutdown] drains listeners, dispatcher,
- * SaveManager and database exactly once and is safe to call twice (AGENTS.md).
+ * hook -> monster compute start -> dispatcher start -> listeners bind. [shutdown]
+ * drains listeners, monster compute, dispatcher, SaveManager and database exactly
+ * once and is safe to call twice (AGENTS.md).
  */
 class ServerBootstrap(
     private val environment: Map<String, String> = System.getenv(),
     private val options: CliOptions = CliOptions(),
     private val databaseConfig: DatabaseConfig? = null,
     private val configBoot: ConfigBoot = ConfigBoot(ConfigManager::load),
+    private val configManagerBoot: ConfigManagerBoot = ConfigManagerBoot(::defaultConfigManagerBoot),
     private val databaseBoot: DatabaseBoot = JdbcDatabaseBoot,
     private val mapBoot: MapBoot = MapBoot { GameMap() },
     private val scriptingBoot: ScriptingBoot = ScriptingBoot(::defaultScriptingBoot),
@@ -157,27 +262,28 @@ class ServerBootstrap(
             }
         }
     },
-    private val listenerFactory: ListenerFactory = ListenerFactory { config, accountRepository, gameMap, dispatcher, luaEnvironment, composition ->
-        CanaryServer(
-            loginPort = config.loginPort,
-            gamePort = config.gamePort,
-            accountRepository = accountRepository,
-            gameMap = gameMap,
-            dispatcher = dispatcher,
-            luaEnvironment = luaEnvironment,
-            itemTypes = composition.itemTypes,
-            imbuements = composition.imbuements,
-            dataSource = composition.dataSource,
-        )
-    },
-    private val dispatcher: GameDispatcher = GameDispatcher()
+    private val listenerFactory: ListenerFactory = defaultListenerFactory(),
+    /**
+     * `g_dispatcher()` (`Dispatcher::init`, dispatcher.cpp:114-131): the booted
+     * dispatcher or one this root composes over [configManagerBoot] and the
+     * monster compute service. An injected dispatcher stays caller-owned.
+     */
+    private val dispatcher: GameDispatcher? = null,
+    /**
+     * `g_monsterComputeService()` (monster_compute_service.hpp:101): the
+     * instance this root starts (`CanaryServer::run`, canary_server.cpp:215) and
+     * drains (`CanaryServer::shutdown`, canary_server.cpp:628). When absent the
+     * root creates and owns one.
+     */
+    private val monsterComputeService: MonsterComputeService? = null,
 ) {
     private val started = AtomicBoolean(false)
     private val shutdownLatch = CountDownLatch(1)
     private val drain = ShutdownDrain(
         stopListeners = { listener?.stop() },
         closeConnections = { listener?.closeConnections() },
-        shutdownDispatcher = { dispatcher.shutdown() },
+        shutdownMonsterCompute = { activeMonsterComputeService?.shutdown() },
+        shutdownDispatcher = { activeDispatcher?.shutdown() },
         flushSaveManager = { saveManager?.shutdown() },
         closeDatabase = { dataSource?.let(databaseBoot::close) }
     )
@@ -185,6 +291,8 @@ class ServerBootstrap(
     private var dataSource: DataSource? = null
     private var listener: ListenerBoot? = null
     private var saveManager: SaveManager? = null
+    private var activeDispatcher: GameDispatcher? = null
+    private var activeMonsterComputeService: MonsterComputeService? = null
 
     val isStarted: Boolean get() = started.get()
     val isShutdown: Boolean get() = drain.isDrained
@@ -194,6 +302,7 @@ class ServerBootstrap(
         if (!started.compareAndSet(false, true)) return
 
         val config = configBoot.load(environment, options)
+        val configManager = configManagerBoot.load(environment, options)
 
         val source = databaseBoot.connect(databaseConfig)
         dataSource = source
@@ -205,17 +314,61 @@ class ServerBootstrap(
         val imbuements = imbuementBoot.load(config)
         val itemTypes = itemBoot.load(config, appearances)
 
-        saveManager = SaveManager(JdbcPlayerRepository(source))
+        // `g_monsterComputeService().start(monsterComputeConfig)` after
+        // `loadMaps` (src/canary_server.cpp:212-216); the dispatcher is
+        // composed over it afterwards so its `WorkerCompletion` lane drains the
+        // completions (dispatcher.cpp:127, 267-293).
+        val computeService = monsterComputeService ?: MonsterComputeService()
+        computeService.start(monsterComputeConfig(configManager))
+        activeMonsterComputeService = computeService
 
-        dispatcher.start()
+        val runningDispatcher = dispatcher
+            ?: GameDispatcher(config = configManager, monsterComputeService = computeService)
+        activeDispatcher = runningDispatcher
+
+        // `Creature::getCreatureAsyncTaskBuckets` world state (creature.cpp:34-55).
+        val buckets = CreatureAsyncTaskBuckets(dispatcher = { activeDispatcher })
+
+        // `IOLoginData::savePlayer` (src/io/iologindata.cpp:195-211) over one
+        // shared `DBTransaction::executeWithinTransaction` scope
+        // (src/database/database.hpp:233-256): every repository of the guard is
+        // constructed over [saveTransaction] and `SaveManager` flushes through
+        // the resulting path.
+        val saveTransaction = PlayerSaveTransaction(source)
+        val playerSavePath = PlayerSavePath(
+            transaction = saveTransaction,
+            loginData = IOLoginData(
+                players = JdbcPlayerRepository(saveTransaction),
+                accounts = JdbcAccountRepository(saveTransaction),
+                vip = JdbcVipRepository(saveTransaction),
+                storageRepository = JdbcPlayerStorageRepository(saveTransaction),
+                items = JdbcPlayerItemsRepository(saveTransaction),
+                depots = JdbcPlayerDepotRepository(saveTransaction),
+                spells = JdbcPlayerSpellsRepository(saveTransaction),
+                kills = JdbcPlayerKillsRepository(saveTransaction),
+                stash = JdbcPlayerStashRepository(saveTransaction),
+                rewards = JdbcPlayerRewardsRepository(saveTransaction),
+                features = JdbcFeatureStateRepository(saveTransaction),
+                itemTypes = itemTypes,
+                imbuements = imbuements,
+                saveTransaction = saveTransaction,
+                depotChests = { player -> player.getDepotChests() },
+                bestiaryPersistence = IOBestiaryPersistence(saveTransaction),
+                preyPersistence = IOPreyPersistence(saveTransaction),
+            ),
+            players = JdbcPlayerRepository(saveTransaction),
+        )
+        saveManager = SaveManager(playerSavePath)
+
+        runningDispatcher.start()
 
         val server = listenerFactory.create(
             config,
             JdbcAccountRepository(source),
             gameMap,
-            dispatcher,
+            runningDispatcher,
             luaEnvironment,
-            GameComposition(source, itemTypes, imbuements),
+            GameComposition(source, itemTypes, imbuements, configManager, buckets, computeService, playerSavePath),
         )
         listener = server
         server.start()
@@ -227,7 +380,7 @@ class ServerBootstrap(
         shutdownLatch.await()
     }
 
-    /** Idempotent drain: listeners -> dispatcher -> SaveManager flush -> database close. */
+    /** Idempotent drain: listeners -> connections -> monster compute -> dispatcher -> SaveManager -> database. */
     fun shutdown() {
         drain.drain()
         shutdownLatch.countDown()

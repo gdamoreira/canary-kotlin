@@ -15,11 +15,14 @@ import io.netty.util.concurrent.GlobalEventExecutor
 import javax.sql.DataSource
 import org.opentibia.canary.account.AccountRepository
 import org.opentibia.canary.account.InMemoryAccountRepository
+import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
+import org.opentibia.canary.creatures.monsters.MonsterPipelinesHost
 import org.opentibia.canary.game.Game
 import org.opentibia.canary.game.scheduling.CreatureAsyncTaskBuckets
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.game.scheduling.MonsterComputeService
 import org.opentibia.canary.io.IOMarket
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
@@ -85,6 +88,22 @@ class CanaryServer(
      * the dispatcher's adaptive budgets. `null` keeps the getter defaults.
      */
     private val configManager: ConfigManager? = null,
+    /**
+     * `Creature::getCreatureAsyncTaskBuckets` shared world state
+     * (creature.cpp:34-55) composed by the bootstrap; when absent the listener
+     * owns one over its dispatcher. The same instance reaches [game] and
+     * [monsterPipelinesHost] so monster and non-monster batches share the world
+     * buckets.
+     */
+    suppliedCreatureAsyncTaskBuckets: CreatureAsyncTaskBuckets? = null,
+    /**
+     * `g_monsterComputeService()` (src/game/scheduling/monster_compute_service.hpp:101)
+     * started by the bootstrap (`CanaryServer::run`, canary_server.cpp:215) and
+     * shared with the world dispatcher's `WorkerCompletion` lane. Composing it
+     * here builds the production [monsterPipelinesHost]; `null` keeps the
+     * monster pipeline host uncomposed (embedded/test use).
+     */
+    private val monsterComputeService: MonsterComputeService? = null,
 ) : ListenerBoot {
     /**
      * `g_dispatcher()` (`CanaryServer::run`, src/canary_server.cpp:132): the
@@ -94,12 +113,11 @@ class CanaryServer(
 
     /**
      * `Creature::getCreatureAsyncTaskBuckets` shared world state
-     * (creature.cpp:34-55): one registry per composition root, shared by the
-     * `Game` non-monster bindings and any `MonsterPipelinesHost` the bootstrap
-     * composes with the world.
+     * (creature.cpp:34-55): the bootstrap-owned registry or one this listener
+     * owns, shared by the `Game` non-monster bindings and [monsterPipelinesHost].
      */
     internal val creatureAsyncTaskBuckets: CreatureAsyncTaskBuckets =
-        CreatureAsyncTaskBuckets(dispatcher = { this.dispatcher })
+        suppliedCreatureAsyncTaskBuckets ?: CreatureAsyncTaskBuckets(dispatcher = { this.dispatcher })
 
     /**
      * `Player::muteCountMap` (player.hpp:281): the C++ static map shared by
@@ -130,9 +148,34 @@ class CanaryServer(
     }
 
     /**
+     * Production `MonsterPipelinesHost` composition: the bootstrap-started
+     * [monsterComputeService] owns the off-thread computes, the world map
+     * resolves the spectator sectors, `g_game().getCreatureByID`
+     * (game.cpp:1296) re-resolves the deferred targets and the world
+     * [creatureAsyncTaskBuckets] are shared with [game]'s non-monster batches.
+     * The dispatcher is attached before any monster can register
+     * (`Creature::getCreatureAsyncTaskBuckets` reads it at enqueue time) and the
+     * remaining coordinator seams are bound after [game] exists.
+     */
+    internal val monsterPipelinesHost: MonsterPipelinesHost? = monsterComputeService?.let { service ->
+        MonsterPipelinesHost(
+            service = service,
+            mapAccess = gameMap,
+            resolveCreature = { id -> game.getCreatureByID(id) },
+            creatureAsyncTaskBuckets = creatureAsyncTaskBuckets,
+        ).also { host ->
+            host.dispatcher = this.dispatcher
+            host.monsterPerfTestFriendlyFire = {
+                val key = ConfigKeys.byName("MONSTER_PERF_TEST_FRIENDLY_FIRE")
+                key != null && (configManager?.getBoolean(key, key.defaultValue as Boolean) ?: false)
+            }
+        }
+    }
+
+    /**
      * `g_game()` equivalent shared by every game connection served by this listener,
-     * composed with the booted item/imbuement registries, market, config and
-     * world-shared async buckets.
+     * composed with the booted item/imbuement registries, market, config,
+     * world-shared async buckets and the production [monsterPipelinesHost].
      */
     val game: Game = suppliedGame ?: Game(
         gameMap,
@@ -142,7 +185,19 @@ class CanaryServer(
         imbuements = imbuements,
         configManager = configManager,
         creatureAsyncTaskBuckets = creatureAsyncTaskBuckets,
+        monsterHost = monsterPipelinesHost,
     )
+
+    init {
+        // Coordinator call-site bindings of `MonsterPipelinesHost` over the
+        // composed world (`Game::addCreatureCheck`/`removeCreatureCheck`,
+        // game.cpp:7659/7687, and `Game::internalCreatureTurn`, game.cpp:7599).
+        monsterPipelinesHost?.apply {
+            addCreatureCheck = { monster -> game.addCreatureCheck(monster) }
+            removeCreatureCheck = { monster -> game.removeCreatureCheck(monster) }
+            internalCreatureTurn = { monster, direction -> game.internalCreatureTurn(monster, direction) }
+        }
+    }
 
     /**
      * `g_game().transformItem(item, item->getID(), charges - 1)` binding
