@@ -46,7 +46,7 @@ All items are **sequential on `main`** (they overlap files; parallel worktrees w
 3. Reword the `docs/improvements.md` directive line to use `/Users/<name>` placeholder (self-referential literal otherwise defeats the check).
 
 **Validation:**
-- `git grep -n "Users/damoreira"` → **0 matches**.
+- `git grep -nE "Users/[A-Za-z0-9._-]+"` → **0 matches**.
 - `./gradlew clean test` green (KDoc-only change, still gate it).
 
 **Commit:** `chore(docs): use relative ../.projects paths for Canary source references`
@@ -213,7 +213,7 @@ All items are **sequential on `main`** (they overlap files; parallel worktrees w
 
 | Check | Command | Pass |
 |---|---|---|
-| Home paths gone | `git grep -n "Users/damoreira"` | 0 matches |
+| Home paths gone | `git grep -nE "Users/[A-Za-z0-9._-]+"` | 0 matches |
 | Fork refs | `git grep -n opentibiabr` | reviewed allow-list only |
 | RSA override | new tests + `CryptoTest` | green |
 | Docs links | relative-link audit | 0 broken |
