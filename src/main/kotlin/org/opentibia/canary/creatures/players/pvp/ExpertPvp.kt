@@ -1,6 +1,13 @@
 package org.opentibia.canary.creatures.players.pvp
 
+import org.opentibia.canary.creatures.Creature
+import org.opentibia.canary.creatures.Monster
+import org.opentibia.canary.creatures.Npc
+import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.creatures.Skulls_t
+import org.opentibia.canary.creatures.players.getPvpMode
+import org.opentibia.canary.spells.WorldType
 
 /**
  * `PvpMode_t` (`src/creatures/creatures_definitions.hpp:818-822`).
@@ -372,6 +379,123 @@ object ExpertPvp {
         }
 
         return ExpertPvpRelationResult(relation = relation, facts = context)
+    }
+
+    /**
+     * `ExpertPvp::classifyRelation(actor, subject)` (expert_pvp.cpp:485-522):
+     * builds the relation facts from the live players and re-runs the context
+     * classifier. `g_game().getWorldType()` of `isSkulledClientTarget`
+     * (expert_pvp.cpp:240-255) is an explicit [worldType] parameter per
+     * AGENTS.md 1.1.
+     */
+    fun classifyRelation(actor: Player?, subject: Creature?, worldType: WorldType): ExpertPvpRelationResult {
+        if (actor == null || subject == null) {
+            return classifyRelation(ExpertPvpRelationContext())
+        }
+
+        val subjectPlayer = subject as? Player
+        val subjectMonster = subject as? Monster
+        val subjectOwnerPlayer = subjectPlayer ?: getMasterPlayer(subject)
+
+        var partyAlly = false
+        var guildAlly = false
+        var warEnemy = false
+        var directAttacker = false
+        var protectedAllyAttacker = false
+        var directTarget = false
+        var skulledTarget = false
+        if (subjectOwnerPlayer != null && subjectOwnerPlayer !== actor) {
+            val actorParty = actor.getParty()
+            val actorGuild = actor.getGuild()
+            val subjectGuild = subjectOwnerPlayer.getGuild()
+            partyAlly = actorParty != null && actorParty === subjectOwnerPlayer.getParty()
+            guildAlly = actorGuild != null && actorGuild === subjectGuild
+            warEnemy = actorGuild != null && subjectGuild != null &&
+                actor.pvpPlayer.isInWarList(subjectGuild.id) &&
+                subjectOwnerPlayer.pvpPlayer.isInWarList(actorGuild.id)
+            directAttacker = subjectOwnerPlayer.pvpPlayer.hasAttacked(actor.pvpPlayer)
+            protectedAllyAttacker = hasAttackedProtectedAlly(actor, subjectOwnerPlayer)
+            directTarget = !actor.hasFlag(PlayerFlags_t.NotGainInFight) &&
+                actor.pvpPlayer.getAttackedPlayerGuids().contains(subjectOwnerPlayer.getGUID())
+            skulledTarget = isSkulledClientTarget(actor, subjectOwnerPlayer, worldType)
+        }
+
+        val context = ExpertPvpRelationContext(
+            actorGuid = actor.getGUID(),
+            subjectGuid = subjectOwnerPlayer?.getGUID() ?: 0L,
+            actorMode = actor.getPvpMode(),
+            actorIsAccessPlayer = isAccessPlayer(actor),
+            subjectIsAccessPlayer = isAccessPlayer(subjectOwnerPlayer),
+            isSelf = subjectOwnerPlayer === actor,
+            subjectIsPlayer = subjectPlayer != null,
+            subjectIsMonster = subjectMonster != null,
+            subjectIsPlayerSummon = subjectPlayer == null && subject.isSummon() && subjectOwnerPlayer != null,
+            subjectIsNpc = subject is Npc,
+            partyAlly = partyAlly,
+            guildAlly = guildAlly,
+            warEnemy = warEnemy,
+            directAttacker = directAttacker,
+            protectedAllyAttacker = protectedAllyAttacker,
+            directTarget = directTarget,
+            skulledTarget = skulledTarget,
+        )
+
+        return classifyRelation(context)
+    }
+
+    /** File-local `isAccessPlayer` (expert_pvp.cpp:52-59). */
+    private fun isAccessPlayer(player: Player?): Boolean = player != null && player.group?.access == true
+
+    /** File-local `getMasterPlayer` (expert_pvp.cpp:61-68). */
+    private fun getMasterPlayer(creature: Creature): Player? = creature.getMaster() as? Player
+
+    /**
+     * File-local `isSkulledClientTarget` (expert_pvp.cpp:240-255): only the PvP
+     * world type classifies a skulled/killed/attacked subject.
+     */
+    private fun isSkulledClientTarget(actor: Player, subjectPlayer: Player, worldType: WorldType): Boolean {
+        if (worldType != WorldType.PVP || actor === subjectPlayer) {
+            return false
+        }
+
+        val skull = subjectPlayer.getSkull()
+        if (skull != Skulls_t.SKULL_NONE) {
+            return skull != Skulls_t.SKULL_GREEN
+        }
+
+        return subjectPlayer.pvpPlayer.hasKilled(actor.pvpPlayer) ||
+            subjectPlayer.pvpPlayer.hasAttacked(actor.pvpPlayer)
+    }
+
+    /** File-local `hasAttackedProtectedAlly` (expert_pvp.cpp:257-278). */
+    private fun hasAttackedProtectedAlly(actor: Player, subjectPlayer: Player): Boolean {
+        if (actor === subjectPlayer) {
+            return false
+        }
+
+        val party = actor.getParty()
+        if (party != null) {
+            for (partyPlayer in party.getPlayers()) {
+                if (partyPlayer !== actor && partyPlayer !== subjectPlayer &&
+                    subjectPlayer.pvpPlayer.hasAttacked(partyPlayer.pvpPlayer)
+                ) {
+                    return true
+                }
+            }
+        }
+
+        val guild = actor.getGuild()
+        if (guild != null) {
+            for (guildPlayer in guild.getMembersOnline()) {
+                if (guildPlayer !== actor && guildPlayer !== subjectPlayer &&
+                    subjectPlayer.pvpPlayer.hasAttacked(guildPlayer.pvpPlayer)
+                ) {
+                    return true
+                }
+            }
+        }
+
+        return false
     }
 
     /**
