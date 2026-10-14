@@ -84,11 +84,13 @@ typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
  * with Canary's BFS `sid` assignment from 101 and the `OPENCONTAINER`
  * attributes are re-armed from `Player::getOpenContainers` before the
  * attributes are captured. The reward chest (`Player::getRewardChest`,
- * player.cpp:2058-2063) and inbox (`Player::inbox`, player.hpp:1760) sinks are
- * reached through the `Player` itself; the depot chests need the
- * `Player::depotChests` map (see CREATURE.KT ACCESSOR NEEDS) and stay inert
- * until it exists. [savePlayerGuard] calls all of the live walks; the row-based
- * overloads remain for callers that already hold the `(pid, sid)` rows.
+ * player.cpp:2058-2063), inbox (`Player::inbox`, player.hpp:1760) and depot
+ * chests (`Player::depotChests`, player.hpp:1673) sinks are reached through
+ * the `Player` itself; the depot walk defaults to `Player::getDepotChests` and
+ * the loader materializes the same chests through
+ * `Player::getDepotChest(pid, true)`. [savePlayerGuard] calls all of the live
+ * walks; the row-based overloads remain for callers that already hold the
+ * `(pid, sid)` rows.
  *
  * The remaining guard saves reuse the wave-36/40 persistence classes:
  * [savePlayerStash(player)] walks `Player::getStashItems` with the C++
@@ -100,16 +102,12 @@ typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
  * constructed over it (the port's `DBTransaction::executeWithinTransaction`
  * equivalent).
  *
- * CREATURE.KT ACCESSOR NEEDS (report to the composition owner):
- *  - `Player::depotChests` (src/creatures/players/player.hpp:1673), a
- *    `Map<Int, DepotChest>` populated by `Player::getDepotChest(depotId,
- *    autoCreate)` (player.cpp:1998-2022) and by `Player::getDepotLocker`
- *    (player.cpp:2024-2058) for boxes `1..DEPOT_BOXES`. `loadPlayerDepotItems`
- *    and `savePlayerDepotItems` must resolve the same chest instances, so the
- *    composition root should wire the save `depotChests` seam to that map and
- *    pass `{ player.getDepotChest(it, true) }` at the load call site. Until
- *    the accessor exists the depot save seam defaults to `null` and the walk
- *    stays inert instead of clearing the persisted rows.
+ * The depot walk resolves the same chest instances on both directions:
+ * `savePlayerDepotItems(player)` defaults to `Player::getDepotChests`
+ * (src/creatures/players/player.hpp:1673) and `loadPlayerDepotItems(player,
+ * rows, getDepotChest)` must be passed `{ player.getDepotChest(it, true) }`,
+ * the accessor `Player::getDepotLocker` (player.cpp:2024-2058) populates for
+ * boxes `1..DEPOT_BOXES`.
  *
  * PARITY GAPS (reported by the wave): the shared transaction of [savePlayer]
  * only covers repositories constructed over the supplied [PlayerSaveTransaction]
@@ -148,12 +146,13 @@ class IOLoginData(
      * `Player::depotChests` (src/creatures/players/player.hpp:1673): the
      * materialized depot chest map keyed by `pid` that
      * `IOLoginDataSave::savePlayerDepotItems`
-     * (iologindata_save_player.cpp:583-586) iterates. The port's `Player` does
-     * not expose the map yet (see the class CREATURE.KT ACCESSOR NEEDS), so it
-     * is a nullable seam: `null` keeps the depot walk inert like the other
-     * unwired sinks instead of clearing the persisted rows.
+     * (iologindata_save_player.cpp:583-586) iterates. The default resolves
+     * `Player::getDepotChests` (the public C++ field's accessor), which the
+     * loader materializes into through `Player::getDepotChest(pid, true)`, so a
+     * save/load round trip walks the same chest instances; `null` keeps the
+     * walk inert for callers that need the pre-wiring behavior.
      */
-    private val depotChests: ((Player) -> Map<Int, Container>)? = null,
+    private val depotChests: ((Player) -> Map<Int, Container>)? = { player -> player.getDepotChests() },
     /**
      * `IOLoginDataSave::savePlayerBestiarySystem`
      * (src/io/functions/iologindata_save_player.cpp:478-532) sink: the wave-36
@@ -612,8 +611,9 @@ class IOLoginData(
      * [saveItems] assigns the `sid`s. Canary skips the whole walk, including
      * the `DELETE`, while `lastDepotId` is `-1`, i.e. before the player ever
      * opened a depot (iologindata_save_player.cpp:576). The [depotChests] sink
-     * is `null` until `Creature.kt` exposes `Player::depotChests`, which keeps
-     * the walk and its `DELETE` inert rather than clearing persisted rows.
+     * defaults to `Player::getDepotChests`, so the walk and its `DELETE` cover
+     * the live chests the loader materializes; an explicit `null` keeps the
+     * walk inert instead of clearing persisted rows.
      */
     fun savePlayerDepotItems(player: Player): Boolean {
         val chests = depotChests?.invoke(player) ?: return true
