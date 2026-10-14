@@ -4,6 +4,7 @@ import io.netty.buffer.UnpooledByteBufAllocator
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.combat.condition.Outfit
+import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Npc
 import org.opentibia.canary.creatures.Player
@@ -87,6 +88,7 @@ class PlayerSendSinkTest {
         var forgingDataFrame: () -> ForgeDataWriter.ForgingDataFrame? = { null }
         var shopInventoryMap: (Player) -> Map<Int, Int> = { emptyMap() }
         var shopHiddenSellItems: (Player) -> Boolean = { false }
+        var creatureById: (Long) -> Creature? = { null }
 
         fun build(): PlayerFrameSink = PlayerFrameSink(
             player = player,
@@ -116,6 +118,7 @@ class PlayerSendSinkTest {
             forgingDataFrame = forgingDataFrame,
             shopInventoryMap = shopInventoryMap,
             shopHiddenSellItems = shopHiddenSellItems,
+            creatureById = creatureById,
         )
     }
 
@@ -533,7 +536,7 @@ class PlayerSendSinkTest {
     }
 
     @Test
-    fun `sendCreatureReload writes the update-tile creature frame`() {
+    fun `sendCreatureReload adds an unknown creature then updates the known one`() {
         val game = org.opentibia.canary.game.Game(GameMap(), org.opentibia.canary.game.scheduling.GameDispatcher())
         game.map.getOrCreateTile(center).also { it.ground = Item(id = 100) }
         game.map.getOrCreateTile(adjacent).also { it.ground = Item(id = 100) }
@@ -555,9 +558,15 @@ class PlayerSendSinkTest {
         )
 
         sink.sendCreatureReload(rat)
+        sink.sendCreatureReload(rat)
 
-        assertThat(frames).hasSize(1)
-        assertThat(frames[0]).startsWith(*bytes(0x6B, 0xE9, 0x03, 0xE8, 0x03, 0x07, 0x01))
+        assertThat(frames).hasSize(2)
+        assertThat(frames[0][0]).isEqualTo(0x6A.toByte())
+        assertThat(frames[0][7]).isEqualTo(0x61.toByte())
+        assertThat(frames[0].copyOfRange(9, 13)).isEqualTo(bytes(0x00, 0x00, 0x00, 0x00))
+        assertThat(frames[1][0]).isEqualTo(0x6B.toByte())
+        assertThat(frames[1][7]).isEqualTo(0x61.toByte())
+        assertThat(frames[1].copyOfRange(9, 13)).isEqualTo(bytes(0x00, 0x00, 0x00, 0x00))
     }
 
     @Test
@@ -586,6 +595,11 @@ class PlayerSendSinkTest {
 
         assertThat(frames).hasSize(1)
         assertThat(frames[0]).startsWith(*bytes(0x6C, 0xE9, 0x03, 0xE8, 0x03, 0x07, 0x01))
+        assertThat(frames[0][14]).isEqualTo(0x61.toByte())
+        assertThat(frames[0].copyOfRange(16, 20)).isEqualTo(bytes(0x88, 0x13, 0x00, 0x00))
+
+        sink.sendPartyCreatureUpdate(rat)
+        assertThat(frames[1][6]).isEqualTo(0x61.toByte())
     }
 
     @Test
@@ -612,22 +626,94 @@ class PlayerSendSinkTest {
     }
 
     @Test
-    fun `party shield skull health and vocation fall back to the creature update`() {
+    fun `party shield skull health and vocation fall back to the creature update while unseen`() {
+        val bound = bind { pvpWorld = { true } }
+        val shieldRat = Monster(5000, "Rat", maxHealth = 100, health = 80, position = center)
+        val skullRat = Monster(5001, "Rat", maxHealth = 100, health = 80, position = center)
+        val healthRat = Monster(5002, "Rat", maxHealth = 100, health = 80, position = center)
+
+        bound.sink.sendPartyCreatureShield(shieldRat)
+        bound.sink.sendPartyCreatureSkull(skullRat)
+        bound.sink.sendPartyCreatureHealth(healthRat, 80)
+        bound.sink.sendPartyPlayerVocation(newPlayer(id = 7, name = "Mate"))
+
+        assertThat(bound.frames).hasSize(4)
+        assertThat(bound.frames).allSatisfy { frame ->
+            assertThat(frame[0]).isEqualTo(0x8B.toByte())
+            assertThat(frame[6]).isEqualTo(0x61.toByte())
+        }
+        assertThat(bound.frames[3].copyOfRange(1, 5)).isEqualTo(bytes(0x07, 0x00, 0x00, 0x00))
+    }
+
+    @Test
+    fun `party shield skull health and vocation use the known-creature sub-frames once seen`() {
         val bound = bind { pvpWorld = { true } }
         val rat = Monster(5000, "Rat", maxHealth = 100, health = 80, position = center)
+        val mate = newPlayer(id = 7, name = "Mate")
 
         bound.sink.sendPartyCreatureUpdate(rat)
-        val update = bound.frames[0]
+        bound.sink.sendPartyCreatureUpdate(mate)
 
         bound.sink.sendPartyCreatureShield(rat)
         bound.sink.sendPartyCreatureSkull(rat)
         bound.sink.sendPartyCreatureHealth(rat, 80)
-        bound.sink.sendPartyPlayerVocation(newPlayer(id = 7, name = "Mate"))
+        bound.sink.sendPartyPlayerVocation(mate)
 
-        assertThat(bound.frames[1]).isEqualTo(update)
-        assertThat(bound.frames[2]).isEqualTo(update)
-        assertThat(bound.frames[3]).isEqualTo(update)
-        assertThat(bound.frames[4]).startsWith(*bytes(0x8B, 0x07, 0x00, 0x00, 0x00, 0x00))
+        assertThat(bound.frames).hasSize(6)
+        assertThat(bound.frames[2]).isEqualTo(bytes(0x91, 0x88, 0x13, 0x00, 0x00, 0x00))
+        assertThat(bound.frames[3]).isEqualTo(bytes(0x90, 0x88, 0x13, 0x00, 0x00, 0x00))
+        assertThat(bound.frames[4]).isEqualTo(bytes(0x8C, 0x88, 0x13, 0x00, 0x00, 0x50))
+        assertThat(bound.frames[5]).isEqualTo(bytes(0x8B, 0x07, 0x00, 0x00, 0x00, 0x0D, 0x00))
+    }
+
+    @Test
+    fun `sendPartyCreatureUpdate writes an unknown frame first and a known frame on the repeat`() {
+        val bound = bind()
+        val rat = Monster(5000, "Rat", maxHealth = 100, health = 80, position = center)
+
+        bound.sink.sendPartyCreatureUpdate(rat)
+        bound.sink.sendPartyCreatureUpdate(rat)
+
+        val unknown = bound.frames[0]
+        assertThat(unknown[6]).isEqualTo(0x61.toByte())
+        assertThat(unknown.copyOfRange(8, 12)).isEqualTo(bytes(0x00, 0x00, 0x00, 0x00))
+        assertThat(unknown.copyOfRange(12, 16)).isEqualTo(bytes(0x88, 0x13, 0x00, 0x00))
+        val known = bound.frames[1]
+        assertThat(known[6]).isEqualTo(0x62.toByte())
+        assertThat(known.copyOfRange(8, 12)).isEqualTo(bytes(0x88, 0x13, 0x00, 0x00))
+    }
+
+    @Test
+    fun `the known cache evicts the oldest unseen creature at the 1300 limit`() {
+        val player = newPlayer()
+        val monsters = (0 until 1300).map { index ->
+            Monster(5001L + index, "Rat$index", maxHealth = 100, health = 80, position = Position(500, 500, 7))
+        }
+        val byId = monsters.associateBy { it.id }
+        val frames = mutableListOf<ByteArray>()
+        val sink = PlayerFrameSink(
+            player,
+            GameMap(),
+            { UnpooledByteBufAllocator.DEFAULT },
+            { frame ->
+                val out = ByteArray(frame.readableBytes())
+                frame.readBytes(out)
+                frame.release()
+                frames.add(out)
+            },
+            creatureById = { id -> byId[id] },
+        )
+
+        monsters.forEach { sink.sendPartyCreatureUpdate(it) }
+        val newest = Monster(6301, "Rat-new", maxHealth = 100, health = 80, position = Position(500, 500, 7))
+        sink.sendPartyCreatureUpdate(newest)
+
+        val eviction = frames.last()
+        assertThat(eviction[6]).isEqualTo(0x61.toByte())
+        assertThat(eviction.copyOfRange(8, 12)).isEqualTo(bytes(0x89, 0x13, 0x00, 0x00))
+
+        sink.sendPartyCreatureUpdate(monsters.first())
+        assertThat(frames.last()[6]).isEqualTo(0x61.toByte())
     }
 
     @Test

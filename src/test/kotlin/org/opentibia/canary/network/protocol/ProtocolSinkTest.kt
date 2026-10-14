@@ -265,6 +265,42 @@ class ProtocolSinkTest {
     }
 
     @Test
+    fun `sendCreatureAppear marks the first appearance unknown and the repeat known`() {
+        val map = GameMap()
+        val tile = map.getOrCreateTile(observerPosition)
+        tile.ground = Item(id = 100)
+        val sink = InMemoryProtocolSink(observer(), map)
+        val rat = monster()
+        tile.internalAddThing(rat)
+
+        sink.sendCreatureAppear(rat, rat.position, isLogin = false)
+        sink.sendCreatureAppear(rat, rat.position, isLogin = false)
+
+        assertThat(sink.frames).hasSize(2)
+        val first = sink.frames[0]
+        assertThat(first[7]).isEqualTo(0x61.toByte())
+        assertThat(first.copyOfRange(9, 13)).isEqualTo(bytes(0x00, 0x00, 0x00, 0x00))
+        val second = sink.frames[1]
+        assertThat(second[7]).isEqualTo(0x62.toByte())
+        assertThat(second.copyOfRange(9, 13)).isEqualTo(bytes(0x88, 0x13, 0x00, 0x00))
+    }
+
+    @Test
+    fun `sendCreatureAppear ignores a creature outside the viewport`() {
+        val map = GameMap()
+        val farPosition = Position(500, 500, 7)
+        val tile = map.getOrCreateTile(farPosition)
+        tile.ground = Item(id = 100)
+        val sink = InMemoryProtocolSink(observer(), map)
+        val far = monster(id = 5001, position = farPosition)
+        tile.internalAddThing(far)
+
+        sink.sendCreatureAppear(far, far.position, isLogin = false)
+
+        assertThat(sink.frames).isEmpty()
+    }
+
+    @Test
     fun `sendCreatureMove writes the 0x6C removal when only the old position is visible`() {
         val sink = InMemoryProtocolSink(observer())
         val oldPos = Position(101, 200, 7)

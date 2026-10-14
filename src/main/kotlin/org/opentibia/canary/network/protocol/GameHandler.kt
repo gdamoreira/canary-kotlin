@@ -299,7 +299,14 @@ class GameHandler(
 
         // `Player::client` is the per-session ProtocolGame; the port models it
         // as the per-player sink over this channel (fire-and-forget writes).
-        activePlayer.protocolSink = NettyProtocolSink(ctx.channel(), activePlayer, gameMap)
+        // `g_game().getCreatureByID` feeds the session known-set eviction
+        // (`ProtocolGame::checkCreatureAsKnown`, protocolgame.cpp:2346).
+        activePlayer.protocolSink = NettyProtocolSink(
+            ctx.channel(),
+            activePlayer,
+            gameMap,
+            creatureById = { id -> game.getCreatureByID(id) },
+        )
 
         // Canary restores the persisted player systems during login
         // (IOLoginData::loadPlayer) before firing the login creature events

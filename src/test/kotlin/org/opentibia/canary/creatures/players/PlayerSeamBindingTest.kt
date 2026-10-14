@@ -175,7 +175,7 @@ class PlayerSeamBindingTest {
     }
 
     @Test
-    fun `reloadCreature emits the reload frame to every same-floor spectator`() {
+    fun `reloadCreature adds an unknown creature for every same-floor spectator`() {
         val game = Game(GameMap(), GameDispatcher())
         game.map.getOrCreateTile(center).also { it.ground = Item(id = 100) }
         game.map.getOrCreateTile(adjacent).also { it.ground = Item(id = 100) }
@@ -188,7 +188,9 @@ class PlayerSeamBindingTest {
         game.reloadCreature(rat)
 
         assertThat(bound.frames).hasSize(1)
-        assertThat(bound.frames[0]).startsWith(*bytes(0x6B, 0xE9, 0x03, 0xE8, 0x03, 0x07, 0x01))
+        assertThat(bound.frames[0]).startsWith(
+            *bytes(0x6A, 0xE9, 0x03, 0xE8, 0x03, 0x07, 0x01, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00),
+        )
     }
 
     @Test
@@ -238,14 +240,16 @@ class PlayerSeamBindingTest {
     }
 
     @Test
-    fun `sendPlayerPartyIcons emits the shield and skull frames through the sink`() {
+    fun `sendPlayerPartyIcons adds the unseen target then emits the known skull frame`() {
         val bound = bind(newPlayer(), pvpWorld = true)
         val target = newPlayer(id = 7, name = "Mate")
 
         bound.player.sendPlayerPartyIcons(target)
 
         assertThat(bound.frames).hasSize(2)
-        assertThat(bound.frames).allSatisfy { frame -> assertThat(frame[0]).isEqualTo(0x8B.toByte()) }
+        assertThat(bound.frames[0][0]).isEqualTo(0x8B.toByte())
+        assertThat(bound.frames[0][6]).isEqualTo(0x61.toByte())
+        assertThat(bound.frames[1][0]).isEqualTo(0x90.toByte())
     }
 
     @Test

@@ -3,6 +3,7 @@ package org.opentibia.canary.network.protocol
 import io.netty.buffer.ByteBuf
 import io.netty.buffer.ByteBufAllocator
 import io.netty.buffer.UnpooledByteBufAllocator
+import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.map.GameMap
 
@@ -14,7 +15,8 @@ import org.opentibia.canary.map.GameMap
 class InMemoryProtocolSink(
     player: Player,
     map: GameMap = GameMap(),
-) : ProtocolFrameSink(player, map) {
+    creatureById: (Long) -> Creature? = { null },
+) : ProtocolFrameSink(player, map, creatureById) {
 
     /** Every frame emitted in call order, copied out of its `ByteBuf`. */
     val frames = mutableListOf<ByteArray>()
