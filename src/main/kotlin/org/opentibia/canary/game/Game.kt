@@ -12,8 +12,11 @@ import org.opentibia.canary.chat.ChatClient
 import org.opentibia.canary.chat.ChatManager
 import org.opentibia.canary.chat.NoopChatClient
 import org.opentibia.canary.chat.SpeakClasses
+import org.opentibia.canary.combat.BlockType
+import org.opentibia.canary.combat.Combat
 import org.opentibia.canary.combat.CombatDamage
 import org.opentibia.canary.combat.CombatOrigin
+import org.opentibia.canary.combat.CombatParams
 import org.opentibia.canary.combat.CombatType
 import org.opentibia.canary.combat.condition.Buff
 import org.opentibia.canary.combat.condition.Condition
@@ -33,6 +36,7 @@ import org.opentibia.canary.creatures.Skulls_t
 import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.WeaponType_t
 import org.opentibia.canary.creatures.players.WalkStartPolicy
+import org.opentibia.canary.creatures.players.getDodgeChance
 import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.creatures.appearance.outfit.Outfit as OutfitDefinition
 import org.opentibia.canary.creatures.appearance.effects.AttachedEffects
@@ -137,6 +141,8 @@ import org.opentibia.canary.network.protocol.MessageClass
 import org.opentibia.canary.network.protocol.SourceEffect
 import org.opentibia.canary.network.protocol.StoreWindowWriter
 import org.opentibia.canary.network.protocol.TransferErrorMessage
+import org.opentibia.canary.network.protocol.cyclopedia.CyclopediaCharacterWriter
+import org.opentibia.canary.network.protocol.cyclopedia.CyclopediaWindowWriter
 import org.opentibia.canary.network.protocol.wheel.SaveWheelCommand
 import org.opentibia.canary.network.protocol.wheel.WheelGemActionCommand
 import org.opentibia.canary.persistence.PlayerStorage
@@ -170,8 +176,12 @@ import org.opentibia.canary.systems.wheel.WheelPlayer
 import org.opentibia.canary.systems.wheel.WheelStat
 import org.opentibia.canary.utils.Tools
 import org.opentibia.canary.utils.WildcardTreeNode
+import java.io.File
+import java.io.IOException
 import java.lang.ref.WeakReference
+import java.util.Calendar
 import java.util.IdentityHashMap
+import java.util.Random as JavaRandom
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.random.Random
@@ -286,6 +296,36 @@ data class PlayerStats(
 data class HighscoreSkillName(
     val name: String,
     val category: Int,
+)
+
+/** `FILELOADER_ERRORS` (`src/io/io_definitions.hpp:13-22`). */
+enum class FileLoaderError(val value: Int) {
+    ERROR_NONE(0),
+    ERROR_INVALID_FILE_VERSION(1),
+    ERROR_CAN_NOT_OPEN(2),
+    ERROR_CAN_NOT_CREATE(3),
+    ERROR_EOF(4),
+    ERROR_SEEK_ERROR(5),
+    ERROR_NOT_OPEN(6),
+    ERROR_INVALID_NODE(7),
+    ERROR_INVALID_FORMAT(8),
+}
+
+/**
+ * One `boosted_creature` row read by `Game::loadBoostedCreature`
+ * (game.cpp:787-790): the SELECT column order is preserved.
+ */
+data class BoostedCreatureRecord(
+    val date: Int,
+    val boostname: String,
+    val raceid: Int,
+    val looktype: Int,
+    val lookfeet: Int,
+    val looklegs: Int,
+    val lookhead: Int,
+    val lookbody: Int,
+    val lookaddons: Int,
+    val lookmount: Int,
 )
 
 /**
@@ -518,12 +558,13 @@ class Game(
      */
     private val otsysTimeMs: () -> Long = { System.currentTimeMillis() },
     /**
-     * `Game::m_appearancesPtr` (game.hpp:881) behind [outfitSupportsMount]. The
-     * `{CORE_DIRECTORY}/items/appearances.dat` parsing already lives in
-     * `io.appearances.Appearances`; hosts load it once and inject the tables.
-     * `null` keeps the C++ "no appearances loaded" behavior (`true`).
+     * The initial `Game::m_appearancesPtr` (game.hpp:881) behind
+     * [outfitSupportsMount]. The `{CORE_DIRECTORY}/items/appearances.dat`
+     * parsing already lives in `io.appearances.Appearances`; hosts load it once
+     * and inject the tables, or leave it to [loadAppearanceProtobuf]. `null`
+     * keeps the C++ "no appearances loaded" behavior (`true`).
      */
-    private val appearances: Appearances? = null,
+    appearances: Appearances? = null,
     /**
      * `IOMarket::getInstance()` (game.cpp:10297, 4078) seam for the market
      * browse handlers and the average-price query.
@@ -1978,6 +2019,25 @@ class Game(
 
     /** `Game::BestiaryList` (game.hpp:876): race id -> lowercase bestiary name. */
     private val bestiaryList = sortedMapOf<Int, String>()
+
+    /** `Game::boostedCreature` (game.hpp:877). */
+    private var boostedCreature: String = ""
+
+    /**
+     * `Game::m_appearancesPtr` (game.hpp:881): replaced by
+     * [loadAppearanceProtobuf], seeded from the constructor table. `null` means
+     * "no appearances loaded".
+     */
+    private var appearancesPtr: Appearances? = appearances
+
+    /** `Game::registeredMagicEffects` (game.hpp:881). */
+    private val registeredMagicEffects = mutableListOf<Int>()
+
+    /** `Game::registeredDistanceEffects` (game.hpp:882). */
+    private val registeredDistanceEffects = mutableListOf<Int>()
+
+    /** `Game::registeredLookTypes` (game.hpp:883). */
+    private val registeredLookTypes = mutableListOf<Int>()
 
     /** `Game::m_summaryCategories` (game.cpp:735-742). */
     private val summaryCategories: Map<Int, String> = linkedMapOf(
@@ -13576,7 +13636,7 @@ class Game(
      * like the C++ `!m_appearancesPtr` branch.
      */
     fun outfitSupportsMount(lookType: Int): Boolean {
-        val appearances = this.appearances ?: return true
+        val appearances = this.appearancesPtr ?: return true
         return appearances.outfitSupportsMount(lookType)
     }
 
@@ -13711,6 +13771,816 @@ class Game(
         }
     }
 
+    // --- wave-50 final members (game.cpp:785-9888) ------------------------------
+
+    /**
+     * `Game::loadBoostedCreature` (src/game/game.cpp:785-860): a stored row for
+     * the current local day keeps its boosted name; otherwise a bestiary race
+     * different from the stored one is selected, resolved through
+     * `g_monsters().getMonsterType` and persisted with its outfit.
+     *
+     * PARITY GAPS: the `SELECT`/`UPDATE` statements are the
+     * [storeBoostedCreature]/[updateBoostedCreature] seams; `localtime` maps to
+     * the host default time zone; `db.escapeString` uses the injected
+     * [Database] and falls back to verbatim single quotes without one.
+     */
+    fun loadBoostedCreature() {
+        val result = storeBoostedCreature()
+        if (result == null) {
+            logger.warn { "[Game::loadBoostedCreature] - Failed to detect boosted creature database. (CODE 01)" }
+            return
+        }
+
+        val ltm = Calendar.getInstance().also { it.timeInMillis = getTimeNow() * 1000 }
+        if (result.date == ltm.get(Calendar.DAY_OF_MONTH)) {
+            setBoostedName(result.boostname)
+            return
+        }
+
+        val monsterList = getBestiaryList()
+        var selectedRaceId = 0
+        var selectedName = ""
+        if (monsterList.isNotEmpty()) {
+            val monsters = monsterList.entries.filter { it.key != result.raceid }
+            if (monsters.isNotEmpty()) {
+                val selected = monsters[normalRandom(0, monsters.size - 1)]
+                selectedRaceId = selected.key
+                selectedName = selected.value
+            }
+        }
+
+        if (selectedRaceId == 0) {
+            logger.warn { "[Game::loadBoostedCreature] - It was not possible to generate a new boosted creature->" }
+            return
+        }
+
+        val monsterType = getMonsterTypeByName(selectedName)
+        if (monsterType == null) {
+            logger.warn {
+                "[Game::loadBoostedCreature] - It was not possible to generate a new boosted creature-> " +
+                    "Monster '$selectedName' not found."
+            }
+            return
+        }
+
+        setBoostedName(selectedName)
+
+        val escapedName = database?.escapeString(selectedName) ?: "'$selectedName'"
+        val query = "UPDATE `boosted_creature` SET " +
+            "`date` = '${ltm.get(Calendar.DAY_OF_MONTH)}'," +
+            "`boostname` = $escapedName," +
+            "`looktype` = ${monsterType.info.outfit.lookType}," +
+            "`lookfeet` = ${monsterType.info.outfit.lookFeet}," +
+            "`looklegs` = ${monsterType.info.outfit.lookLegs}," +
+            "`lookhead` = ${monsterType.info.outfit.lookHead}," +
+            "`lookbody` = ${monsterType.info.outfit.lookBody}," +
+            "`lookaddons` = ${monsterType.info.outfit.lookAddons}," +
+            "`lookmount` = ${monsterType.info.outfit.lookMount}," +
+            "`raceid` = '$selectedRaceId'"
+
+        if (!updateBoostedCreature(query)) {
+            logger.warn { "[Game::loadBoostedCreature] - Failed to detect boosted creature database. (CODE 02)" }
+        }
+    }
+
+    /** `Game::setBoostedName` (src/game/game.hpp:463-467). */
+    fun setBoostedName(name: String) {
+        boostedCreature = name
+    }
+
+    /** `Game::getBoostedMonsterName` (src/game/game.hpp:469-471). */
+    fun getBoostedMonsterName(): String = boostedCreature
+
+    /**
+     * `Game::combatBlockHit` (src/game/game.cpp:7874-8070): the dodge roll,
+     * absorb/increase message flags, dealt/received buffs, mantra absorb,
+     * `Creature::blockHit`, damage reflection and charm parry, returning
+     * whether both damage components were blocked.
+     *
+     * PARITY GAPS: `target->getMonster()`/`attacker->getMonster()` map to the
+     * Kotlin `Monster` type; `attacker->getMaxHealth()` is reduced to
+     * `Creature::maxHealth` (the `Player` override adding
+     * `varStats[STAT_MAXHITPOINTS]` and the wheel health is not modelled);
+     * `Combat::doCombatHealth` and `Combat::applyMantraAbsorb` are the
+     * [combatDoCombatHealth]/[combatApplyMantraAbsorb] seams.
+     */
+    @Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
+    fun combatBlockHit(
+        damage: CombatDamage,
+        attacker: Creature?,
+        target: Creature,
+        checkDefense: Boolean,
+        checkArmor: Boolean,
+        field: Boolean,
+        condition: Boolean = false,
+    ): Boolean {
+        if (damage.primaryType == CombatType.NONE && damage.secondaryType == CombatType.NONE) {
+            return true
+        }
+
+        val targetPlayer = target as? Player
+        if (targetPlayer != null && targetPlayer.isInGhostMode()) {
+            return true
+        }
+
+        if (damage.primaryValue > 0 || damage.primaryType == CombatType.AGONYDAMAGE) {
+            return false
+        }
+
+        // Skill dodge (ruse)
+        if (targetPlayer != null) {
+            val chance = getDodgeChance(targetPlayer)
+            if ((chance > 0 && uniformRandom(0, 10000) < chance) || damage.hazardDodge) {
+                sendBlockEffect(BlockType.DODGE, damage.primaryType, target.position, attacker)
+                sendTextMessage(targetPlayer, MessageClass.MESSAGE_ATTENTION, "You dodged an attack.")
+                return true
+            }
+        }
+
+        var canHeal = false
+        val damageHeal = CombatDamage(primaryType = CombatType.HEALING)
+
+        var damageAbsorbMessage = false
+        var damageIncreaseMessage = false
+
+        var canReflect = false
+        val damageReflected = CombatDamage()
+        val damageReflectedParams = CombatParams()
+
+        var primaryBlockType = BlockType.NONE
+        var secondaryBlockType = BlockType.NONE
+
+        val targetMonster = target as? Monster
+
+        if (damage.primaryType != CombatType.NONE) {
+            damage.primaryValue = -damage.primaryValue
+
+            // Damage healing primary
+            if (attacker != null) {
+                if (targetMonster != null) {
+                    val primaryHealing = getHealingCombatValue(targetMonster, damage.primaryType)
+                    if (primaryHealing > 0) {
+                        damageHeal.primaryValue = ceil(damage.primaryValue * (primaryHealing / 100.0)).toInt()
+                        canHeal = true
+                    }
+                }
+                if (targetPlayer != null && getAbsorbPercent(attacker, damage.primaryType) != 0) {
+                    damageAbsorbMessage = true
+                }
+                if (attacker is Player && getIncreasePercent(attacker, damage.primaryType) != 0) {
+                    damageIncreaseMessage = true
+                }
+                damage.primaryValue =
+                    (damage.primaryValue * (attacker.getBuff(Buff.BUFF_DAMAGEDEALT.value) / 100.0)).toInt()
+            }
+            damage.primaryValue = (damage.primaryValue * (target.getBuff(Buff.BUFF_DAMAGERECEIVED.value) / 100.0)).toInt()
+
+            if (!condition) {
+                damage.primaryValue = combatApplyMantraAbsorb(targetPlayer, damage.primaryType, damage.primaryValue)
+                damage.primaryValue = maxOf(damage.primaryValue, 0)
+            }
+
+            val (blockedPrimaryDamage, primaryBlock) = combatTargetBlockHit(
+                attacker,
+                target,
+                damage.primaryType,
+                damage.primaryValue,
+                checkDefense,
+                checkArmor,
+                field,
+            )
+            damage.primaryValue = -blockedPrimaryDamage
+            primaryBlockType = primaryBlock
+            sendBlockEffect(primaryBlockType, damage.primaryType, target.position, attacker)
+
+            // Damage reflection primary
+            if (!damage.extension && attacker != null) {
+                val attackerMonster = attacker as? Monster
+                if (attackerMonster != null && targetPlayer != null && damage.primaryType != CombatType.HEALING) {
+                    // Charm rune (target as player)
+                    val mType = getMonsterTypeByName(attackerMonster.name)
+                    if (mType != null) {
+                        val activeCharm = getCharmFromTarget(targetPlayer, mType).major
+                        if (activeCharm == CharmRune.CHARM_PARRY) {
+                            val charm = getBestiaryCharm(activeCharm)
+                            val charmTier = getCharmTier(targetPlayer, activeCharm)
+                            if (charm != null && charm.type == CharmType.CHARM_DEFENSIVE &&
+                                charm.getChance(charmTier) >= normalRandom(1, 10000) / 100.0
+                            ) {
+                                parseCharmCombat(
+                                    charm,
+                                    targetPlayer,
+                                    attacker,
+                                    damage.primaryValue + damage.secondaryValue,
+                                )
+                            }
+                        }
+                    }
+                }
+                val primaryReflectPercent = getReflectPercent(target, damage.primaryType, true)
+                val primaryReflectFlat = getReflectFlat(target, damage.primaryType, true)
+                if (primaryReflectPercent > 0 || primaryReflectFlat > 0) {
+                    val distanceX = getDistanceX(target.position, attacker.position)
+                    val distanceY = getDistanceY(target.position, attacker.position)
+                    if (targetMonster != null || damage.primaryType != CombatType.PHYSICALDAMAGE ||
+                        primaryReflectPercent > 0 || maxOf(distanceX, distanceY) < 2
+                    ) {
+                        val reflectFlat = -primaryReflectFlat
+                        val reflectPercent = ceil(damage.primaryValue * primaryReflectPercent / 100.0).toInt()
+                        val reflectLimit = ceil(attacker.maxHealth * 0.01).toInt()
+                        damageReflected.primaryValue = maxOf(-reflectLimit, reflectFlat + reflectPercent)
+                        damageReflected.primaryType =
+                            if (targetPlayer != null) CombatType.NEUTRALDAMAGE else damage.primaryType
+                        if (damageReflected.exString.isNotEmpty()) {
+                            damageReflected.exString += ", "
+                        }
+                        damageReflected.extension = true
+                        damageReflected.exString += " (damage reflection)"
+                        damageReflectedParams.combatType = damage.primaryType
+                        damageReflectedParams.aggressive = true
+                        canReflect = true
+                    }
+                }
+            }
+        }
+
+        if (damage.secondaryType != CombatType.NONE) {
+            damage.secondaryValue = -damage.secondaryValue
+
+            // Damage healing secondary
+            if (attacker != null) {
+                if (targetMonster != null) {
+                    val secondaryHealing = getHealingCombatValue(targetMonster, damage.secondaryType)
+                    if (secondaryHealing > 0) {
+                        damageHeal.primaryValue += ceil(damage.secondaryValue * (secondaryHealing / 100.0)).toInt()
+                        canHeal = true
+                    }
+                }
+                if (targetPlayer != null && getAbsorbPercent(attacker, damage.secondaryType) != 0) {
+                    damageAbsorbMessage = true
+                }
+                if (attacker is Player && getIncreasePercent(attacker, damage.secondaryType) != 0) {
+                    damageIncreaseMessage = true
+                }
+                damage.secondaryValue =
+                    (damage.secondaryValue * (attacker.getBuff(Buff.BUFF_DAMAGEDEALT.value) / 100.0)).toInt()
+            }
+            damage.secondaryValue =
+                (damage.secondaryValue * (target.getBuff(Buff.BUFF_DAMAGERECEIVED.value) / 100.0)).toInt()
+
+            if (!condition) {
+                damage.secondaryValue =
+                    combatApplyMantraAbsorb(targetPlayer, damage.secondaryType, damage.secondaryValue)
+                damage.secondaryValue = maxOf(damage.secondaryValue, 0)
+            }
+
+            val (blockedSecondaryDamage, secondaryBlock) = combatTargetBlockHit(
+                attacker,
+                target,
+                damage.secondaryType,
+                damage.secondaryValue,
+                false,
+                false,
+                field,
+            )
+            damage.secondaryValue = -blockedSecondaryDamage
+            secondaryBlockType = secondaryBlock
+            sendBlockEffect(secondaryBlockType, damage.secondaryType, target.position, attacker)
+
+            // Damage reflection secondary
+            if (!damage.extension && attacker != null && targetMonster != null) {
+                val secondaryReflectPercent = getReflectPercent(target, damage.secondaryType, true).toInt()
+                val secondaryReflectFlat = getReflectFlat(target, damage.secondaryType, true)
+                if (secondaryReflectPercent > 0 || secondaryReflectFlat > 0) {
+                    if (!canReflect) {
+                        val reflectFlat = -secondaryReflectFlat
+                        val reflectPercent = ceil(damage.primaryValue * secondaryReflectPercent / 100.0).toInt()
+                        val reflectLimit = ceil(attacker.maxHealth * 0.01).toInt()
+                        damageReflected.primaryValue = maxOf(-reflectLimit, reflectFlat + reflectPercent)
+                        damageReflected.primaryType = damage.secondaryType
+                        if (damageReflected.exString.isNotEmpty()) {
+                            damageReflected.exString += ", "
+                        }
+                        damageReflected.extension = true
+                        damageReflected.exString += " (damage reflection)"
+                        damageReflectedParams.combatType = damage.primaryType
+                        damageReflectedParams.aggressive = true
+                        canReflect = true
+                    } else {
+                        damageReflected.secondaryType = damage.secondaryType
+                        damageReflected.primaryValue =
+                            ceil(damage.secondaryValue * secondaryReflectPercent / 100.0).toInt() +
+                            maxOf(
+                                -ceil(attacker.maxHealth * 0.01).toInt(),
+                                maxOf(damage.secondaryValue, -secondaryReflectFlat),
+                            )
+                    }
+                }
+            }
+        }
+
+        if (damage.primaryType == CombatType.HEALING) {
+            damage.primaryValue = (damage.primaryValue * (target.getBuff(Buff.BUFF_HEALINGRECEIVED.value) / 100.0)).toInt()
+        }
+
+        if (damageAbsorbMessage) {
+            if (damage.exString.isNotEmpty()) {
+                damage.exString += ", "
+            }
+            damage.exString += "active elemental resiliance"
+        }
+
+        if (damageIncreaseMessage) {
+            if (damage.exString.isNotEmpty()) {
+                damage.exString += ", "
+            }
+            damage.exString += "active elemental amplification"
+        }
+
+        if (canReflect && attacker != null) {
+            combatDoCombatHealth(target, attacker, damageReflected, damageReflectedParams)
+        }
+        if (canHeal) {
+            combatChangeHealth(null, target, damageHeal, false)
+        }
+        return primaryBlockType != BlockType.NONE && secondaryBlockType != BlockType.NONE
+    }
+
+    /**
+     * `InternalGame::sendBlockEffect` (src/game/game.cpp:413-453): the block
+     * type selects the magic effect; `BLOCK_IMMUNITY` resolves the combat type
+     * through the switch and every non-`BLOCK_NONE` block plays the no-damage
+     * sound. `COMBAT_UNDEFINEDDAMAGE` returns before the sound, exactly like
+     * the C++ `return`.
+     */
+    private fun sendBlockEffect(
+        blockType: BlockType,
+        combatType: CombatType,
+        targetPos: Position,
+        source: Creature?,
+    ) {
+        when (blockType) {
+            BlockType.DEFENSE -> addMagicEffect(targetPos, CONST_ME_POFF, source)
+            BlockType.ARMOR -> addMagicEffect(targetPos, CONST_ME_BLOCKHIT, source)
+            BlockType.DODGE -> addMagicEffect(targetPos, CONST_ME_DODGE, source)
+            BlockType.IMMUNITY -> {
+                val hitEffect = when (combatType) {
+                    CombatType.UNDEFINEDDAMAGE -> return
+                    CombatType.ENERGYDAMAGE,
+                    CombatType.FIREDAMAGE,
+                    CombatType.PHYSICALDAMAGE,
+                    CombatType.ICEDAMAGE,
+                    CombatType.DEATHDAMAGE,
+                    -> CONST_ME_BLOCKHIT
+                    CombatType.EARTHDAMAGE -> CONST_ME_GREEN_RINGS
+                    CombatType.HOLYDAMAGE -> CONST_ME_HOLYDAMAGE
+                    else -> CONST_ME_POFF
+                }
+                addMagicEffect(targetPos, hitEffect, source)
+            }
+            BlockType.NONE -> {}
+        }
+
+        if (blockType != BlockType.NONE) {
+            sendSingleSoundEffect(targetPos, SoundEffect.NO_DAMAGE, source)
+        }
+    }
+
+    /**
+     * The default `Creature::blockHit` core behind [combatTargetBlockHit]:
+     * [Combat.blockHit] (absorb/increase, immunity, defense, armor) followed by
+     * [Combat.mitigateDamage] (creature.cpp:944-1009).
+     *
+     * PARITY GAPS: the `attacker->onAttackedCreature`/
+     * `onAttackedCreatureBlockHit` callbacks, `onBlockHit`, `onTakeDamage` and
+     * `onAttacked` hooks stay with the creature-event system;
+     * `attacker->getIncreasePercent` is read through the seam.
+     */
+    private fun blockHitCore(
+        attacker: Creature?,
+        target: Creature,
+        combatType: CombatType,
+        damage: Int,
+        checkDefense: Boolean,
+        checkArmor: Boolean,
+    ): Pair<Int, BlockType> {
+        var checkDefenseNow = checkDefense
+        var checkArmorNow = checkArmor
+        if (target is Monster && disableMonsterArmor) {
+            checkDefenseNow = false
+            checkArmorNow = false
+        }
+        val immune = combatIsImmune(target, combatType)
+        val hasDefense = if (!immune && (checkDefenseNow || checkArmorNow)) combatHasDefense(target) else false
+
+        val (blockedDamage, blockType) = Combat.blockHit(
+            damage = damage,
+            random = combatRandom,
+            checkDefense = checkDefenseNow,
+            checkArmor = checkArmorNow,
+            hasDefense = hasDefense,
+            canUseDefense = combatCanUseDefense(target),
+            defense = getDefense(target),
+            armor = getArmor(target),
+            immune = immune,
+            combatType = combatType,
+            absorbPercent = getAbsorbPercent(target, combatType),
+            absorbFlat = getAbsorbFlat(target, combatType),
+            increasePercent = if (attacker != null) getIncreasePercent(attacker, combatType) else 0,
+        )
+
+        if (blockedDamage == 0) {
+            return blockedDamage to blockType
+        }
+        return Combat.mitigateDamage(combatType, blockedDamage, getMitigation(target), blockType)
+    }
+
+    /**
+     * `Game::playerCyclopediaCharacterInfo` (src/game/game.cpp:9823-9888): only
+     * the requesting character's own info is served; every other id answers the
+     * `sendCyclopediaCharacterNoData(type, 2)` refusal.
+     *
+     * PARITY GAPS: `Player::sendCyclopediaCharacter*` packets and the
+     * `PlayerCyclopedia` death/kill queries are the injected seams; the
+     * `CYCLOPEDIA_CHARACTERINFO_COMBATSTATS` case falls through the C++
+     * `default` label to the `sendCyclopediaCharacterNoData(type, 1)` refusal.
+     */
+    fun playerCyclopediaCharacterInfo(
+        player: Player,
+        characterID: Int,
+        characterInfoType: Int,
+        entriesPerPage: Int,
+        page: Int,
+    ) {
+        val playerID = player.id.toInt()
+        if (playerID != characterID) {
+            // For now allow viewing only our character since we don't have tournaments supported
+            sendCyclopediaCharacterNoData(player, characterInfoType, 2)
+            return
+        }
+
+        when (characterInfoType) {
+            CyclopediaWindowWriter.CYCLOPEDIA_CHARACTERINFO_BASEINFORMATION ->
+                sendCyclopediaCharacterBaseInformation(player)
+
+            CyclopediaWindowWriter.CYCLOPEDIA_CHARACTERINFO_GENERALSTATS ->
+                sendCyclopediaCharacterGeneralStats(player)
+
+            CyclopediaWindowWriter.CYCLOPEDIA_CHARACTERINFO_RECENTDEATHS ->
+                player.cyclopedia().loadDeathHistory(page, entriesPerPage)
+
+            CyclopediaWindowWriter.CYCLOPEDIA_CHARACTERINFO_RECENTPVPKILLS ->
+                player.cyclopedia().loadRecentKills(page, entriesPerPage)
+
+            CyclopediaWindowWriter.CYCLOPEDIA_CHARACTERINFO_ACHIEVEMENTS ->
+                sendUnlockedSecretAchievements(player)
+
+            CyclopediaWindowWriter.CYCLOPEDIA_CHARACTERINFO_ITEMSUMMARY -> {
+                val inventoryItems = getInventoryItemsId(player)
+                val storeInboxItems = getStoreInboxItemsId(player)
+                val stashItems = getStashItems(player)
+                val depotBoxItems = getDepotChestItemsId(player)
+                val inboxItems = getDepotInboxItemsId(player)
+
+                sendCyclopediaCharacterItemSummary(
+                    player,
+                    inventoryItems,
+                    storeInboxItems,
+                    stashItems,
+                    depotBoxItems,
+                    inboxItems,
+                )
+            }
+
+            CyclopediaWindowWriter.CYCLOPEDIA_CHARACTERINFO_OUTFITSMOUNTS ->
+                sendCyclopediaCharacterOutfitsMounts(player)
+
+            CyclopediaWindowWriter.CYCLOPEDIA_CHARACTERINFO_STORESUMMARY ->
+                sendCyclopediaCharacterStoreSummary(player)
+
+            CyclopediaWindowWriter.CYCLOPEDIA_CHARACTERINFO_INSPECTION ->
+                sendCyclopediaCharacterInspection(player)
+
+            CyclopediaWindowWriter.CYCLOPEDIA_CHARACTERINFO_BADGES ->
+                sendCyclopediaCharacterBadges(player)
+
+            CyclopediaWindowWriter.CYCLOPEDIA_CHARACTERINFO_TITLES ->
+                sendCyclopediaCharacterTitles(player)
+
+            CyclopediaWindowWriter.CYCLOPEDIA_CHARACTERINFO_WHEEL ->
+                playerOpenWheel(playerID.toLong(), characterID.toLong())
+
+            CyclopediaWindowWriter.CYCLOPEDIA_CHARACTERINFO_OFFENCESTATS ->
+                sendCyclopediaCharacterOffenceStats(player)
+
+            CyclopediaWindowWriter.CYCLOPEDIA_CHARACTERINFO_DEFENCESTATS ->
+                sendCyclopediaCharacterDefenceStats(player)
+
+            CyclopediaWindowWriter.CYCLOPEDIA_CHARACTERINFO_MISCSTATS ->
+                sendCyclopediaCharacterMiscStats(player)
+
+            else -> sendCyclopediaCharacterNoData(player, characterInfoType, 1)
+        }
+    }
+
+    /**
+     * `Game::loadMainMap` (src/game/game.cpp:1058-1062): the despawn config and
+     * the main-map `Map::loadMap` call over
+     * `DATA_DIRECTORY + "/world/" + filename + ".otbm"`.
+     *
+     * PARITY GAP: `g_configManager()` values and the `Map::loadMap` call are
+     * the [dataDirectory]/[mapLoadMap] seams.
+     */
+    fun loadMainMap(filename: String) {
+        setMonsterDespawnRangeAndRadius(defaultDespawnRange, defaultDespawnRadius)
+        mapLoadMap("$dataDirectory/world/$filename.otbm", true, true, true, true, true, Position(0, 0, 0))
+    }
+
+    /**
+     * `Game::loadCustomMaps` (src/game/game.cpp:1064-1109): directory creation,
+     * the `.otbm` sweep with the 50-map cap, the `#`/main-map skips and the
+     * final `Map::loadHouseInfo`.
+     *
+     * PARITY GAPS: `std::filesystem` is the
+     * [ensureCustomMapDirectory]/[listCustomMapFiles] seam pair; the log lines
+     * keep the C++ messages; `std::ios_base::failure` maps to [IOException].
+     */
+    fun loadCustomMaps(customMapPath: String) {
+        setMonsterDespawnRangeAndRadius(defaultDespawnRange, defaultDespawnRadius)
+
+        if (!ensureCustomMapDirectory(customMapPath)) {
+            throw IOException("Failed to create custom map directory $customMapPath")
+        }
+
+        var customMapIndex = 0
+        for (realPath in listCustomMapFiles(customMapPath)) {
+            // `std::filesystem::path::extension()`/`stem()`: a leading dot is
+            // part of the stem, not an extension.
+            val name = File(realPath).name
+            val dotIndex = name.lastIndexOf('.')
+            val extension = if (dotIndex > 0) name.substring(dotIndex) else ""
+            if (extension != ".otbm") {
+                continue
+            }
+
+            val filename = if (dotIndex > 0) name.substring(0, dotIndex) else name
+
+            // Do not load more maps than possible
+            if (customMapIndex >= 50) {
+                logger.warn { "Maximum number of custom maps loaded. Custom map $filename [ignored]" }
+                continue
+            }
+
+            // Filenames that start with a # are ignored.
+            if (filename.startsWith('#')) {
+                logger.info { "Custom map $filename [disabled]" }
+                continue
+            }
+
+            // Avoid loading main map again.
+            if (filename == mapName) {
+                logger.warn { "Custom map $filename is main map" }
+                continue
+            }
+
+            mapLoadMapCustom(filename, true, true, true, true, customMapIndex)
+
+            customMapIndex++
+        }
+
+        // Must be done after all maps have been loaded
+        mapLoadHouseInfo()
+    }
+
+    /** `Game::loadMap` (src/game/game.cpp:1111-1113). */
+    fun loadMap(path: String, pos: Position = Position(0, 0, 0)) {
+        mapLoadMap(path, false, false, false, false, false, pos)
+    }
+
+    /**
+     * `Game::loadAppearanceProtobuf` (src/game/game.cpp:1657-1708): parse
+     * `appearances.dat`, merge the item registry and, under
+     * `WARN_UNSAFE_SCRIPTS`, register the effect/missile/outfit ids.
+     *
+     * PARITY GAPS: `ParseFromIstream` is the [parseAppearances] seam:
+     * a `null` parse resets `m_appearancesPtr`, so the "cannot open" case
+     * shares the C++ parse-failure reset instead of preserving the previous
+     * table; `outfitMountSupportedLookTypes` is recomputed by the parsed
+     * [Appearances]; `Item::items.loadFromProtobuf` is the
+     * [loadItemsFromProtobuf] seam.
+     */
+    fun loadAppearanceProtobuf(file: String): FileLoaderError {
+        val parsed = parseAppearances(file)
+        if (parsed == null) {
+            appearancesPtr = null
+            return FileLoaderError.ERROR_NOT_OPEN
+        }
+
+        appearancesPtr = parsed
+
+        // Parsing all items into ItemType
+        loadItemsFromProtobuf(parsed)
+
+        // Only iterate other objects if necessary
+        if (warnUnsafeScripts) {
+            // Registering magic effects
+            registeredMagicEffects += parsed.effects.keys
+
+            // Registering distance effects
+            registeredDistanceEffects += parsed.missiles.keys
+
+            // Registering outfits
+            registeredLookTypes += parsed.outfits.keys
+        }
+
+        return FileLoaderError.ERROR_NONE
+    }
+
+    /** `Game::isMagicEffectRegistered` (src/game/game.hpp:657-659). */
+    fun isMagicEffectRegistered(type: Int): Boolean = type in registeredMagicEffects
+
+    /** `Game::isDistanceEffectRegistered` (src/game/game.hpp:661-665). */
+    fun isDistanceEffectRegistered(type: Int): Boolean = type in registeredDistanceEffects
+
+    /** `Game::isLookTypeRegistered` (src/game/game.hpp:667-669). */
+    fun isLookTypeRegistered(type: Int): Boolean = type in registeredLookTypes
+
+    // --- wave-50 final member seams ---------------------------------------------
+
+    /** `g_database().storeQuery("SELECT ... FROM boosted_creature")` seam (game.cpp:787). */
+    var storeBoostedCreature: () -> BoostedCreatureRecord? = { null }
+
+    /** `db.executeQuery("UPDATE boosted_creature ...")` seam (game.cpp:856). */
+    var updateBoostedCreature: (String) -> Boolean = { query -> database?.executeQuery(query) == true }
+
+    /** `Monster::despawnRange = ...; Monster::despawnRadius = ...` seam (game.cpp:1059-1060, 1065-1066). */
+    var setMonsterDespawnRangeAndRadius: (Int, Int) -> Unit = { _, _ -> }
+
+    /** `g_configManager().getString(DATA_DIRECTORY)` default "data-otservbr-global" (configmanager.cpp:395). */
+    var dataDirectory: String = "data-otservbr-global"
+
+    /** `g_configManager().getString(MAP_NAME)` default "canary" (configmanager.cpp:73). */
+    var mapName: String = "canary"
+
+    /** `g_configManager().getNumber(DEFAULT_DESPAWNRANGE)` default 2 (configmanager.cpp:248). */
+    var defaultDespawnRange: Int = 2
+
+    /** `g_configManager().getNumber(DEFAULT_DESPAWNRADIUS)` default 50 (configmanager.cpp:247). */
+    var defaultDespawnRadius: Int = 50
+
+    /** `std::filesystem::exists`/`create_directory` seam (game.cpp:1070); false means creation failed. */
+    var ensureCustomMapDirectory: (String) -> Boolean = { true }
+
+    /** `std::filesystem::directory_iterator(customMapPath)` `entry.path()` seam (game.cpp:1075). */
+    var listCustomMapFiles: (String) -> List<String> = { emptyList() }
+
+    /** `Map::loadMap(identifier, mainMap, loadHouses, loadMonsters, loadNpcs, loadZones, pos)` (src/map/map.cpp:157) seam. */
+    var mapLoadMap: (String, Boolean, Boolean, Boolean, Boolean, Boolean, Position) -> Unit =
+        { _, _, _, _, _, _, _ -> }
+
+    /** `Map::loadMapCustom(mapName, loadHouses, loadMonsters, loadNpcs, loadZones, customMapIndex)` (src/map/map.cpp:231) seam. */
+    var mapLoadMapCustom: (String, Boolean, Boolean, Boolean, Boolean, Int) -> Unit = { _, _, _, _, _, _ -> }
+
+    /** `Map::loadHouseInfo` (src/map/map.cpp:257) seam. */
+    var mapLoadHouseInfo: () -> Unit = {}
+
+    /** `g_configManager().getBoolean(WARN_UNSAFE_SCRIPTS)` default true (configmanager.cpp:169). */
+    var warnUnsafeScripts: Boolean = true
+
+    /** `m_appearancesPtr->ParseFromIstream(&fileStream)` seam (game.cpp:1672); null is the parse/open failure. */
+    var parseAppearances: (String) -> Appearances? = { file ->
+        val handle = File(file)
+        if (handle.exists()) Appearances.load(handle) else null
+    }
+
+    /** `Item::items.loadFromProtobuf()` (game.cpp:1680) seam over the injected [itemTypes]. */
+    var loadItemsFromProtobuf: (Appearances) -> Unit = { parsed -> itemTypes?.loadFromProtobuf(parsed) }
+
+    /** `uniform_random(min, max)` (src/utils/tools.hpp) seam for the dodge roll (game.cpp:7891). */
+    var uniformRandom: (Int, Int) -> Int = { minNumber, _ -> minNumber }
+
+    /** `Player::getDodgeChance()` (player.cpp:12923) seam (game.cpp:7890). */
+    var getDodgeChance: (Player) -> Int = { player -> player.getDodgeChance() }
+
+    /** `Monster::getHealingCombatValue(type)` (monster.cpp:335) seam (game.cpp:7915, 7991). */
+    var getHealingCombatValue: (Monster, CombatType) -> Int = { _, _ -> 0 }
+
+    /** `Creature::getAbsorbPercent(combat)` (creature.cpp:1979) seam (game.cpp:7921, 7996). */
+    var getAbsorbPercent: (Creature, CombatType) -> Int = { _, _ -> 0 }
+
+    /** `Creature::getAbsorbFlat(combat)` (creature.cpp:1962) seam (creature.cpp:930). */
+    var getAbsorbFlat: (Creature, CombatType) -> Int = { _, _ -> 0 }
+
+    /** `Creature::getIncreasePercent(combat)` (creature.cpp:1996) seam (game.cpp:7924, 7999). */
+    var getIncreasePercent: (Creature, CombatType) -> Int = { _, _ -> 0 }
+
+    /** `Creature::getReflectPercent(combat, useCharges)` (creature.cpp) seam (game.cpp:7957, 8017). */
+    var getReflectPercent: (Creature, CombatType, Boolean) -> Double = { _, _, _ -> 0.0 }
+
+    /** `Creature::getReflectFlat(combat, useCharges)` (creature.cpp) seam (game.cpp:7958, 8018). */
+    var getReflectFlat: (Creature, CombatType, Boolean) -> Int = { _, _, _ -> 0 }
+
+    /** `Creature::blockHit`'s `blockCount > 0` local (creature.cpp:961-964). */
+    var combatHasDefense: (Creature) -> Boolean = { false }
+
+    /** `Creature::canUseDefense` (creature.cpp:969). */
+    var combatCanUseDefense: (Creature) -> Boolean = { false }
+
+    /** `Creature::getDefense` (creature.cpp:967). */
+    var getDefense: (Creature) -> Int = { 0 }
+
+    /** `Creature::getArmor` (creature.cpp:977). */
+    var getArmor: (Creature) -> Int = { 0 }
+
+    /** `Creature::isImmune(combat)` (creature.cpp:955). */
+    var combatIsImmune: (Creature, CombatType) -> Boolean = { _, _ -> false }
+
+    /** `Creature::getMitigation` (creature.cpp:910-922). */
+    var getMitigation: (Creature) -> Double = { 0.0 }
+
+    /** `g_configManager().getBoolean(DISABLE_MONSTER_ARMOR)` boundary (creature.cpp:950). */
+    var disableMonsterArmor: Boolean = false
+
+    /**
+     * `Combat::applyMantraAbsorb(targetPlayer, type, value)` (combat.cpp:739)
+     * seam (game.cpp:7932, 8007). The default is the inert identity because
+     * `Player::getMantra` (player.cpp:671) is not modelled yet; hosts can bind
+     * the ported [Combat.applyMantraAbsorb] over their `CombatTarget` adapter.
+     */
+    var combatApplyMantraAbsorb: (Player?, CombatType, Int) -> Int = { _, _, value -> value }
+
+    /** `Combat::doCombatHealth(target, attacker, damageReflected, params)` (game.cpp:8064) seam. */
+    var combatDoCombatHealth: (Creature, Creature, CombatDamage, CombatParams) -> Unit = { _, _, _, _ -> }
+
+    /** `uniform_random` generator of `Creature::blockHit` (creature.cpp:968, 979). */
+    var combatRandom: JavaRandom = JavaRandom()
+
+    /**
+     * `target->blockHit(attacker, combatType, damage, checkDefense, checkArmor, field)`
+     * (src/creatures/creature.cpp:944-1009) seam. Returns the mutated damage
+     * and block type; the default composes the ported [Combat.blockHit] core
+     * and [Combat.mitigateDamage] over the target-state seams above.
+     */
+    var combatTargetBlockHit: (Creature?, Creature, CombatType, Int, Boolean, Boolean, Boolean) -> Pair<Int, BlockType> =
+        { attacker, target, combatType, damage, checkDefense, checkArmor, _ ->
+            blockHitCore(attacker, target, combatType, damage, checkDefense, checkArmor)
+        }
+
+    /** `Player::sendCyclopediaCharacterNoData(type, error)` protocol seam (game.cpp:9827, 9885). */
+    var sendCyclopediaCharacterNoData: (Player, Int, Int) -> Unit = { _, _, _ -> }
+
+    /** `Player::sendCyclopediaCharacterGeneralStats()` protocol seam (game.cpp:9836). */
+    var sendCyclopediaCharacterGeneralStats: (Player) -> Unit = { _ -> }
+
+    /** `Player::achiev().sendUnlockedSecretAchievements()` protocol seam (game.cpp:9845). */
+    var sendUnlockedSecretAchievements: (Player) -> Unit = { _ -> }
+
+    /** `Player::getInventoryItemsId(true)` seam (game.cpp:9848). */
+    var getInventoryItemsId: (Player) -> List<CyclopediaCharacterWriter.ItemSummaryEntry> = { emptyList() }
+
+    /** `Player::getStoreInboxItemsId()` seam (game.cpp:9849). */
+    var getStoreInboxItemsId: (Player) -> List<CyclopediaCharacterWriter.ItemSummaryEntry> = { emptyList() }
+
+    /** `Player::getStashItems()` seam (game.cpp:9850); the C++ `StashItemList` map. */
+    var getStashItems: (Player) -> Map<Int, Int> = { emptyMap() }
+
+    /** `Player::getDepotChestItemsId()` seam (game.cpp:9851). */
+    var getDepotChestItemsId: (Player) -> List<CyclopediaCharacterWriter.ItemSummaryEntry> = { emptyList() }
+
+    /** `Player::getDepotInboxItemsId()` seam (game.cpp:9852). */
+    var getDepotInboxItemsId: (Player) -> List<CyclopediaCharacterWriter.ItemSummaryEntry> = { emptyList() }
+
+    /** `Player::sendCyclopediaCharacterItemSummary(...)` protocol seam (game.cpp:9854). */
+    var sendCyclopediaCharacterItemSummary: (
+        Player,
+        List<CyclopediaCharacterWriter.ItemSummaryEntry>,
+        List<CyclopediaCharacterWriter.ItemSummaryEntry>,
+        Map<Int, Int>,
+        List<CyclopediaCharacterWriter.ItemSummaryEntry>,
+        List<CyclopediaCharacterWriter.ItemSummaryEntry>,
+    ) -> Unit = { _, _, _, _, _, _ -> }
+
+    /** `Player::sendCyclopediaCharacterOutfitsMounts()` protocol seam (game.cpp:9858). */
+    var sendCyclopediaCharacterOutfitsMounts: (Player) -> Unit = { _ -> }
+
+    /** `Player::sendCyclopediaCharacterStoreSummary()` protocol seam (game.cpp:9861). */
+    var sendCyclopediaCharacterStoreSummary: (Player) -> Unit = { _ -> }
+
+    /** `Player::sendCyclopediaCharacterInspection()` protocol seam (game.cpp:9864). */
+    var sendCyclopediaCharacterInspection: (Player) -> Unit = { _ -> }
+
+    /** `Player::sendCyclopediaCharacterBadges()` protocol seam (game.cpp:9867). */
+    var sendCyclopediaCharacterBadges: (Player) -> Unit = { _ -> }
+
+    /** `Player::sendCyclopediaCharacterOffenceStats()` protocol seam (game.cpp:9876). */
+    var sendCyclopediaCharacterOffenceStats: (Player) -> Unit = { _ -> }
+
+    /** `Player::sendCyclopediaCharacterDefenceStats()` protocol seam (game.cpp:9879). */
+    var sendCyclopediaCharacterDefenceStats: (Player) -> Unit = { _ -> }
+
+    /** `Player::sendCyclopediaCharacterMiscStats()` protocol seam (game.cpp:9882). */
+    var sendCyclopediaCharacterMiscStats: (Player) -> Unit = { _ -> }
+
     companion object {
         /** `INDEX_WHEREEVER` (src/items/cylinder.hpp:18). */
         const val INDEX_WHEREEVER = -1
@@ -13720,6 +14590,15 @@ class Game(
 
         /** `CONST_ME_POFF` (src/utils/utils_definitions.hpp:63). */
         const val CONST_ME_POFF = 3
+
+        /** `CONST_ME_BLOCKHIT` (src/utils/utils_definitions.hpp:64). */
+        const val CONST_ME_BLOCKHIT = 4
+
+        /** `CONST_ME_GREEN_RINGS` (src/utils/utils_definitions.hpp:69). */
+        const val CONST_ME_GREEN_RINGS = 9
+
+        /** `CONST_ME_HOLYDAMAGE` (src/utils/utils_definitions.hpp:100). */
+        const val CONST_ME_HOLYDAMAGE = 40
 
         /** `CONST_ME_CRITICAL_DAMAGE` (src/utils/utils_definitions.hpp:230). */
         const val CONST_ME_CRITICAL_DAMAGE = 173
