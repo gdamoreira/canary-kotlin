@@ -3,6 +3,7 @@ package org.opentibia.canary.creatures
 import org.opentibia.canary.account.Account
 import org.opentibia.canary.account.AccountType
 import org.opentibia.canary.account.getTimeNow
+import org.opentibia.canary.chat.SpeakClasses
 import org.opentibia.canary.combat.condition.Buff
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionId
@@ -19,6 +20,7 @@ import org.opentibia.canary.creatures.grouping.Party
 import org.opentibia.canary.creatures.grouping.PartyShields_t
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.players.CountBlock
+import org.opentibia.canary.creatures.players.ExivaRestrictions
 import org.opentibia.canary.creatures.players.PlayerActionTimers
 import org.opentibia.canary.creatures.players.PlayerDeathState
 import org.opentibia.canary.creatures.players.PlayerTask
@@ -63,6 +65,7 @@ import org.opentibia.canary.systems.bestiary.CharmRune
 import org.opentibia.canary.systems.forge.PlayerForgeHistory
 import org.opentibia.canary.systems.prey.PreySlot
 import org.opentibia.canary.systems.rewardchest.ReturnValue
+import org.opentibia.canary.systems.rewardchest.RewardChest
 import org.opentibia.canary.systems.taskhunting.TaskHuntingSlot
 import org.opentibia.canary.systems.taskhunting.TaskMonsterInfo
 import org.opentibia.canary.systems.wheel.PlayerWheel
@@ -135,9 +138,19 @@ abstract class Creature(
 
     private var internalRemoved = false
 
+    /**
+     * Port generation guard for deferred async work. It advances whenever the
+     * owner is removed, invalidating every batch or completion queued before
+     * (AGENTS.md deferred-callback lifetime safety). Canary models the same
+     * safety with the scheduler's `weak_ptr` + id lookup
+     * (`Creature::enqueueAsyncTask`, creature.cpp:2048-2054).
+     */
+    private var asyncTaskGeneration: Long = 0
+
     /** `Creature::setRemoved()` (src/creatures/creature.hpp:152). */
     fun setRemoved() {
         internalRemoved = true
+        asyncTaskGeneration++
     }
 
     /** `Creature::isRemoved()` (src/creatures/creature.hpp:210). */
@@ -244,6 +257,15 @@ abstract class Creature(
         // No behaviour.
     }
 
+    /**
+     * `Creature::onCreatureSay` (`creature.hpp:616`) virtual hook; the base
+     * creature has no behaviour. `Player::saySpell` fires it for every player
+     * spectator (player.cpp:11076).
+     */
+    open fun onCreatureSay(creature: Creature, type: SpeakClasses, text: String) {
+        // No behaviour.
+    }
+
     // --- movement/zone hooks (creature.cpp:303-313, 436-577, 1856-1862) -----------
 
     /** `Creature::lastStep` (creature.hpp:892). */
@@ -307,7 +329,7 @@ abstract class Creature(
 
     /** `Creature::updateCreatureWalk` (creature.hpp:412-414). */
     open fun updateCreatureWalk() {
-        goToFollowCreature()
+        goToFollowCreature_async()
     }
 
     /**
@@ -435,6 +457,14 @@ abstract class Creature(
      */
     var scheduleAsyncTaskBatch: (() -> Unit) -> Unit = { task -> task() }
 
+    /**
+     * `g_dispatcher().addEvent` admission seam used by
+     * `Creature::goToFollowCreature_async` for its `onComplete` barrier
+     * (`creature.cpp:1052`). The default mirrors [scheduleAsyncTaskBatch] and
+     * runs the callback inline; a host can inject the dispatcher hop.
+     */
+    var scheduleAsyncCallback: (() -> Unit) -> Unit = { task -> task() }
+
     /** `Creature::addAsyncTask` (creature.hpp:984-989). */
     fun addAsyncTask(fnc: () -> Unit) {
         asyncTasks.add(fnc)
@@ -473,8 +503,8 @@ abstract class Creature(
 
     /**
      * `Creature::executeAsyncTasks` (`creature.cpp:2148-2184`). The
-     * `goToFollowCreature()` call of the `Pathfinder` branch
-     * (`creature.cpp:2162-2164`) belongs to the follow subsystem (PARITY GAP).
+     * `Pathfinder` flag reruns the follow path recompute
+     * (`creature.cpp:2162-2164`).
      */
     fun executeAsyncTasks() {
         val currentTasks = asyncTasks.toList()
@@ -490,8 +520,9 @@ abstract class Creature(
             }
 
             flagAsyncTask = FlagAsyncClass_t.AsyncTaskRunning.value or currentFlags
-            // `if ((currentFlags & Pathfinder) != 0) goToFollowCreature()`
-            // (`creature.cpp:2162-2164`) — follow subsystem (PARITY GAP).
+            if ((currentFlags and FlagAsyncClass_t.Pathfinder.value) != 0) {
+                goToFollowCreature()
+            }
             onExecuteAsyncTasks()
         }
 
@@ -508,6 +539,35 @@ abstract class Creature(
         }
     }
 
+    /**
+     * `Creature::goToFollowCreature_async` (`creature.cpp:1046-1056`).
+     *
+     * A dead creature ignores the request. The `onComplete` barrier is queued
+     * only while no `Pathfinder` task is already pending, then the flag is set
+     * so the next [executeAsyncTasks] reruns [goToFollowCreature].
+     *
+     * The queued barrier validates the generation captured at scheduling time,
+     * so a callback queued before removal/replacement of the owner becomes a
+     * no-op (AGENTS.md deferred-callback lifetime safety).
+     */
+    fun goToFollowCreature_async(onComplete: (() -> Unit)? = null) {
+        if (isDead) {
+            return
+        }
+
+        if (!hasAsyncTaskFlag(FlagAsyncClass_t.Pathfinder) && onComplete != null) {
+            val scheduledGeneration = asyncTaskGeneration
+            scheduleAsyncCallback {
+                if (scheduledGeneration != asyncTaskGeneration || isRemoved()) {
+                    return@scheduleAsyncCallback
+                }
+                onComplete()
+            }
+        }
+
+        setAsyncTaskFlag(FlagAsyncClass_t.Pathfinder, true)
+    }
+
     /** `Creature::sendAsyncTasks` (`creature.cpp:2186-2193`). */
     fun sendAsyncTasks() {
         if (hasAsyncTaskFlag(FlagAsyncClass_t.AsyncTaskRunning)) {
@@ -515,7 +575,27 @@ abstract class Creature(
         }
 
         flagAsyncTask = flagAsyncTask or FlagAsyncClass_t.AsyncTaskRunning.value
-        scheduleAsyncTaskBatch { executeAsyncTasks() }
+        val scheduledGeneration = asyncTaskGeneration
+        scheduleAsyncTaskBatch {
+            if (scheduledGeneration != asyncTaskGeneration) {
+                dropStaleAsyncTaskBatch()
+                return@scheduleAsyncTaskBatch
+            }
+            executeAsyncTasks()
+        }
+    }
+
+    /**
+     * Drops a batch scheduled before its owner was removed. The queued work can
+     * no longer reach the world, but the `AsyncTaskRunning` latch must be
+     * cleared so a later replacement of the owner object starts clean.
+     */
+    private fun dropStaleAsyncTaskBatch() {
+        asyncTasks.clear()
+        deferredAsyncTaskFlags = 0
+        if (flagAsyncTask == FlagAsyncClass_t.AsyncTaskRunning.value) {
+            flagAsyncTask = 0
+        }
     }
 
     /**
@@ -706,7 +786,7 @@ abstract class Creature(
         varBuffs[buff.value] = 100
     }
 
-    // --- loot/skill-loss flags (creature.hpp:641-646, 932) ------------------------
+    // --- loot/skill-loss flags (creature.hpp:641-646, 932-933) --------------------
 
     /**
      * `Creature::skillLoss` (creature.hpp:932, protected), default true. The
@@ -719,6 +799,14 @@ abstract class Creature(
     /** `Creature::setSkillLoss` (creature.hpp:644-646). */
     fun setSkillLoss(newSkillLoss: Boolean) {
         skillLoss = newSkillLoss
+    }
+
+    /** `Creature::lootDrop` (creature.hpp:933), default true. */
+    var lootDrop: Boolean = true
+
+    /** `Creature::setDropLoot` (creature.hpp:641-643). */
+    fun setDropLoot(newLootDrop: Boolean) {
+        lootDrop = newLootDrop
     }
 
     /**
@@ -1354,6 +1442,17 @@ class Monster(
     /** `MonsterBehavior::hasExtraSwing` state projection (monster.cpp:2091-2093). */
     var hasExtraSwingProvider: () -> Boolean = { false }
 
+    /** `Monster::soulPit` (monster.hpp:466). */
+    private var soulPit: Boolean = false
+
+    /** `Monster::getSoulPit` (monster.cpp:3193-3195). */
+    fun getSoulPit(): Boolean = soulPit
+
+    /** `Monster::setSoulPit` (monster.cpp:3197-3199). */
+    fun setSoulPit(value: Boolean) {
+        soulPit = value
+    }
+
     /** `Monster::onCreatureAppear` tail (monster.cpp:348-389). */
     override fun onCreatureAppear(creature: Creature, isLogin: Boolean) {
         super.onCreatureAppear(creature, isLogin)
@@ -1669,6 +1768,13 @@ class Player(
     fun setGuildRank(newGuildRank: GuildRank?) {
         mGuildRank = newGuildRank
     }
+
+    /** `Player::exivaRestrictions` (player.hpp:1862). */
+    @get:JvmName("getExivaRestrictionsValue")
+    val exivaRestrictions: ExivaRestrictions = ExivaRestrictions()
+
+    /** `Player::getExivaRestrictions()` (player.cpp:13440-13446). */
+    fun getExivaRestrictions(): ExivaRestrictions = exivaRestrictions
 
     /**
      * `Player::isMuted()` (player.cpp:3494-3506): the longest remaining
@@ -2034,8 +2140,40 @@ class Player(
     /** `Player::stashMenu` (player.hpp:1829); `Player::isStashMenuAvailable` reads it. */
     var stashMenu: Boolean = false
 
+    /** `Player::marketMenu` (player.hpp:1828). */
+    var marketMenu: Boolean = false
+
     /** `Player::isStashMenuAvailable` (player.hpp:533-535). */
     fun isStashMenuAvailable(): Boolean = stashMenu
+
+    /** `Player::client->sendCloseDepotSearch()` (player.cpp:6820) protocol seam. */
+    var sendCloseDepotSearch: () -> Unit = {}
+
+    /** `Player::client->sendSpecialContainersAvailable()` (player.cpp:6831) protocol seam. */
+    var sendSpecialContainersAvailable: () -> Unit = {}
+
+    /**
+     * `Player::setSpecialMenuAvailable` (player.cpp:6815-6833): disabling depot
+     * search closes an open search window, then the three menu gates are
+     * stored and the client is told the new availability.
+     */
+    fun setSpecialMenuAvailable(stashBool: Boolean, marketMenuBool: Boolean, depotSearchBool: Boolean) {
+        if (isDepotSearchOpen() && !depotSearchBool && depotSearch) {
+            setDepotSearchIsOpen(0, 0)
+            sendCloseDepotSearch()
+        }
+
+        stashMenu = stashBool
+        marketMenu = marketMenuBool
+        depotSearch = depotSearchBool
+        sendSpecialContainersAvailable()
+    }
+
+    /**
+     * `Player::getRewardChest()` (player.cpp:2058-2063): lazily built and owned
+     * by [features].
+     */
+    fun getRewardChest(): RewardChest = features.rewardChest
 
     /**
      * `Player::stashItems` supply stash (player.hpp:1826). Canary stores the
@@ -3075,6 +3213,7 @@ class Player(
             return ReturnValue.NOTENOUGHCAPACITY
         }
         inventory[target.value] = item
+        updateInventoryWeight()
         sendInventoryItem(target, item)
         return ReturnValue.NOERROR
     }
@@ -3090,6 +3229,7 @@ class Player(
         if (item.count <= 0) {
             inventory[slot] = null
         }
+        updateInventoryWeight()
         sendInventoryItem(Slots_t.fromValue(slot) ?: return ReturnValue.NOTPOSSIBLE, if (item.count <= 0) null else item)
         return ReturnValue.NOERROR
     }
@@ -3118,7 +3258,7 @@ class Player(
     }
 
     /** `Player::getFreeCapacity` (player.cpp:5468-5476). */
-    fun getFreeCapacity(): Double = max(0.0, capacity - inventoryWeight())
+    fun getFreeCapacity(): Double = max(0.0, capacity - inventoryWeight)
 
     /** `Player::getSkillLevel` (player.cpp:7468). */
     fun getSkillLevel(skill: skills_t): Int {
@@ -3230,8 +3370,25 @@ class Player(
     private fun firstFreeSlot(): Slots_t? =
         Slots_t.entries.firstOrNull { it.value in Slots_t.FIRST..Slots_t.LAST && inventory[it.value] == null }
 
-    private fun inventoryWeight(): Double =
-        (Slots_t.FIRST..Slots_t.LAST).sumOf { slot -> inventory[slot]?.let { itemWeight(it) } ?: 0.0 }
+    /** `Player::inventoryWeight` (player.hpp:1798), summed by [updateInventoryWeight]. */
+    private var inventoryWeight: Double = 0.0
+
+    /**
+     * `Player::updateInventoryWeight` (player.cpp:1072-1084). An
+     * infinite-capacity player keeps the previous value, exactly like the C++
+     * early return.
+     */
+    fun updateInventoryWeight() {
+        if (hasFlag(PlayerFlags_t.HasInfiniteCapacity)) {
+            return
+        }
+
+        inventoryWeight = 0.0
+        for (slot in Slots_t.FIRST..Slots_t.LAST) {
+            val item = inventory[slot] ?: continue
+            inventoryWeight += itemWeight(item)
+        }
+    }
 
     private fun itemWeight(item: Item): Double = item.weight
 

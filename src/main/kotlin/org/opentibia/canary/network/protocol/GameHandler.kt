@@ -120,11 +120,10 @@ class GameHandler(
         game.startAutoWalk = { player, listDir, ignoreConditions ->
             player.startAutoWalk(listDir, ignoreConditions)
         }
-        // `Creature::updateCreatureWalk` (creature.hpp:412) awaits
-        // `goToFollowCreature_async()`; the async follow pipeline is not ported,
-        // so the synchronous `Player::goToFollowCreature` (player.cpp:6161) is
-        // the nearest reachable host method (PARITY GAP).
-        game.updateCreatureWalk = { player -> player.goToFollowCreature() }
+        // `Creature::updateCreatureWalk` (creature.hpp:412) awaits the async
+        // `goToFollowCreature_async()` barrier; the bound host call runs the
+        // full Pathfinder-batch pipeline (creature.cpp:1046-1056, 2148-2184).
+        game.updateCreatureWalk = { player -> player.updateCreatureWalk() }
 
         val engine = composedImbuementEngine
         if (engine != null) {
