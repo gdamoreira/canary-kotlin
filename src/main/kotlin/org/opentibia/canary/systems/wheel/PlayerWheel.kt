@@ -1,19 +1,59 @@
 package org.opentibia.canary.systems.wheel
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import org.opentibia.canary.combat.CombatType
+import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.config.FeatureFlags
 import org.opentibia.canary.creatures.Creature
+import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.game.zones.ZoneType
+import org.opentibia.canary.items.Ammo_t
+import org.opentibia.canary.items.SLOTP_TWO_HAND
+import org.opentibia.canary.map.Position
+import org.opentibia.canary.map.SpectatorMapAccess
+import org.opentibia.canary.map.SpectatorSector
+import org.opentibia.canary.map.Spectators
+import org.opentibia.canary.spells.Spells
 
 private val logger = KotlinLogging.logger {}
+
+/** `ITEM_DIVINE_EMPOWERMENT` (src/utils/utils_definitions.hpp:703). */
+private const val ITEM_DIVINE_EMPOWERMENT = 40450
+
+/** `struct PromotionScroll` (player_wheel.hpp:71-75). */
+data class PromotionScroll(
+    val itemId: Int,
+    val name: String,
+    val extraPoints: Int,
+)
+
+/**
+ * `WheelOfDestinyPromotionScrolls` (player_wheel.cpp:365-371): the five
+ * promotion scrolls `PlayerWheel::unlockScroll` can grant.
+ */
+private val WHEEL_OF_DESTINY_PROMOTION_SCROLLS = listOf(
+    PromotionScroll(43946, "abridged", 3),
+    PromotionScroll(43947, "basic", 5),
+    PromotionScroll(43948, "revised", 9),
+    PromotionScroll(43949, "extended", 13),
+    PromotionScroll(43950, "advanced", 20),
+)
+
+/** Inert map access for the default empty nearby-monster snapshot. */
+private object NullSpectatorMapAccess : SpectatorMapAccess {
+    override fun getMapSector(x: Int, y: Int): SpectatorSector? = null
+}
 
 /**
  * Mirror of the deterministic point-budget surface of Canary's `PlayerWheel`
  * (src/creatures/players/components/wheel/player_wheel.cpp), plus the minimal
- * gem-state mutations consumed by [WheelApplication]. The full component also
- * owns stages, persistence, the player item/gold economy and protocol
- * serialization; those are not ported here. Remaining gaps are noted in
- * docs/Plan/050-wheel-of-destiny-engine.md.
+ * gem-state mutations consumed by [WheelApplication], the spell-upgrade ledger
+ * ([getSpellUpgrade]/[upgradeSpell]/[downgradeSpell]/[resetUpgradedSpells]),
+ * the revelation additional area/target/duration queries, the promotion-scroll
+ * ledger ([unlockScroll]) and the [onThink] instant checks. Persistence, the
+ * player item/gold economy and protocol serialization are not ported here.
+ * Remaining gaps are noted in docs/Done/050-wheel-of-destiny-engine.md.
  */
 class PlayerWheel(
     val vocationCipId: Int,
@@ -39,6 +79,24 @@ class PlayerWheel(
     private val player: Player? = null,
     /** `OTSYS_TIME()` (src/utils/tools.hpp) seam for the gift on-think timer. */
     private val otsysTimeMs: () -> Long = System::currentTimeMillis,
+    /**
+     * `g_spells()` `isMonkShrineSpell` check of `upgradeSpell`
+     * (player_wheel.cpp:3476). The registry is injected per AGENTS.md 1.1;
+     * `isMonkShrineSpell` is a pure name check (spells.cpp:224-227), so the
+     * default empty registry answers exactly like the process-wide one.
+     */
+    private val spells: Spells = Spells(),
+    /**
+     * `Spectators().find<Monster>(m_player.getPosition(), false, 1, 1, 1, 1, false)`
+     * of `checkBattleInstinct`/`checkPositionalTactics` (player_wheel.cpp:2945,
+     * 2969): `g_game().map` is injected here per AGENTS.md 1.1 as in
+     * `Player::saySpell`; the default local snapshot is empty.
+     */
+    private val findNearbyMonsters: (Position) -> Spectators = { position ->
+        Spectators(NullSpectatorMapAccess).find<Monster>(position, false, 1, 1, 1, 1, false)
+    },
+    /** `g_game().reloadCreature(m_player.getPlayer())` (player_wheel.cpp:3391). */
+    private val reloadCreature: (Creature) -> Unit = {},
 ) {
     fun getPointsBySlotType(slot: WheelSlots): Int = pointsBySlot[slot] ?: 0
 
@@ -372,6 +430,548 @@ class PlayerWheel(
         }
         setOnThinkTimer(WheelOnThink.GIFT_OF_LIFE, otsysTimeMs() + value * 1000L)
         setGiftOfCooldown(cooldown, true)
+    }
+
+    // --- spell upgrades and revelation scrolls (player_wheel.hpp:516-521) --------
+
+    /** `PlayerWheel::m_spellsSelected` (player_wheel.hpp:516). */
+    private val spellsSelected = mutableMapOf<String, WheelSpellGrade>()
+
+    /** `PlayerWheel::m_learnedSpellsSelected` (player_wheel.hpp:517). */
+    private val learnedSpellsSelected = mutableListOf<String>()
+
+    /**
+     * `PlayerWheel::m_beamMasterySpells` (player_wheel.hpp:519): the beam-mastery
+     * path is not ported, so this set is only cleared by
+     * [resetUpgradedSpells] like the C++ (PARITY GAP).
+     */
+    private val beamMasterySpells = mutableSetOf<String>()
+
+    /** `PlayerWheel::m_unlockedScrolls` (player_wheel.hpp:521). */
+    private val unlockedScrolls = mutableListOf<PromotionScroll>()
+
+    /** `PlayerWheel::getSpellUpgrade` (player_wheel.cpp:3863). */
+    fun getSpellUpgrade(name: String): WheelSpellGrade = spellsSelected[name] ?: WheelSpellGrade.NONE
+
+    /**
+     * `PlayerWheel::upgradeSpell` (player_wheel.cpp:3475): the spell is learned
+     * when the player does not know it and it is not a monk shrine spell, then
+     * the selected grade steps `NONE -> REGULAR -> UPGRADED -> MAX` and stays at
+     * `MAX`.
+     */
+    fun upgradeSpell(name: String) {
+        if (player?.hasLearnedInstantSpell(name) != true && !spells.isMonkShrineSpell(name)) {
+            learnedSpellsSelected.add(name)
+            player?.learnInstantSpell(name)
+        }
+        when (spellsSelected[name]) {
+            null, WheelSpellGrade.NONE -> spellsSelected[name] = WheelSpellGrade.REGULAR
+            WheelSpellGrade.REGULAR -> spellsSelected[name] = WheelSpellGrade.UPGRADED
+            WheelSpellGrade.UPGRADED -> spellsSelected[name] = WheelSpellGrade.MAX
+            WheelSpellGrade.MAX -> Unit
+        }
+    }
+
+    /**
+     * `PlayerWheel::downgradeSpell` (player_wheel.cpp:3489): `REGULAR` (and
+     * `NONE`) erase the selection; the learned spell is not forgotten.
+     */
+    fun downgradeSpell(name: String) {
+        when (spellsSelected[name]) {
+            null, WheelSpellGrade.NONE, WheelSpellGrade.REGULAR -> spellsSelected.remove(name)
+            WheelSpellGrade.UPGRADED -> spellsSelected[name] = WheelSpellGrade.REGULAR
+            WheelSpellGrade.MAX -> spellsSelected[name] = WheelSpellGrade.UPGRADED
+        }
+    }
+
+    /**
+     * `PlayerWheel::resetUpgradedSpells` (player_wheel.cpp:3456): every wheel
+     * learned spell is forgotten, the selection/learned/beam sets are cleared,
+     * and all major stats, stages and the focus-mastery timer reset to zero.
+     */
+    fun resetUpgradedSpells() {
+        for (spell in learnedSpellsSelected) {
+            val target = player
+            if (target != null && target.hasLearnedInstantSpell(spell)) {
+                target.forgetInstantSpell(spell)
+            }
+        }
+        creaturesNearby = 0
+        spellsSelected.clear()
+        learnedSpellsSelected.clear()
+        beamMasterySpells.clear()
+        for (major in WheelMajor.entries) {
+            setMajorStat(major, 0)
+        }
+        for (stage in WheelStage.entries) {
+            setStage(stage, 0)
+        }
+        setOnThinkTimer(WheelOnThink.FOCUS_MASTERY, 0)
+    }
+
+    /**
+     * `PlayerWheel::scrollAcquired` (player_wheel.cpp:1801): whether the
+     * promotion scroll was already unlocked.
+     */
+    fun scrollAcquired(scrollName: String): Boolean = unlockedScrolls.any { it.name == scrollName }
+
+    /**
+     * `PlayerWheel::unlockScroll` (player_wheel.cpp:1809): an already acquired
+     * scroll is refused, a known `WheelOfDestinyPromotionScrolls` name is
+     * appended and accepted, anything else is refused.
+     */
+    fun unlockScroll(scrollName: String): Boolean {
+        if (scrollAcquired(scrollName)) {
+            return false
+        }
+        val scroll = WHEEL_OF_DESTINY_PROMOTION_SCROLLS.firstOrNull { it.name == scrollName } ?: return false
+        unlockedScrolls.add(scroll)
+        return true
+    }
+
+    // --- revelation spell queries (player_wheel.cpp:918-991) ---------------------
+
+    /**
+     * `PlayerWheel::getSpellAdditionalArea` (player_wheel.cpp:918): the selected
+     * grade is scanned from its stage down to 1 for an `increase.area` entry of
+     * the vocation table. A `MAX` stage (3) never matches because the table
+     * holds only three grade rows (indices 0..2), exactly like the C++.
+     */
+    fun getSpellAdditionalArea(spellName: String): Boolean {
+        val stage = getSpellUpgrade(spellName).value
+        if (stage == 0) {
+            return false
+        }
+        return when (vocationCipId) {
+            IOWheel.VOCATION_KNIGHT_CIP -> checkSpellArea(WheelSpellTables.knight, spellName, stage)
+            IOWheel.VOCATION_PALADIN_CIP -> checkSpellArea(WheelSpellTables.paladin, spellName, stage)
+            IOWheel.VOCATION_DRUID_CIP -> checkSpellArea(WheelSpellTables.druid, spellName, stage)
+            IOWheel.VOCATION_SORCERER_CIP -> checkSpellArea(WheelSpellTables.sorcerer, spellName, stage)
+            IOWheel.VOCATION_MONK_CIP -> checkSpellArea(WheelSpellTables.monk, spellName, stage)
+            else -> false
+        }
+    }
+
+    /**
+     * `PlayerWheel::getSpellAdditionalTarget` (player_wheel.cpp:944): the first
+     * non-zero `increase.additionalTarget` from the selected grade downwards.
+     */
+    fun getSpellAdditionalTarget(spellName: String): Int {
+        val stage = getSpellUpgrade(spellName).value
+        if (stage == 0) {
+            return 0
+        }
+        return when (vocationCipId) {
+            IOWheel.VOCATION_KNIGHT_CIP -> checkSpellAdditionalTarget(WheelSpellTables.knight, spellName, stage)
+            IOWheel.VOCATION_PALADIN_CIP -> checkSpellAdditionalTarget(WheelSpellTables.paladin, spellName, stage)
+            IOWheel.VOCATION_DRUID_CIP -> checkSpellAdditionalTarget(WheelSpellTables.druid, spellName, stage)
+            IOWheel.VOCATION_SORCERER_CIP -> checkSpellAdditionalTarget(WheelSpellTables.sorcerer, spellName, stage)
+            IOWheel.VOCATION_MONK_CIP -> checkSpellAdditionalTarget(WheelSpellTables.monk, spellName, stage)
+            else -> 0
+        }
+    }
+
+    /**
+     * `PlayerWheel::getSpellAdditionalDuration` (player_wheel.cpp:970): the
+     * first positive `increase.duration` from the selected grade downwards.
+     * Canary has no monk branch here (player_wheel.cpp:976-990), so monk
+     * spells always answer `0`.
+     */
+    fun getSpellAdditionalDuration(spellName: String): Int {
+        val stage = getSpellUpgrade(spellName).value
+        if (stage == 0) {
+            return 0
+        }
+        return when (vocationCipId) {
+            IOWheel.VOCATION_KNIGHT_CIP -> checkSpellAdditionalDuration(WheelSpellTables.knight, spellName, stage)
+            IOWheel.VOCATION_PALADIN_CIP -> checkSpellAdditionalDuration(WheelSpellTables.paladin, spellName, stage)
+            IOWheel.VOCATION_DRUID_CIP -> checkSpellAdditionalDuration(WheelSpellTables.druid, spellName, stage)
+            IOWheel.VOCATION_SORCERER_CIP -> checkSpellAdditionalDuration(WheelSpellTables.sorcerer, spellName, stage)
+            else -> 0
+        }
+    }
+
+    /** `checkSpellArea` (player_wheel.cpp:304-323). */
+    private fun checkSpellArea(spellsTable: List<WheelSpellData>, spellName: String, stage: Int): Boolean {
+        for (spellTable in spellsTable) {
+            val size = spellTable.grade.size
+            logger.debug { "spell area stage $stage, grade $size" }
+            if (spellTable.name != spellName || stage >= size) {
+                continue
+            }
+            for (grade in stage downTo 1) {
+                if (spellTable.grade[grade].increase.area) {
+                    logger.debug { "[checkSpellArea] spell with name $spellName, stage $stage, and grade $grade has increase area" }
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /** `checkSpellAdditionalTarget` (player_wheel.cpp:325-343). */
+    private fun checkSpellAdditionalTarget(spellsTable: List<WheelSpellData>, spellName: String, stage: Int): Int {
+        for (spellTable in spellsTable) {
+            val size = spellTable.grade.size
+            logger.debug { "spell target stage $stage, grade $size" }
+            if (spellTable.name != spellName || stage >= size) {
+                continue
+            }
+            for (grade in stage downTo 1) {
+                val additionalTarget = spellTable.grade[grade].increase.additionalTarget
+                if (additionalTarget != 0) {
+                    return additionalTarget
+                }
+            }
+        }
+        return 0
+    }
+
+    /** `checkSpellAdditionalDuration` (player_wheel.cpp:345-363). */
+    private fun checkSpellAdditionalDuration(spellsTable: List<WheelSpellData>, spellName: String, stage: Int): Int {
+        for (spellTable in spellsTable) {
+            val size = spellTable.grade.size
+            logger.debug { "spell duration stage $stage, grade $size" }
+            if (spellTable.name != spellName || stage >= size) {
+                continue
+            }
+            for (grade in stage downTo 1) {
+                val duration = spellTable.grade[grade].increase.duration
+                if (duration > 0) {
+                    return duration
+                }
+            }
+        }
+        return 0
+    }
+
+    // --- onThink and its instant checks (player_wheel.cpp:2941-3421) -------------
+
+    /** `PlayerWheel::m_creaturesNearby` (player_wheel.hpp:515). */
+    private var creaturesNearby = 0
+
+    /** `PlayerWheel::m_specializedMagic` (player_wheel.hpp:513), indexed by the combat enum value. */
+    private val specializedMagic = IntArray(CombatType.COUNT.value)
+
+    /** `PlayerWheel::getSpecializedMagic` (player_wheel.cpp:3833). */
+    fun getSpecializedMagic(type: CombatType): Int {
+        if (type.value >= specializedMagic.size) {
+            logger.error { "[PlayerWheel::getSpecializedMagic] Instant type ${type.value}. Error message: out of range" }
+            return 0
+        }
+        return specializedMagic[type.value]
+    }
+
+    /** `PlayerWheel::setSpecializedMagic` (player_wheel.cpp:3573). */
+    fun setSpecializedMagic(type: CombatType, value: Int) {
+        if (type.value >= specializedMagic.size) {
+            logger.error { "[PlayerWheel::setSpecializedMagic] Type ${type.value} is out of range, value $value. Error message: out of range" }
+            return
+        }
+        specializedMagic[type.value] = value
+    }
+
+    /**
+     * `Spectators().find<Monster>(...).excludePlayerMaster().size()` of
+     * `checkBattleInstinct`/`checkPositionalTactics` (player_wheel.cpp:2945,
+     * 2969); an unwired player has no position and sees no monsters.
+     */
+    private fun nearbyMonsterCount(): Int {
+        val position = player?.position ?: return 0
+        return findNearbyMonsters(position).excludePlayerMaster().size()
+    }
+
+    /**
+     * `PlayerWheel::checkBattleInstinct` (player_wheel.cpp:2941): five or more
+     * nearby monsters grant melee `1 * (count - 4)` and shield
+     * `6 * (count - 4)`; below five both major stats clear.
+     */
+    fun checkBattleInstinct(): Boolean {
+        setOnThinkTimer(WheelOnThink.BATTLE_INSTINCT, otsysTimeMs() + 2000)
+        var updateClient = false
+        creaturesNearby = 0
+        var monsters = nearbyMonsterCount()
+        if (monsters >= 5) {
+            creaturesNearby = monsters
+            monsters -= 4
+            val meleeSkill = 1 * monsters
+            val shieldSkill = 6 * monsters
+            if (getMajorStat(WheelMajor.MELEE) != meleeSkill || getMajorStat(WheelMajor.SHIELD) != shieldSkill) {
+                setMajorStat(WheelMajor.MELEE, meleeSkill)
+                setMajorStat(WheelMajor.SHIELD, shieldSkill)
+                updateClient = true
+            }
+        } else if (getMajorStat(WheelMajor.MELEE) != 0 || getMajorStat(WheelMajor.SHIELD) != 0) {
+            setMajorStat(WheelMajor.MELEE, 0)
+            setMajorStat(WheelMajor.SHIELD, 0)
+            updateClient = true
+        }
+        return updateClient
+    }
+
+    /**
+     * `PlayerWheel::checkPositionalTactics` (player_wheel.cpp:2965): no nearby
+     * monster grants distance 3 and clears the holy/healing specialized magic;
+     * otherwise distance clears and both specialized magics become 3.
+     */
+    fun checkPositionalTactics(): Boolean {
+        setOnThinkTimer(WheelOnThink.POSITIONAL_TACTICS, otsysTimeMs() + 2000)
+        creaturesNearby = 0
+        var updateClient = false
+        val monsters = nearbyMonsterCount()
+        val holyMagicSkill = 3
+        val healingMagicSkill = 3
+        val distanceSkill = 3
+        if (monsters == 0) {
+            creaturesNearby = monsters
+            if (getMajorStat(WheelMajor.DISTANCE) != distanceSkill) {
+                setMajorStat(WheelMajor.DISTANCE, distanceSkill)
+                updateClient = true
+            }
+            if (getSpecializedMagic(CombatType.HOLYDAMAGE) != 0) {
+                setSpecializedMagic(CombatType.HOLYDAMAGE, 0)
+                updateClient = true
+            }
+            if (getSpecializedMagic(CombatType.HEALING) != 0) {
+                setSpecializedMagic(CombatType.HEALING, 0)
+                updateClient = true
+            }
+        } else {
+            if (getMajorStat(WheelMajor.DISTANCE) != 0) {
+                setMajorStat(WheelMajor.DISTANCE, 0)
+                updateClient = true
+            }
+            if (getSpecializedMagic(CombatType.HOLYDAMAGE) != holyMagicSkill) {
+                setSpecializedMagic(CombatType.HOLYDAMAGE, holyMagicSkill)
+                updateClient = true
+            }
+            if (getSpecializedMagic(CombatType.HEALING) != healingMagicSkill) {
+                setSpecializedMagic(CombatType.HEALING, healingMagicSkill)
+                updateClient = true
+            }
+        }
+        return updateClient
+    }
+
+    /**
+     * `PlayerWheel::checkBallisticMastery` (player_wheel.cpp:3005): a bolt
+     * weapon grants 1000 critical damage; an arrow weapon grants 2% physical
+     * and 2% holy damage; anything else clears all three.
+     */
+    fun checkBallisticMastery(): Boolean {
+        setOnThinkTimer(WheelOnThink.BALLISTIC_MASTERY, otsysTimeMs() + 2000)
+        var updateClient = false
+        val newCritical = 1000
+        val newHolyBonus = 2
+        val newPhysicalBonus = 2
+        val item = player?.getWeapon()
+        if (item != null && item.getAmmoType() == Ammo_t.AMMO_BOLT) {
+            if (getMajorStat(WheelMajor.CRITICAL_DMG) != newCritical) {
+                setMajorStat(WheelMajor.CRITICAL_DMG, newCritical)
+                updateClient = true
+            }
+            if (getMajorStat(WheelMajor.PHYSICAL_DMG) != 0 || getMajorStat(WheelMajor.HOLY_DMG) != 0) {
+                setMajorStat(WheelMajor.PHYSICAL_DMG, 0)
+                setMajorStat(WheelMajor.HOLY_DMG, 0)
+                updateClient = true
+            }
+        } else if (item != null && item.getAmmoType() == Ammo_t.AMMO_ARROW) {
+            if (getMajorStat(WheelMajor.CRITICAL_DMG) != 0) {
+                setMajorStat(WheelMajor.CRITICAL_DMG, 0)
+                updateClient = true
+            }
+            if (getMajorStat(WheelMajor.PHYSICAL_DMG) != newPhysicalBonus || getMajorStat(WheelMajor.HOLY_DMG) != newHolyBonus) {
+                setMajorStat(WheelMajor.PHYSICAL_DMG, newPhysicalBonus)
+                setMajorStat(WheelMajor.HOLY_DMG, newHolyBonus)
+                updateClient = true
+            }
+        } else {
+            if (getMajorStat(WheelMajor.CRITICAL_DMG) != 0) {
+                setMajorStat(WheelMajor.CRITICAL_DMG, 0)
+                updateClient = true
+            }
+            if (getMajorStat(WheelMajor.PHYSICAL_DMG) != 0 || getMajorStat(WheelMajor.HOLY_DMG) != 0) {
+                setMajorStat(WheelMajor.PHYSICAL_DMG, 0)
+                setMajorStat(WheelMajor.HOLY_DMG, 0)
+                updateClient = true
+            }
+        }
+        return updateClient
+    }
+
+    /**
+     * `PlayerWheel::checkCombatMastery` (player_wheel.cpp:3048): a two-handed
+     * weapon grants critical damage by stage and clears defense; otherwise the
+     * defense shield skill scales by stage and critical damage clears.
+     */
+    fun checkCombatMastery(): Boolean {
+        setOnThinkTimer(WheelOnThink.COMBAT_MASTERY, otsysTimeMs() + 2000)
+        var updateClient = false
+        val stage = getStage(WheelStage.COMBAT_MASTERY)
+        val item = player?.getWeapon()
+        if (item != null && (item.getSlotPosition() and SLOTP_TWO_HAND) != 0) {
+            var criticalSkill = 0
+            if (stage >= 3) {
+                criticalSkill = 1200
+            } else if (stage >= 2) {
+                criticalSkill = 800
+            } else if (stage >= 1) {
+                criticalSkill = 400
+            }
+            if (getMajorStat(WheelMajor.CRITICAL_DMG_2) != criticalSkill) {
+                setMajorStat(WheelMajor.CRITICAL_DMG_2, criticalSkill)
+                updateClient = true
+            }
+            if (getMajorStat(WheelMajor.DEFENSE) != 0) {
+                setMajorStat(WheelMajor.DEFENSE, 0)
+                updateClient = true
+            }
+        } else {
+            if (getMajorStat(WheelMajor.CRITICAL_DMG_2) != 0) {
+                setMajorStat(WheelMajor.CRITICAL_DMG_2, 0)
+                updateClient = true
+            }
+            if (getMajorStat(WheelMajor.DEFENSE) == 0) {
+                var shieldSkill = 0
+                if (stage >= 3) {
+                    shieldSkill = 30
+                } else if (stage >= 2) {
+                    shieldSkill = 20
+                } else if (stage >= 1) {
+                    shieldSkill = 10
+                }
+                setMajorStat(WheelMajor.DEFENSE, shieldSkill)
+                updateClient = true
+            }
+        }
+        return updateClient
+    }
+
+    /**
+     * `PlayerWheel::checkDivineEmpowerment` (player_wheel.cpp:3094): an
+     * `ITEM_DIVINE_EMPOWERMENT` owned by the player on the current tile grants
+     * 8/10/12 damage by stage.
+     */
+    fun checkDivineEmpowerment(): Boolean {
+        var updateClient = false
+        setOnThinkTimer(WheelOnThink.DIVINE_EMPOWERMENT, otsysTimeMs() + 1000)
+
+        val target = player ?: return updateClient
+        val items = target.getTile()?.items ?: return updateClient
+
+        var damageBonus = 0
+        var isOwner = false
+        for (item in items) {
+            if (item.id == ITEM_DIVINE_EMPOWERMENT && item.isOwner(target.getGUID())) {
+                isOwner = true
+                break
+            }
+        }
+
+        if (isOwner) {
+            val stage = getStage(WheelStage.DIVINE_EMPOWERMENT)
+            if (stage >= 3) {
+                damageBonus = 12
+            } else if (stage >= 2) {
+                damageBonus = 10
+            } else if (stage >= 1) {
+                damageBonus = 8
+            }
+        }
+
+        if (damageBonus != getMajorStat(WheelMajor.DAMAGE)) {
+            setMajorStat(WheelMajor.DAMAGE, damageBonus)
+            updateClient = true
+        }
+        return updateClient
+    }
+
+    /**
+     * `PlayerWheel::onThink` (player_wheel.cpp:3369): decrements the gift of
+     * life cooldown on its timer, clears every major stat when the player is
+     * idle (then returns unless `force`), and runs the timer-gated instant
+     * checks.
+     */
+    @Suppress("CyclomaticComplexMethod", "LongMethod")
+    fun onThink(force: Boolean = false) {
+        var updateClient = false
+        creaturesNearby = 0
+        // Gift of life (Cooldown)
+        if (getGiftOfCooldown() > 0 && getOnThinkTimer(WheelOnThink.GIFT_OF_LIFE) <= otsysTimeMs()) {
+            decreaseGiftOfCooldown(1)
+        }
+        val inFight = player?.hasCondition(ConditionType.CONDITION_INFIGHT) == true
+        val protectionZone = player?.getZoneType() == ZoneType.ZONE_PROTECTION
+        if (!inFight || protectionZone || (
+                !getInstant("Battle Instinct") && !getInstant("Positional Tactics") &&
+                    !getInstant("Ballistic Mastery") && !getInstant("Gift of Life") &&
+                    !getInstant("Combat Mastery") && !getInstant("Divine Empowerment") &&
+                    getGiftOfCooldown() == 0
+                )
+        ) {
+            var mustReset = false
+            for (major in WheelMajor.entries) {
+                if (getMajorStat(major) != 0) {
+                    mustReset = true
+                    break
+                }
+            }
+
+            if (mustReset) {
+                for (major in WheelMajor.entries) {
+                    setMajorStat(major, 0)
+                }
+                player?.let { target ->
+                    target.protocolSink?.sendSkills(target)
+                    target.protocolSink?.sendStats(target)
+                    reloadCreature(target)
+                }
+            }
+            if (!force) {
+                return
+            }
+        }
+        // Battle Instinct
+        if (getInstant("Battle Instinct") &&
+            (force || getOnThinkTimer(WheelOnThink.BATTLE_INSTINCT) < otsysTimeMs()) &&
+            checkBattleInstinct()
+        ) {
+            updateClient = true
+        }
+        // Positional Tactics
+        if (getInstant("Positional Tactics") &&
+            (force || getOnThinkTimer(WheelOnThink.POSITIONAL_TACTICS) < otsysTimeMs()) &&
+            checkPositionalTactics()
+        ) {
+            updateClient = true
+        }
+        // Ballistic Mastery
+        if (getInstant("Ballistic Mastery") &&
+            (force || getOnThinkTimer(WheelOnThink.BALLISTIC_MASTERY) < otsysTimeMs()) &&
+            checkBallisticMastery()
+        ) {
+            updateClient = true
+        }
+        // Combat Mastery
+        if (getInstant("Combat Mastery") &&
+            (force || getOnThinkTimer(WheelOnThink.COMBAT_MASTERY) < otsysTimeMs()) &&
+            checkCombatMastery()
+        ) {
+            updateClient = true
+        }
+        // Divine Empowerment
+        if (getInstant("Divine Empowerment") &&
+            (force || getOnThinkTimer(WheelOnThink.DIVINE_EMPOWERMENT) < otsysTimeMs()) &&
+            checkDivineEmpowerment()
+        ) {
+            updateClient = true
+        }
+        if (updateClient) {
+            player?.let { target ->
+                target.protocolSink?.sendSkills(target)
+                target.protocolSink?.sendStats(target)
+            }
+        }
     }
 
     /**
