@@ -1,5 +1,6 @@
 # Improvements manually detected
 
+- Remove all references to local absolute home paths (e.g. `/Users/<name>/.projects/...`). Consider the repository root as `../.projects/`.
 - Change all `https://github.com/opentibiabr/canary` references to `https://github.com/gdamoreira/canary-kotlin`
 - Hardcoded RSA encryption keys should be moved to a configuration file
 - Documentation in `canary/docs` repository should be copied to this repository and updated to reflect the changes made to the codebase.
