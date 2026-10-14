@@ -76,15 +76,22 @@ template, shipped verbatim. In upstream Canary you copy it to `config.lua` and
 the server executes it, reading globals such as `serverName`,
 `dataPackDirectory` or `mapDownloadUrl`.
 
-This port exposes the same key surface through `ConfigManager`:
+This port reads the same key surface through `ConfigManager`, with Canary boot
+precedence (defaults < `CANARY_*` environment < `--config` file < CLI options):
 
-- `CANARY_*` environment variables, and
-- an optional `--config <properties>` file keyed by the `config.lua`
-  identifiers (for example `serverName = My Server`).
+- `--config config.lua` — a `.lua` path is **executed through LuaJ** exactly
+  like `ConfigManager::load` and its globals (`serverName`, `loginProtocolPort`,
+  `dataPackDirectory`, the `OTCRFeatures` table, …) are applied;
+- `--config server.properties` — any other path is parsed as an
+  `identifier = value` properties file keyed by the `config.lua` identifiers;
+- `CANARY_*` environment variables.
 
-Executing a Lua `config.lua` file at boot is **not wired yet** — the template
-ships for parity and reference, and `MapDownload` already reads the upstream
-`config.lua.dist` to discover `mapDownloadUrl`.
+Start from the template:
+
+```bash
+cp config.lua.dist config.lua
+./gradlew run --args="--config config.lua"
+```
 
 ### Running Locally (Zero-Configuration Mode)
 

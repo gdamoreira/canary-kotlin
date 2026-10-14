@@ -593,8 +593,16 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 60: Lua Config Execution (14:00 – 15:00)
+- **`config.lua` startup path** — `ConfigSource.ofLua` executes a `.lua` `--config` file through LuaJ and reads the `ConfigKeys` globals plus the `OTCRFeatures` table, matching `ConfigManager::load` (configmanager.cpp:26-417); `ServerConfig` resolves `serverName`/ports/`dataPackDirectory` from the same globals (9 new tests, TDD).
+- **Template shipped** — byte-identical `config.lua.dist` at the repository root; local `config.lua` git-ignored like upstream.
+- **CI heap fix verified** — GitHub Actions CI and the Docker image build both green after the `gradle.properties` daemon-heap pinning.
+- **690 suites / 7636 tests, all green.**
+
+---
+
 ### Current Status
-- **Automated Tests**: **690 test suites / 7627 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **690 test suites / 7636 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/game-play-features.md`.
