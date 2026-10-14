@@ -58,6 +58,7 @@ import org.opentibia.canary.creatures.players.components.Title
 import org.opentibia.canary.creatures.players.components.TitleRegistry
 import org.opentibia.canary.creatures.players.vip.PlayerVip
 import org.opentibia.canary.creatures.players.vip.VipStatus
+import org.opentibia.canary.creatures.monsters.MonsterTargeting
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.npcs.NpcInfo
 import org.opentibia.canary.creatures.players.PlayerTask
@@ -66,18 +67,21 @@ import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.database.Database
 import org.opentibia.canary.database.PlayerLoginRepository
 import org.opentibia.canary.economy.market.MarketOfferType
+import org.opentibia.canary.game.modal.ModalWindow
 import org.opentibia.canary.game.modal.ModalWindowManager
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.game.movement.areInRange
 import org.opentibia.canary.game.movement.getDirectionTo
 import org.opentibia.canary.game.movement.getDistanceX
 import org.opentibia.canary.game.movement.getDistanceY
+import org.opentibia.canary.game.movement.getDistanceZ
 import org.opentibia.canary.game.movement.getNextPosition
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.game.zones.Zone
 import org.opentibia.canary.game.zones.ZoneType
+import org.opentibia.canary.io.appearances.Appearances
 import org.opentibia.canary.io.HistoryMarketOffer
 import org.opentibia.canary.io.IOBosstiary
 import org.opentibia.canary.io.IOMarket
@@ -99,7 +103,10 @@ import org.opentibia.canary.items.ItemType
 import org.opentibia.canary.items.Items
 import org.opentibia.canary.items.ItemTypes_t
 import org.opentibia.canary.items.ObjectCategory_t
+import org.opentibia.canary.items.SLOTP_AMMO
 import org.opentibia.canary.items.SLOTP_ARMOR
+import org.opentibia.canary.items.SLOTP_LEFT
+import org.opentibia.canary.items.SLOTP_TWO_HAND
 import org.opentibia.canary.items.SLOTP_BACKPACK
 import org.opentibia.canary.items.SLOTP_FEET
 import org.opentibia.canary.items.SLOTP_HAND
@@ -109,11 +116,13 @@ import org.opentibia.canary.items.SLOTP_NECKLACE
 import org.opentibia.canary.items.SLOTP_RING
 import org.opentibia.canary.items.Thing
 import org.opentibia.canary.items.containers.Inbox
+import org.opentibia.canary.items.containers.depot.DepotChest
 import org.opentibia.canary.items.containers.depot.DepotLocker
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Spectators
 import org.opentibia.canary.map.Tile
+import org.opentibia.canary.map.house.AccessHouseLevel
 import org.opentibia.canary.map.house.CyclopediaHouseState
 import org.opentibia.canary.map.house.House
 import org.opentibia.canary.map.house.TradeEvents_t
@@ -140,6 +149,10 @@ import org.opentibia.canary.spells.WorldType
 import org.opentibia.canary.systems.forge.Forge
 import org.opentibia.canary.systems.forge.ForgeAction_t
 import org.opentibia.canary.systems.forge.ForgeRandom
+import org.opentibia.canary.systems.bestiary.Charm
+import org.opentibia.canary.systems.bestiary.CharmRune
+import org.opentibia.canary.systems.bestiary.CharmType
+import org.opentibia.canary.systems.bestiary.PlayerCharmsByMonster
 import org.opentibia.canary.systems.forge.ItemClassification
 import org.opentibia.canary.systems.forge.ItemClassifications
 import org.opentibia.canary.systems.imbuement.Imbuement
@@ -147,6 +160,8 @@ import org.opentibia.canary.systems.imbuement.Imbuements
 import org.opentibia.canary.systems.mount.Mount
 import org.opentibia.canary.systems.prey.PreyAction
 import org.opentibia.canary.systems.prey.PreyOption
+import org.opentibia.canary.systems.rewardchest.PlayerRewardChestOwner
+import org.opentibia.canary.systems.rewardchest.RewardChest
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import org.opentibia.canary.systems.taskhunting.PreyTaskAction
 import org.opentibia.canary.systems.wheel.IOWheel
@@ -502,6 +517,13 @@ class Game(
      * can drive the rate-limit windows.
      */
     private val otsysTimeMs: () -> Long = { System.currentTimeMillis() },
+    /**
+     * `Game::m_appearancesPtr` (game.hpp:881) behind [outfitSupportsMount]. The
+     * `{CORE_DIRECTORY}/items/appearances.dat` parsing already lives in
+     * `io.appearances.Appearances`; hosts load it once and inject the tables.
+     * `null` keeps the C++ "no appearances loaded" behavior (`true`).
+     */
+    private val appearances: Appearances? = null,
     /**
      * `IOMarket::getInstance()` (game.cpp:10297, 4078) seam for the market
      * browse handlers and the average-price query.
@@ -1203,6 +1225,73 @@ class Game(
 
     /** `Game::playerBrowseField(playerId, pos)` (game.cpp:5104) task seam used by the podium walk tasks. */
     var playerBrowseFieldHandler: (Long, Position) -> Unit = { _, _ -> }
+
+    // --- movement handler seams (game.cpp:1711-2420) ---------------------------
+
+    /** `g_configManager().getNumber(PUSH_DELAY)` default 1000 (configmanager.cpp:337). */
+    var pushDelay: Int = 1000
+
+    /** `g_configManager().getNumber(ACTIONS_DELAY_INTERVAL)` default 200 (configmanager.cpp:226). */
+    var actionsDelayInterval: Int = 200
+
+    /** `Player::pushEvent(bool)` (player.cpp:7225) seam used by [playerMoveCreature]. */
+    var playerPushEvent: (Player, Boolean) -> Unit = { _, _ -> }
+
+    /** `Player::sendItemInspection(itemId, itemCount, item, cyclopedia)` protocol seam (game.cpp:1635, 1652). */
+    var sendItemInspection: (Player, Int, Int, Item?, Boolean) -> Unit = { _, _, _, _, _ -> }
+
+    /** `g_events().eventPlayerOnMoveCreature(player, creature, fromPos, toPos)` veto seam (game.cpp:1866). */
+    var eventPlayerOnMoveCreature: (Player, Creature, Position, Position) -> Boolean = { _, _, _, _ -> true }
+
+    /** `g_callbacks().checkCallback(playerOnMoveCreature, ...)` veto seam (game.cpp:1870). */
+    var callbackPlayerOnMoveCreature: (Player, Creature, Position, Position) -> Boolean = { _, _, _, _ -> true }
+
+    /** `g_events().eventPlayerOnMoveItem(player, item, count, fromPos, toPos, from, to)` veto seam (game.cpp:2237). */
+    var eventPlayerOnMoveItem:
+        (Player, Item, Int, Position, Position, Cylinder, Cylinder) -> Boolean = { _, _, _, _, _, _, _ ->
+            true
+        }
+
+    /** `g_callbacks().checkCallback(playerOnMoveItem, ...)` veto seam (game.cpp:2233). */
+    var callbackPlayerOnMoveItem:
+        (Player, Item, Int, Position, Position, Cylinder, Cylinder) -> Boolean = { _, _, _, _, _, _, _ ->
+            true
+        }
+
+    /** `g_events().eventPlayerOnItemMoved(...)` notification seam (game.cpp:2290). */
+    var eventPlayerOnItemMoved:
+        (Player, Item, Int, Position, Position, Cylinder, Cylinder) -> Unit = { _, _, _, _, _, _, _ ->
+        }
+
+    /** `g_callbacks().executeCallback(playerOnItemMoved, ...)` notification seam (game.cpp:2291). */
+    var callbackPlayerOnItemMoved:
+        (Player, Item, Int, Position, Position, Cylinder, Cylinder) -> Unit = { _, _, _, _, _, _, _ ->
+        }
+
+    /** `Player::sendPodiumWindow(item, pos, itemId, stackPos)` protocol seam (game.cpp:5218). */
+    var sendPodiumWindow: (Player, Item, Position, Int, Int) -> Unit = { _, _, _, _, _ -> }
+
+    /** `Player::sendMonsterPodiumWindow(item, pos, itemId, stackPos)` protocol seam (game.cpp:5213). */
+    var sendMonsterPodiumWindow: (Player, Item, Position, Int, Int) -> Unit = { _, _, _, _, _ -> }
+
+    /** `Item::getDescription(itemType, 1, nullptr, count)` renderer seam (src/items/item.cpp:625). */
+    var getItemDescription: (ItemType, Int) -> String = { _, _ -> "" }
+
+    /** `g_events().eventPlayerOnLookInShop(player, itemType, count)` veto seam (game.cpp:6341). */
+    var eventPlayerOnLookInShop: (Player, ItemType, Int) -> Boolean = { _, _, _ -> true }
+
+    /** `g_callbacks().checkCallback(playerOnLookInShop, ...)` veto seam (game.cpp:6345). */
+    var callbackPlayerOnLookInShop: (Player, ItemType, Int) -> Boolean = { _, _, _ -> true }
+
+    /** `Player::setNextActionTask(task)` (player.cpp:3031) seam used by the retry handlers. */
+    var setNextActionTask: (Player, PlayerTask?) -> Unit = { player, task -> player.setNextActionTask(task) }
+
+    /**
+     * `Player::getLootPouch()` (player.cpp) seam used by [playerEquipItem]. The
+     * Kotlin `Player` does not expose the loot-pouch container (PARITY GAP), so
+     * unwired hosts resolve to `null` exactly like a player without a pouch.
+     */
+    var getPlayerLootPouch: (Player) -> Container? = { null }
 
     // --- remaining player handler seams (game.cpp:4310-11487) -----------------
 
@@ -4459,6 +4548,7 @@ class Game(
             StackPosType_t.STACKPOS_FIND_THING ->
                 tile.getUseItem(index)?.getItem() ?: tile.getDoorItem() ?: tile.getTopDownItem()
             StackPosType_t.STACKPOS_TOPDOWN_ITEM -> topDownItem(tile)
+            StackPosType_t.STACKPOS_MOVE -> tile.getTopDownItem()?.takeIf { it.isMovable() }
             else -> null
         } ?: return null
 
@@ -11681,6 +11771,1946 @@ class Game(
     private fun ucfirst(value: String): String =
         value.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
 
+    // --- movement handlers (game.cpp:1115-2420) --------------------------------
+
+    /**
+     * `Game::internalGetCylinder` (src/game/game.cpp:1115): map tiles outside
+     * the `0xFFFF` pseudo-position and open containers for the `0x40` container
+     * ids.
+     *
+     * PARITY GAP: the C++ inventory branch returns the `Player` cylinder, but
+     * the Kotlin `Player` is intentionally not a `Cylinder`, so inventory
+     * positions resolve to `null` (see [pickupItem] for the injected
+     * inventory-move counterpart).
+     */
+    fun internalGetCylinder(player: Player, pos: Position): Cylinder? {
+        if (pos.x != 0xFFFF) {
+            return map.getTile(pos)
+        }
+
+        if ((pos.y and 0x40) != 0) {
+            val fromCid = pos.y and 0x0F
+            return player.getContainerByID(fromCid)
+        }
+
+        return null
+    }
+
+    /**
+     * `Game::checkMoveItemToCylinder` (src/game/game.cpp:2301): the gold-pouch,
+     * store-inbox, store-item, house-access and nested-store-item gates before
+     * a cylinder move is attempted. `TOGGLE_GOLD_POUCH_*` are the
+     * [toggleGoldPouchQuicklootOnly]/[toggleGoldPouchAllowAnything] seams.
+     */
+    @Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
+    fun checkMoveItemToCylinder(
+        player: Player?,
+        fromCylinder: Cylinder?,
+        toCylinder: Cylinder?,
+        item: Item?,
+        toPos: Position,
+    ): ReturnValue {
+        if (player == null || toCylinder == null || item == null) {
+            return ReturnValue.NOTPOSSIBLE
+        }
+
+        val toCylinderContainer = toCylinder.getContainer()
+        if (toCylinderContainer != null) {
+            var containerID = toCylinderContainer.id
+
+            // check the store inbox index if gold pouch forces it as containerID
+            if (containerID == Container.ITEM_STORE_INBOX) {
+                val cylinderItem = toCylinderContainer.getItemByIndex(toPos.z)
+                if (cylinderItem != null && cylinderItem.id == Container.ITEM_GOLD_POUCH) {
+                    containerID = Container.ITEM_GOLD_POUCH
+                }
+            }
+
+            val containerToStow = isTryingToStow(toPos, toCylinder)
+
+            if (containerID == Container.ITEM_GOLD_POUCH && !containerToStow) {
+                if (toggleGoldPouchQuickLootOnly) {
+                    return ReturnValue.CONTAINERNOTENOUGHROOM
+                }
+
+                if (!toggleGoldPouchAllowAnything && item.id != ITEM_GOLD_COIN &&
+                    item.id != ITEM_PLATINUM_COIN && item.id != ITEM_CRYSTAL_COIN
+                ) {
+                    return ReturnValue.ITEMCANNOTBEMOVEDPOUCH
+                }
+
+                // prevent move up from pouch to store inbox.
+                if (!item.canBeMovedToStore() && fromCylinder?.getContainer()?.id == Container.ITEM_GOLD_POUCH) {
+                    return ReturnValue.NOTBOUGHTINSTORE
+                }
+
+                return ReturnValue.NOERROR
+            }
+
+            val topParentContainer = toCylinderContainer.getRootContainer()
+            val parentContainer = topParentContainer?.getParent()?.getContainer()
+            val isStoreInbox = parentContainer?.isStoreInbox() == true
+            val topParentIsStoreInbox = topParentContainer?.isStoreInbox() == true
+            val directIsStoreInbox = containerID == Container.ITEM_STORE_INBOX
+            val fromContainer = fromCylinder?.getContainer()
+            val fromRoot = fromContainer?.getRootContainer()
+            val fromIsStoreInbox = (fromContainer != null && fromContainer.isStoreInbox()) ||
+                (fromRoot != null && fromRoot.isStoreInbox())
+            val toIsStoreInbox = directIsStoreInbox || topParentIsStoreInbox
+
+            if (item.id == Container.ITEM_GOLD_POUCH && !containerToStow) {
+                // Loot pouch can only be moved inside Store Inbox (internal reordering).
+                if (!(fromIsStoreInbox && toIsStoreInbox)) {
+                    return ReturnValue.ITEMCANNOTBEMOVEDTHERE
+                }
+            }
+
+            if (!item.canBeMovedToStore()) {
+                if (directIsStoreInbox) {
+                    if (!(fromIsStoreInbox && (item.isMovable() || item.id == Container.ITEM_GOLD_POUCH))) {
+                        return ReturnValue.NOTBOUGHTINSTORE
+                    }
+                }
+
+                if (topParentIsStoreInbox) {
+                    // Internal reorganization of the Store Inbox: only allow movable items, or the
+                    // gold pouch, when the source is also within the Store Inbox.
+                    if (!(fromIsStoreInbox && (item.isMovable() || item.id == Container.ITEM_GOLD_POUCH))) {
+                        return ReturnValue.ITEMCANNOTBEMOVEDTHERE
+                    }
+                }
+            }
+
+            if (item.isStoreItem() && !containerToStow) {
+                var isValidMoveItem = false
+                val fromHouseTile = fromCylinder?.getTile()
+                val house = fromHouseTile?.getHouse()
+                if (house != null && house.getHouseAccessLevel(player) < AccessHouseLevel.HOUSE_OWNER) {
+                    return ReturnValue.NOTPOSSIBLE
+                }
+
+                if (containerID == Container.ITEM_STORE_INBOX || containerID == DepotLocker.ITEM_DEPOT ||
+                    toCylinderContainer is DepotChest
+                ) {
+                    isValidMoveItem = true
+                }
+
+                if (parentContainer != null && (parentContainer is DepotChest || isStoreInbox)) {
+                    isValidMoveItem = true
+                }
+
+                if (topParentContainer != null && topParentContainer.isStoreInbox()) {
+                    isValidMoveItem = true
+                }
+
+                if (item.id == Container.ITEM_GOLD_POUCH) {
+                    isValidMoveItem = true
+                }
+
+                if (!isValidMoveItem) {
+                    return ReturnValue.ITEMCANNOTBEMOVEDTHERE
+                }
+
+                if (item.hasOwner() && !item.isOwner(player)) {
+                    return ReturnValue.ITEMISNOTYOURS
+                }
+            }
+
+            if (item.getContainer() != null && !item.isStoreItem()) {
+                for (containerItem in item.getContainer()!!.getItems(true)) {
+                    if (!containerItem.isStoreItem() || containerToStow) {
+                        continue
+                    }
+
+                    val parentOfTop = topParentContainer?.getParent()?.getContainer()
+                    val outsideStoreContainers = containerID != Container.ITEM_GOLD_POUCH &&
+                        containerID != DepotLocker.ITEM_DEPOT &&
+                        containerID != Container.ITEM_STORE_INBOX
+                    if (outsideStoreContainers ||
+                        (parentOfTop != null && (!(parentOfTop is DepotChest) || parentOfTop.id != Container.ITEM_STORE_INBOX))
+                    ) {
+                        return ReturnValue.NOTPOSSIBLE
+                    }
+                }
+            }
+        } else if (toCylinder.getTile() != null) {
+            val toHouseTile = toCylinder.getTile()
+            val house = toHouseTile?.getHouse()
+            if (fromCylinder?.getContainer() != null) {
+                if (item.isStoreItem()) {
+                    if (house != null && house.getHouseAccessLevel(player) < AccessHouseLevel.HOUSE_OWNER) {
+                        return ReturnValue.NOTPOSSIBLE
+                    }
+                }
+                if (item.getContainer() != null && !item.isStoreItem()) {
+                    for (containerItem in item.getContainer()!!.getItems(true)) {
+                        if (containerItem.isStoreItem()) {
+                            return ReturnValue.NOTPOSSIBLE
+                        }
+                    }
+                }
+
+                if (item.isStoreItem() && house == null) {
+                    return ReturnValue.ITEMCANNOTBEMOVEDTHERE
+                }
+            }
+        }
+
+        return ReturnValue.NOERROR
+    }
+
+    /** `Game::playerMoveThing` (src/game/game.cpp:1711). */
+    @Suppress("ReturnCount")
+    fun playerMoveThing(
+        playerId: Long,
+        fromPos: Position,
+        itemId: Int,
+        fromStackPos: Int,
+        toPos: Position,
+        count: Int,
+    ) {
+        val player = getPlayerByID(playerId) ?: return
+
+        // Prevent the player from being able to move the item within the imbuement window
+        if (player.hasImbuingItem()) {
+            return
+        }
+
+        var fromIndex: Int
+        if (fromPos.x == 0xFFFF) {
+            if ((fromPos.y and 0x40) != 0) {
+                fromIndex = fromPos.z
+            } else if ((fromPos.y == 0x20 || fromPos.y == 0x21) && !player.isDepotSearchOpenOnItem(itemId)) {
+                // '0x20' -> From depot.
+                // '0x21' -> From inbox.
+                // Both only when the item is being moved from depot search window.
+                sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+                return
+            } else {
+                fromIndex = fromPos.y
+            }
+        } else {
+            fromIndex = fromStackPos
+        }
+
+        val moveItem = internalGetThing(player, fromPos, fromIndex, itemId, StackPosType_t.STACKPOS_MOVE)
+        val creature = if (fromPos.x != 0xFFFF) map.getTile(fromPos)?.getTopVisibleCreature(player) else null
+        if (moveItem != null) {
+            val toCylinder = internalGetCylinder(player, toPos)
+            if (toCylinder == null) {
+                sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+                return
+            }
+
+            playerMoveItem(player, fromPos, itemId, fromStackPos, toPos, count, moveItem, toCylinder)
+        } else if (creature != null) {
+            val tile = map.getTile(toPos)
+            if (tile == null) {
+                sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+                return
+            }
+
+            if (areInRange(creature.position, player.position, 1, 1, 0)) {
+                val task = createPlayerTask(
+                    pushDelay.toLong(),
+                    {
+                        playerMoveCreatureByID(player.id, creature.id, creature.position, tile.position)
+                    },
+                    "Game::playerMoveThing",
+                )
+                player.setNextActionPushTask(task)
+            } else {
+                playerMoveCreature(player, creature, creature.position, tile)
+            }
+        } else {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+        }
+    }
+
+    /** `Game::playerMoveCreatureByID` (src/game/game.cpp:1776). */
+    fun playerMoveCreatureByID(playerId: Long, movingCreatureId: Long, movingCreatureOrigPos: Position, toPos: Position) {
+        val player = getPlayerByID(playerId) ?: return
+        val movingCreature = getCreatureByID(movingCreatureId) ?: return
+        val toTile = map.getTile(toPos) ?: run {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        playerMoveCreature(player, movingCreature, movingCreatureOrigPos, toTile)
+    }
+
+    /**
+     * `Game::playerMoveCreature` (src/game/game.cpp:1796): the walk-event body
+     * with the action-delay retry, walk-to-creature, pushability/ghost gates,
+     * throw distance, zone and crowd gates, then `internalMoveCreature`.
+     * `g_dispatcher().addWalkEvent` is the [addWalkEvent] seam and
+     * `Player::pushEvent` the [playerPushEvent] seam.
+     */
+    @Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
+    fun playerMoveCreature(player: Player, movingCreature: Creature, movingCreatureOrigPos: Position, toTile: Tile) {
+        val accepted = addWalkEvent(player.id, 0L) {
+            if (!player.canDoAction()) {
+                val task = createPlayerTask(
+                    600,
+                    {
+                        playerMoveCreatureByID(player.id, movingCreature.id, movingCreatureOrigPos, toTile.position)
+                    },
+                    "Game::playerMoveCreature",
+                )
+                player.setNextActionPushTask(task)
+                return@addWalkEvent
+            }
+
+            player.setNextActionTask(null)
+
+            if (!areInRange(movingCreatureOrigPos, player.position, 1, 1, 0)) {
+                // need to walk to the creature first before moving it
+                val listDir = getPathTo(player, movingCreatureOrigPos, 0, 1, true, true)
+                if (listDir != null) {
+                    if (!queuePlayerAutoWalk(player, listDir)) {
+                        return@addWalkEvent
+                    }
+                    val task = createPlayerTask(
+                        600,
+                        {
+                            playerMoveCreatureByID(player.id, movingCreature.id, movingCreatureOrigPos, toTile.position)
+                        },
+                        "Game::playerMoveCreature",
+                    )
+                    playerPushEvent(player, true)
+                    player.setNextActionPushTask(task)
+                } else {
+                    sendCancelMessage(player, ReturnValue.THEREISNOWAY)
+                }
+                return@addWalkEvent
+            }
+
+            playerPushEvent(player, false)
+            val monster = movingCreature as? Monster
+            val isFamiliar = monster != null && player.isFamiliarProvider(monster)
+
+            if (!isFamiliar && ((!movingCreature.isPushable() && !player.hasFlag(PlayerFlags_t.CanPushAllCreatures)) ||
+                    (movingCreature.isInGhostMode() && !player.isAccessPlayer()))
+            ) {
+                sendCancelMessage(player, ReturnValue.NOTMOVABLE)
+                return@addWalkEvent
+            }
+
+            // check throw distance
+            val movingCreaturePos = movingCreature.position
+            val toPos = toTile.position
+            if (getDistanceX(movingCreaturePos, toPos) > movingCreature.getThrowRange() ||
+                getDistanceY(movingCreaturePos, toPos) > movingCreature.getThrowRange() ||
+                getDistanceZ(movingCreaturePos, toPos) * 4 > movingCreature.getThrowRange()
+            ) {
+                sendCancelMessage(player, ReturnValue.DESTINATIONOUTOFREACH)
+                return@addWalkEvent
+            }
+
+            if (!areInRange(movingCreaturePos, player.position, 1, 1, 0)) {
+                sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+                return@addWalkEvent
+            }
+
+            if (player !== movingCreature) {
+                if (toTile.hasFlag(TileFlags.TILESTATE_BLOCKPATH.value)) {
+                    sendCancelMessage(player, ReturnValue.NOTENOUGHROOM)
+                    return@addWalkEvent
+                } else if ((movingCreature.getZoneType() == ZoneType.ZONE_PROTECTION &&
+                        !toTile.hasFlag(TileFlags.TILESTATE_PROTECTIONZONE.value)) ||
+                    (movingCreature.getZoneType() == ZoneType.ZONE_NOPVP &&
+                        !toTile.hasFlag(TileFlags.TILESTATE_NOPVPZONE.value))
+                ) {
+                    sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+                    return@addWalkEvent
+                } else {
+                    for (tileCreature in toTile.getCreatures()) {
+                        if (!tileCreature.isInGhostMode()) {
+                            sendCancelMessage(player, ReturnValue.NOTENOUGHROOM)
+                            return@addWalkEvent
+                        }
+                    }
+
+                    val movingNpc = movingCreature as? Npc
+                    if (movingNpc != null && movingNpc.canInteract(toPos)) {
+                        sendCancelMessage(player, ReturnValue.NOTENOUGHROOM)
+                        return@addWalkEvent
+                    }
+                }
+
+                movingCreature.setLastPosition(movingCreature.position)
+            }
+
+            if (!eventPlayerOnMoveCreature(player, movingCreature, movingCreaturePos, toPos)) {
+                return@addWalkEvent
+            }
+
+            if (!callbackPlayerOnMoveCreature(player, movingCreature, movingCreaturePos, toPos)) {
+                return@addWalkEvent
+            }
+
+            val ret = internalMoveCreature(movingCreature, toTile)
+            if (ret != ReturnValue.NOERROR) {
+                sendCancelMessage(player, ret)
+            }
+            player.setLastPosition(player.position)
+        }
+
+        if (!accepted) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+        }
+    }
+
+    /** `Game::playerMoveItemByPlayerID` (src/game/game.cpp:2031). */
+    fun playerMoveItemByPlayerID(
+        playerId: Long,
+        fromPos: Position,
+        itemId: Int,
+        fromStackPos: Int,
+        toPos: Position,
+        count: Int,
+    ) {
+        val player = getPlayerByID(playerId) ?: return
+        playerMoveItem(player, fromPos, itemId, fromStackPos, toPos, count, null, null)
+    }
+
+    /**
+     * `Game::playerMoveItem` (src/game/game.cpp:2039): the action-delay retry,
+     * item resolution, cylinder resolution, [checkMoveItemToCylinder], floor
+     * and range gates, hangable walk-around, throw gates, event vetoes, the
+     * stash redirect and the cylinder move.
+     *
+     * PARITY GAPS: `Game::internalMoveItem` is split between the tile-based
+     * public overload and the private [internalMoveItemCylinder]; the C++
+     * `RETURNVALUE_NEEDEXCHANGE`/trade-item branches and the quiver inventory
+     * refresh are not modelled.
+     */
+    @Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
+    fun playerMoveItem(
+        player: Player,
+        fromPos: Position,
+        itemId: Int,
+        fromStackPos: Int,
+        toPos: Position,
+        count: Int,
+        item: Item?,
+        toCylinder: Cylinder?,
+    ) {
+        if (!player.canDoAction()) {
+            val delay = player.getNextActionTime()
+            val task = createPlayerTask(
+                delay,
+                {
+                    playerMoveItemByPlayerID(player.id, fromPos, itemId, fromStackPos, toPos, count)
+                },
+                "Game::playerMoveItem",
+            )
+            setNextActionTask(player, task)
+            return
+        }
+
+        setNextActionTask(player, null)
+
+        var moveItem = item
+        if (moveItem == null) {
+            var fromIndex: Int
+            if (fromPos.x == 0xFFFF) {
+                if ((fromPos.y and 0x40) != 0) {
+                    fromIndex = fromPos.z
+                } else if ((fromPos.y == 0x20 || fromPos.y == 0x21) && !player.isDepotSearchOpenOnItem(itemId)) {
+                    sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+                    return
+                } else {
+                    fromIndex = fromPos.y
+                }
+            } else {
+                fromIndex = fromStackPos
+            }
+
+            moveItem = internalGetThing(player, fromPos, fromIndex, itemId, StackPosType_t.STACKPOS_MOVE)
+            if (moveItem == null) {
+                sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+                return
+            }
+        }
+
+        if (moveItem.id != itemId) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        var fromCylinder: Cylinder?
+        if (fromPos.x == 0xFFFF && (fromPos.y == 0x20 || fromPos.y == 0x21)) {
+            // '0x20' -> From depot.
+            // '0x21' -> From inbox.
+            // Both only when the item is being moved from depot search window.
+            if (!player.isDepotSearchOpenOnItem(itemId)) {
+                sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+                return
+            }
+
+            fromCylinder = moveItem.getParent()
+        } else {
+            fromCylinder = internalGetCylinder(player, fromPos)
+        }
+
+        if (fromCylinder == null) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        var target = toCylinder
+        if (target == null) {
+            target = internalGetCylinder(player, toPos)
+            if (target == null) {
+                sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+                return
+            }
+        }
+
+        val check = checkMoveItemToCylinder(player, fromCylinder, target, moveItem, toPos)
+        if (check != ReturnValue.NOERROR) {
+            sendCancelMessage(player, check)
+            return
+        }
+
+        val playerPos = player.position
+        val cylinderTile = fromCylinder.getTile()
+        val mapFromPos = cylinderTile?.position ?: moveItem.position
+        if (playerPos.z != mapFromPos.z) {
+            sendCancelMessage(
+                player,
+                if (playerPos.z > mapFromPos.z) ReturnValue.FIRSTGOUPSTAIRS else ReturnValue.FIRSTGODOWNSTAIRS,
+            )
+            return
+        }
+
+        if (!areInRange(playerPos, mapFromPos, 1, 1)) {
+            // need to walk to the item first before using it
+            val listDir = getPathTo(player, moveItem.position, 0, 1, true, true)
+            if (listDir != null) {
+                if (!queuePlayerAutoWalk(player, listDir)) {
+                    return
+                }
+                val task = createPlayerTask(
+                    400,
+                    {
+                        playerMoveItemByPlayerID(player.id, fromPos, itemId, fromStackPos, toPos, count)
+                    },
+                    "Game::playerMoveItem",
+                )
+                setNextWalkActionTask(player, task)
+            } else {
+                sendCancelMessage(player, ReturnValue.THEREISNOWAY)
+            }
+            return
+        }
+
+        val toCylinderTile = target.getTile()
+        val mapToPos = toCylinderTile?.position ?: toPos
+
+        // hangable item specific code
+        if (moveItem.isHangable() && toCylinderTile != null &&
+            toCylinderTile.hasFlag(TileFlags.TILESTATE_SUPPORTS_HANGABLE.value)
+        ) {
+            // destination supports hangable objects so need to move there first
+            val vertical = toCylinderTile.hasProperty(ItemProperty.CONST_PROP_ISVERTICAL)
+            if (vertical) {
+                if (playerPos.x + 1 == mapToPos.x) {
+                    sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+                    return
+                }
+            } else {
+                if (playerPos.y + 1 == mapToPos.y) {
+                    sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+                    return
+                }
+            }
+
+            if (!areInRange(playerPos, mapToPos, 1, 1, 0)) {
+                val walkPos = if (vertical) {
+                    Position(mapToPos.x + 1, mapToPos.y, mapToPos.z)
+                } else {
+                    Position(mapToPos.x, mapToPos.y + 1, mapToPos.z)
+                }
+
+                val requiresPickup = fromPos.x != 0xFFFF &&
+                    areInRange(mapFromPos, playerPos, 1, 1) &&
+                    !areInRange(mapFromPos, walkPos, 1, 1, 0)
+                if (requiresPickup) {
+                    queuePlayerAutoWalkAfterItemPickup(player.id, walkPos, 0, fromCylinder, moveItem, count) {
+                            walkPlayer,
+                            itemPos,
+                            itemStackPos,
+                        ->
+                        val task = createPlayerTask(
+                            400,
+                            {
+                                playerMoveItemByPlayerID(player.id, itemPos, itemId, itemStackPos, toPos, count)
+                            },
+                            "Game::playerMoveItem",
+                        )
+                        walkPlayer.setNextWalkActionTask(task)
+                    }
+                    return
+                }
+
+                val listDir = getPathTo(player, walkPos, 0, 0, true, true)
+                if (listDir != null) {
+                    if (!queuePlayerAutoWalk(player, listDir)) {
+                        return
+                    }
+                    val task = createPlayerTask(
+                        400,
+                        {
+                            playerMoveItemByPlayerID(player.id, fromPos, itemId, fromStackPos, toPos, count)
+                        },
+                        "Game::playerMoveItem",
+                    )
+                    setNextWalkActionTask(player, task)
+                } else {
+                    sendCancelMessage(player, ReturnValue.THEREISNOWAY)
+                }
+                return
+            }
+        }
+
+        val throwRange = moveItem.getThrowRange()
+        if (getDistanceX(playerPos, mapToPos) > throwRange ||
+            getDistanceY(playerPos, mapToPos) > throwRange ||
+            getDistanceZ(mapFromPos, mapToPos) * 4 > throwRange
+        ) {
+            sendCancelMessage(player, ReturnValue.DESTINATIONOUTOFREACH)
+            return
+        }
+
+        if (!canThrowObjectTo.invoke(mapFromPos, mapToPos)) {
+            sendCancelMessage(player, ReturnValue.CANNOTTHROW)
+            return
+        }
+
+        if (!callbackPlayerOnMoveItem(player, moveItem, count, fromPos, toPos, fromCylinder, target)) {
+            return
+        }
+
+        if (!eventPlayerOnMoveItem(player, moveItem, count, fromPos, toPos, fromCylinder, target)) {
+            return
+        }
+
+        var toIndex = 0
+        if (toPos.x == 0xFFFF) {
+            toIndex = if ((toPos.y and 0x40) != 0) toPos.z else toPos.y
+        }
+
+        if (moveItem.type?.wrapable == true || moveItem.isStoreItem() ||
+            (moveItem.hasOwner() && !moveItem.isOwner(player))
+        ) {
+            val toHouseTile = toCylinderTile
+            val fromHouseTile = cylinderTile
+
+            if (fromHouseTile != null && fromHouseTile.isHouse()) {
+                val fromHouse = fromHouseTile.getHouse()
+                val toHouse = toHouseTile?.getHouse()
+                if (fromHouse == null || toHouse == null || toHouse.id != fromHouse.id) {
+                    sendCancelMessageText(player, "You cannot move this item out of this house.")
+                    return
+                }
+            }
+        }
+
+        if (isTryingToStow(toPos, target)) {
+            stowItem(player, moveItem, count, false)
+            return
+        }
+
+        val fromContainer = fromCylinder.getContainer()
+        val toContainer = target.getContainer()
+        val fromRoot = fromContainer?.getRootContainer()
+        val toRoot = toContainer?.getRootContainer()
+        val fromIsStoreInbox = fromContainer != null && (fromContainer.isStoreInbox() || fromRoot?.isStoreInbox() == true)
+        val toIsStoreInbox = toContainer != null && (toContainer.isStoreInbox() || toRoot?.isStoreInbox() == true)
+        val isLootPouchStoreInboxReorder = moveItem.id == Container.ITEM_GOLD_POUCH &&
+            fromIsStoreInbox && toIsStoreInbox
+
+        if ((!moveItem.isPushable() && !isLootPouchStoreInboxReorder) ||
+            moveItem.hasAttribute(ItemAttribute.UNIQUEID)
+        ) {
+            sendCancelMessage(player, ReturnValue.NOTMOVABLE)
+            return
+        }
+
+        val moveFlags = if (isLootPouchStoreInboxReorder) CylinderFlags.FLAG_IGNORENOTMOVABLE else 0
+        val ret = internalMoveItemCylinder(fromCylinder, target, toIndex, moveItem, count, moveFlags, player)
+        if (ret != ReturnValue.NOERROR) {
+            sendCancelMessage(player, ret)
+        } else if (toContainer != null && fromContainer != null &&
+            fromContainer.countsToLootAnalyzerBalance() &&
+            toContainer.getItem().getTopParent()?.getPlayer() === player
+        ) {
+            sendLootStats(player, moveItem, count)
+        }
+
+        cancelPush(player)
+
+        eventPlayerOnItemMoved(player, moveItem, count, fromPos, toPos, fromCylinder, target)
+        callbackPlayerOnItemMoved(player, moveItem, count, fromPos, toPos, fromCylinder, target)
+    }
+
+    /**
+     * Cylinder-to-cylinder subset of `Game::internalMoveItem`
+     * (src/game/game.cpp:2436) used by the move handlers: the
+     * `queryDestination` floor/container chain, the `queryRemove(1)` /
+     * `queryAdd` gates, `queryMaxCount` and the stackable merge.
+     *
+     * PARITY GAPS: `RETURNVALUE_NEEDEXCHANGE`, the `tradeItem` guard, the
+     * `movedItem` out parameter, the quiver inventory refresh and the
+     * post-notification bracelets beyond the facade's own calls are not
+     * modelled.
+     */
+    @Suppress("LongMethod")
+    private fun internalMoveItemCylinder(
+        fromCylinder: Cylinder,
+        toCylinder: Cylinder,
+        index: Int,
+        item: Item,
+        count: Int,
+        flags: Int,
+        actor: Creature? = null,
+    ): ReturnValue {
+        var to = toCylinder
+        var idx = index
+        var toItem: Item? = null
+        var moveFlags = flags
+        var floorN = 0
+
+        while (true) {
+            val destination = to.queryDestination(idx, item, toItem, moveFlags)
+            val subCylinder = destination.cylinder ?: return ReturnValue.NOTPOSSIBLE
+            idx = destination.index
+            toItem = destination.destItem
+            if (subCylinder === to) {
+                moveFlags = destination.flags
+                break
+            }
+
+            to = subCylinder
+            moveFlags = 0
+
+            // to prevent infinite loop
+            if (++floorN >= MAP_MAX_LAYERS) {
+                break
+            }
+        }
+
+        // destination is the same as the source?
+        if (item === toItem) {
+            return ReturnValue.NOERROR
+        }
+
+        // 'Move up' stackable items fix
+        //  Cip's client never sends the count of stackables when using "Move up" menu option
+        var moveCount = count
+        if (item.isStackable() && count == 255 && fromCylinder.getParent() === to) {
+            moveCount = item.getItemCount()
+        }
+
+        // check if we can remove this item (using count of 1 since we don't know how much we can move yet)
+        var ret = fromCylinder.queryRemove(item, 1, flags, actor)
+        if (ret != ReturnValue.NOERROR) {
+            return ret
+        }
+
+        // check if we can add this item
+        ret = to.queryAdd(idx, item, moveCount, moveFlags, actor)
+        if (ret != ReturnValue.NOERROR) {
+            return ret
+        }
+
+        // check how much we can move
+        val maxQuery = to.queryMaxCount(idx, item, moveCount, 0, moveFlags)
+        if (maxQuery.returnValue != ReturnValue.NOERROR && maxQuery.maxQueryCount == 0) {
+            return maxQuery.returnValue
+        }
+
+        val m = if (item.isStackable()) minOf(moveCount, maxQuery.maxQueryCount) else maxQuery.maxQueryCount
+
+        ret = fromCylinder.queryRemove(item, m, flags, actor)
+        if (ret != ReturnValue.NOERROR) {
+            return ret
+        }
+
+        val itemIndex = fromCylinder.getThingIndex(item)
+        var moveItem: Item? = item
+        var updateItem: Item? = null
+        fromCylinder.removeThing(item, m)
+
+        // update item(s)
+        if (item.isStackable()) {
+            val n = if (toItem != null && sameItemType(item, toItem)) {
+                val stackSize = toItem.type?.stackSize ?: DEFAULT_STACK_SIZE
+                minOf(stackSize - toItem.count, m).coerceAtLeast(0)
+            } else {
+                0
+            }
+
+            if (n > 0 && toItem != null) {
+                to.updateThing(toItem, toItem.id, toItem.count + n)
+                updateItem = toItem
+            }
+
+            val newCount = m - n
+            moveItem = if (newCount > 0) cloneItem(item, newCount) else null
+        }
+
+        // add item
+        if (moveItem != null) {
+            to.addThing(idx, moveItem)
+        }
+
+        if (itemIndex != -1) {
+            fromCylinder.postRemoveNotification(item, to, itemIndex)
+        }
+
+        if (moveItem != null) {
+            val moveItemIndex = to.getThingIndex(moveItem)
+            if (moveItemIndex != -1) {
+                to.postAddNotification(moveItem, fromCylinder, moveItemIndex)
+            }
+            startDecaying(moveItem)
+        }
+
+        if (updateItem != null) {
+            val updateItemIndex = to.getThingIndex(updateItem)
+            if (updateItemIndex != -1) {
+                to.postAddNotification(updateItem, fromCylinder, updateItemIndex)
+            }
+            startDecaying(updateItem)
+        }
+
+        return ReturnValue.NOERROR
+    }
+
+    /** `Game::playerInspectItem(player, pos)` (src/game/game.cpp:1635). */
+    fun playerInspectItem(player: Player, pos: Position) {
+        val item = internalGetThing(player, pos, 0, 0, StackPosType_t.STACKPOS_TOPDOWN_ITEM) ?: run {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        sendItemInspection(player, item.id, item.getItemCount(), item, false)
+    }
+
+    /** `Game::playerInspectItem(player, itemId, itemCount, cyclopedia)` (src/game/game.cpp:1652). */
+    fun playerInspectItem(player: Player, itemId: Int, itemCount: Int, cyclopedia: Boolean) {
+        sendItemInspection(player, itemId, itemCount, null, cyclopedia)
+    }
+
+    /**
+     * `Game::playerConfigureShowOffSocket` (src/game/game.cpp:5161): the
+     * renown/bestiary podium validation, the walk-to-podium retry and the
+     * `sendPodiumWindow`/`sendMonsterPodiumWindow` branch.
+     */
+    @Suppress("ReturnCount")
+    fun playerConfigureShowOffSocket(playerId: Long, pos: Position, stackPos: Int, itemId: Int) {
+        val player = getPlayerByID(playerId) ?: return
+        if (pos.x == 0xFFFF) {
+            return
+        }
+
+        val item = internalGetThing(player, pos, stackPos, itemId, StackPosType_t.STACKPOS_TOPDOWN_ITEM) ?: return
+
+        if (item.id != itemId || item.type?.isPodium != true || item.hasAttribute(ItemAttribute.UNIQUEID)) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        if (item.hasOwner() && !item.isOwner(player)) {
+            sendCancelMessage(player, ReturnValue.ITEMISNOTYOURS)
+            return
+        }
+
+        if (onlyInvitedCanMoveHouseItems && !playerCanUseItemOnHouseTile(player, item)) {
+            sendCancelMessage(player, ReturnValue.CANNOTUSETHISOBJECT)
+            return
+        }
+
+        val isPodiumOfRenown = itemId == ITEM_PODIUM_OF_RENOWN1 || itemId == ITEM_PODIUM_OF_RENOWN2
+        if (!areInRange(pos, player.position, 1, 1, 0)) {
+            val listDir = getPathTo(player, pos, 0, 1, true, false)
+            if (listDir != null) {
+                if (!queuePlayerAutoWalk(player, listDir)) {
+                    return
+                }
+                val task = if (isPodiumOfRenown) {
+                    createPlayerTask(
+                        400,
+                        { sendPodiumWindow(player, item, pos, itemId, stackPos) },
+                        "Game::playerConfigureShowOffSocket",
+                    )
+                } else {
+                    createPlayerTask(
+                        400,
+                        { sendMonsterPodiumWindow(player, item, pos, itemId, stackPos) },
+                        "Game::playerConfigureShowOffSocket",
+                    )
+                }
+                setNextWalkActionTask(player, task)
+            } else {
+                sendCancelMessage(player, ReturnValue.THEREISNOWAY)
+            }
+            return
+        }
+
+        if (isPodiumOfRenown) {
+            sendPodiumWindow(player, item, pos, itemId, stackPos)
+        } else {
+            sendMonsterPodiumWindow(player, item, pos, itemId, stackPos)
+        }
+    }
+
+    /**
+     * `Game::playerWrapableItem` (src/game/game.cpp:5361): the house/owner
+     * gates, the walk-to-item retry, the holding-player and auto-carpet
+     * unwrap gates, then [wrapItem]/[unwrapItem].
+     *
+     * PARITY GAP: `Item::getHoldingPlayer` is the facade's
+     * `getTopParent()?.getPlayer()` and `unWrapId` the [itemUnWrapIds] map
+     * written by [wrapItem].
+     */
+    @Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
+    fun playerWrapableItem(playerId: Long, pos: Position, stackPos: Int, itemId: Int) {
+        val player = getPlayerByID(playerId) ?: return
+
+        val item = internalGetThing(player, pos, stackPos, itemId, StackPosType_t.STACKPOS_FIND_THING) ?: return
+
+        val tile = map.getTile(item.position)
+        if (tile == null) {
+            logger.error { "Game::playerWrapableItem: Invalid tile on position: $pos" }
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        if (!tile.hasFlag(TileFlags.TILESTATE_PROTECTIONZONE.value) || !tile.isHouse()) {
+            sendCancelMessageText(player, "You may construct this only inside a house.")
+            return
+        }
+
+        val house = tile.getHouse()
+        if (house == null) {
+            sendCancelMessageText(player, "You may construct this only inside a house.")
+            return
+        }
+
+        if (house.getHouseAccessLevel(player) < AccessHouseLevel.HOUSE_OWNER) {
+            sendCancelMessageText(player, "You are not allowed to construct this here.")
+            return
+        }
+
+        if (item.id != itemId || item.hasAttribute(ItemAttribute.UNIQUEID) ||
+            (item.type?.wrapable != true && item.id != Items.ITEM_DECORATION_KIT)
+        ) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        if (item.hasOwner() && !item.isOwner(player)) {
+            sendCancelMessage(player, ReturnValue.ITEMISNOTYOURS)
+            return
+        }
+
+        if (onlyInvitedCanMoveHouseItems && !playerCanUseItemOnHouseTile(player, item)) {
+            sendCancelMessage(player, ReturnValue.CANNOTUSETHISOBJECT)
+            return
+        }
+
+        if (pos.x != 0xFFFF && !areInRange(pos, player.position, 1, 1, 0)) {
+            val listDir = getPathTo(player, pos, 0, 1, true, true)
+            if (listDir != null) {
+                if (!queuePlayerAutoWalk(player, listDir)) {
+                    return
+                }
+                val task = createPlayerTask(
+                    400,
+                    { playerWrapableItem(playerId, pos, stackPos, itemId) },
+                    "Game::playerWrapableItem",
+                )
+                setNextWalkActionTask(player, task)
+            } else {
+                sendCancelMessage(player, ReturnValue.THEREISNOWAY)
+            }
+            return
+        }
+
+        val container = item.getContainer()
+        if (container != null && container.getItemHoldingCount() > 0) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        val topItem = tile.getTopTopItem()
+        val holdingPlayer = item.getTopParent()?.getPlayer()
+        val unwrappable = holdingPlayer != null && item.id == Items.ITEM_DECORATION_KIT
+        val blockedUnwrap = topItem != null && topItem.canReceiveAutoCarpet() &&
+            !item.hasProperty(ItemProperty.CONST_PROP_IMMOVABLEBLOCKSOLID)
+
+        if (unwrappable || blockedUnwrap) {
+            sendCancelMessageText(player, "You can only wrap/unwrap on the floor.")
+            return
+        }
+
+        val unWrapId = itemUnWrapIds[item] ?: 0
+
+        // Prevent to wrap a filled bath tube
+        if (item.id == ITEM_FILLED_BATH_TUBE) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        if (item.type?.wrapable == true && item.id != Items.ITEM_DECORATION_KIT) {
+            wrapItem(item, house)
+        } else if (item.id == Items.ITEM_DECORATION_KIT && unWrapId != 0) {
+            unwrapItem(item, unWrapId, house, player)
+        }
+        addMagicEffect(pos, CONST_ME_POFF)
+    }
+
+    /**
+     * `Game::playerLookInShop` (src/game/game.cpp:6328): the interacting
+     * merchant, the item-type and event gates, the look description and the
+     * merchant check callback.
+     *
+     * PARITY GAP: the `Item::getDescription` renderer is the
+     * [getItemDescription] seam (the Kotlin item layer has no renderer).
+     */
+    fun playerLookInShop(playerId: Long, itemId: Int, count: Int) {
+        val player = getPlayerByID(playerId) ?: return
+        val merchant = getInteractableShopOwner(player) ?: return
+
+        val itemType = itemTypes?.get(itemId) ?: return
+        if (itemType.id == 0) {
+            return
+        }
+
+        if (!eventPlayerOnLookInShop(player, itemType, count)) {
+            return
+        }
+
+        if (!callbackPlayerOnLookInShop(player, itemType, count)) {
+            return
+        }
+
+        sendTextMessage(player, MessageClass.MESSAGE_LOOK, "You see ${getItemDescription(itemType, count)}")
+        merchant.onPlayerCheckItem(player, itemType.id, count)
+    }
+
+    /**
+     * `Game::playerEquipItem` (src/game/game.cpp:4159): the slot, cooldown,
+     * action-delay and fear gates, the backpack search with the tier filter,
+     * the two-handed/quiver unequips and the inventory move.
+     *
+     * PARITY GAPS: the loot-pouch fallback (`Player::getLootPouch` is not
+     * modelled) and `Game::internalMoveItem(..., player, slot, ...)` run
+     * through [moveItemToPlayer] because the Kotlin `Player` is not a
+     * `Cylinder`.
+     */
+    @Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
+    fun playerEquipItem(playerId: Long, itemId: Int, hasTier: Boolean = false, tier: Int = 0) {
+        val player = getPlayerByID(playerId) ?: return
+
+        val itemType = itemTypes?.get(itemId) ?: return
+        val slot = getSlotType(itemType)
+
+        if (slot == Slots_t.CONST_SLOT_NECKLACE) {
+            if (!player.canEquipNecklace()) {
+                return
+            }
+        } else if (slot == Slots_t.CONST_SLOT_RING) {
+            if (!player.canEquipRing()) {
+                return
+            }
+        } else if (!player.canDoAction()) {
+            val delay = player.getNextActionTime()
+            if (delay > 0) {
+                val task = createPlayerTask(
+                    delay,
+                    { playerEquipItem(playerId, itemId, hasTier, tier) },
+                    "Game::playerEquipItem",
+                )
+                player.setNextActionTask(task)
+            }
+            return
+        }
+
+        if (player.hasCondition(ConditionType.CONDITION_FEARED)) {
+            sendTextMessage(player, MessageClass.MESSAGE_FAILURE, "You are feared.")
+            return
+        }
+
+        val backpack = player.getInventoryItem(Slots_t.CONST_SLOT_BACKPACK)?.getContainer()
+
+        val slotItem = player.getInventoryItem(slot)
+        var equipItem = searchForItem(backpack, itemType.id, hasTier, tier)
+        if (equipItem == null) {
+            equipItem = searchForItem(getPlayerLootPouch(player), itemType.id, hasTier, tier)
+        }
+        var ret = ReturnValue.NOERROR
+
+        if (slotItem != null && slotItem.id == itemType.id && (!hasTier || slotItem.getTier() == tier)) {
+            ret = internalCollectManagedItems(player, slotItem, getObjectCategory(slotItem), false)
+        } else if (equipItem != null) {
+            // Shield slot item
+            val rightItem = player.getInventoryItem(Slots_t.CONST_SLOT_RIGHT)
+
+            // Check Ammo item
+            if (itemType.weaponType == WeaponType_t.WEAPON_AMMO) {
+                if (rightItem != null && rightItem.isQuiver()) {
+                    val quiver = rightItem.getContainer()
+                    if (quiver != null) {
+                        ret = internalMoveItemCylinder(
+                            equipItem.getParent() ?: return,
+                            quiver,
+                            0,
+                            equipItem,
+                            equipItem.getItemCount(),
+                            0,
+                        )
+                    }
+                }
+            } else {
+                val leftItem = player.getInventoryItem(Slots_t.CONST_SLOT_LEFT)
+
+                val slotPosition = equipItem.getSlotPosition()
+                // Checks if a two-handed item is being equipped in the left slot when the right slot is already occupied and move to backpack
+                if ((slotPosition and SLOTP_LEFT) != 0 &&
+                    (slotPosition and SLOTP_TWO_HAND) != 0 &&
+                    rightItem != null &&
+                    itemType.weaponType != WeaponType_t.WEAPON_DISTANCE &&
+                    !rightItem.isQuiver() &&
+                    (leftItem == null || leftItem.getWeaponType() != WeaponType_t.WEAPON_DISTANCE)
+                ) {
+                    ret = internalCollectManagedItems(player, rightItem, getObjectCategory(rightItem), false)
+                }
+
+                // Check if trying to equip a quiver while another quiver is already equipped in the right slot
+                if (slot == Slots_t.CONST_SLOT_RIGHT && rightItem != null && rightItem.isQuiver() &&
+                    itemType.isQuiver()
+                ) {
+                    // Replace the existing quiver with the new one
+                    ret = moveItemToPlayer(player, rightItem, Slots_t.CONST_SLOT_WHEREEVER)
+                    if (ret != ReturnValue.NOERROR) {
+                        sendCancelMessage(player, ret)
+                        return
+                    }
+                } else {
+                    // Check if trying to equip a shield while a two-handed weapon is equipped in the left slot
+                    if (slot == Slots_t.CONST_SLOT_RIGHT && leftItem != null &&
+                        (leftItem.getSlotPosition() and SLOTP_TWO_HAND) != 0
+                    ) {
+                        // Unequip the two-handed weapon from the left slot
+                        ret = moveItemToPlayer(player, leftItem, Slots_t.CONST_SLOT_WHEREEVER)
+                        if (ret != ReturnValue.NOERROR) {
+                            sendCancelMessage(player, ret)
+                            return
+                        }
+                    }
+                }
+
+                if (slotItem != null) {
+                    ret = internalCollectManagedItems(player, slotItem, getObjectCategory(slotItem), false)
+                    // If the item is not collected, move it to any available container slot
+                    if (ret != ReturnValue.NOERROR) {
+                        ret = moveItemToPlayer(player, slotItem, Slots_t.CONST_SLOT_WHEREEVER)
+                    }
+                }
+
+                ret = moveItemToPlayer(player, equipItem, slot)
+            }
+        }
+
+        if (ret != ReturnValue.NOERROR) {
+            sendCancelMessage(player, ret)
+            return
+        }
+
+        val now = otsysTimeMs()
+        if (slot == Slots_t.CONST_SLOT_NECKLACE) {
+            player.setNextNecklaceAction(now + actionsDelayInterval)
+        } else if (slot == Slots_t.CONST_SLOT_RING) {
+            player.setNextRingAction(now + actionsDelayInterval)
+        } else {
+            player.setNextAction(now + actionsDelayInterval)
+        }
+    }
+
+    /** `getSlotType(itemType)` (`src/game/game.cpp:4132`, anonymous namespace). */
+    private fun getSlotType(itemType: ItemType): Slots_t {
+        var slot = Slots_t.CONST_SLOT_RIGHT
+        if (itemType.weaponType != WeaponType_t.WEAPON_SHIELD) {
+            val slotPosition = itemType.slotPosition
+            slot = when {
+                (slotPosition and SLOTP_HEAD) != 0 -> Slots_t.CONST_SLOT_HEAD
+                (slotPosition and SLOTP_NECKLACE) != 0 -> Slots_t.CONST_SLOT_NECKLACE
+                (slotPosition and SLOTP_ARMOR) != 0 -> Slots_t.CONST_SLOT_ARMOR
+                (slotPosition and SLOTP_LEGS) != 0 -> Slots_t.CONST_SLOT_LEGS
+                (slotPosition and SLOTP_FEET) != 0 -> Slots_t.CONST_SLOT_FEET
+                (slotPosition and SLOTP_RING) != 0 -> Slots_t.CONST_SLOT_RING
+                (slotPosition and SLOTP_AMMO) != 0 -> Slots_t.CONST_SLOT_AMMO
+                (slotPosition and SLOTP_TWO_HAND) != 0 || (slotPosition and SLOTP_LEFT) != 0 -> Slots_t.CONST_SLOT_LEFT
+                else -> Slots_t.CONST_SLOT_RIGHT
+            }
+        }
+
+        return slot
+    }
+
+    /** `searchForItem(container, itemId, hasTier, tier)` (src/game/game.cpp:4118, anonymous namespace). */
+    private fun searchForItem(container: Container?, itemId: Int, hasTier: Boolean, tier: Int): Item? {
+        if (container == null) {
+            return null
+        }
+
+        val iterator = container.iterator()
+        while (iterator.hasNext()) {
+            val item = iterator.current() ?: break
+            iterator.advance()
+            if (item.id == itemId && (!hasTier || item.getTier() == tier)) {
+                return item
+            }
+        }
+
+        return null
+    }
+
+    /**
+     * `Game::internalMoveItem(..., player, slot, ...)` reduced to the Kotlin
+     * `Player` facade: the item leaves its source container (or inventory slot)
+     * and is placed through `Player::addItem`, restoring the container on
+     * failure.
+     */
+    private fun moveItemToPlayer(player: Player, item: Item, slot: Slots_t): ReturnValue {
+        val source = item.getParent()?.getContainer()
+        if (source != null) {
+            val ret = source.queryRemove(item, item.getItemCount(), 0)
+            if (ret != ReturnValue.NOERROR) {
+                return ret
+            }
+            source.removeThing(item, item.getItemCount())
+        } else if (inventorySlotOf(player, item) != null) {
+            player.removeItem(item, 0)
+        }
+
+        val add = player.addItem(item, slot)
+        if (add != ReturnValue.NOERROR && source != null) {
+            source.addThing(item)
+        }
+        return add
+    }
+
+    /** The inventory slot currently holding [item], or `null`. */
+    private fun inventorySlotOf(player: Player, item: Item): Slots_t? =
+        Slots_t.entries.firstOrNull { it.value in Slots_t.FIRST..Slots_t.LAST && player.getInventoryItem(it) === item }
+
+    // --- final member seams (game.cpp:770-12608) --------------------------------
+
+    /** `g_dispatcher().cycleEvent(delay, event)` seam used by [start]. */
+    var cycleEvent: (Long, () -> Unit) -> Long = { _, _ -> 0 }
+
+    /** `g_luaEnvironment().collectGarbage()` (game.cpp:891) seam (Lua boundary, AGENTS.md 1.4). */
+    var collectLuaGarbage: () -> Unit = { }
+
+    /** `g_configManager().getNumber(MARKET_REFRESH_PRICES)` default 30 (configmanager.cpp:62). */
+    var marketRefreshPricesIntervalMinutes: Int = 30
+
+    /** `g_database().storeQuery("... motd_num")` seam (game.cpp:9594). */
+    var loadMotdNumValue: () -> Long? = { null }
+
+    /** `g_database().storeQuery("... motd_hash")` seam (game.cpp:9602). */
+    var loadMotdHashValue: () -> String? = { null }
+
+    /** `g_database().storeQuery("SELECT COUNT(*) ... players_online")` seam (game.cpp:12616). */
+    var countPlayersOnlineValue: () -> Int? = { null }
+
+    /** `g_database().executeQuery("DELETE FROM players_online")` seam (game.cpp:12623). */
+    var deletePlayersOnline: () -> Boolean = { false }
+
+    /** `DBInsert ... INSERT IGNORE INTO players_online` seam (game.cpp:12636). */
+    var insertPlayersOnline: (List<Long>) -> Boolean = { false }
+
+    /** `DELETE FROM players_online WHERE player_id NOT IN (...)` seam (game.cpp:12651). */
+    var prunePlayersOnline: (List<Long>) -> Boolean = { false }
+
+    /** `g_configManager().getNumber(KICK_AFTER_MINUTES)` default 15 (configmanager.cpp:293). */
+    var kickAfterMinutes: Int = 15
+
+    /** `Player::client != nullptr` (game.cpp:12274) seam. */
+    var playerHasClient: (Player) -> Boolean = { true }
+
+    /** `Player::disconnect()` (player.cpp) seam used by [playerCheckActivity]. */
+    var disconnectPlayer: (Player) -> Unit = { _ -> }
+
+    /** `Player::getCreatureEvents(CREATURE_EVENT_EXTENDED_OPCODE)` execution seam (game.cpp:11121). */
+    var executeExtendedOpcode: (Player, Int, String) -> Unit = { _, _, _ -> }
+
+    /** `Player::canAutoWalk(pos, function, delay)` (player.cpp:12589) seam (game.cpp:12315). */
+    var playerCanAutoWalk: (Player, Position, () -> Unit, Long) -> Boolean = { _, _, _, _ -> false }
+
+    /** `client_assertions.txt` append target of `Game::playerDebugAssert` (game.cpp:10211). */
+    var debugAssertionsFile: String = "client_assertions.txt"
+
+    /** `g_monsters().getMonsterType(name)` (monsters.cpp) seam used by [applyCharmRune]. */
+    var getMonsterTypeByName: (String) -> MonsterType? = { null }
+
+    /** `g_iobestiary().getCharmFromTarget(player, monsterType)` (iobestiary.cpp:412) seam. */
+    var getCharmFromTarget: (Player, MonsterType) -> PlayerCharmsByMonster = { _, _ -> PlayerCharmsByMonster() }
+
+    /** `g_iobestiary().getBestiaryCharm(charmRune)` (iobestiary.cpp:231) seam. */
+    var getBestiaryCharm: (CharmRune) -> Charm? = { null }
+
+    /** `Player::getCharmTier(charmRune)` (player.hpp) seam. */
+    var getCharmTier: (Player, CharmRune) -> Int = { _, _ -> 0 }
+
+    /** `Player::getCharmChanceModifier()` (condition.cpp:1015) seam. */
+    var getCharmChanceModifier: (Player) -> Int = { 0 }
+
+    /** `g_iobestiary().parseCharmCombat(charm, player, target, realDamage)` (iobestiary.cpp:191) seam. */
+    var parseCharmCombat: (Charm, Player, Creature?, Int) -> Unit = { _, _, _, _ -> }
+
+    /** `Mounts::getMountByID(id)` (mounts.cpp) seam behind [resolveRandomMountClientId]. */
+    var getMountByID: (Int) -> Mount? = { null }
+
+    /**
+     * `Player::attachedEffects()` wing/effect/aura/shader application of
+     * `Game::playerChangeOutfit` (game.cpp:7306-7386) seam. The Kotlin [Player]
+     * does not carry the attached-effect state yet (PARITY GAP), so the
+     * registry lookups, `diswing`/`diseffect`/`disaura`/`disshader` and the
+     * `sendShader` calls are injected.
+     */
+    var playerApplyAttachedEffects: (Player, Outfit) -> Unit = { _, _ -> }
+
+    /** `g_configManager().getBoolean(TOGGLE_MOUNT_IN_PZ)` default false (configmanager.cpp:157). */
+    var toggleMountInPz: Boolean = false
+
+    /** `Game::updatePlayersOnline` `m_deathTime` (game.cpp:12280) facade storage. */
+    private val deathTimeByPlayer = IdentityHashMap<Player, Int>()
+
+    /** `Game::mapLuaItemsStored` (game.hpp:874): position -> item id. */
+    private val mapLuaItemsStored = linkedMapOf<Position, Int>()
+
+    /**
+     * `Game::offlineTrainingWindow` (game.hpp:914): the hardcoded offline
+     * training modal window.
+     */
+    private val offlineTrainingWindow: ModalWindow by lazy(LazyThreadSafetyMode.NONE) {
+        ModalWindow(
+            ModalWindowManager.OFFLINE_TRAINING_WINDOW_ID,
+            "Choose a Skill",
+            "Please choose a skill:",
+        ).also { window ->
+            window.choices.add("Fist Fighting and Shielding" to skills_t.SKILL_FIST.value)
+            window.choices.add("Sword Fighting and Shielding" to skills_t.SKILL_SWORD.value)
+            window.choices.add("Axe Fighting and Shielding" to skills_t.SKILL_AXE.value)
+            window.choices.add("Club Fighting and Shielding" to skills_t.SKILL_CLUB.value)
+            window.choices.add("Distance Fighting and Shielding" to skills_t.SKILL_DISTANCE.value)
+            window.choices.add("Magic Level and Shielding" to skills_t.SKILL_MAGLEVEL.value)
+            window.buttons.add("Okay" to 1)
+            window.buttons.add("Cancel" to 0)
+            window.defaultEscapeButton = 1
+            window.defaultEnterButton = 0
+            window.priority = true
+        }
+    }
+
+    // --- reward chest (game.cpp:3898, 12296) ------------------------------------
+
+    /**
+     * `Game::collectRewardChestItems` (src/game/game.cpp:3898): the empty-chest
+     * flag, the per-item capacity break, the `maxMoveItems` limit and the
+     * `internalCollectManagedItems` counter. `Player::rewardMap` re-parenting
+     * stays with [RewardChest]; the collection loop lives in
+     * `RewardChest.collectRewardChestItems` and only needs the owner view
+     * built here.
+     */
+    fun collectRewardChestItems(player: Player, maxMoveItems: Int = 0): ReturnValue {
+        val rewardChest = player.getRewardChest()
+        if (rewardChest.empty) {
+            logger.debug { "Reward chest is empty" }
+            return ReturnValue.REWARDCHESTISEMPTY
+        }
+
+        val owner = PlayerRewardChestOwner(
+            capacityProvider = { player.getFreeCapacity() },
+            cancelMessageSink = { ret -> sendCancelMessage(player, ret) },
+            textMessageSink = { text -> sendTextMessage(player, MessageClass.MESSAGE_EVENT_ADVANCE, text) },
+            collectManagedItem = { item -> internalCollectManagedItems(player, item, getObjectCategory(item)) },
+        )
+        return rewardChest.collectRewardChestItems(owner, maxMoveItems)
+    }
+
+    /**
+     * `Game::playerRewardChestCollect` (src/game/game.cpp:12296): the chest
+     * lookup, the `Player::canAutoWalk` retry, the empty-chest cancel and
+     * [collectRewardChestItems].
+     *
+     * PARITY GAPS: `Player::rewardMap` re-parenting cannot be resolved because
+     * the map lives inside [RewardChest], and the C++ `quickLootMutex` is not
+     * needed under the single-threaded WorldCommit confinement (AGENTS.md 1.2).
+     */
+    fun playerRewardChestCollect(playerId: Long, pos: Position, itemId: Int, stackPos: Int, maxMoveItems: Int = 0) {
+        val player = getPlayerByID(playerId) ?: return
+
+        val item = internalGetThing(player, pos, stackPos, itemId, StackPosType_t.STACKPOS_FIND_THING) ?: run {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        val container = item.getContainer()
+        if (item.id != RewardChest.ITEM_REWARD_CHEST || container == null) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        val function = { playerRewardChestCollect(playerId, pos, itemId, stackPos, maxMoveItems) }
+        if (playerCanAutoWalk(player, item.position, function, 500)) {
+            return
+        }
+
+        val playerRewardChest = player.getRewardChest()
+        if (playerRewardChest.empty) {
+            sendCancelMessage(player, ReturnValue.REWARDCHESTISEMPTY)
+            return
+        }
+
+        playerRewardChest.setParent(container.getParent()?.getTile())
+
+        val returnValue = collectRewardChestItems(player, maxMoveItems)
+        if (returnValue != ReturnValue.NOERROR) {
+            sendCancelMessage(player, returnValue)
+        }
+    }
+
+    // --- achievements (game.cpp:12481-12527) ------------------------------------
+
+    /** `Game::registerAchievement` (src/game/game.cpp:12481). */
+    fun registerAchievement(id: Int, name: String, description: String, secret: Boolean, grade: Int, points: Int) {
+        achievementRegistry.registerAchievement(id, name, description, secret, grade, points)
+    }
+
+    /** `Game::getSecretAchievements` (src/game/game.cpp:12505). */
+    fun getSecretAchievements(): List<Achievement> = achievementRegistry.getSecretAchievements()
+
+    /** `Game::getPublicAchievements` (src/game/game.cpp:12516). */
+    fun getPublicAchievements(): List<Achievement> = achievementRegistry.getPublicAchievements()
+
+    /** `Game::getAchievements` (src/game/game.cpp:12527). */
+    fun getAchievements(): List<Achievement> = achievementRegistry.getAchievements()
+
+    // --- startup / motd / online bookkeeping (game.cpp:862-12608) --------------
+
+    /**
+     * `Game::loadMotdNum` (src/game/game.cpp:9592): the persisted counter and
+     * hash; a changed `SERVER_MOTD` hash increments the counter and a missing
+     * row seeds `server_config` through the [database].
+     */
+    fun loadMotdNum() {
+        val value = loadMotdNumValue()
+        if (value != null) {
+            motdNum = value
+        } else {
+            database?.executeQuery("INSERT INTO `server_config` (`config`, `value`) VALUES ('motd_num', '0')")
+        }
+
+        val hash = loadMotdHashValue()
+        if (hash != null) {
+            motdHash = hash
+            if (motdHash != Tools.transformToSHA1(serverMotd)) {
+                motdNum++
+            }
+        } else {
+            database?.executeQuery("INSERT INTO `server_config` (`config`, `value`) VALUES ('motd_hash', '')")
+        }
+    }
+
+    /** `Game::getLightHour` (src/game/game.hpp:551). */
+    fun getLightHour(): Int = lightHour
+
+    /**
+     * `Game::start` (src/game/game.cpp:862): the tibian clock seed and the
+     * maintenance/cycle event registrations. The protocol `ServiceManager`
+     * registration has no Kotlin counterpart (PARITY GAP: the network bootstrap
+     * owns the listeners).
+     */
+    fun start() {
+        val now = getTimeNow()
+        val calendar = java.util.Calendar.getInstance()
+        calendar.timeInMillis = now * 1000
+        val minutes = calendar.get(java.util.Calendar.MINUTE)
+        lightHour = (minutes * LIGHT_DAY_LENGTH) / 60
+
+        scheduleEvent(EVENT_MS + 1000L) { createFiendishMonsters() }
+        scheduleEvent(EVENT_MS + 1000L) { createInfluencedMonsters() }
+        cycleEvent(EVENT_MS.toLong()) { updateForgeableMonsters() }
+        cycleEvent(EVENT_LIGHTINTERVAL_MS.toLong()) { checkLight() }
+        cycleEvent(EVENT_CHECK_CREATURE_INTERVAL_MS) { checkCreatures() }
+        cycleEvent(EVENT_LUA_GARBAGE_COLLECTION_MS) { collectLuaGarbage() }
+
+        val marketItemsPriceIntervalMinutes = marketRefreshPricesIntervalMinutes
+        if (marketItemsPriceIntervalMinutes > 0) {
+            var marketItemsPriceIntervalMS = marketItemsPriceIntervalMinutes * 60000L
+            if (marketItemsPriceIntervalMS < 60000L) {
+                marketItemsPriceIntervalMS = 60000L
+            }
+            cycleEvent(marketItemsPriceIntervalMS) { loadItemsPrice() }
+        }
+
+        cycleEvent(UPDATE_PLAYERS_ONLINE_DB_MS) { updatePlayersOnline() }
+    }
+
+    /** `Game::resetMonsters` (src/game/game.cpp:770): clear every monster target/friend list. */
+    fun resetMonsters() {
+        for (monster in monsters.toList()) {
+            val state = monsterHost?.entryOf(monster.id)?.targetState ?: continue
+            MonsterTargeting.clearTargetList(state)
+            MonsterTargeting.clearFriendList(state)
+        }
+    }
+
+    /**
+     * `Game::addMoney` (src/game/game.cpp:3367): crystal/platinum/gold
+     * conversion with the `addCoins`/`addCoinStack` helpers. The returned pair
+     * is `(totalAdded, returnValue)` and `totalAdded` counts the added gold
+     * value.
+     *
+     * PARITY GAP: the Kotlin `internalAddItem` facade reports no remainder, so
+     * a partially placed stack is treated as fully placed and the
+     * `FLAG_DROPONMAP` branch only triggers on a placement error.
+     */
+    fun addMoney(cylinder: Cylinder?, money: Long, flags: Int = 0): Pair<Long, ReturnValue> {
+        if (cylinder == null) {
+            logger.error { "[addMoney] cylinder is nullptr" }
+            return 0L to ReturnValue.NOTPOSSIBLE
+        }
+
+        if (money == 0L) {
+            return 0L to ReturnValue.NOERROR
+        }
+
+        var remaining = money
+        var totalAdded = 0L
+
+        val crystalCoins = remaining / 10000
+        remaining -= crystalCoins * 10000
+        var (added, returnValue) = addCoins(cylinder, ITEM_CRYSTAL_COIN, crystalCoins, 10000, flags)
+        totalAdded += added
+        if (returnValue != ReturnValue.NOERROR) {
+            return totalAdded to returnValue
+        }
+
+        val platinumCoins = remaining / 100
+        remaining -= platinumCoins * 100
+        val platinum = addCoins(cylinder, ITEM_PLATINUM_COIN, platinumCoins, 100, flags)
+        totalAdded += platinum.first
+        returnValue = platinum.second
+        if (returnValue != ReturnValue.NOERROR) {
+            return totalAdded to returnValue
+        }
+
+        if (remaining > 0) {
+            val gold = addCoins(cylinder, ITEM_GOLD_COIN, remaining, 1, flags)
+            totalAdded += gold.first
+            returnValue = gold.second
+        }
+
+        return totalAdded to returnValue
+    }
+
+    /** `addCoins(game, cylinder, itemId, count, unitValue, flags, totalAdded)` (game.cpp:3276). */
+    private fun addCoins(
+        cylinder: Cylinder,
+        itemId: Int,
+        count: Long,
+        unitValue: Long,
+        flags: Int,
+    ): Pair<Long, ReturnValue> {
+        var remaining = count
+        var totalAdded = 0L
+        while (remaining > 0) {
+            val createCount = minOf(100L, remaining)
+            val (added, ret) = addCoinStack(cylinder, itemId, createCount, unitValue, flags)
+            totalAdded += added
+            if (ret != ReturnValue.NOERROR) {
+                return totalAdded to ret
+            }
+            remaining -= createCount
+        }
+
+        return totalAdded to ReturnValue.NOERROR
+    }
+
+    /**
+     * `addCoinStack(game, cylinder, itemId, count, unitValue, flags, totalAdded)`
+     * (game.cpp:3241): places one stack, counting the added value and falling
+     * back to the cylinder tile under `FLAG_DROPONMAP`.
+     */
+    private fun addCoinStack(
+        cylinder: Cylinder,
+        itemId: Int,
+        count: Long,
+        unitValue: Long,
+        flags: Int,
+    ): Pair<Long, ReturnValue> {
+        val outcome = addItemToCylinder(cylinder, itemId, count.toInt(), flags)
+        var totalAdded = outcome.placed.toLong() * unitValue
+
+        val fullyPlaced = outcome.ret == ReturnValue.NOERROR && outcome.remainder == 0
+        if (fullyPlaced) {
+            return totalAdded to ReturnValue.NOERROR
+        }
+
+        val tile = cylinder.getTile()
+        if ((flags and CylinderFlags.FLAG_DROPONMAP) == 0 || tile == null) {
+            return totalAdded to (if (outcome.ret != ReturnValue.NOERROR) outcome.ret else ReturnValue.NOTENOUGHROOM)
+        }
+
+        val dropCount = count.toInt() - outcome.placed
+        if (dropCount == 0) {
+            return totalAdded to (if (outcome.ret != ReturnValue.NOERROR) outcome.ret else ReturnValue.NOTENOUGHROOM)
+        }
+
+        val dropOutcome = addItemToCylinder(tile, itemId, dropCount, CylinderFlags.FLAG_NOLIMIT)
+        totalAdded += dropOutcome.placed.toLong() * unitValue
+        if (dropOutcome.ret != ReturnValue.NOERROR) {
+            return totalAdded to dropOutcome.ret
+        }
+        if (dropOutcome.remainder != 0) {
+            return totalAdded to (if (outcome.ret != ReturnValue.NOERROR) outcome.ret else ReturnValue.NOTENOUGHROOM)
+        }
+
+        return totalAdded to ReturnValue.NOERROR
+    }
+
+    /** `AddItemOutcome` of `addItemToCylinder` (game.cpp:3212). */
+    private class AddItemOutcome(val placed: Int, val remainder: Int, val ret: ReturnValue)
+
+    /** `addItemToCylinder(game, cylinder, itemId, count, flags)` (game.cpp:3221). */
+    private fun addItemToCylinder(cylinder: Cylinder, itemId: Int, count: Int, flags: Int): AddItemOutcome {
+        val item = Item.create(itemId, count, itemTypes)
+        val ret = when (cylinder) {
+            is Tile -> internalAddItem(cylinder, item, INDEX_WHEREEVER, flags)
+            else -> containerAddItem(cylinder, item, INDEX_WHEREEVER)
+        }
+
+        // The Kotlin internalAddItem facade does not expose the placed remainder (PARITY GAP).
+        return if (ret == ReturnValue.NOERROR) {
+            AddItemOutcome(count, 0, ret)
+        } else {
+            AddItemOutcome(0, count, ret)
+        }
+    }
+
+    /**
+     * `Game::updatePlayersOnline` (src/game/game.cpp:12608): the empty-table
+     * count/delete path and the `INSERT IGNORE`/`NOT IN` prune path, both
+     * through persistence seams.
+     *
+     * PARITY GAP: the C++ `DBTransaction` wrapper is not modelled because the
+     * Kotlin `Database` owns transactions and the method runs on the single
+     * WorldCommit lane.
+     */
+    fun updatePlayersOnline() {
+        if (players.isEmpty()) {
+            val count = countPlayersOnlineValue()
+            if (count == null) {
+                logger.error { "[Game::updatePlayersOnline] Failed to count players_online records." }
+                return
+            }
+
+            if (count == 0) {
+                return
+            }
+
+            if (!deletePlayersOnline()) {
+                logger.error { "[Game::updatePlayersOnline] Failed to clear players_online records." }
+            }
+            return
+        }
+
+        val onlinePlayerIds = mutableListOf<Long>()
+        for (player in players.values) {
+            onlinePlayerIds.add(player.getGUID())
+        }
+
+        if (!insertPlayersOnline(onlinePlayerIds)) {
+            logger.error { "[Game::updatePlayersOnline] Failed to insert players_online records." }
+            return
+        }
+
+        if (!prunePlayersOnline(onlinePlayerIds)) {
+            logger.error { "[Game::updatePlayersOnline] Failed to prune offline players_online records." }
+        }
+    }
+
+    /**
+     * `Game::playerCheckActivity` (src/game/game.cpp:12263): the death-screen
+     * IP gate, the dead-and-connected guard, the non-access death timer and the
+     * 1s re-arm. `Player::m_deathTime` is the [deathTimeByPlayer] facade.
+     */
+    fun playerCheckActivity(playerName: String, interval: Int) {
+        val player = getPlayerByName(playerName) ?: return
+
+        if (getPlayerIP(player) == 0L) {
+            removeDeadPlayer(playerName)
+            logger.info { "Player with name '$playerName' has logged out due to exited in death screen" }
+            disconnectPlayer(player)
+            return
+        }
+
+        if (!player.isDead || !playerHasClient(player)) {
+            return
+        }
+
+        if (!player.isAccessPlayer()) {
+            val deathTime = (deathTimeByPlayer[player] ?: 0) + interval
+            deathTimeByPlayer[player] = deathTime
+            if (deathTime > kickAfterMinutes * 60000 + 60000) {
+                removeDeadPlayer(playerName)
+                logger.info { "Player with name '$playerName' has logged out due to inactivity after death" }
+                disconnectPlayer(player)
+                return
+            }
+        }
+
+        dispatcher.schedule(1000, DispatcherLane.PlayerAction) { playerCheckActivity(playerName, interval) }
+    }
+
+    /** `Game::setCreateLuaItems` (src/game/game.hpp:672). */
+    fun setCreateLuaItems(position: Position, itemId: Int) {
+        mapLuaItemsStored[position] = itemId
+    }
+
+    /**
+     * `Game::createLuaItemsOnMap` (src/game/game.cpp:11845): create the stored
+     * items, skipping missing tiles and positions that already hold the item.
+     */
+    fun createLuaItemsOnMap() {
+        for ((position, itemId) in mapLuaItemsStored) {
+            val item = Item.create(itemId, 1, itemTypes)
+            if (item.id == 0) {
+                logger.warn { "[Game::createLuaItemsOnMap] - Cannot create item with id $itemId" }
+                continue
+            }
+
+            if (position.x != 0) {
+                val tile = map.getTile(position)
+                if (tile == null) {
+                    logger.warn { "[Game::createLuaItemsOnMap] - Tile is wrong or not found position: $position" }
+                    continue
+                }
+
+                // If the item already exists on the map, then ignore it and send warning
+                if (findItemOfType(tile, itemId, false, -1) != null) {
+                    logger.warn {
+                        "[Game::createLuaItemsOnMap] - Cannot create item with id $itemId on position $position, item already exists"
+                    }
+                    continue
+                }
+
+                internalAddItem(tile, item, INDEX_WHEREEVER, CylinderFlags.FLAG_NOLIMIT)
+            }
+        }
+    }
+
+    /**
+     * `Game::parsePlayerExtendedOpcode` (src/game/game.cpp:11114): every
+     * `CREATURE_EVENT_EXTENDED_OPCODE` creature event executes the opcode. The
+     * event loop is the [executeExtendedOpcode] seam (Lua event layer, AGENTS.md
+     * 1.4).
+     */
+    fun parsePlayerExtendedOpcode(playerId: Long, opcode: Int, buffer: String) {
+        val player = getPlayerByID(playerId) ?: return
+        executeExtendedOpcode(player, opcode, buffer)
+    }
+
+    /**
+     * `Game::playerDebugAssert` (src/game/game.cpp:10203): append the client
+     * assertion to [debugAssertionsFile] with the formatted time, player name
+     * and IP. I/O failures are logged instead of crashing the world lane.
+     */
+    fun playerDebugAssert(playerId: Long, assertLine: String, date: String, description: String, comment: String) {
+        val player = getPlayerByID(playerId) ?: return
+
+        val header = "----- ${Tools.formatDate(getTimeNow())} - ${player.name} " +
+            "(${Tools.convertIPToString(getPlayerIP(player))}) -----"
+        try {
+            java.io.File(debugAssertionsFile).appendText(
+                "$header\n$assertLine\n$date\n$description\n$comment\n",
+            )
+        } catch (e: java.io.IOException) {
+            logger.error(e) { "[Game::playerDebugAssert] Failed to append to $debugAssertionsFile" }
+        }
+    }
+
+    /**
+     * `Game::sendOfflineTrainingDialog` (src/game/game.cpp:11134): send the
+     * hardcoded [offlineTrainingWindow] unless the player already has it open.
+     */
+    fun sendOfflineTrainingDialog(player: Player?) {
+        if (player == null) {
+            return
+        }
+
+        val manager = modalWindowManager ?: return
+        if (!manager.hasModalWindowOpen(player, ModalWindowManager.OFFLINE_TRAINING_WINDOW_ID)) {
+            manager.sendModalWindow(player, offlineTrainingWindow)
+        }
+    }
+
+    /** `Game::resolveRandomMountClientId` (src/game/game.cpp:10041). */
+    fun resolveRandomMountClientId(randomMountId: Int): Int {
+        val randomMount = if (randomMountId != 0) getMountByID(randomMountId) else null
+        return randomMount?.clientId ?: 0
+    }
+
+    /**
+     * `Game::outfitSupportsMount` (src/game/game.cpp:10071): consult the
+     * injected appearance tables; without them every outfit is accepted exactly
+     * like the C++ `!m_appearancesPtr` branch.
+     */
+    fun outfitSupportsMount(lookType: Int): Boolean {
+        val appearances = this.appearances ?: return true
+        return appearances.outfitSupportsMount(lookType)
+    }
+
+    /**
+     * `Game::playerChangeOutfit` config overload (src/game/game.cpp:7228): the
+     * `ALLOW_CHANGEOUTFIT` gate before the player lookup.
+     */
+    fun playerChangeOutfit(playerId: Long, outfit: Outfit, setMount: Boolean, isMountRandomized: Int = 0) {
+        if (!allowChangeOutfit) {
+            return
+        }
+
+        val player = getPlayerByID(playerId) ?: return
+        playerChangeOutfit(player, outfit, setMount, isMountRandomized)
+    }
+
+    /**
+     * `Game::playerChangeOutfit` (src/game/game.cpp:7237): the support-outfit
+     * and random-mount gates, the outfit-existence and mount-support gates, the
+     * mount speed change and the `Player::canWear` outfit application.
+     *
+     * PARITY GAP: the wing/effect/aura/shader block runs through
+     * [playerApplyAttachedEffects] because the Kotlin `Player` does not carry
+     * the attached-effect state.
+     */
+    @Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
+    fun playerChangeOutfit(player: Player?, outfit: Outfit, setMount: Boolean, isMountRandomized: Int = 0) {
+        if (player == null) {
+            return
+        }
+
+        var randomized = isMountRandomized
+        if (player.isWearingSupportOutfit()) {
+            outfit.lookMount = 0
+            randomized = 0
+        }
+
+        player.features.mounts.setRandomMount(randomized)
+
+        if (randomized != 0 && setMount && player.features.mounts.hasAnyMount()) {
+            outfit.lookMount = resolveRandomMountClientId(player.features.mounts.getRandomMountId())
+            if (outfit.lookMount == 0) {
+                randomized = 0
+                player.features.mounts.setRandomMount(0)
+            }
+        }
+
+        val playerOutfit = getOutfitByLookType(player, outfit.lookType)
+        if (playerOutfit == null || !setMount) {
+            outfit.lookMount = 0
+            randomized = 0
+            player.features.mounts.setRandomMount(0)
+        }
+
+        if (outfit.lookMount != 0 && !outfitSupportsMount(outfit.lookType)) {
+            outfit.lookMount = 0
+            randomized = 0
+            player.features.mounts.setRandomMount(0)
+        }
+
+        if (outfit.lookMount != 0) {
+            val mount = getMountByClientID(outfit.lookMount) ?: return
+            if (!player.features.mounts.hasMount(mount)) {
+                return
+            }
+
+            val playerTile = player.getTile() ?: return
+            val blockedInProtectionZone = !toggleMountInPz &&
+                playerTile.hasFlag(TileFlags.TILESTATE_PROTECTIONZONE.value)
+            if (blockedInProtectionZone) {
+                outfit.lookMount = 0
+            } else {
+                var deltaSpeedChange = mount.speed
+                val prevMount = if (player.features.mounts.isMounted()) {
+                    getMountByID(player.features.mounts.getCurrentMount())
+                } else {
+                    null
+                }
+                if (prevMount != null) {
+                    deltaSpeedChange -= prevMount.speed
+                }
+                changeSpeed(player, deltaSpeedChange)
+            }
+
+            player.features.mounts.setCurrentMount(mount.id)
+        } else if (player.features.mounts.isMounted()) {
+            player.features.mounts.dismount()
+        }
+
+        if (playerCanWear(player, outfit.lookType, outfit.lookAddons)) {
+            player.setDefaultOutfit(outfit)
+
+            if (player.hasCondition(ConditionType.CONDITION_OUTFIT)) {
+                return
+            }
+
+            internalCreatureChangeOutfit(player, outfit)
+        }
+
+        playerApplyAttachedEffects(player, outfit)
+    }
+
+    /**
+     * `Game::applyCharmRune` (src/game/game.cpp:8973): the major/minor charm
+     * lookup, the tier chance plus the (cripple-exempt) chance modifier and the
+     * `uniform_random(1, 100)` offensive proc. The `g_iobestiary()` lookups and
+     * `parseCharmCombat` dispatch are the injected seams (AGENTS.md 1.4 keeps
+     * the charm tables Lua-authored).
+     */
+    fun applyCharmRune(targetMonster: Monster?, attackerPlayer: Player?, target: Creature?, realDamage: Int) {
+        if (targetMonster == null || attackerPlayer == null) {
+            return
+        }
+
+        val monsterType = getMonsterTypeByName(targetMonster.name) ?: return
+        val charms = getCharmFromTarget(attackerPlayer, monsterType)
+
+        for (charmType in listOf(charms.major, charms.minor)) {
+            if (charmType == CharmRune.CHARM_NONE) {
+                continue
+            }
+
+            val charm = getBestiaryCharm(charmType) ?: continue
+            val charmTier = getCharmTier(attackerPlayer, charmType)
+            val chance = charm.getChance(charmTier).toInt() +
+                (if (charm.id == CharmRune.CHARM_CRIPPLE) 0 else getCharmChanceModifier(attackerPlayer))
+
+            val rng = normalRandom(1, 100)
+            if (charm.type == CharmType.CHARM_OFFENSIVE && chance >= rng) {
+                parseCharmCombat(charm, attackerPlayer, target, realDamage)
+            }
+        }
+    }
+
     companion object {
         /** `INDEX_WHEREEVER` (src/items/cylinder.hpp:18). */
         const val INDEX_WHEREEVER = -1
@@ -11734,6 +13764,9 @@ class Game(
         /** `ITEM_PODIUM_OF_RENOWN2` (`src/utils/utils_definitions.hpp:700`). */
         private const val ITEM_PODIUM_OF_RENOWN2 = 35974
 
+        /** `ITEM_FILLED_BATH_TUBE` (`src/utils/utils_definitions.hpp:665`). */
+        private const val ITEM_FILLED_BATH_TUBE = 26077
+
         /** `Tantugly's Head` monster outfit lookTypeEx (game.cpp:11329). */
         private const val TENTUGLY_HEAD_LOOK_TYPE_EX = 35105
 
@@ -11777,6 +13810,18 @@ class Game(
 
         /** `EVENT_LIGHTINTERVAL_MS` (src/game/game.hpp:66). */
         private const val EVENT_LIGHTINTERVAL_MS = 10000
+
+        /** `EVENT_MS` (src/game/game.hpp:64). */
+        private const val EVENT_MS = 10000
+
+        /** `EVENT_CHECK_CREATURE_INTERVAL` (src/creatures/creature.hpp:47). */
+        private const val EVENT_CHECK_CREATURE_INTERVAL_MS = 1000L
+
+        /** `EVENT_LUA_GARBAGE_COLLECTION` (src/game/game.hpp:69). */
+        private const val EVENT_LUA_GARBAGE_COLLECTION_MS = 600_000L
+
+        /** `UPDATE_PLAYERS_ONLINE_DB` (src/game/game.hpp:74). */
+        private const val UPDATE_PLAYERS_ONLINE_DB_MS = 600_000L
 
         /** `Creature::EVENT_CREATURECOUNT` (src/creatures/creature.hpp:46). */
         private const val EVENT_CREATURECOUNT = 10

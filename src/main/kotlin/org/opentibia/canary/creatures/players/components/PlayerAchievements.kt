@@ -27,22 +27,57 @@ interface AchievementRegistry {
 
     /** `Game::getAchievementByName` (game.cpp:12497-12503). */
     fun getAchievementByName(name: String): Achievement
+
+    /** `Game::registerAchievement` (game.cpp:12481-12491). */
+    fun registerAchievement(id: Int, name: String, description: String, secret: Boolean, grade: Int, points: Int) {}
+
+    /** `Game::getAchievements` (game.cpp:12527). */
+    fun getAchievements(): List<Achievement> = emptyList()
+
+    /** `Game::getSecretAchievements` (game.cpp:12505). */
+    fun getSecretAchievements(): List<Achievement> = getAchievements().filter { it.secret }
+
+    /** `Game::getPublicAchievements` (game.cpp:12516). */
+    fun getPublicAchievements(): List<Achievement> = getAchievements().filter { !it.secret }
 }
 
 /** Registry stand-in for local runs and tests. */
 class InMemoryAchievementRegistry(achievements: List<Achievement> = emptyList()) : AchievementRegistry {
 
-    private val achievements = achievements.toList()
+    private val achievementsById = linkedMapOf<Int, Achievement>()
 
-    override fun getAchievementById(id: Int): Achievement =
-        achievements.firstOrNull { it.id == id } ?: Achievement()
+    private val achievementsNameToId = linkedMapOf<String, Int>()
+
+    init {
+        for (achievement in achievements) {
+            achievementsById[achievement.id] = achievement
+            achievementsNameToId.putIfAbsent(achievement.name, achievement.id)
+        }
+    }
+
+    override fun getAchievementById(id: Int): Achievement = achievementsById[id] ?: Achievement()
 
     override fun getAchievementByName(name: String): Achievement {
         if (name.isEmpty()) {
             return Achievement()
         }
-        return achievements.firstOrNull { it.name == name } ?: Achievement()
+        val id = achievementsNameToId[name] ?: return Achievement()
+        return getAchievementById(id)
     }
+
+    override fun registerAchievement(id: Int, name: String, description: String, secret: Boolean, grade: Int, points: Int) {
+        achievementsById[id] = Achievement(
+            id = id,
+            name = name,
+            description = description,
+            secret = secret,
+            grade = grade,
+            points = points,
+        )
+        achievementsNameToId.putIfAbsent(name, id)
+    }
+
+    override fun getAchievements(): List<Achievement> = achievementsById.values.toList()
 }
 
 /**
