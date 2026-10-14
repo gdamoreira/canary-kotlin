@@ -17,7 +17,6 @@ import org.opentibia.canary.account.AccountRepository
 import org.opentibia.canary.account.InMemoryAccountRepository
 import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
-import org.opentibia.canary.creatures.monsters.Monsters
 import org.opentibia.canary.creatures.monsters.MonsterPipelinesHost
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.creatures.monsters.Monsters
@@ -117,14 +116,6 @@ class CanaryServer(
      * monster pipeline host uncomposed (embedded/test use).
      */
     private val monsterComputeService: MonsterComputeService? = null,
-    /**
-     * `g_monsters()` registry (src/creatures/monsters/monsters.hpp:242) loaded
-     * by the bootstrap. Backs the world's `monsterTypeProvider`
-     * (`Monsters::getMonsterType`) so `Game::internalPlaceCreature`
-     * (game.cpp:1495) registers the placed monster with its
-     * `Monster::m_monsterType`; `null` keeps the pipeline type seams inert.
-     */
-    internal val monsters: Monsters? = null,
     /**
      * `g_vocations()` registry (src/creatures/players/vocations/vocation.hpp:122)
      * loaded by the bootstrap; consumed by the world [Game] highscore queries

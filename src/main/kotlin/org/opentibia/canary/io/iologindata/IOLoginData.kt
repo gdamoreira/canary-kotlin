@@ -9,6 +9,7 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerPronoun_t
 import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.skills_t
+import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.players.components.PlayerSex_t
 import org.opentibia.canary.creatures.players.components.PlayerStorage
 import org.opentibia.canary.creatures.players.pvp.Kill
@@ -86,6 +87,11 @@ typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
  * live in [IOLoginDataSubloads] and run through the injected [subloads] seam;
  * the remaining Canary sub-loads (outfit, store inbox, reward chest,
  * prey/task hunting) are not ported yet (PARITY GAPS).
+ * `disableIrrelevantInfo` is unset, the advanced feature state. The bestiary
+ * charms, store inbox, reward chest and prey/task hunting sub-loads are driven
+ * through [IOLoginDataSubloads2]. The remaining Canary sub-loads (guild,
+ * outfit, skull, conditions, storage map, VIP) are not ported yet (PARITY
+ * GAPS).
  *
  * The live item walks are ported as [saveItems] plus [savePlayerItem(player)]
  * (inventory), [savePlayerDepotItems(player)], [saveRewardItems(player)] and
@@ -201,10 +207,36 @@ class IOLoginData(
      * its repositories (AGENTS.md 1.1).
      */
     private val subloads: IOLoginDataSubloads? = null,
+    /**
+     * `g_monsters().getMonsterTypeByRaceId` (monsters.cpp:375-388) resolution of
+     * the persisted bestiary tracker race ids that
+     * `IOLoginDataLoad::loadPlayerBestiaryCharms`
+     * (iologindata_load_player.cpp:508-519) re-adds through
+     * `Player::addMonsterToCyclopediaTrackerList`; an unresolved id is dropped
+     * like the C++ `if (monsterType)` guard. `null` keeps the tracker
+     * resolution inert.
+     */
+    private val monsterTypeByRaceId: (raceId: Int, isBoss: Boolean) -> MonsterType? = { _, _ -> null },
 ) {
 
     private val featureLoader: PlayerFeatureStateLoader? by lazy(LazyThreadSafetyMode.NONE) {
         features?.let { PlayerFeatureStateLoader(it) }
+    }
+
+    /**
+     * Wave-56 part 2 of the login sub-loads (bestiary charms, store inbox,
+     * reward chest, prey/task hunting), separated into
+     * [IOLoginDataSubloads2] so the part-1 sub-loads stay in this file.
+     */
+    private val subloads2: IOLoginDataSubloads2 by lazy(LazyThreadSafetyMode.NONE) {
+        IOLoginDataSubloads2(
+            loginData = this,
+            bestiaryPersistence = bestiaryPersistence,
+            preyPersistence = preyPersistence,
+            itemTypes = itemTypes,
+            imbuements = imbuements,
+            monsterTypeByRaceId = monsterTypeByRaceId,
+        )
     }
 
     /** Resolved `gameWorldAuthentication` result: account id plus canonical character name. */
@@ -289,6 +321,11 @@ class IOLoginData(
      * advanced feature state plus the exiva restrictions. The outfit, store
      * inbox, reward chest, prey and task-hunting loads are not ported yet
      * (PARITY GAPS): each has no Kotlin state holder or composition seam.
+     * models: basic info, experience, blessings, skills, kills, stash, bestiary
+     * charms, inventory tree, store inbox, depot chests, reward chest, inbox,
+     * prey/task hunting, instant spell list and (when the login is not a
+     * preload) the advanced feature state. The guild, outfit, skull, conditions,
+     * storage map and VIP loads are not ported yet (PARITY GAPS).
      */
     fun loadPlayer(player: Player, record: PlayerRecord?, disableIrrelevantInfo: Boolean = false): Boolean {
         if (record == null) {
@@ -305,11 +342,16 @@ class IOLoginData(
         loadPlayerKills(player)
         subloads?.loadPlayerGuild(player)
         loadPlayerStashItems(player)
+        subloads2.loadPlayerBestiaryCharms(player)
         loadPlayerInventoryItems(player)
+        subloads2.loadPlayerStoreInbox(player)
         loadPlayerDepotItems(player)
+        subloads2.loadRewardItems(player)
         loadPlayerInboxItems(player)
         subloads?.loadPlayerStorageMap(player)
         subloads?.loadPlayerVip(player)
+        subloads2.loadPlayerPreyClass(player)
+        subloads2.loadPlayerTaskHuntingClass(player)
         loadPlayerInstantSpellList(player)
 
         if (!disableIrrelevantInfo) {
