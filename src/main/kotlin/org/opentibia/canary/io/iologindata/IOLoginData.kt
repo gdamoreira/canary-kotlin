@@ -81,10 +81,11 @@ typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
  * and imbuement decay through the injected seams. [loadPlayer] drives the
  * whole login load: the persisted row (vitals/experience/blessings), skills,
  * kills, stash, inventory, depot chests, inbox, instant spell list and, when
- * `disableIrrelevantInfo` is unset, the advanced feature state. The remaining
- * Canary sub-loads (guild, outfit, skull, conditions, store inbox, reward
- * chest, storage map, VIP, prey/task hunting) are not ported yet (PARITY
- * GAPS).
+ * `disableIrrelevantInfo` is unset, the advanced feature state. The
+ * conditions, skull, guild, storage map, VIP and exiva-restriction sub-loads
+ * live in [IOLoginDataSubloads] and run through the injected [subloads] seam;
+ * the remaining Canary sub-loads (outfit, store inbox, reward chest,
+ * prey/task hunting) are not ported yet (PARITY GAPS).
  *
  * The live item walks are ported as [saveItems] plus [savePlayerItem(player)]
  * (inventory), [savePlayerDepotItems(player)], [saveRewardItems(player)] and
@@ -192,6 +193,14 @@ class IOLoginData(
      * return, leaving the persisted skills unapplied.
      */
     private val vocations: Vocations? = null,
+    /**
+     * The six `IOLoginDataLoad` sub-loads of `IOLoginData::loadPlayer`
+     * (conditions, skull, guild, storage map, VIP and exiva restrictions;
+     * src/io/iologindata.cpp:115-161, 192). `null` keeps them inert like the
+     * other unwired seams; the composition root constructs the sub-loads over
+     * its repositories (AGENTS.md 1.1).
+     */
+    private val subloads: IOLoginDataSubloads? = null,
 ) {
 
     private val featureLoader: PlayerFeatureStateLoader? by lazy(LazyThreadSafetyMode.NONE) {
@@ -274,12 +283,12 @@ class IOLoginData(
      * mirrors the missing-result guard.
      *
      * The ported sub-loads keep Canary's order for the systems the Kotlin state
-     * models: basic info, experience, blessings, skills, kills, stash,
-     * inventory tree, depot chests, inbox, instant spell list and (when the
-     * login is not a preload) the advanced feature state. The guild, outfit,
-     * skull, conditions, store inbox, reward chest, storage map, VIP, prey and
-     * task-hunting loads are not ported yet (PARITY GAPS): each has no Kotlin
-     * state holder or composition seam.
+     * models: basic info, experience, blessings, conditions, skull, skills,
+     * kills, guild, stash, inventory tree, depot chests, inbox, storage map,
+     * VIP, instant spell list and (when the login is not a preload) the
+     * advanced feature state plus the exiva restrictions. The outfit, store
+     * inbox, reward chest, prey and task-hunting loads are not ported yet
+     * (PARITY GAPS): each has no Kotlin state holder or composition seam.
      */
     fun loadPlayer(player: Player, record: PlayerRecord?, disableIrrelevantInfo: Boolean = false): Boolean {
         if (record == null) {
@@ -290,12 +299,17 @@ class IOLoginData(
         loadPlayerBasicInfo(player, record)
         loadPlayerExperience(player, record)
         loadPlayerBlessings(player, record)
+        subloads?.loadPlayerConditions(player)
+        subloads?.loadPlayerSkullSystem(player)
         loadPlayerSkill(player, record)
         loadPlayerKills(player)
+        subloads?.loadPlayerGuild(player)
         loadPlayerStashItems(player)
         loadPlayerInventoryItems(player)
         loadPlayerDepotItems(player)
         loadPlayerInboxItems(player)
+        subloads?.loadPlayerStorageMap(player)
+        subloads?.loadPlayerVip(player)
         loadPlayerInstantSpellList(player)
 
         if (!disableIrrelevantInfo) {
@@ -311,11 +325,14 @@ class IOLoginData(
      * The forge/bosstiary/wheel systems already live in the feature repository.
      * `IOLoginDataLoad::loadPlayerUpdateSystem`
      * (iologindata_load_player.cpp:1031-1039) `updateInventoryWeight` is
-     * re-applied once the whole inventory tree is attached.
+     * re-applied once the whole inventory tree is attached, and the exiva
+     * restrictions load last like the C++ `loadPlayerExivaRestrictions`
+     * (iologindata.cpp:192).
      */
     fun loadOnlyDataForOnlinePlayer(player: Player, record: PlayerRecord?) {
         featureLoader?.loadInto(player.id, player.features)
         player.updateInventoryWeight()
+        subloads?.loadPlayerExivaRestrictions(player)
     }
 
     /**
