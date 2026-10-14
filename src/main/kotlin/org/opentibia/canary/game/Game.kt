@@ -1,15 +1,20 @@
 package org.opentibia.canary.game
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import org.opentibia.canary.account.Account
 import org.opentibia.canary.account.AccountErrors
 import org.opentibia.canary.account.CoinTransactionType
 import org.opentibia.canary.account.CoinType
 import org.opentibia.canary.chat.CHANNEL_GUILD
+import org.opentibia.canary.chat.CHANNEL_PRIVATE
 import org.opentibia.canary.chat.ChatClient
+import org.opentibia.canary.chat.ChatManager
 import org.opentibia.canary.chat.NoopChatClient
 import org.opentibia.canary.chat.SpeakClasses
 import org.opentibia.canary.combat.CombatDamage
+import org.opentibia.canary.combat.CombatOrigin
 import org.opentibia.canary.combat.CombatType
+import org.opentibia.canary.combat.condition.Buff
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.LightInfo
 import org.opentibia.canary.combat.condition.Outfit
@@ -21,10 +26,14 @@ import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Npc
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerFlags_t
+import org.opentibia.canary.creatures.Skulls_t
 import org.opentibia.canary.creatures.Slots_t
+import org.opentibia.canary.creatures.players.WalkStartPolicy
+import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.creatures.appearance.outfit.Outfit as OutfitDefinition
 import org.opentibia.canary.creatures.grouping.Party
 import org.opentibia.canary.creatures.monsters.ForgeClassification
+import org.opentibia.canary.creatures.monsters.MonsterPipelinesHost
 import org.opentibia.canary.creatures.players.components.CyclopediaDatabaseTasks
 import org.opentibia.canary.creatures.players.components.CyclopediaQueryResult
 import org.opentibia.canary.creatures.players.components.HighscoreCategories_t
@@ -92,6 +101,7 @@ import org.opentibia.canary.persistence.PlayerStorage
 import org.opentibia.canary.social.guild.Guild
 import org.opentibia.canary.social.guild.GuildRepository
 import org.opentibia.canary.spells.SoundEffect
+import org.opentibia.canary.spells.WorldType
 import org.opentibia.canary.systems.forge.Forge
 import org.opentibia.canary.systems.forge.ForgeAction_t
 import org.opentibia.canary.systems.forge.ForgeRandom
@@ -107,6 +117,7 @@ import org.opentibia.canary.systems.wheel.WheelApplication
 import org.opentibia.canary.systems.wheel.WheelPlayer
 import org.opentibia.canary.systems.wheel.WheelStat
 import org.opentibia.canary.utils.Tools
+import org.opentibia.canary.utils.WildcardTreeNode
 import java.lang.ref.WeakReference
 import java.util.IdentityHashMap
 import kotlin.math.abs
@@ -132,6 +143,17 @@ enum class TradeState_t {
     TRADE_ACCEPT,
     TRADE_ACKNOWLEDGE,
     TRADE_TRANSFER,
+}
+
+/** `GameState_t` (`src/game/game_definitions.hpp:28-36`): the `Game::gameState` machine. */
+enum class GameState_t {
+    GAME_STATE_STARTUP,
+    GAME_STATE_INIT,
+    GAME_STATE_NORMAL,
+    GAME_STATE_CLOSED,
+    GAME_STATE_SHUTDOWN,
+    GAME_STATE_CLOSING,
+    GAME_STATE_MAINTAIN,
 }
 
 /** `PvpMode_t` (`src/creatures/creatures_definitions.hpp:818-823`): the expert-PvP stance of `Game::playerSetFightModes`. */
@@ -289,6 +311,27 @@ data class HighscoreSkillName(
  *    `playerToggleMount` game.cpp:7219, `playerRequestOutfit` game.cpp:7206,
  *    `playerReceivePing` game.cpp:4454, `playerReceivePingBack` game.cpp:4463,
  *    `playerCloseNpcChannel` game.cpp:4443, `playerBroadcastMessage` game.cpp:4310)
+ *  - combat state-change pipeline (`combatChangeHealth` game.cpp:8344,
+ *    `applyHealthChange` game.cpp:8327, `checkGiftOfLife` player_wheel.cpp:3155,
+ *    `combatChangeMana` game.cpp:9063, `applyPvPDamage` game.cpp:8232,
+ *    `pvpLevelDifferenceDamageMultiplier` game.cpp:8243, `applyLifeLeech`
+ *    game.cpp:9029, `applyManaLeech` game.cpp:8998, `calculateLeechAmount`
+ *    game.cpp:9058, `updatePlayerPartyHuntAnalyzer` game.cpp:8773,
+ *    `handleHazardSystemAttack` game.cpp:8193, `addMagicEffect` game.cpp:9343,
+ *    `sendDamageMessageAndEffects` game.cpp:8788)
+ *  - host seams (`checkCreatures` → `Monster::trySchedulePostThink`
+ *    game.cpp:7719, `queueMonsterPostThink` game.cpp:7694, walk seams bound to
+ *    the host `Player`; `playerAutoWalk` game.cpp:4472)
+ *  - channel handlers (`playerCreatePrivateChannel` game.cpp:4324 …
+ *    `playerOpenPrivateChannel` game.cpp:4424) through the injected
+ *    `ChatManager`
+ *  - world/creature accessors (`getGameState` game.cpp:922, `setGameState`
+ *    game.cpp:952, `setWorldType` game.cpp:926, `getCreatureByName`
+ *    game.cpp:1356, `getNpcByName` game.cpp:1380, `addNpc` game.cpp:11639,
+ *    `removeNpc` game.cpp:11646, `getPlayerNameByGUID` game.cpp:1439,
+ *    `getPlayerByNameWildcard` game.cpp:1454, `getPlayersByAccount`
+ *    game.cpp:1480, `addDeadPlayer` game.cpp:11607, `removeDeadPlayer`
+ *    game.cpp:11611, `getDeadPlayer` game.cpp:11615)
  *
  * All state is thread-confined: mutating methods must run inside the injected
  * [dispatcher]'s single-threaded `WorldCommit` lane (AGENTS.md 1.2).
@@ -353,6 +396,15 @@ class Game(
      * `Game::playerAnswerModalWindow` routing target (game.cpp:11144).
      */
     private val modalWindowManager: ModalWindowManager? = null,
+    /**
+     * The `MonsterPipelinesHost` owning the deferred monster pipelines
+     * (`Monster::trySchedulePostThink`, `Game::queueMonsterPostThink`,
+     * game.cpp:7694-7741). `null` keeps the non-monster `checkCreatures`
+     * fallback inert until the host is injected.
+     */
+    private val monsterHost: MonsterPipelinesHost? = null,
+    /** `g_chat()` (chat.cpp) seam behind the channel handlers (game.cpp:4324-4441). */
+    private val chatManager: ChatManager? = null,
 ) {
     private val players = mutableMapOf<Long, Player>()
 
@@ -364,6 +416,34 @@ class Game(
 
     /** `Game::monstersIdIndex` (game.hpp). */
     private val monstersIdIndex = mutableMapOf<Long, Int>()
+
+    /** `Game::npcs` (game.hpp): every live npc, registered by [addNpc]. */
+    private val npcs = mutableListOf<Npc>()
+
+    /** `Game::npcsNameIndex` (game.hpp). */
+    private val npcsNameIndex = mutableMapOf<String, Int>()
+
+    /** `Game::npcsIdIndex` (game.hpp). */
+    private val npcsIdIndex = mutableMapOf<Long, Int>()
+
+    /** `Game::m_playerNameCache` (game.hpp:825): guid -> resolved name. */
+    private val playerNameCache = mutableMapOf<Long, String>()
+
+    /**
+     * `Game::wildcardTree` (game.hpp:824): the lowercase player-name prefix
+     * tree behind `getPlayerByNameWildcard`, maintained by [addPlayer] and
+     * [removePlayer].
+     */
+    private val wildcardTree = WildcardTreeNode(true)
+
+    /** `Game::m_deadPlayers` (game.hpp:820), keyed by the player name. */
+    private val deadPlayers = mutableMapOf<String, WeakReference<Player>>()
+
+    /** `Game::gameState` (game.hpp:926), initialised to `GAME_STATE_NORMAL`. */
+    private var gameState = GameState_t.GAME_STATE_NORMAL
+
+    /** `Game::worldType` (game.hpp:927), initialised to `WORLD_TYPE_PVP`. */
+    private var worldType = WorldType.PVP
 
     /** `Game::forgeableMonsters` (game.hpp:901). */
     private val forgeableMonsters = mutableListOf<Long>()
@@ -675,29 +755,56 @@ class Game(
     var resetIdleTime: (Player) -> Unit = { _ -> }
 
     /**
-     * `Player::setNextWalkTask(task)` (player.cpp) seam. The handlers pass
-     * `null` to clear the queued walk task, mirroring the C++ `nullptr` call.
+     * `Player::setNextWalkTask(task)` (player.cpp:2996) seam bound to the host
+     * player. The handlers pass `null` to clear the queued walk task, mirroring
+     * the C++ `nullptr` call.
      */
-    var setNextWalkTask: (Player, Any?) -> Unit = { _, _ -> }
+    var setNextWalkTask: (Player, Any?) -> Unit = { player, task -> player.setNextWalkTask(task as? PlayerTask) }
 
     /**
-     * `Player::setNextWalkActionTask(task)` (player.cpp) seam. The handlers pass
-     * `null` to clear the queued walk action, mirroring the C++ `nullptr` call.
+     * `Player::setNextWalkActionTask(task)` (player.cpp:2983) seam bound to the
+     * host player. The handlers pass `null` to clear the queued walk action,
+     * mirroring the C++ `nullptr` call.
      */
-    var setNextWalkActionTask: (Player, Any?) -> Unit = { _, _ -> }
+    var setNextWalkActionTask: (Player, Any?) -> Unit = { player, task -> player.setNextWalkActionTask(task as? PlayerTask) }
 
     /** `Player::cancelPush()` (player.cpp:7230) seam used by the move/turn handlers. */
     var cancelPush: (Player) -> Unit = { _ -> }
 
     /**
-     * `Player::startAutoWalk(listDir, force, startPolicy)` (creature.cpp:449)
-     * seam. [force] is the C++ `force` flag; the port's walk queue owns the
-     * start policy.
+     * `Creature::startAutoWalk(listDir, ignoreConditions, startPolicy)`
+     * (creature.cpp:326-340 / creature.hpp:397), bound to the host player. The
+     * `ignoreConditions` flag preserves the C++ call sites' boolean; the port's
+     * walk queue owns the start policy.
      */
-    var startAutoWalk: (Player, List<Direction>, Boolean) -> Unit = { _, _, _ -> }
+    var startAutoWalk: (Player, List<Direction>, Boolean) -> Unit = { player, listDir, ignoreConditions ->
+        player.startAutoWalk(listDir, ignoreConditions)
+    }
 
-    /** `Player::updateCreatureWalk()` (player.cpp:10662) seam used by the target handlers. */
-    var updateCreatureWalk: (Player) -> Unit = { _ -> }
+    /**
+     * `Creature::updateCreatureWalk()` (creature.hpp:412): `goToFollowCreature_async()`
+     * whose barrier invokes the virtual `goToFollowCreature`. The async barrier
+     * is not ported (PARITY GAP), so the host player's `goToFollowCreature` is
+     * invoked directly.
+     */
+    var updateCreatureWalk: (Player) -> Unit = { player -> player.goToFollowCreature() }
+
+    // --- channel handler seams (game.cpp:4324-4441) ----------------------------
+
+    /** `Player::sendCreatePrivateChannel(channelId, name)` (player.cpp) protocol seam. */
+    var sendCreatePrivateChannel: (Player, Int, String) -> Unit = { _, _, _ -> }
+
+    /** `Player::sendChannelsDialog()` (player.cpp) protocol seam. */
+    var sendChannelsDialog: (Player) -> Unit = { _ -> }
+
+    /** `Player::sendChannel(channelId, name, users, invitedUsers)` (player.cpp) protocol seam. */
+    var sendChannel: (Player, Int, String, Map<Long, Player>?, Map<Long, Player>?) -> Unit = { _, _, _, _, _ -> }
+
+    /** `Player::sendOpenPrivateChannel(receiver)` (player.cpp) protocol seam. */
+    var sendOpenPrivateChannel: (Player, String) -> Unit = { _, _ -> }
+
+    /** `IOLoginData::formatPlayerName(name)` (src/io/iologindata.cpp) seam; `null` rejects the name. */
+    var formatPlayerName: (String) -> String? = { null }
 
     /** `Player::receivePing()` (player.cpp:6310) protocol seam. */
     var receivePing: (Player) -> Unit = { _ -> }
@@ -835,8 +942,9 @@ class Game(
 
     // --- wheel combat seams (game.cpp:8264-8287) -------------------------------
 
-    /** `Game::combatChangeHealth(attacker, target, damage, isEvent)` (game.cpp:8344) seam; the full combat pipeline is not ported. */
-    var combatChangeHealth: (Creature?, Creature, CombatDamage, Boolean) -> Boolean = { _, _, _, _ -> false }
+    // The combat state-change pipeline (`combatChangeHealth`, `combatChangeMana`,
+    // the leech helpers and their protocol/event seams) is defined below, next to
+    // the wheel application helpers it drives.
 
     // --- show-off socket seams (game.cpp:5227) ---------------------------------
 
@@ -1097,11 +1205,17 @@ class Game(
     /** `Game::addPlayer` (src/game/game.cpp:11624). */
     fun addPlayer(player: Player) {
         players[player.id] = player
+        if (player.name.isNotEmpty()) {
+            wildcardTree.insert(player.name.lowercase())
+        }
     }
 
     /** `Game::removePlayer` (src/game/game.cpp:11631). */
     fun removePlayer(player: Player) {
         players.remove(player.id)
+        if (player.name.isNotEmpty()) {
+            wildcardTree.remove(player.name.lowercase())
+        }
     }
 
     /** `Game::getPlayers` (src/game/game.hpp:577): online players keyed by creature id. */
@@ -1495,13 +1609,16 @@ class Game(
     /**
      * `Game::checkCreatures` (src/game/game.cpp:7719): advances the rotating
      * `checkCreatureLists` cursor and, per flagged alive creature, runs
-     * `Creature::onThink(EVENT_CREATURE_THINK_INTERVAL)`. Dead or unflagged
-     * entries clear `inCheckCreaturesVector` and are pruned.
+     * `Creature::onThink(EVENT_CREATURE_THINK_INTERVAL)`. A monster schedules
+     * its deferred post-think through the injected [monsterHost]
+     * (`Monster::trySchedulePostThink`, game.cpp:7727-7729); non-monsters keep
+     * the `onAttacking`/`executeConditions` fallback. Dead or unflagged entries
+     * clear `inCheckCreaturesVector` and are pruned.
      *
-     * PARITY GAPS: `Monster::trySchedulePostThink` and the non-monster
-     * `Creature::onAttacking` call are not ported; the condition tick
-     * (`executeConditions`) is folded into [Creature.onThink] by the Kotlin
-     * creature port, so it must not run twice here.
+     * PARITY GAPS: the non-monster `Creature::onAttacking` call is not ported;
+     * the condition tick (`executeConditions`) is folded into
+     * [Creature.onThink] by the Kotlin creature port, so it must not run twice
+     * here.
      */
     fun checkCreatures() {
         val bucket = checkCreatureLists[checkCreatureIndex]
@@ -1510,6 +1627,9 @@ class Game(
             val creature = iterator.next().get()
             if (creature != null && creature.creatureCheck && creature.isAlive()) {
                 creature.onThink(EVENT_CREATURE_THINK_INTERVAL)
+                if (creature is Monster) {
+                    monsterHost?.trySchedulePostThink(creature)
+                }
             } else {
                 creature?.inCheckCreaturesVector = false
                 iterator.remove()
@@ -1518,6 +1638,15 @@ class Game(
 
         checkCreatureIndex = (checkCreatureIndex + 1) % EVENT_CREATURECOUNT
     }
+
+    /**
+     * `Game::queueMonsterPostThink` (src/game/game.cpp:7694): admission-gated
+     * enqueue of the monster id into the visible/background post-think queue.
+     * The queues live in the injected [MonsterPipelinesHost]
+     * (game.cpp:85-200 anonymous-namespace helpers); an unwired host rejects.
+     */
+    fun queueMonsterPostThink(monsterId: Long, playerVisible: Boolean): Boolean =
+        monsterHost?.queueMonsterPostThink(monsterId, playerVisible) ?: false
 
     /**
      * `Game::internalAddItem` (src/game/game.cpp:2693 and 2698 remainder overload).
@@ -1814,6 +1943,115 @@ class Game(
     fun playerStopAutoWalk(playerId: Long) {
         val player = getPlayerByID(playerId) ?: return
         player.stopWalk()
+    }
+
+    /**
+     * `Game::playerAutoWalk` (src/game/game.cpp:4472): resets the login
+     * protection/idle timers, clears the queued walk task and starts the walk
+     * with the C++ first-step policy (immediate for a single step).
+     */
+    fun playerAutoWalk(playerId: Long, listDir: List<Direction>) {
+        val player = getPlayerByID(playerId) ?: return
+
+        resetLoginProtection(player)
+        resetIdleTime(player)
+        setNextWalkTask(player, null)
+        val startPolicy =
+            if (listDir.size == 1) WalkStartPolicy.ImmediateWhenReady else WalkStartPolicy.RespectDelay
+        player.startAutoWalk(listDir, false, startPolicy)
+    }
+
+    // --- channel handlers (game.cpp:4324-4441) ---------------------------------
+
+    /**
+     * `Game::playerCreatePrivateChannel` (src/game/game.cpp:4324): premium only;
+     * creates the `CHANNEL_PRIVATE` slot through the injected chat manager and
+     * sends it to the owner.
+     */
+    fun playerCreatePrivateChannel(playerId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+        if (!player.isPremium()) {
+            return
+        }
+
+        val channel = chatManager?.createChannel(player, CHANNEL_PRIVATE) ?: return
+        if (!channel.addUser(player)) {
+            return
+        }
+
+        sendCreatePrivateChannel(player, channel.getId(), channel.getName())
+    }
+
+    /** `Game::playerChannelInvite` (src/game/game.cpp:4338). */
+    fun playerChannelInvite(playerId: Long, name: String) {
+        val player = getPlayerByID(playerId) ?: return
+        val channel = chatManager?.getPrivateChannel(player) ?: return
+        val invitePlayer = getPlayerByName(name) ?: return
+        if (player === invitePlayer) {
+            return
+        }
+
+        channel.invitePlayer(player, invitePlayer)
+    }
+
+    /** `Game::playerChannelExclude` (src/game/game.cpp:4361). */
+    fun playerChannelExclude(playerId: Long, name: String) {
+        val player = getPlayerByID(playerId) ?: return
+        val channel = chatManager?.getPrivateChannel(player) ?: return
+        val excludePlayer = getPlayerByName(name) ?: return
+        if (player === excludePlayer) {
+            return
+        }
+
+        channel.excludePlayer(player, excludePlayer)
+    }
+
+    /** `Game::playerRequestChannels` (src/game/game.cpp:4384). */
+    fun playerRequestChannels(playerId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+        sendChannelsDialog(player)
+    }
+
+    /**
+     * `Game::playerOpenChannel` (src/game/game.cpp:4393): joins the channel and
+     * sends it with its users (non-public channels only) and invited users.
+     */
+    fun playerOpenChannel(playerId: Long, channelId: Int) {
+        val player = getPlayerByID(playerId) ?: return
+        val channel = chatManager?.addUserToChannel(player, channelId) ?: return
+
+        val invitedUsers = channel.getInvitedUsers()
+        val users = if (!channel.isPublicChannel()) channel.getUsers() else null
+
+        sendChannel(player, channel.getId(), channel.getName(), users, invitedUsers)
+    }
+
+    /** `Game::playerCloseChannel` (src/game/game.cpp:4415). */
+    fun playerCloseChannel(playerId: Long, channelId: Int) {
+        val player = getPlayerByID(playerId) ?: return
+        chatManager?.removeUserFromChannel(player, channelId)
+    }
+
+    /**
+     * `Game::playerOpenPrivateChannel` (src/game/game.cpp:4424): the receiver
+     * name is validated through the `IOLoginData::formatPlayerName` seam, self
+     * channels and unknown names are rejected with the C++ cancel messages.
+     */
+    fun playerOpenPrivateChannel(playerId: Long, receiver: String) {
+        val player = getPlayerByID(playerId) ?: return
+
+        val formattedReceiver = formatPlayerName(receiver)
+        if (formattedReceiver == null) {
+            sendCancelMessageText(player, "A player with this name does not exist.")
+            return
+        }
+
+        if (player.name == formattedReceiver) {
+            sendCancelMessageText(player, "You cannot set up a private message channel with yourself.")
+            return
+        }
+
+        sendOpenPrivateChannel(player, formattedReceiver)
     }
 
     /** `Game::canThrowObjectTo` (src/game/game.cpp:7591): direct `Map::canThrowObjectTo` delegate. */
@@ -5884,9 +6122,20 @@ class Game(
         updateUIExhausted(player)
     }
 
-    /** `Game::getNpcByID` (src/game/game.cpp:1326): linear scan of the placed NPCs by id. */
-    fun getNpcByID(npcId: Long): Npc? =
-        placedCreatures.keys.firstOrNull { it is Npc && it.id == npcId } as? Npc
+    /**
+     * `Game::getNpcByID` (src/game/game.cpp:1326): the `npcsIdIndex` registry
+     * lookup. Until the spawn pipeline registers every placed NPC through
+     * [addNpc] (PARITY GAP), ids missing from the registry fall back to the
+     * placed-creature scan.
+     */
+    fun getNpcByID(npcId: Long): Npc? {
+        if (npcId == 0L) {
+            return null
+        }
+
+        npcsIdIndex[npcId]?.let { return npcs.getOrNull(it) }
+        return placedCreatures.keys.firstOrNull { it is Npc && it.id == npcId } as? Npc
+    }
 
     /**
      * `Game::playerNpcGreet` (src/game/game.cpp:10236): the exhaustion gate and
@@ -6992,9 +7241,1010 @@ class Game(
     /** `Game::getIOWheel` (src/game/game.cpp:12347). */
     fun getIOWheel(): IOWheel = ioWheel
 
+    // --- game state / world type (game.cpp:922-928, game.hpp:136-140) -----------
+
+    /** `Game::getGameState` (src/game/game.cpp:922). */
+    fun getGameState(): GameState_t = gameState
+
+    /**
+     * `Game::setGameState` (src/game/game.cpp:952). Reduced to the state
+     * assignment and the two guard clauses: the `GAME_STATE_INIT` world
+     * bootstrap (map spawns, raids, mounts, MOTD/record load), the
+     * `GAME_STATE_SHUTDOWN` save/kick-all and the `GAME_STATE_CLOSED` kick of
+     * non-`CanAlwaysLogin` players are not wired (PARITY GAP).
+     */
+    fun setGameState(newState: GameState_t) {
+        if (gameState == GameState_t.GAME_STATE_SHUTDOWN) {
+            return
+        }
+
+        if (gameState == newState) {
+            return
+        }
+
+        gameState = newState
+    }
+
+    /** `Game::setWorldType` (src/game/game.cpp:926). */
+    fun setWorldType(type: WorldType) {
+        worldType = type
+    }
+
+    /** `Game::getWorldType` (src/game/game.hpp:136-138). */
+    fun getWorldType(): WorldType = worldType
+
+    // --- creature name/id lookups (game.cpp:1356-1454, 11639) -------------------
+
+    /**
+     * `Game::getCreatureByName` (src/game/game.cpp:1356): online player, then
+     * npc, then monster, all through the lowercase name indexes.
+     */
+    fun getCreatureByName(creatureName: String): Creature? {
+        if (creatureName.isEmpty()) {
+            return null
+        }
+
+        val lowerCaseName = creatureName.lowercase()
+        players.values.firstOrNull { it.name.lowercase() == lowerCaseName }?.let { return it }
+        npcsNameIndex[lowerCaseName]?.let { return npcs[it] }
+        monstersNameIndex[lowerCaseName]?.let { return monsters[it] }
+        return null
+    }
+
+    /** `Game::getNpcByName` (src/game/game.cpp:1380). */
+    fun getNpcByName(npcName: String): Npc? {
+        if (npcName.isEmpty()) {
+            return null
+        }
+
+        val it = npcsNameIndex[npcName.lowercase()] ?: return null
+        return npcs[it]
+    }
+
+    /** `Game::addNpc` (src/game/game.cpp:11639). */
+    fun addNpc(npc: Npc?) {
+        if (npc == null) {
+            return
+        }
+        npcs.add(npc)
+        val index = npcs.size - 1
+        npcsNameIndex[npc.name.lowercase()] = index
+        npcsIdIndex[npc.id] = index
+    }
+
+    /** `Game::removeNpc` (src/game/game.cpp:11646). */
+    fun removeNpc(npc: Npc?) {
+        if (npc == null) {
+            return
+        }
+
+        val npcId = npc.id
+        npcsNameIndex.remove(npc.name.lowercase())
+        val it = npcsIdIndex.remove(npcId) ?: return
+
+        if (it < npcs.size) {
+            npcs[it] = npcs.last()
+            val moved = npcs.removeAt(npcs.size - 1)
+            if (npcs.isNotEmpty()) {
+                npcsNameIndex[moved.name.lowercase()] = it
+                npcsIdIndex[moved.id] = it
+            }
+        }
+    }
+
+    /** `Game::getNpcs` read view (game.hpp). */
+    fun getNpcs(): List<Npc> = npcs.toList()
+
+    /**
+     * `Game::getPlayerNameByGUID` (src/game/game.cpp:1439) with the
+     * `m_playerNameCache` memo; the `allowOffline` load goes through the
+     * injected `loadPlayerById` seam.
+     */
+    fun getPlayerNameByGUID(guid: Long): String {
+        if (guid == 0L) {
+            return ""
+        }
+        playerNameCache[guid]?.let { return it }
+        val name = getPlayerByGUID(guid, true)?.name ?: ""
+        if (name.isNotEmpty()) {
+            playerNameCache[guid] = name
+        }
+        return name
+    }
+
+    /**
+     * `Game::getPlayerByNameWildcard` (src/game/game.cpp:1454). The C++
+     * `player` out parameter becomes the second element of the returned pair.
+     */
+    fun getPlayerByNameWildcard(s: String): Pair<ReturnValue, Player?> {
+        val length = s.length
+        if (length == 0 || length > 29) {
+            return ReturnValue.PLAYERWITHTHISNAMEISNOTONLINE to null
+        }
+
+        val player: Player?
+        if (s.last() == '~') {
+            val query = s.substring(0, length - 1).lowercase()
+            val result = wildcardTree.findOne(query)
+            if (result.value != ReturnValue.NOERROR) {
+                return result.value to null
+            }
+            player = result.name?.let { getPlayerByName(it) }
+        } else {
+            player = getPlayerByName(s)
+        }
+
+        if (player == null) {
+            return ReturnValue.PLAYERWITHTHISNAMEISNOTONLINE to null
+        }
+
+        return ReturnValue.NOERROR to player
+    }
+
+    /**
+     * `Game::getPlayersByAccount` (src/game/game.cpp:1480): every account
+     * character name resolved through [getPlayerByName] with the
+     * `allowOffline` fallback.
+     */
+    fun getPlayersByAccount(acc: Account, allowOffline: Boolean = false): List<Player> {
+        val (accountPlayers, error) = acc.getAccountPlayers()
+        if (error != AccountErrors.Ok) {
+            return emptyList()
+        }
+
+        val ret = mutableListOf<Player>()
+        for ((name, _) in accountPlayers) {
+            getPlayerByName(name, allowOffline)?.let { ret.add(it) }
+        }
+        return ret
+    }
+
+    // --- dead player registry (game.cpp:11607-11621) -----------------------------
+
+    /** `Game::addDeadPlayer` (src/game/game.cpp:11607). */
+    fun addDeadPlayer(player: Player) {
+        deadPlayers[player.name] = WeakReference(player)
+    }
+
+    /** `Game::removeDeadPlayer` (src/game/game.cpp:11611). */
+    fun removeDeadPlayer(playerName: String) {
+        deadPlayers.remove(playerName)
+    }
+
+    /** `Game::getDeadPlayer` (src/game/game.cpp:11615). */
+    fun getDeadPlayer(playerName: String): Player? = deadPlayers[playerName]?.get()
+
+    // --- combat state-change pipeline (game.cpp:8193-9080) -----------------------
+
+    /** `Creature::isAttackable()` (src/creatures/creature.cpp); seam for combat. */
+    var isAttackable: (Creature) -> Boolean = { true }
+
+    /** `Player::getSkullClient(creature)` (player.cpp:7127); default reads the attached PvP component. */
+    var getSkullClient: (Player, Creature) -> Skulls_t = { player, creature ->
+        player.pvpPlayer.getSkullClient(creature)
+    }
+
+    /** `Player::updateImpactTracker(type, amount)` (player.cpp) protocol/stats seam. */
+    var updateImpactTracker: (Player, CombatType, Int) -> Unit = { _, _, _ -> }
+
+    /** `Party::addPlayerHealing(player, amount)` (party.cpp:...) seam for the party hunt analyzer. */
+    var addPlayerHealing: (Player, Int) -> Unit = { _, _ -> }
+
+    /** `Party::addPlayerDamage(player, amount)` (party.cpp:...) seam for the party hunt analyzer. */
+    var addPlayerDamage: (Player, Int) -> Unit = { _, _ -> }
+
+    /**
+     * `CreatureEvent::executeHealthChange` dispatch seam (game.cpp:8361-8368):
+     * returns true when at least one listener ran, in which case the C++
+     * recursion repeats the hit with `ORIGIN_NONE`.
+     */
+    var executeCreatureHealthChangeEvents: (Creature, Creature?, CombatDamage) -> Boolean = { _, _, _ -> false }
+
+    /**
+     * `CreatureEvent::executeManaChange` dispatch seam (game.cpp:9106-9115):
+     * returns true when at least one listener ran.
+     */
+    var executeCreatureManaChangeEvents: (Creature, Creature?, CombatDamage) -> Boolean = { _, _, _ -> false }
+
+    /**
+     * `CreatureEvent::executeOnPrepareDeath` dispatch seam (game.cpp:8740-8744):
+     * returns the (possibly rewritten) damage, or `null` to veto the hit.
+     */
+    var executeOnPrepareDeath: (Creature, Creature?, Int) -> Int? = { _, _, realDamage -> realDamage }
+
+    /** `Monster::getHazard()` (monster.cpp) seam behind [handleHazardSystemAttack]. */
+    var monsterHasHazard: (Monster) -> Boolean = { false }
+
+    /** `Player::parseAttackDealtHazardSystem` / `parseAttackRecvHazardSystem` (player.cpp:5513-5647) seam. */
+    var parseHazardSystemAttack: (CombatDamage, Player, Monster, Boolean) -> Unit = { _, _, _, _ -> }
+
+    /** `PlayerWheel::checkDrainBodyLeech(target, skill)` (player_wheel.cpp:3257) seam. */
+    var checkDrainBodyLeech: (Creature?, skills_t) -> Int = { _, _ -> 0 }
+
+    /** `Player::vocation` (player.hpp) accessor seam; the Kotlin `Player` keeps the vocation id + registry. */
+    var getVocation: (Player) -> Vocation? = { player -> player.vocations?.getVocation(player.vocationId) }
+
+    /** `g_configManager().getNumber(PVP_MAX_LEVEL_DIFFERENCE)` (configmanager.cpp) seam. */
+    var pvpMaxLevelDifference: Int = 0
+
+    /** `g_configManager().getFloat(PVP_RATE_DAMAGE_TAKEN_PER_LEVEL)` (configmanager.cpp) seam. */
+    var pvpRateDamageTakenPerLevel: Float = 0.0f
+
+    /** `g_configManager().getFloat(PVP_RATE_DAMAGE_REDUCTION_PER_LEVEL)` (configmanager.cpp) seam. */
+    var pvpRateDamageReductionPerLevel: Float = 0.0f
+
+    /** `PlayerWheel::reduceAllSpellsCooldownTimer(value)` (player_wheel.cpp:3423) seam. */
+    var reduceAllSpellsCooldownTimer: (Player, Int) -> Unit = { _, _ -> }
+
+    /** `PlayerWheel::sendGiftOfLifeCooldown()` (player_wheel.cpp:1590) protocol seam. */
+    var sendGiftOfLifeCooldown: (Player) -> Unit = { _ -> }
+
+    /** `Player::sendMagicEffect(pos, effect, source)` protocol seam. */
+    var sendMagicEffect: (Player, Position, Int) -> Unit = { _, _, _ -> }
+
+    /** `Game::combatGetTypeInfo(type, target, color, effect)` (game.cpp:8072) seam; returns the hit effect (0 = `CONST_ME_NONE`). */
+    var combatGetTypeInfo: (CombatType, Creature) -> Int = { _, _ -> 0 }
+
+    /** `g_events().eventCreatureOnDrainHealth` dispatch seam (game.cpp:8533). */
+    var eventCreatureOnDrainHealth: (
+        Creature,
+        Creature?,
+        CombatType,
+        Int,
+        CombatType,
+        Int,
+    ) -> Unit = { _, _, _, _, _, _ -> }
+
+    /** `g_callbacks().executeCallback(creatureOnDrainHealth, ...)` seam (game.cpp:8534). */
+    var callbackCreatureOnDrainHealth: (
+        Creature,
+        Creature?,
+        CombatType,
+        Int,
+        CombatType,
+        Int,
+    ) -> Unit = { _, _, _, _, _, _ -> }
+
+    /**
+     * `Game::addMagicEffect(pos, effect)` (src/game/game.cpp:9343): every
+     * multifloor player spectator of [pos] receives the effect.
+     */
+    fun addMagicEffect(pos: Position, effect: Int) {
+        val spectators = spectatorsOf(pos, multifloor = true)
+        addMagicEffect(spectators, pos, effect)
+    }
+
+    /**
+     * `Game::addMagicEffect(spectators, pos, effect)` (src/game/game.cpp:9348).
+     * The `source` overload's `SourceEffect_t` classification is not carried by
+     * the seam (PARITY GAP).
+     */
+    fun addMagicEffect(spectators: List<Creature>, pos: Position, effect: Int) {
+        for (spectator in spectators) {
+            val tmpPlayer = spectator as? Player ?: continue
+            sendMagicEffect(tmpPlayer, pos, effect)
+        }
+    }
+
+    /**
+     * `Game::handleHazardSystemAttack` (src/game/game.cpp:8193): only a
+     * non-zero primary hit against a hazardous monster reaches the player
+     * hazard parser; the parser itself is the injected seam.
+     */
+    fun handleHazardSystemAttack(damage: CombatDamage, player: Player, monster: Monster, isPlayerAttacker: Boolean) {
+        if (damage.primaryValue != 0 && monsterHasHazard(monster)) {
+            parseHazardSystemAttack(damage, player, monster, isPlayerAttacker)
+        }
+    }
+
+    /**
+     * `Game::applyPvPDamage` (src/game/game.cpp:8232): scales both components
+     * by the defender's receive multiplier, the attacker's dealt multiplier and
+     * the level-difference rate.
+     */
+    fun applyPvPDamage(damage: CombatDamage, attacker: Player, target: Player) {
+        val targetDamageReceivedMultiplier = getVocation(target)?.pvpDamageReceivedMultiplier ?: 1.0f
+        val attackerDamageDealtMultiplier = getVocation(attacker)?.pvpDamageDealtMultiplier ?: 1.0f
+        val levelDifferenceDamageMultiplier = pvpLevelDifferenceDamageMultiplier(attacker, target)
+
+        val pvpDamageMultiplier = targetDamageReceivedMultiplier * attackerDamageDealtMultiplier * levelDifferenceDamageMultiplier
+
+        damage.primaryValue = Math.round(damage.primaryValue * pvpDamageMultiplier)
+        damage.secondaryValue = Math.round(damage.secondaryValue * pvpDamageMultiplier)
+    }
+
+    /** `Game::pvpLevelDifferenceDamageMultiplier` (src/game/game.cpp:8243). */
+    fun pvpLevelDifferenceDamageMultiplier(attacker: Player, target: Player): Float {
+        var levelDifference = kotlin.math.abs(target.level - attacker.level)
+        val isLowerLevel = target.level < attacker.level
+
+        levelDifference = minOf(levelDifference, pvpMaxLevelDifference)
+
+        var levelDiffRate = 1.0f
+        if (isLowerLevel) {
+            val rateDamageTakenByLevel = pvpRateDamageTakenPerLevel / 100
+            levelDiffRate += levelDifference * rateDamageTakenByLevel
+        } else {
+            val rateDamageReductionByLevel = pvpRateDamageReductionPerLevel / 100
+            levelDiffRate -= levelDifference * rateDamageReductionByLevel
+        }
+
+        return levelDiffRate
+    }
+
+    /**
+     * `Game::applyHealthChange` (src/game/game.cpp:8327): the Wheel of Destiny
+     * "Gift of Life" gate. When the incoming hit overkills the player inside
+     * the stage's overkill percentage and the cooldown is clear, the gift
+     * triggers ([checkGiftOfLife]) and the post-trigger health is returned.
+     */
+    fun applyHealthChange(damage: CombatDamage, target: Creature): Int {
+        var targetHealth = target.health
+
+        val targetPlayer = target as? Player
+        if (targetPlayer != null) {
+            if (targetPlayer.wheel().getInstant("Gift of Life") &&
+                targetPlayer.wheel().getGiftOfCooldown() == 0 &&
+                (damage.primaryValue + damage.secondaryValue) >= targetHealth
+            ) {
+                var overkillMultiplier = (damage.primaryValue + damage.secondaryValue) - targetHealth
+                overkillMultiplier = (overkillMultiplier * 100) / targetPlayer.maxHealth
+                if (overkillMultiplier <= targetPlayer.wheel().getGiftOfLifeValue()) {
+                    checkGiftOfLife(targetPlayer)
+                    targetHealth = target.health
+                }
+            }
+        }
+        return targetHealth
+    }
+
+    /**
+     * `PlayerWheel::checkGiftOfLife` (src/creatures/players/components/wheel/player_wheel.cpp:3155),
+     * hosted on the `Game` facade because its body drives the game combat,
+     * effect and cooldown services. Heals the stage fraction of max health,
+     * emits the event message and water-drop effect, reduces every spell
+     * cooldown by 60s and arms the total cooldown.
+     */
+    fun checkGiftOfLife(player: Player) {
+        val giftDamage = CombatDamage()
+        giftDamage.primaryValue = (player.maxHealth * player.wheel().getGiftOfLifeValue()) / 100
+        giftDamage.primaryType = CombatType.HEALING
+        sendTextMessage(
+            player,
+            MessageClass.MESSAGE_EVENT_ADVANCE,
+            "That was close! Fortunately, your were saved by the Gift of Life.",
+        )
+        addMagicEffect(player.position, CONST_ME_WATER_DROP)
+        combatChangeHealth(player, player, giftDamage, false)
+        reduceAllSpellsCooldownTimer(player, GIFT_OF_LIFE_COOLDOWN_REDUCTION)
+        player.wheel().setGiftOfCooldown(player.wheel().getGiftOfLifeTotalCooldown(), false)
+        sendGiftOfLifeCooldown(player)
+    }
+
+    /**
+     * `Game::combatChangeHealth` (src/game/game.cpp:8344): the health
+     * state-change pipeline.
+     *
+     * Faithful reductions (PARITY GAPS): the perfect-shot bonus, the
+     * manashield drain, the defensive charm rolls and the hazard dodge
+     * notifications stay in their owning systems; the creature-event and
+     * protocol interactions run through the injected seams; the target's
+     * `getNameDescription` is reduced to `Creature::getName`.
+     */
+    @Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
+    fun combatChangeHealth(
+        attacker: Creature?,
+        target: Creature,
+        damage: CombatDamage,
+        isEvent: Boolean = false,
+    ): Boolean {
+        val targetPos = target.position
+        if (damage.primaryValue > 0) {
+            if (target.health <= 0) {
+                return false
+            }
+
+            val attackerPlayer = attacker as? Player
+            val targetPlayer = target as? Player
+            if (isUnmarkedBlackSkull(attackerPlayer, targetPlayer)) {
+                return false
+            }
+
+            if (damage.origin != CombatOrigin.NONE &&
+                executeCreatureHealthChangeEvents(target, attacker, damage)
+            ) {
+                damage.origin = CombatOrigin.NONE
+                return combatChangeHealth(attacker, target, damage, isEvent)
+            }
+
+            // Wheel of destiny combat healing
+            applyWheelOfDestinyHealing(damage, attackerPlayer, target)
+
+            val healthBefore = target.health
+            target.gainHealth(attacker, damage.primaryValue)
+            val realHealthChange = target.health - healthBefore
+
+            if (realHealthChange > 0 && !target.isInGhostMode()) {
+                if (targetPlayer != null) {
+                    updateImpactTracker(targetPlayer, CombatType.HEALING, realHealthChange)
+                }
+
+                // Party hunt analyzer
+                if (attackerPlayer != null && attackerPlayer.getParty() != null) {
+                    addPlayerHealing(attackerPlayer, realHealthChange)
+                }
+
+                val damageString = "$realHealthChange ${if (realHealthChange != 1) "hitpoints." else "hitpoint."}"
+
+                var spectatorMessage = ""
+                for (spectator in spectatorsOf(targetPos, multifloor = false)) {
+                    val tmpPlayer = spectator as? Player ?: continue
+                    val messageType: MessageClass
+                    val messageText: String
+                    if (tmpPlayer === attackerPlayer && attackerPlayer !== targetPlayer) {
+                        messageType = MessageClass.MESSAGE_HEALED
+                        messageText = "You heal ${target.name} for $damageString"
+                    } else if (tmpPlayer === targetPlayer) {
+                        val prefix = when {
+                            attacker == null -> "You were healed"
+                            targetPlayer === attackerPlayer -> "You heal yourself"
+                            else -> "You were healed by ${attacker.name}"
+                        }
+                        messageType = MessageClass.MESSAGE_HEALED
+                        messageText = "$prefix for $damageString"
+                    } else {
+                        if (spectatorMessage.isEmpty()) {
+                            spectatorMessage = if (attacker == null) {
+                                "${ucfirst(target.name)} was healed"
+                            } else {
+                                val pronoun = if (attacker === target) "itself" else target.name
+                                "${ucfirst(attacker.name)} healed $pronoun"
+                            } + " for $damageString"
+                        }
+                        messageType = MessageClass.MESSAGE_HEALED_OTHERS
+                        messageText = spectatorMessage
+                    }
+                    sendTextMessage(tmpPlayer, messageType, messageText)
+                }
+            }
+            return true
+        }
+
+        if (!isAttackable(target)) {
+            if (!target.isInGhostMode()) {
+                addMagicEffect(targetPos, CONST_ME_POFF)
+            }
+            return true
+        }
+
+        val attackerPlayer = attacker as? Player
+        val targetPlayer = target as? Player
+        if (isUnmarkedBlackSkull(attackerPlayer, targetPlayer)) {
+            return false
+        }
+
+        if (damage.origin != CombatOrigin.NONE && executeCreatureHealthChangeEvents(target, attacker, damage)) {
+            damage.origin = CombatOrigin.NONE
+            return combatChangeHealth(attacker, target, damage, isEvent)
+        }
+
+        // Wheel of destiny apply combat effects
+        applyWheelOfDestinyEffectsToDamage(damage, attackerPlayer, target)
+
+        damage.primaryValue = kotlin.math.abs(damage.primaryValue)
+        damage.secondaryValue = kotlin.math.abs(damage.secondaryValue)
+
+        val targetMonster = target as? Monster
+        val attackerMonster = attacker as? Monster
+
+        // PARITY GAP: the perfect-shot bonus (game.cpp:8500-8526) needs the
+        // player weapon/quiver accessors and is not ported.
+
+        if (!isEvent) {
+            eventCreatureOnDrainHealth(
+                target,
+                attacker,
+                damage.primaryType,
+                damage.primaryValue,
+                damage.secondaryType,
+                damage.secondaryValue,
+            )
+            callbackCreatureOnDrainHealth(
+                target,
+                attacker,
+                damage.primaryType,
+                damage.primaryValue,
+                damage.secondaryType,
+                damage.secondaryValue,
+            )
+        }
+        if (damage.origin != CombatOrigin.NONE && attacker != null && damage.primaryType != CombatType.HEALING) {
+            damage.primaryValue = damage.primaryValue * attacker.getBuff(Buff.BUFF_DAMAGEDEALT.value) / 100
+            damage.secondaryValue = damage.secondaryValue * attacker.getBuff(Buff.BUFF_DAMAGEDEALT.value) / 100
+        }
+        if (damage.origin != CombatOrigin.NONE && damage.primaryType != CombatType.HEALING) {
+            damage.primaryValue = damage.primaryValue * target.getBuff(Buff.BUFF_DAMAGERECEIVED.value) / 100
+            damage.secondaryValue = damage.secondaryValue * target.getBuff(Buff.BUFF_DAMAGERECEIVED.value) / 100
+        }
+        val healthChange = damage.primaryValue + damage.secondaryValue
+        if (healthChange == 0) {
+            return true
+        }
+
+        var spectators = spectatorsOf(targetPos, multifloor = true)
+
+        if (targetPlayer != null && attackerMonster != null) {
+            handleHazardSystemAttack(damage, targetPlayer, attackerMonster, false)
+        } else if (attackerPlayer != null && targetMonster != null) {
+            handleHazardSystemAttack(damage, attackerPlayer, targetMonster, true)
+
+            if ((damage.primaryValue == 0 && damage.secondaryValue == 0) || damage.hazardDodge) {
+                notifyHazardDodge(spectators, targetPos, attackerPlayer, targetMonster)
+                return true
+            }
+        }
+
+        if (damage.fatal) {
+            addMagicEffect(spectators, targetPos, CONST_ME_FATAL)
+        } else if (damage.critical) {
+            addMagicEffect(spectators, targetPos, CONST_ME_CRITICAL_DAMAGE)
+        }
+
+        // PARITY GAPS: the defensive charm rune rolls (game.cpp:8570-8598),
+        // the manashield drain (game.cpp:8607-8700) and the mana-shield charm
+        // inversion of `combatChangeMana` belong to the bestiary/condition
+        // systems and are not wired here.
+
+        var realDamage = damage.primaryValue + damage.secondaryValue
+        if (realDamage == 0) {
+            return true
+        }
+
+        // Apply Custom PvP Damage (must be placed here to avoid recursive calls)
+        if (attackerPlayer != null && targetPlayer != null) {
+            applyPvPDamage(damage, attackerPlayer, targetPlayer)
+        }
+
+        var targetHealth = target.health
+        realDamage = minOf(targetHealth, damage.primaryValue + damage.secondaryValue)
+        if (realDamage == 0) {
+            return true
+        } else if (realDamage >= targetHealth) {
+            val preparedDamage = executeOnPrepareDeath(target, attacker, realDamage) ?: return false
+            realDamage = preparedDamage
+        }
+
+        targetHealth = applyHealthChange(damage, target)
+        if (damage.primaryValue >= targetHealth) {
+            damage.primaryValue = targetHealth
+            damage.secondaryValue = 0
+        } else if (damage.secondaryValue != 0) {
+            damage.secondaryValue = minOf(damage.secondaryValue, targetHealth - damage.primaryValue)
+        }
+
+        // `Creature::drainHealth(attacker, realDamage)`; the attacker's
+        // `onTargetCreatureLossHealth` hook is not modelled (PARITY GAP).
+        target.changeHealth(-realDamage)
+
+        // PARITY GAP: `Monster::randomStepping` field-damage suppression.
+
+        if (spectators.isEmpty()) {
+            spectators = spectatorsOf(targetPos, multifloor = true)
+        }
+
+        addCreatureHealth(target)
+
+        sendDamageMessageAndEffects(
+            attacker,
+            target,
+            damage,
+            targetPos,
+            attackerPlayer,
+            targetPlayer,
+            spectators,
+            realDamage,
+        )
+
+        if (attackerPlayer != null) {
+            if (!damage.extension && damage.origin != CombatOrigin.CONDITION) {
+                // PARITY GAP: `applyCharmRune` (bestiary charm procs), life and
+                // mana leech run below.
+                applyLifeLeech(attackerPlayer, targetMonster, target, damage, realDamage)
+                applyManaLeech(attackerPlayer, targetMonster, target, damage, realDamage)
+            }
+            updatePlayerPartyHuntAnalyzer(damage, attackerPlayer)
+        }
+
+        return true
+    }
+
+    /**
+     * `Game::combatChangeMana` (src/game/game.cpp:9063): the mana state change.
+     * The `CHARM_VOIDINVERSION` inversion and the creature-event callback seam
+     * are reduced to the injected mana-change event dispatch (PARITY GAP for
+     * the charm path).
+     */
+    fun combatChangeMana(attacker: Creature?, target: Creature, damage: CombatDamage): Boolean {
+        var manaChange = damage.primaryValue + damage.secondaryValue
+        val attackerPlayer = attacker as? Player
+        val targetPlayer = target as? Player
+
+        if (manaChange > 0) {
+            if (isUnmarkedBlackSkull(attackerPlayer, targetPlayer)) {
+                return false
+            }
+
+            if (damage.origin != CombatOrigin.NONE && executeCreatureManaChangeEvents(target, attacker, damage)) {
+                damage.origin = CombatOrigin.NONE
+                return combatChangeMana(attacker, target, damage)
+            }
+
+            val manaBefore = target.mana
+            target.mana = minOf(target.maxMana, target.mana + manaChange)
+            val realManaChange = target.mana - manaBefore
+            if (realManaChange > 0 && !target.isInGhostMode()) {
+                val damageString = "$realManaChange mana"
+                for (spectator in spectatorsOf(target.position, multifloor = false)) {
+                    val tmpPlayer = spectator as? Player ?: continue
+                    if (tmpPlayer.position.z != target.position.z) {
+                        continue
+                    }
+                    val messageText = when {
+                        tmpPlayer === targetPlayer -> "You were restored for $damageString."
+                        attacker == null -> "${ucfirst(target.name)} was restored for $damageString."
+                        else -> "${ucfirst(attacker.name)} restored ${target.name} for $damageString."
+                    }
+                    sendTextMessage(tmpPlayer, MessageClass.MESSAGE_MANA, messageText)
+                }
+            }
+            return true
+        }
+
+        if (manaChange < 0) {
+            val manaBefore = target.mana
+            target.mana = maxOf(0, target.mana + manaChange)
+            val realManaChange = manaBefore - target.mana
+            if (realManaChange > 0 && !target.isInGhostMode()) {
+                val damageString = "$realManaChange mana"
+                for (spectator in spectatorsOf(target.position, multifloor = false)) {
+                    val tmpPlayer = spectator as? Player ?: continue
+                    if (tmpPlayer.position.z != target.position.z) {
+                        continue
+                    }
+                    val messageText = when {
+                        tmpPlayer === attackerPlayer && attackerPlayer !== targetPlayer ->
+                            "${ucfirst(target.name)} loses $damageString due to your attack."
+                        tmpPlayer === targetPlayer -> "You lose $damageString."
+                        else -> "${ucfirst(target.name)} loses $damageString due to an attack by " +
+                            "${attacker?.name ?: "something"}."
+                    }
+                    sendTextMessage(tmpPlayer, MessageClass.MESSAGE_MANA, messageText)
+                }
+            }
+        }
+
+        return true
+    }
+
+    /**
+     * `Game::sendDamageMessageAndEffects` (src/game/game.cpp:8788): the
+     * `sendEffects` + `sendMessages` pair. `shouldSendMessage` is reduced to
+     * always true because the Kotlin `TextMessage` color model is not ported.
+     */
+    fun sendDamageMessageAndEffects(
+        attacker: Creature?,
+        target: Creature,
+        damage: CombatDamage,
+        targetPos: Position,
+        attackerPlayer: Player?,
+        targetPlayer: Player?,
+        spectators: List<Creature>,
+        realDamage: Int,
+    ) {
+        sendEffects(attacker, target, damage, targetPos, spectators)
+        sendMessages(attacker, target, damage, targetPos, attackerPlayer, targetPlayer, spectators, realDamage)
+    }
+
+    /** `Game::sendEffects` (src/game/game.cpp:8943) over the injected [combatGetTypeInfo]. */
+    private fun sendEffects(
+        attacker: Creature?,
+        target: Creature,
+        damage: CombatDamage,
+        targetPos: Position,
+        spectators: List<Creature>,
+    ) {
+        if (damage.primaryValue != 0) {
+            val hitEffect = combatGetTypeInfo(damage.primaryType, target)
+            if (hitEffect != CONST_ME_NONE) {
+                addMagicEffect(spectators, targetPos, hitEffect)
+            }
+        }
+
+        if (damage.secondaryValue != 0) {
+            val hitEffect = combatGetTypeInfo(damage.secondaryType, target)
+            if (hitEffect != CONST_ME_NONE) {
+                addMagicEffect(spectators, targetPos, hitEffect)
+            }
+        }
+    }
+
+    /**
+     * `Game::sendMessages` (src/game/game.cpp:8803). The input analyzer update
+     * and the low-blow/savage charm notes are not ported (PARITY GAP).
+     */
+    private fun sendMessages(
+        attacker: Creature?,
+        target: Creature,
+        damage: CombatDamage,
+        targetPos: Position,
+        attackerPlayer: Player?,
+        targetPlayer: Player?,
+        spectators: List<Creature>,
+        realDamage: Int,
+    ) {
+        if (attackerPlayer != null) {
+            updateImpactTracker(attackerPlayer, damage.primaryType, damage.primaryValue)
+            if (damage.secondaryType != CombatType.NONE) {
+                updateImpactTracker(attackerPlayer, damage.secondaryType, damage.secondaryValue)
+            }
+        }
+
+        val damageString = "$realDamage ${if (realDamage != 1) "hitpoints" else "hitpoint"}"
+
+        var spectatorMessage = ""
+        for (spectator in spectators) {
+            val tmpPlayer = spectator as? Player ?: continue
+            if (tmpPlayer.position.z != targetPos.z) {
+                continue
+            }
+
+            val messageType: MessageClass
+            val messageText: String
+            if (tmpPlayer === attackerPlayer && attackerPlayer !== targetPlayer) {
+                messageType = MessageClass.MESSAGE_DAMAGE_DEALT
+                messageText = buildMessageAsAttacker(target, damage, damageString)
+            } else if (tmpPlayer === targetPlayer) {
+                messageType = MessageClass.MESSAGE_DAMAGE_RECEIVED
+                messageText = buildMessageAsTarget(attacker, damage, attackerPlayer, targetPlayer, damageString)
+            } else {
+                if (spectatorMessage.isEmpty()) {
+                    spectatorMessage = buildMessageAsSpectator(attacker, target, damage, damageString)
+                }
+                messageType = MessageClass.MESSAGE_DAMAGE_OTHERS
+                messageText = spectatorMessage
+            }
+            sendTextMessage(tmpPlayer, messageType, messageText)
+        }
+    }
+
+    /** `Game::buildMessageAsSpectator` (src/game/game.cpp:8834). */
+    private fun buildMessageAsSpectator(
+        attacker: Creature?,
+        target: Creature,
+        damage: CombatDamage,
+        damageString: String,
+    ): String {
+        val attackMsg = if (damage.critical) "critical " else ""
+        val article = if (damage.critical) "a" else "an"
+        val builder = StringBuilder("${ucfirst(target.name)} loses $damageString")
+        if (attacker != null) {
+            builder.append(" due to ")
+            if (attacker === target) {
+                builder.append("its own ${attackMsg}attack")
+            } else {
+                builder.append("$article ${attackMsg}attack by ${attacker.name}")
+            }
+        }
+        builder.append('.')
+        if (damage.extension) {
+            builder.append(' ').append(damage.exString)
+        }
+        return builder.toString()
+    }
+
+    /**
+     * `Game::buildMessageAsTarget` (src/game/game.cpp:8870). The Soulpit
+     * critical suffix needs `Monster::getSoulPit`/`getForgeStack` (PARITY GAP).
+     */
+    private fun buildMessageAsTarget(
+        attacker: Creature?,
+        damage: CombatDamage,
+        attackerPlayer: Player?,
+        targetPlayer: Player?,
+        damageString: String,
+    ): String {
+        val attackMsg = if (damage.critical) "critical " else ""
+        val article = if (damage.critical) "a" else "an"
+
+        val builder = StringBuilder("You lose $damageString")
+        if (attacker == null) {
+            builder.append('.')
+        } else if (targetPlayer === attackerPlayer) {
+            builder.append(" due to your own ${attackMsg}attack.")
+        } else {
+            builder.append(" due to $article ${attackMsg}attack by ${attacker.name}.")
+        }
+        if (damage.extension) {
+            builder.append(' ').append(damage.exString)
+        }
+        return builder.toString()
+    }
+
+    /** `Game::buildMessageAsAttacker` (src/game/game.cpp:8900). */
+    private fun buildMessageAsAttacker(target: Creature, damage: CombatDamage, damageString: String): String {
+        val builder = StringBuilder(
+            "${ucfirst(target.name)} loses $damageString due to your " +
+                "${if (damage.critical) "critical " else " "}attack.",
+        )
+        if (damage.extension) {
+            builder.append(' ').append(damage.exString)
+        }
+        if (damage.fatal) {
+            builder.append(" (Onslaught)")
+        }
+        return builder.toString()
+    }
+
+    /**
+     * `Game::notifySpectators` (src/game/game.cpp:8203): the hazard dodge
+     * fanout. The cancel message is not ported (PARITY GAP).
+     */
+    private fun notifyHazardDodge(
+        spectators: List<Creature>,
+        targetPos: Position,
+        attackerPlayer: Player,
+        targetMonster: Monster,
+    ) {
+        if (spectators.isEmpty()) {
+            return
+        }
+
+        for (spectator in spectators) {
+            val tmpPlayer = spectator as? Player ?: continue
+            if (tmpPlayer.position.z != targetPos.z) {
+                continue
+            }
+
+            val text = if (tmpPlayer === attackerPlayer) {
+                "${ucfirst(targetMonster.name)} has dodged your attack. (Hazard)"
+            } else {
+                "${ucfirst(targetMonster.name)} has dodged an attack by ${attackerPlayer.name}. (Hazard)"
+            }
+            sendTextMessage(tmpPlayer, MessageClass.MESSAGE_DAMAGE_OTHERS, text)
+        }
+        addMagicEffect(targetPos, CONST_ME_DODGE)
+    }
+
+    /**
+     * `Game::calculateLeechAmount` (src/game/game.cpp:9058):
+     * `realDamage * skill/10000 * (0.1 * targets + 0.9) / targets`, rounded and
+     * clamped to `[0, realDamage]`.
+     */
+    fun calculateLeechAmount(realDamage: Int, skillAmount: Int, targetsAffected: Int): Int {
+        val intermediateResult = realDamage * (skillAmount / 10000.0) *
+            (0.1 * targetsAffected + 0.9) / targetsAffected
+        return Math.round(intermediateResult).toInt().coerceIn(0, realDamage)
+    }
+
+    /**
+     * `Game::applyLifeLeech` (src/game/game.cpp:9029). The `CHARM_VAMP` bonus
+     * is not ported (PARITY GAP); the wheel drain-body bonus is the
+     * [checkDrainBodyLeech] seam.
+     */
+    fun applyLifeLeech(
+        attackerPlayer: Player,
+        targetMonster: Monster?,
+        target: Creature?,
+        damage: CombatDamage,
+        realDamage: Int,
+    ) {
+        val wheelLeechAmount = checkDrainBodyLeech(target, skills_t.SKILL_LIFE_LEECH_AMOUNT)
+        val lifeSkill = attackerPlayer.getSkillLevel(skills_t.SKILL_LIFE_LEECH_AMOUNT).toLong() +
+            wheelLeechAmount + damage.lifeLeech
+
+        val boundedLifeSkill = lifeSkill.coerceIn(0, UINT16_MAX.toLong()).toInt()
+        if (boundedLifeSkill == 0) {
+            return
+        }
+
+        val tmpDamage = CombatDamage()
+        tmpDamage.origin = CombatOrigin.SPELL
+        tmpDamage.primaryType = CombatType.HEALING
+        tmpDamage.primaryValue = calculateLeechAmount(realDamage, boundedLifeSkill, damage.affected)
+
+        combatChangeHealth(null, attackerPlayer, tmpDamage, false)
+    }
+
+    /**
+     * `Game::applyManaLeech` (src/game/game.cpp:8998). The `CHARM_VOID` bonus
+     * is not ported (PARITY GAP); the wheel drain-body bonus is the
+     * [checkDrainBodyLeech] seam.
+     */
+    fun applyManaLeech(
+        attackerPlayer: Player,
+        targetMonster: Monster?,
+        target: Creature?,
+        damage: CombatDamage,
+        realDamage: Int,
+    ) {
+        val wheelLeechAmount = checkDrainBodyLeech(target, skills_t.SKILL_MANA_LEECH_AMOUNT)
+        val manaSkill = attackerPlayer.getSkillLevel(skills_t.SKILL_MANA_LEECH_AMOUNT).toLong() +
+            wheelLeechAmount + damage.manaLeech
+
+        val boundedManaSkill = manaSkill.coerceIn(0, UINT16_MAX.toLong()).toInt()
+        if (boundedManaSkill == 0) {
+            return
+        }
+
+        val tmpDamage = CombatDamage()
+        tmpDamage.origin = CombatOrigin.SPELL
+        tmpDamage.primaryType = CombatType.MANADRAIN
+        tmpDamage.primaryValue = calculateLeechAmount(realDamage, boundedManaSkill, damage.affected)
+
+        combatChangeMana(null, attackerPlayer, tmpDamage)
+    }
+
+    /**
+     * `Game::updatePlayerPartyHuntAnalyzer` (src/game/game.cpp:8773): forwards
+     * both damage components to the player's party hunt analyzer through the
+     * [addPlayerDamage] seam (`Party` does not carry the analyzer yet, PARITY GAP).
+     */
+    fun updatePlayerPartyHuntAnalyzer(damage: CombatDamage, player: Player?) {
+        if (player == null) {
+            return
+        }
+
+        if (player.getParty() != null) {
+            if (damage.primaryValue != 0) {
+                addPlayerDamage(player, damage.primaryValue)
+            }
+            if (damage.secondaryValue != 0) {
+                addPlayerDamage(player, damage.secondaryValue)
+            }
+        }
+    }
+
+    /**
+     * `Player::getSkull()` / `Player::getSkullClient` black-skull gate used by
+     * the health, mana and healing paths (game.cpp:8355, 8381, 9093).
+     */
+    private fun isUnmarkedBlackSkull(attackerPlayer: Player?, targetPlayer: Player?): Boolean =
+        attackerPlayer != null &&
+            targetPlayer != null &&
+            attackerPlayer.getSkull() == Skulls_t.SKULL_BLACK &&
+            getSkullClient(attackerPlayer, targetPlayer) == Skulls_t.SKULL_NONE
+
+    /** `ucfirst` (src/utils/tools.hpp). */
+    private fun ucfirst(value: String): String =
+        value.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+
     companion object {
         /** `INDEX_WHEREEVER` (src/items/cylinder.hpp:18). */
         const val INDEX_WHEREEVER = -1
+
+        /** `CONST_ME_NONE` (src/utils/utils_definitions.hpp:60). */
+        const val CONST_ME_NONE = 0
+
+        /** `CONST_ME_POFF` (src/utils/utils_definitions.hpp:63). */
+        const val CONST_ME_POFF = 3
+
+        /** `CONST_ME_CRITICAL_DAMAGE` (src/utils/utils_definitions.hpp:230). */
+        const val CONST_ME_CRITICAL_DAMAGE = 173
+
+        /** `CONST_ME_FATAL` (src/utils/utils_definitions.hpp:287). */
+        const val CONST_ME_FATAL = 230
+
+        /** `CONST_ME_DODGE` (src/utils/utils_definitions.hpp:288). */
+        const val CONST_ME_DODGE = 231
+
+        /** `CONST_ME_WATER_DROP` (src/utils/utils_definitions.hpp:300). */
+        const val CONST_ME_WATER_DROP = 243
+
+        /** `reductionTimer` of `PlayerWheel::checkGiftOfLife` (player_wheel.cpp:3164). */
+        private const val GIFT_OF_LIFE_COOLDOWN_REDUCTION = 60000
+
+        /** `std::numeric_limits<uint16_t>::max()` (game.cpp:9011, 9032). */
+        private const val UINT16_MAX = 65535
 
         /** `ITEM_STORE_COIN` (src/utils/utils_definitions.hpp:611). */
         private const val ITEM_STORE_COIN = 22118

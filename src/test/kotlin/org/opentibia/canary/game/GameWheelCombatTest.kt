@@ -3,8 +3,6 @@ package org.opentibia.canary.game
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.combat.CombatDamage
-import org.opentibia.canary.combat.CombatType
-import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.game.scheduling.GameDispatcher
@@ -21,14 +19,12 @@ import org.opentibia.canary.systems.wheel.WheelStat
  *  - `Game::getIOWheel` (game.cpp:12347)
  *
  * plus the `PlayerWheel::` accessors they call (player_wheel.cpp:3172-3241,
- * 3546-3985). `Game::combatChangeHealth` (game.cpp:8344) is an injected seam
- * because the full combat pipeline is not ported.
+ * 3546-3985). The healing link drives the real `Game::combatChangeHealth`
+ * (game.cpp:8344) state change (see `GameCombatPipelineTest`).
  */
 class GameWheelCombatTest {
 
     private val center = Position(1000, 1000, 7)
-
-    private class Healing(val attacker: Creature?, val target: Creature?, val damage: CombatDamage)
 
     private fun newGame(): Game = Game(GameMap(), GameDispatcher())
 
@@ -89,33 +85,24 @@ class GameWheelCombatTest {
     fun `applyWheelOfDestinyHealing applies the healing link as a self combat heal`() {
         val game = newGame()
         val player = game.player(1, "Druid")
-        val heals = mutableListOf<Healing>()
-        game.combatChangeHealth = { attacker, target, damage, _ ->
-            heals.add(Healing(attacker, target, damage))
-            true
-        }
+        player.health = 50
 
         val damage = CombatDamage(primaryValue = 100, healingLink = 10)
         game.applyWheelOfDestinyHealing(damage, player, null)
 
-        val heal = heals.single()
-        assertThat(heal.attacker).isSameAs(player)
-        assertThat(heal.target).isSameAs(player)
-        assertThat(heal.damage.primaryValue).isEqualTo(10)
-        assertThat(heal.damage.primaryType).isEqualTo(CombatType.HEALING)
+        assertThat(player.health).isEqualTo(60)
     }
 
     @Test
     fun `applyWheelOfDestinyHealing ignores a zero healing link`() {
         val game = newGame()
         val player = game.player(1, "Druid")
-        var healed = false
-        game.combatChangeHealth = { _, _, _, _ -> healed = true; true }
+        player.health = 50
 
         val damage = CombatDamage(primaryValue = 100)
         game.applyWheelOfDestinyHealing(damage, player, null)
 
-        assertThat(healed).isFalse()
+        assertThat(player.health).isEqualTo(50)
     }
 
     @Test

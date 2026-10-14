@@ -37,6 +37,8 @@ class PlayerWheel(
      * `check<Spell>ByTarget` methods can never match (PARITY GAP).
      */
     private val player: Player? = null,
+    /** `OTSYS_TIME()` (src/utils/tools.hpp) seam for the gift on-think timer. */
+    private val otsysTimeMs: () -> Long = System::currentTimeMillis,
 ) {
     fun getPointsBySlotType(slot: WheelSlots): Int = pointsBySlot[slot] ?: 0
 
@@ -323,6 +325,53 @@ class PlayerWheel(
             return
         }
         onThink[type.value] = time
+    }
+
+    // --- Gift of Life (player_wheel.cpp:3945-3996) --------------------------------
+
+    /**
+     * `PlayerWheel::m_player.getStorageValue(STORAGEVALUE_GIFT_OF_LIFE_COOLDOWN_WOD)`
+     * storage (src/utils/const.hpp:37) relocated onto the wheel because the
+     * Kotlin `Player` does not model the integer storage map yet (PARITY GAP).
+     */
+    private var giftOfCooldown: Int = 0
+
+    /** `PlayerWheel::getGiftOfLifeTotalCooldown` (player_wheel.cpp:3945). */
+    fun getGiftOfLifeTotalCooldown(): Int = when (getStage(WheelStage.GIFT_OF_LIFE)) {
+        1 -> 1 * 60 * 60 * 30
+        2 -> 1 * 60 * 60 * 20
+        3 -> 1 * 60 * 60 * 10
+        else -> 0
+    }
+
+    /** `PlayerWheel::getGiftOfLifeValue` (player_wheel.cpp:3958). */
+    fun getGiftOfLifeValue(): Int = when (getStage(WheelStage.GIFT_OF_LIFE)) {
+        1 -> 20
+        2 -> 25
+        3 -> 30
+        else -> 0
+    }
+
+    /** `PlayerWheel::getGiftOfCooldown` (player_wheel.cpp:3972). */
+    fun getGiftOfCooldown(): Int = if (giftOfCooldown <= 0) 0 else giftOfCooldown
+
+    /** `PlayerWheel::setGiftOfCooldown` (player_wheel.cpp:3979). */
+    fun setGiftOfCooldown(value: Int, isOnThink: Boolean) {
+        giftOfCooldown = value
+        if (!isOnThink) {
+            setOnThinkTimer(WheelOnThink.GIFT_OF_LIFE, otsysTimeMs() + 1000)
+        }
+    }
+
+    /** `PlayerWheel::decreaseGiftOfCooldown` (player_wheel.cpp:3986). */
+    fun decreaseGiftOfCooldown(value: Int) {
+        val cooldown = getGiftOfCooldown() - value
+        if (cooldown <= 0) {
+            setOnThinkTimer(WheelOnThink.GIFT_OF_LIFE, otsysTimeMs() + 3_600_000)
+            return
+        }
+        setOnThinkTimer(WheelOnThink.GIFT_OF_LIFE, otsysTimeMs() + value * 1000L)
+        setGiftOfCooldown(cooldown, true)
     }
 
     /**
