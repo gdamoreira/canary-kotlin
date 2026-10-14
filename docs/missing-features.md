@@ -244,10 +244,10 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 **The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Remaining work is depth polish:
 
-1. **Combat spell actors in monster types** — `sb.spell`/`CombatSpell` actor for attack blocks (combat type/effect/shoot) and nested `childLoot`.
-2. **Remaining `PlayerWheel` checks** — healing link/major stat/beam mastery/cooldown reduction/augments/persistence serialization.
-3. **Host accessors** — `Player::storage()`/`getOutfits`/`getBankBalance` composition in `Creature.kt`; io binding of the animus blob.
-4. **Lua shadows** — Lua outfit/storage maps still shadow the composed `PlayerFeatures` state.
+1. **Monster event dispatch** — `registerEvent` doesn't push to already-spawned monsters; `onAppear`/`onDisappear`/`onMove`/`onSay`/`onPlayerAttack` captured but not dispatched; `revscriptsys.lua` not loaded at boot; `MONSTERS_EVENT_*` enums unregistered.
+2. **Compiled spell registry** — `sb.spell = g_spells().getSpellByName` hit not wired (deserializer always builds the actor).
+3. **Condition save path** — no Kotlin condition save (load half only); animus single-column Canary schema vs interim table; storage persistence call sites unbound.
+4. **Visibility/ghost** — `Player::canSeeCreature` override absent; `sendCreatureSquare` canSee gate; `sendCreatureAppear` stackpos→`sendUpdateTile` fallback.
 
 ---
 
