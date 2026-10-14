@@ -1,5 +1,6 @@
 # Canary Kotlin Edition
 
+[![CI](https://github.com/gdamoreira/canary-kotlin/actions/workflows/ci.yml/badge.svg)](https://github.com/gdamoreira/canary-kotlin/actions/workflows/ci.yml)
 [![Kotlin](https://img.shields.io/badge/kotlin-2.4.21-blue.svg?logo=kotlin)](https://kotlinlang.org)
 [![JVM](https://img.shields.io/badge/JVM-25%20LTS-orange.svg?logo=openjdk)](https://adoptium.net)
 [![Gradle](https://img.shields.io/badge/gradle-9.8.1-green.svg?logo=gradle)](https://gradle.org)

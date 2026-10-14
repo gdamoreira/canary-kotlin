@@ -573,8 +573,21 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 58: Repository Improvements (11:00 – 13:00)
+- **Path hygiene** — 57 files swept to relative `../.projects/canary` references; AGENTS.md/template now enforce the convention (`bd9015e`).
+- **Fork branding** — README/status/webhook point at `gdamoreira/canary-kotlin`; MapDownload keeps the upstream artifact URLs annotated (`e64b190`).
+- **RSA configuration** — `CANARY_RSA_P`/`CANARY_RSA_Q` override the built-in OpenTibia pair; invalid values fail the boot fast (7 new tests, `57beea9`).
+- **Documentation port** — full 45-file port/adaptation of `canary/docs` with a new docs hub, Gradle build guides and JVM-adapted architecture/operations docs (`10d53b5`).
+- **README + governance** — ToC and all 12 requested sections; MIT `LICENSE` (user decision), `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md` (`aa85506`).
+- **CI/CD** — GitHub Actions build/test pipeline (JDK 25) and Docker build/compose validation (`29b09f0`).
+- **Datapack** — `data-otservbr-global` copied verbatim (4757 files, 38 MB; Lua stays Lua) (`ca3e768`).
+- **Docker delivery** — read-only data mounts, server healthcheck, `.env.dist`, `docker/DOCKER.md`, guarded `up.sh`/`up.ps1`, `.dockerignore` (`637db6f3`).
+- **690 suites / 7627 tests, all green.**
+
+---
+
 ### Current Status
-- **Automated Tests**: **689 test suites / 7620 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **690 test suites / 7627 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.

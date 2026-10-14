@@ -1,6 +1,6 @@
 # Wave 60 Plan — Repository Improvements (`docs/improvements.md`)
 
-**Status:** Approved — executing sequentially (decisions resolved)
+**Status:** Completed (2026-10-14) — all 8 improvements merged and pushed
 **Decisions (user):** I2 keep upstream download URLs annotated · I7 copy datapack verbatim · I4 full 45-file port · I8 keep root compose + add docker/ guides · I5 **MIT license** (user-elected; upstream Canary is GPL-2.0 — provenance noted in README acknowledgments) · Q1-Q7 resolved as listed
 **Source of requirements:** `docs/improvements.md` (user-authored)
 **Baseline:** `main` @ `cf6496d`; 689 suites / 7620 tests green; zero Kotlin warnings
@@ -242,3 +242,11 @@ All items are **sequential on `main`** (they overlap files; parallel worktrees w
 - **Upstream datapack:** `../.projects/canary/data-otservbr-global/`
 - **Upstream governance:** `../.projects/canary/{LICENSE,CONTRIBUTING.md,CODE_OF_CONDUCT.md}` (no `SECURITY.md` upstream — content must be authored)
 - **RSA key origin:** `../.projects/canary/key.pem` + the OpenTibia default decimal key pair mirrored in `RsaCipher.kt`
+
+---
+
+## Completion (2026-10-14)
+
+All eight improvements landed as separate commits on `main` (see the status
+table in `docs/improvements.md`), ending with **690 suites / 7627 tests green**
+and zero Kotlin warnings. This plan moves to `docs/Done/`.
