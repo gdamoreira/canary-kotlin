@@ -101,15 +101,16 @@ class ScheduledTask internal constructor(
  * carried as a coroutine `ThreadContextElement` so the context survives a
  * suspension resumed on another barrier worker thread.
  *
+ * MONSTER LATENESS: `MonsterPipelinesHost` observes its
+ * `MonsterPostThinkLateness`/`MonsterMovementRefreshLateness` (monster.cpp:1668,
+ * 513) through [observeInternalWork] whenever a dispatcher is attached, and
+ * keeps its local `ConcurrentTimedWork` sinks only for embedded/test hosts.
+ *
  * PARITY GAPS:
  *  - The production `setQueueLatencyLoggingEnabled(true)` call site
  *    (`CanaryServer`, canary_server.cpp:311) belongs to the composition root
  *    and is not wired here; tests enable the toggle through
  *    [setQueueLatencyLoggingEnabled].
- *  - `MonsterPipelinesHost` still records its lateness lambdas into its own
- *    `ConcurrentTimedWork` sinks (`postThinkLateness`/
- *    `movementRefreshLateness`) instead of calling [observeInternalWork]; the
- *    rebinding is owned by the monster host (out of `game.scheduling` scope).
  */
 class GameDispatcher(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default.limitedParallelism(1)),

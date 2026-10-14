@@ -1,6 +1,7 @@
 package org.opentibia.canary.creatures.monsters
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.assertj.core.api.Assertions.assertThat
@@ -12,6 +13,7 @@ import org.opentibia.canary.creatures.FlagAsyncClass_t
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.game.scheduling.CreatureAsyncTaskBuckets
+import org.opentibia.canary.game.scheduling.DispatcherInternalWork
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.scheduling.MonsterComputeConfig
@@ -312,6 +314,53 @@ class MonsterPipelinesHostTest {
     }
 
     @Test
+    fun `the post think lateness reaches the attached dispatcher telemetry sink`() {
+        val dispatcher = GameDispatcher()
+        dispatcher.setQueueLatencyLoggingEnabled(true)
+        host.dispatcher = dispatcher
+        host.scheduleMonsterPostThinkQueue = { _, task -> task(); true }
+        monster.setAsyncTaskFlag(FlagAsyncClass_t.OnThink, true)
+        host.trySchedulePostThink(monster)
+        now = 1_050L
+
+        entry.pipeline.queuePostThinkAfterAsync()
+
+        try {
+            val snapshot = dispatcher.internalWorkSnapshot(DispatcherInternalWork.MonsterPostThinkLateness)
+            assertThat(snapshot.latency.samples).isEqualTo(1)
+            assertThat(snapshot.workUnits).isEqualTo(1)
+            assertThat(snapshot.latency.mean()).isEqualTo(50_000L)
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    @Test
+    fun `the movement refresh lateness reaches the attached dispatcher telemetry sink`() {
+        val dispatcher = GameDispatcher()
+        dispatcher.setQueueLatencyLoggingEnabled(true)
+        host.dispatcher = dispatcher
+        val oldPos = Position(200, 100, 7)
+        val newPos = Position(105, 100, 7)
+        val moving = TargetCreatureFacts(id = 2, position = newPos, playerId = 2)
+        creatures[2] = Player(id = 2, name = "Hero", maxHealth = 100, health = 100, position = newPos)
+
+        entry.pipeline.queueMovementAiRefresh(moving, oldPos, newPos)
+        now = 1_030L
+
+        batches.single().invoke()
+
+        try {
+            val snapshot = dispatcher.internalWorkSnapshot(DispatcherInternalWork.MonsterMovementRefreshLateness)
+            assertThat(snapshot.latency.samples).isEqualTo(1)
+            assertThat(snapshot.workUnits).isEqualTo(1)
+            assertThat(snapshot.latency.mean()).isEqualTo(30_000L)
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    @Test
     fun `registering without a monster type keeps the inert type driven seams`() {
         assertThat(entry.typeState.monsterType).isNull()
         assertThat(entry.host.attackSpells()).isEmpty()
@@ -420,7 +469,13 @@ class MonsterPipelinesHostTest {
 
             withTimeout(2_000) { done.await() }
 
-            val background = dispatcher.laneTelemetry[DispatcherLane.MonsterAI.ordinal].barrierRuntime.snapshotAndReset()
+            var background = dispatcher.laneTelemetry[DispatcherLane.MonsterAI.ordinal].barrierRuntime.snapshotAndReset()
+            withTimeout(2_000) {
+                while (background.workUnits == 0L) {
+                    delay(5)
+                    background = dispatcher.laneTelemetry[DispatcherLane.MonsterAI.ordinal].barrierRuntime.snapshotAndReset()
+                }
+            }
             val visible = dispatcher.laneTelemetry[DispatcherLane.VisibleMonsterAI.ordinal].barrierRuntime.snapshotAndReset()
             assertThat(background.workUnits).isEqualTo(1)
             assertThat(visible.workUnits).isZero()
