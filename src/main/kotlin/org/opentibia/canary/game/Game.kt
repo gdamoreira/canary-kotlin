@@ -8,17 +8,23 @@ import org.opentibia.canary.chat.CHANNEL_GUILD
 import org.opentibia.canary.chat.ChatClient
 import org.opentibia.canary.chat.NoopChatClient
 import org.opentibia.canary.chat.SpeakClasses
+import org.opentibia.canary.combat.CombatDamage
+import org.opentibia.canary.combat.CombatType
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.LightInfo
 import org.opentibia.canary.combat.condition.Outfit
+import org.opentibia.canary.config.FeatureFlags
 import org.opentibia.canary.creatures.ChaseMode
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.FightMode
+import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Npc
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.creatures.Slots_t
+import org.opentibia.canary.creatures.appearance.outfit.Outfit as OutfitDefinition
 import org.opentibia.canary.creatures.grouping.Party
+import org.opentibia.canary.creatures.monsters.ForgeClassification
 import org.opentibia.canary.creatures.players.components.CyclopediaDatabaseTasks
 import org.opentibia.canary.creatures.players.components.CyclopediaQueryResult
 import org.opentibia.canary.creatures.players.components.HighscoreCategories_t
@@ -91,12 +97,15 @@ import org.opentibia.canary.systems.forge.ForgeAction_t
 import org.opentibia.canary.systems.forge.ForgeRandom
 import org.opentibia.canary.systems.imbuement.Imbuement
 import org.opentibia.canary.systems.imbuement.Imbuements
+import org.opentibia.canary.systems.mount.Mount
 import org.opentibia.canary.systems.prey.PreyAction
 import org.opentibia.canary.systems.prey.PreyOption
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import org.opentibia.canary.systems.taskhunting.PreyTaskAction
+import org.opentibia.canary.systems.wheel.IOWheel
 import org.opentibia.canary.systems.wheel.WheelApplication
 import org.opentibia.canary.systems.wheel.WheelPlayer
+import org.opentibia.canary.systems.wheel.WheelStat
 import org.opentibia.canary.utils.Tools
 import java.lang.ref.WeakReference
 import java.util.IdentityHashMap
@@ -259,6 +268,18 @@ data class HighscoreSkillName(
  *    `playerForgeFuseItems` game.cpp:11178, `playerForgeTransferItemTier` game.cpp:11211)
  *  - wheel (`playerOpenWheel` game.cpp:11525, `playerSaveWheel` game.cpp:11538,
  *    `playerWheelGemAction` game.cpp:11554)
+ *  - wheel combat application (`applyWheelOfDestinyHealing` game.cpp:8264,
+ *    `applyWheelOfDestinyEffectsToDamage` game.cpp:8287, `getIOWheel` game.cpp:12347)
+ *  - monster registry (`addMonster` game.cpp:11671, `removeMonster` game.cpp:11683,
+ *    `getMonsterByID` game.cpp:1309)
+ *  - fiendish/influenced forge events (`makeInfluencedMonster` game.cpp:11882,
+ *    `makeFiendishMonster` game.cpp:11928, `updateFiendishMonsterStatus`
+ *    game.cpp:12045, `removeForgeMonster` game.cpp:12057, `removeInfluencedMonster`
+ *    game.cpp:12067, `removeFiendishMonster` game.cpp:12084, `updateForgeableMonsters`
+ *    game.cpp:12103, `createFiendishMonsters` game.cpp:12139,
+ *    `createInfluencedMonsters` game.cpp:12170, `checkForgeEventId` game.cpp:12201,
+ *    `addInfluencedMonster` game.cpp:12209)
+ *  - show-off socket (`playerSetShowOffSocket` game.cpp:5227)
  *  - NPC/podium (`playerNpcGreet` game.cpp:10236, `getNpcByID` game.cpp:1326,
  *    `playerSetMonsterPodium` game.cpp:11283, `playerRotatePodium` game.cpp:11395)
  *  - `playerAnswerModalWindow` (game.cpp:11144) through the injected
@@ -334,6 +355,30 @@ class Game(
     private val modalWindowManager: ModalWindowManager? = null,
 ) {
     private val players = mutableMapOf<Long, Player>()
+
+    /** `Game::monsters` (game.hpp): every live monster, registered by [addMonster]. */
+    private val monsters = mutableListOf<Monster>()
+
+    /** `Game::monstersNameIndex` (game.hpp). */
+    private val monstersNameIndex = mutableMapOf<String, Int>()
+
+    /** `Game::monstersIdIndex` (game.hpp). */
+    private val monstersIdIndex = mutableMapOf<Long, Int>()
+
+    /** `Game::forgeableMonsters` (game.hpp:901). */
+    private val forgeableMonsters = mutableListOf<Long>()
+
+    /** `Game::fiendishMonsters` (game.hpp:789). */
+    private val fiendishMonsters = linkedSetOf<Long>()
+
+    /** `Game::influencedMonsters` (game.hpp:790). */
+    private val influencedMonsters = linkedSetOf<Long>()
+
+    /** `Game::forgeMonsterEventIds` (game.hpp:788): monster id -> scheduled event id. */
+    private val forgeMonsterEventIds = mutableMapOf<Long, Long>()
+
+    /** `Game::m_IOWheel` (game.hpp) behind [getIOWheel]. */
+    private val ioWheel = IOWheel()
 
     /** `Game::guilds` (game.hpp:866). */
     private val guilds = mutableMapOf<Long, Guild>()
@@ -744,6 +789,60 @@ class Game(
     var forgeFuseItems: (Player, ForgeAction_t, Int, Int, Int, Boolean, Boolean, Boolean, Int, Int) -> Unit =
         { _, _, _, _, _, _, _, _, _, _ -> }
 
+    // --- forge monster event seams (game.cpp:11882-12229) ----------------------
+
+    /**
+     * `g_configManager()` `FORGE_*` values (configmanager.cpp:258-273) behind the
+     * fiendish/influenced limits and the fiendish interval math.
+     */
+    var featureFlags: FeatureFlags = FeatureFlags()
+
+    /** `g_dispatcher().scheduleEvent(delay, task, context, lane)` (game.cpp:12038) seam returning the event id. */
+    var scheduleEvent: (Long, () -> Unit) -> Long = { _, _ -> 0 }
+
+    /** `g_dispatcher().stopEvent(eventId)` (game.cpp:12204) seam. */
+    var stopEvent: (Long) -> Unit = { _ -> }
+
+    /** `getTimeNow()` (src/utils/tools.hpp) seam for the fiendish change-time stamp. */
+    var getTimeNow: () -> Long = { System.currentTimeMillis() / 1000 }
+
+    /** `normal_random(min, max)` (src/utils/tools.cpp:13) seam for the influenced-monster draw. */
+    var normalRandom: (Int, Int) -> Int = { minNumber, _ -> minNumber }
+
+    /** `Monster::getForgeStack()` (monster.cpp:3903) seam; the Kotlin [Monster] does not carry the forge stack yet (PARITY GAP). */
+    var getForgeStack: (Monster) -> Int = { 0 }
+
+    /** `Monster::canBeForgeMonster()` (monster.cpp:3891) seam. */
+    var canBeForgeMonster: (Monster) -> Boolean = { false }
+
+    /** `Monster::setMonsterForgeClassification(classification)` (monster.cpp:3916) seam. */
+    var setMonsterForgeClassification: (Monster, ForgeClassification) -> Unit = { _, _ -> }
+
+    /** `Monster::configureForgeSystem(stack)` (monster.cpp:3866) seam. */
+    var configureForgeSystem: (Monster, Int) -> Unit = { _, _ -> }
+
+    /** `Monster::setTimeToChangeFiendish(time)` (monster.cpp:3920) seam. */
+    var setTimeToChangeFiendish: (Monster, Long) -> Unit = { _, _ -> }
+
+    /** `Monster::clearFiendishStatus()` (monster.cpp:3932) seam. */
+    var clearFiendishStatus: (Monster) -> Unit = { _ -> }
+
+    // --- wheel combat seams (game.cpp:8264-8287) -------------------------------
+
+    /** `Game::combatChangeHealth(attacker, target, damage, isEvent)` (game.cpp:8344) seam; the full combat pipeline is not ported. */
+    var combatChangeHealth: (Creature?, Creature, CombatDamage, Boolean) -> Boolean = { _, _, _, _ -> false }
+
+    // --- show-off socket seams (game.cpp:5227) ---------------------------------
+
+    /** `Player::canWear(lookType, addons)` (player.cpp:6783) seam. */
+    var playerCanWear: (Player, Int, Int) -> Boolean = { _, _, _ -> false }
+
+    /** `Outfits::getInstance().getOutfitByLookType(player, lookType)` (outfit.cpp:85) seam. */
+    var getOutfitByLookType: (Player, Int) -> OutfitDefinition? = { _, _ -> null }
+
+    /** `Mounts::getMountByClientID(clientId)` (mounts.cpp) seam. */
+    var getMountByClientID: (Int) -> Mount? = { null }
+
     /** `PlayerWheel::sendOpenWheelWindow(ownerId)` protocol seam (game.cpp:11533). */
     var sendOpenWheelWindow: (Player, Long) -> Unit = { _, _ -> }
 
@@ -791,10 +890,6 @@ class Game(
 
     /** `Game::playerBrowseField(playerId, pos)` (game.cpp:5104) seam used by the podium walk tasks. */
     var playerBrowseField: (Long, Position) -> Unit = { _, _ -> }
-
-    /** `Game::playerSetShowOffSocket(playerId, outfit, pos, stackPos, itemId, podiumVisible, direction)` (game.cpp:5227) seam. */
-    var playerSetShowOffSocket: (Long, Outfit, Position, Int, Int, Int, Int) -> Unit =
-        { _, _, _, _, _, _, _ -> }
 
     // --- remaining player handler seams (game.cpp:4310-11487) -----------------
 
@@ -5910,8 +6005,7 @@ class Game(
     /**
      * `Game::playerRotatePodium` (src/game/game.cpp:11395): rotates a bestiary
      * podium by re-running [playerSetMonsterPodium] with the next direction, or
-     * hands the stored outfit of a renown podium to the
-     * [playerSetShowOffSocket] seam.
+     * hands the stored outfit of a renown podium to [playerSetShowOffSocket].
      */
     @Suppress("CyclomaticComplexMethod", "LongMethod")
     fun playerRotatePodium(playerId: Long, pos: Position, stackPos: Int, itemId: Int) {
@@ -6005,6 +6099,157 @@ class Game(
             if (isPodiumVisible) 1 else 0,
             directionValue,
         )
+    }
+
+    /**
+     * `Game::playerSetShowOffSocket` (src/game/game.cpp:5227): validates the
+     * top-down renown-podium item, walks the player into range, validates the
+     * outfit (`Player::canWear`) and mount (`Mounts::getMountByClientID` +
+     * `Player::hasMount`), stores the `PastLookType`/`PastLookMount` custom
+     * attributes, renames the podium and fans the tile-item update out to every
+     * player spectator.
+     *
+     * The `outfit` argument is mutated exactly like the C++ reference: a
+     * refused look type/addon pair and an unknown or unowned mount are zeroed
+     * in place. `Item::getCustomAttribute` lives in [getItemCustomAttribute],
+     * `Outfits::getInstance().getOutfitByLookType` in [getOutfitByLookType] and
+     * `Player::canWear` in [playerCanWear].
+     */
+    @Suppress("CyclomaticComplexMethod", "LongMethod")
+    fun playerSetShowOffSocket(
+        playerId: Long,
+        outfit: Outfit,
+        pos: Position,
+        stackPos: Int,
+        itemId: Int,
+        podiumVisible: Int,
+        direction: Int,
+    ) {
+        val player = getPlayerByID(playerId) ?: return
+        if (pos.x == 0xFFFF) {
+            return
+        }
+
+        val item = internalGetThing(player, pos, stackPos, itemId, StackPosType_t.STACKPOS_TOPDOWN_ITEM) ?: return
+
+        if (item.id != itemId || item.type?.isPodium != true || item.hasAttribute(ItemAttribute.UNIQUEID)) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        if (item.hasOwner() && !item.isOwner(player)) {
+            sendCancelMessage(player, ReturnValue.ITEMISNOTYOURS)
+            return
+        }
+
+        if (onlyInvitedCanMoveHouseItems && !playerCanUseItemOnHouseTile(player, item)) {
+            sendCancelMessage(player, ReturnValue.CANNOTUSETHISOBJECT)
+            return
+        }
+
+        val tile = item.getParent()?.getTile()
+        if (tile == null) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        if (!areInRange(pos, player.position, 1, 1, 0)) {
+            val listDir = getPathTo(player, pos, 0, 1, true, false)
+            if (listDir != null) {
+                if (!queuePlayerAutoWalk(player, listDir)) {
+                    return
+                }
+                val task = PlayerTask(400, "Game::playerSetShowOffSocket") { playerBrowseField(playerId, pos) }
+                setNextWalkActionTask(player, task)
+            } else {
+                sendCancelMessage(player, ReturnValue.THEREISNOWAY)
+            }
+            return
+        }
+
+        if (onlyInvitedCanMoveHouseItems && !playerCanUseItemOnHouseTile(player, item)) {
+            sendCancelMessage(player, ReturnValue.NOTPOSSIBLE)
+            return
+        }
+
+        if (outfit.lookType != 0) {
+            setItemCustomAttribute(item, "PastLookType", outfit.lookType.toLong())
+        }
+
+        if (outfit.lookMount != 0) {
+            setItemCustomAttribute(item, "PastLookMount", outfit.lookMount.toLong())
+        }
+
+        if (!playerCanWear(player, outfit.lookType, outfit.lookAddons)) {
+            outfit.lookType = 0
+            outfit.lookAddons = 0
+        }
+
+        val mount = getMountByClientID(outfit.lookMount)
+        if (mount == null || !player.features.mounts.hasMount(mount) || player.isWearingSupportOutfit()) {
+            outfit.lookMount = 0
+        }
+
+        if (outfit.lookType != 0) {
+            setItemCustomAttribute(item, "LookType", outfit.lookType.toLong())
+            setItemCustomAttribute(item, "LookHead", outfit.lookHead.toLong())
+            setItemCustomAttribute(item, "LookBody", outfit.lookBody.toLong())
+            setItemCustomAttribute(item, "LookLegs", outfit.lookLegs.toLong())
+            setItemCustomAttribute(item, "LookFeet", outfit.lookFeet.toLong())
+            setItemCustomAttribute(item, "LookAddons", outfit.lookAddons.toLong())
+        } else if ((getItemCustomAttribute(item, "PastLookType") ?: 0L) > 0L) {
+            removeItemCustomAttribute(item, "LookType")
+            removeItemCustomAttribute(item, "PastLookType")
+        }
+
+        if (outfit.lookMount != 0) {
+            setItemCustomAttribute(item, "LookMount", outfit.lookMount.toLong())
+            setItemCustomAttribute(item, "LookMountHead", outfit.lookMountHead.toLong())
+            setItemCustomAttribute(item, "LookMountBody", outfit.lookMountBody.toLong())
+            setItemCustomAttribute(item, "LookMountLegs", outfit.lookMountLegs.toLong())
+            setItemCustomAttribute(item, "LookMountFeet", outfit.lookMountFeet.toLong())
+        } else if ((getItemCustomAttribute(item, "PastLookMount") ?: 0L) > 0L) {
+            removeItemCustomAttribute(item, "LookMount")
+            removeItemCustomAttribute(item, "PastLookMount")
+        }
+
+        setItemCustomAttribute(item, "PodiumVisible", podiumVisible.toLong())
+        setItemCustomAttribute(item, "LookDirection", direction.toLong())
+
+        // Change Podium name
+        if (outfit.lookType != 0 || outfit.lookMount != 0) {
+            val name = StringBuilder()
+            name.append(item.getName())
+            name.append(" displaying the ")
+            var outfited = false
+            if (outfit.lookType != 0) {
+                val outfitInfo = getOutfitByLookType(player, outfit.lookType)
+                if (outfitInfo == null) {
+                    return
+                }
+
+                name.append(outfitInfo.name)
+                name.append(" outfit")
+                outfited = true
+            }
+
+            if (outfit.lookMount != 0) {
+                if (outfited) {
+                    name.append(" on the ")
+                }
+                name.append(mount?.name)
+                name.append(" mount")
+            }
+            item.setAttribute(ItemAttribute.NAME, name.toString())
+        } else {
+            item.removeAttribute(ItemAttribute.NAME)
+        }
+
+        // Send to client
+        for (spectator in spectatorsOf(pos, multifloor = true)) {
+            val playerSpectator = spectator as? Player ?: continue
+            sendUpdateTileItem(playerSpectator, tile, pos, item)
+        }
     }
 
     /**
@@ -6163,6 +6408,522 @@ class Game(
 
         return true
     }
+
+    // --- monster registry (game.cpp:11671-11706, 1309) --------------------------
+
+    /**
+     * `Game::getMonsterByID` (src/game/game.cpp:1309): monsters registered by
+     * [addMonster]; unknown or zero ids resolve to `null`.
+     */
+    fun getMonsterByID(id: Long): Monster? {
+        if (id == 0L) {
+            return null
+        }
+
+        val index = monstersIdIndex[id] ?: return null
+        if (index >= monsters.size) {
+            return null
+        }
+
+        return monsters[index]
+    }
+
+    /**
+     * `Game::addMonster` (src/game/game.cpp:11671). Canary registers a monster
+     * from its constructor; the Kotlin [Monster] does not self-register yet
+     * (PARITY GAP), so hosts call this explicitly.
+     */
+    fun addMonster(monster: Monster?) {
+        if (monster == null) {
+            return
+        }
+
+        val lowerName = monster.name.lowercase()
+        monsters.add(monster)
+        val index = monsters.size - 1
+        monstersNameIndex[lowerName] = index
+        monstersIdIndex[monster.id] = index
+    }
+
+    /** `Game::removeMonster` (src/game/game.cpp:11683): swap-with-last removal. */
+    fun removeMonster(monster: Monster?) {
+        if (monster == null) {
+            return
+        }
+
+        val monsterId = monster.id
+        val monsterLowerName = monster.name.lowercase()
+        val index = monstersIdIndex[monsterId] ?: return
+        monstersNameIndex.remove(monsterLowerName)
+        monstersIdIndex.remove(monsterId)
+
+        if (index != monsters.size - 1) {
+            monsters[index] = monsters[monsters.size - 1]
+            val movedMonster = monsters[index]
+            monstersNameIndex[movedMonster.name.lowercase()] = index
+            monstersIdIndex[movedMonster.id] = index
+        }
+
+        monsters.removeAt(monsters.size - 1)
+    }
+
+    // --- fiendish/influenced forge events (game.cpp:11882-12229) ----------------
+
+    /** `Game::getFiendishMonsters` (game.hpp:676): a snapshot copy, exactly like the C++ `auto` return. */
+    fun getFiendishMonsters(): Set<Long> = fiendishMonsters.toSet()
+
+    /** `Game::getInfluencedMonsters` (game.hpp:680): a snapshot copy. */
+    fun getInfluencedMonsters(): Set<Long> = influencedMonsters.toSet()
+
+    /**
+     * `Game::makeInfluencedMonster` (src/game/game.cpp:11882): draws forgeable
+     * monsters until a monster without a forge stack is found, classifies it as
+     * influenced and registers it; returns the monster id or `0`.
+     */
+    fun makeInfluencedMonster(): Long {
+        if (forgeableMonsters.isEmpty() || influencedMonsters.size >= featureFlags.forgeInfluencedCreaturesLimit) {
+            return 0
+        }
+
+        val maxTries = forgeableMonsters.size
+        var tries = 0
+        var monster: Monster? = null
+        while (true) {
+            if (tries == maxTries) {
+                return 0
+            }
+
+            tries++
+
+            val random = normalRandom(0, forgeableMonsters.size - 1)
+            val monsterId = forgeableMonsters[random]
+            monster = getMonsterByID(monsterId)
+            if (monster == null) {
+                continue
+            }
+
+            // Avoiding replace forgeable monster with another
+            if (getForgeStack(monster) == 0) {
+                val index = forgeableMonsters.indexOf(monsterId)
+                if (index == -1) {
+                    monster = null
+                    continue
+                }
+                forgeableMonsters.removeAt(index)
+                break
+            }
+        }
+
+        val selected = monster
+        if (canBeForgeMonster(selected)) {
+            setMonsterForgeClassification(selected, ForgeClassification.Influenced)
+            configureForgeSystem(selected, 0)
+            influencedMonsters.add(selected.id)
+            return selected.id
+        }
+
+        return 0
+    }
+
+    /**
+     * `Game::makeFiendishMonster` (src/game/game.cpp:11928): optionally rebuilds
+     * the forgeable list (evicting lost fiendish ids and making room at the
+     * limit), draws a monster, classifies it as fiendish and schedules
+     * [updateFiendishMonsterStatus] after the configured interval.
+     */
+    @Suppress("CyclomaticComplexMethod", "LongMethod")
+    fun makeFiendishMonster(forgeableMonsterId: Long = 0, createForgeableMonsters: Boolean = false): Long {
+        if (createForgeableMonsters) {
+            forgeableMonsters.clear()
+            // If the forgeable monsters haven't been created
+            // Then we'll create them so they don't return in the next if (forgeableMonsters.empty())
+            for (monster in monsters) {
+                val monsterTile = monster.getTile() ?: continue
+                if (canBeForgeMonster(monster) && !monsterTile.hasFlag(TileFlags.TILESTATE_NOLOGOUT.value)) {
+                    forgeableMonsters.add(monster.id)
+                }
+            }
+            for (monsterId in getFiendishMonsters()) {
+                // If the fiendish is no longer on the map, we remove it from the vector
+                val monster = getMonsterByID(monsterId)
+                if (monster == null) {
+                    removeFiendishMonster(monsterId)
+                    continue
+                }
+
+                // If you're trying to create a new fiendish and it's already max size, let's remove one of them
+                if (getFiendishMonsters().size >= featureFlags.forgeFiendishCreaturesLimit) {
+                    clearFiendishStatus(monster)
+                    removeFiendishMonster(monsterId)
+                    break
+                }
+            }
+        }
+
+        if (forgeableMonsters.isEmpty() || fiendishMonsters.size >= featureFlags.forgeFiendishCreaturesLimit) {
+            return 0
+        }
+
+        val maxTries = forgeableMonsters.size
+        var tries = 0
+        var monster: Monster? = null
+        while (true) {
+            if (tries == maxTries) {
+                return 0
+            }
+
+            tries++
+
+            val random = forgeRandom.uniformRandom(0, forgeableMonsters.size - 1)
+            var fiendishMonsterId = forgeableMonsterId
+            if (fiendishMonsterId == 0L) {
+                fiendishMonsterId = forgeableMonsters[random]
+            }
+            monster = getMonsterByID(fiendishMonsterId)
+            if (monster == null) {
+                continue
+            }
+
+            // Avoiding replace forgeable monster with another
+            if (getForgeStack(monster) == 0) {
+                val index = forgeableMonsters.indexOf(fiendishMonsterId)
+                if (index == -1) {
+                    monster = null
+                    continue
+                }
+                forgeableMonsters.removeAt(index)
+                break
+            }
+        }
+
+        // Get interval time to fiendish
+        val saveIntervalType = featureFlags.forgeFiendishIntervalType
+        val saveIntervalConfigTime = featureFlags.forgeFiendishIntervalTime.toIntOrNull() ?: 0
+        var intervalTime = 0
+        val timeToChangeFiendish: Long
+        when (saveIntervalType) {
+            "second" -> {
+                intervalTime = 1000
+                timeToChangeFiendish = 1
+            }
+            "minute" -> {
+                intervalTime = 60 * 1000
+                timeToChangeFiendish = 60
+            }
+            "hour" -> {
+                intervalTime = 60 * 60 * 1000
+                timeToChangeFiendish = 3600
+            }
+            else -> {
+                timeToChangeFiendish = 3600
+            }
+        }
+
+        val finalTime = if (intervalTime == 0) {
+            logger.warn { "Fiendish interval type is wrong, setting default time to 1h" }
+            3600L * 1000
+        } else {
+            saveIntervalConfigTime.toLong() * intervalTime
+        }
+
+        val selected = monster
+        if (canBeForgeMonster(selected)) {
+            setMonsterForgeClassification(selected, ForgeClassification.Fiendish)
+            configureForgeSystem(selected, 0)
+            setTimeToChangeFiendish(selected, timeToChangeFiendish + getTimeNow())
+            fiendishMonsters.add(selected.id)
+
+            val monsterId = selected.id
+            val monsterName = selected.name
+            forgeMonsterEventIds[monsterId] = scheduleEvent(finalTime) {
+                updateFiendishMonsterStatus(monsterId, monsterName)
+            }
+            return monsterId
+        }
+
+        return 0
+    }
+
+    /**
+     * `Game::updateFiendishMonsterStatus` (src/game/game.cpp:12045): clears the
+     * fiendish status, unregisters the monster without scheduling a
+     * replacement and rolls a new fiendish monster.
+     */
+    fun updateFiendishMonsterStatus(monsterId: Long, monsterName: String) {
+        val monster = getMonsterByID(monsterId)
+        if (monster == null) {
+            logger.warn {
+                "[updateFiendishMonsterStatus] Failed to update monster with id $monsterId and name $monsterName, monster not found"
+            }
+            return
+        }
+
+        clearFiendishStatus(monster)
+        removeFiendishMonster(monsterId, false)
+        makeFiendishMonster()
+    }
+
+    /** `Game::removeForgeMonster` (src/game/game.cpp:12057): dispatch by classification; always returns true. */
+    fun removeForgeMonster(
+        id: Long,
+        monsterForgeClassification: ForgeClassification,
+        create: Boolean = true,
+    ): Boolean {
+        when (monsterForgeClassification) {
+            ForgeClassification.Fiendish -> removeFiendishMonster(id, create)
+            ForgeClassification.Influenced -> removeInfluencedMonster(id, create)
+            ForgeClassification.Normal -> Unit
+        }
+
+        return true
+    }
+
+    /** `Game::removeInfluencedMonster` (src/game/game.cpp:12067). */
+    fun removeInfluencedMonster(id: Long, create: Boolean = false): Boolean {
+        if (influencedMonsters.remove(id)) {
+            if (create) {
+                scheduleEvent(10L * 1000) { makeInfluencedMonster() }
+            }
+        } else {
+            logger.warn {
+                "[removeInfluencedMonster] - Failed to remove a Influenced Monster, error code: monster id not exist in the influenced monsters map"
+            }
+        }
+        return false
+    }
+
+    /** `Game::removeFiendishMonster` (src/game/game.cpp:12084). */
+    fun removeFiendishMonster(id: Long, create: Boolean = true): Boolean {
+        if (fiendishMonsters.remove(id)) {
+            checkForgeEventId(id)
+
+            if (create) {
+                scheduleEvent(270L * 1000) { makeFiendishMonster(0, false) }
+            }
+        } else {
+            logger.warn {
+                "[removeFiendishMonster] - Failed to remove a Fiendish Monster, error code: monster id not exist in the fiendish monsters map"
+            }
+        }
+
+        return false
+    }
+
+    /**
+     * `Game::updateForgeableMonsters` (src/game/game.cpp:12103): rebuilds the
+     * forgeable list from the live monsters, prunes lost fiendish/influenced
+     * ids and refills both classifications up to their configured limits.
+     */
+    fun updateForgeableMonsters() {
+        forgeableMonsters.clear()
+        for (monster in monsters) {
+            val monsterTile = monster.getTile() ?: continue
+            if (canBeForgeMonster(monster) && !monsterTile.hasFlag(TileFlags.TILESTATE_NOLOGOUT.value)) {
+                forgeableMonsters.add(monster.id)
+            }
+        }
+
+        for (monsterId in getFiendishMonsters()) {
+            if (getMonsterByID(monsterId) == null) {
+                removeFiendishMonster(monsterId)
+            }
+        }
+
+        for (monsterId in getInfluencedMonsters()) {
+            if (getMonsterByID(monsterId) == null) {
+                removeInfluencedMonster(monsterId, false)
+            }
+        }
+
+        if (fiendishMonsters.size < featureFlags.forgeFiendishCreaturesLimit) {
+            createFiendishMonsters()
+        }
+
+        if (influencedMonsters.size < featureFlags.forgeInfluencedCreaturesLimit) {
+            createInfluencedMonsters()
+        }
+    }
+
+    /** `Game::createFiendishMonsters` (src/game/game.cpp:12139), including the no-progress abort. */
+    fun createFiendishMonsters() {
+        val fiendishLimit = featureFlags.forgeFiendishCreaturesLimit
+        if (fiendishMonsters.size >= fiendishLimit) {
+            return
+        }
+
+        var noProgressAttempts = 0
+        val remaining = fiendishLimit - fiendishMonsters.size
+        var maxAttemptsWithoutProgress = remaining * 4
+        if (maxAttemptsWithoutProgress < 25) {
+            maxAttemptsWithoutProgress = 25
+        }
+
+        while (fiendishMonsters.size < fiendishLimit) {
+            val previousSize = fiendishMonsters.size
+
+            makeFiendishMonster()
+
+            if (fiendishMonsters.size > previousSize) {
+                noProgressAttempts = 0
+                continue
+            }
+
+            noProgressAttempts++
+            if (noProgressAttempts >= maxAttemptsWithoutProgress) {
+                logger.warn {
+                    "[createFiendishMonsters] - Aborting fiendish creation due to no progress. " +
+                        "Size: ${fiendishMonsters.size}, max: $fiendishLimit, attempts: $noProgressAttempts."
+                }
+                return
+            }
+        }
+    }
+
+    /** `Game::createInfluencedMonsters` (src/game/game.cpp:12170), including the no-progress abort. */
+    fun createInfluencedMonsters() {
+        val influencedLimit = featureFlags.forgeInfluencedCreaturesLimit
+        if (influencedMonsters.size >= influencedLimit) {
+            return
+        }
+
+        var noProgressAttempts = 0
+        val remaining = influencedLimit - influencedMonsters.size
+        var maxAttemptsWithoutProgress = remaining * 4
+        if (maxAttemptsWithoutProgress < 25) {
+            maxAttemptsWithoutProgress = 25
+        }
+
+        while (influencedMonsters.size < influencedLimit) {
+            val previousSize = influencedMonsters.size
+
+            makeInfluencedMonster()
+
+            if (influencedMonsters.size > previousSize) {
+                noProgressAttempts = 0
+                continue
+            }
+
+            noProgressAttempts++
+            if (noProgressAttempts >= maxAttemptsWithoutProgress) {
+                logger.warn {
+                    "[createInfluencedMonsters] - Aborting influenced creation due to no progress. " +
+                        "Size: ${influencedMonsters.size}, max: $influencedLimit, attempts: $noProgressAttempts."
+                }
+                return
+            }
+        }
+    }
+
+    /** `Game::checkForgeEventId` (src/game/game.cpp:12201): stops and forgets the scheduled event. */
+    fun checkForgeEventId(monsterId: Long) {
+        val eventId = forgeMonsterEventIds.remove(monsterId) ?: return
+        stopEvent(eventId)
+    }
+
+    /**
+     * `Game::addInfluencedMonster` (src/game/game.cpp:12209): prunes lost ids,
+     * enforces the influenced limit for new ids only, then classifies,
+     * configures and registers the monster.
+     */
+    fun addInfluencedMonster(monster: Monster?, stack: Int = 0): Boolean {
+        if (monster != null && canBeForgeMonster(monster)) {
+            influencedMonsters.removeAll { getMonsterByID(it) == null }
+
+            val monsterId = monster.id
+            val alreadyInfluenced = influencedMonsters.contains(monsterId)
+            if (!alreadyInfluenced && (influencedMonsters.size + 1) > featureFlags.forgeInfluencedCreaturesLimit) {
+                return false
+            }
+
+            setMonsterForgeClassification(monster, ForgeClassification.Influenced)
+            configureForgeSystem(monster, stack)
+            influencedMonsters.add(monsterId)
+            return true
+        }
+        return false
+    }
+
+    // --- wheel of destiny combat application (game.cpp:8264-8325, 12347) --------
+
+    /**
+     * `Game::applyWheelOfDestinyHealing` (src/game/game.cpp:8264): scales the
+     * primary value by the healing multiplier, adds the attacker's wheel
+     * `HEALING` stat to both values, emits the `healingLink` self-heal through
+     * the [combatChangeHealth] seam and applies the `Blessing of the Grove`
+     * target bonus.
+     */
+    fun applyWheelOfDestinyHealing(damage: CombatDamage, attackerPlayer: Player?, target: Creature?) {
+        damage.primaryValue += ((damage.primaryValue * damage.healingMultiplier) / 100.0).toInt()
+
+        if (attackerPlayer != null) {
+            damage.primaryValue += attackerPlayer.wheel().getStat(WheelStat.HEALING)
+
+            if (damage.secondaryValue != 0) {
+                damage.secondaryValue += attackerPlayer.wheel().getStat(WheelStat.HEALING)
+            }
+
+            if (damage.healingLink > 0) {
+                val tmpDamage = CombatDamage()
+                tmpDamage.primaryValue = (damage.primaryValue * damage.healingLink) / 100
+                tmpDamage.primaryType = CombatType.HEALING
+                combatChangeHealth(attackerPlayer, attackerPlayer, tmpDamage, false)
+            }
+
+            if (attackerPlayer.wheel().getInstant("Blessing of the Grove")) {
+                val healingBonus = attackerPlayer.wheel().checkBlessingGroveHealingByTarget(target)
+                damage.primaryValue += ((damage.primaryValue * healingBonus) / 100.0).toInt()
+            }
+        }
+    }
+
+    /**
+     * `Game::applyWheelOfDestinyEffectsToDamage` (src/game/game.cpp:8287): the
+     * damage multiplier, the attacker's wheel `DAMAGE` stat and the
+     * Twin Burst / Executioner's Throw / Divine Grenade instant-spell bonuses.
+     */
+    @Suppress("CyclomaticComplexMethod", "LongMethod")
+    fun applyWheelOfDestinyEffectsToDamage(damage: CombatDamage, attackerPlayer: Player?, target: Creature?) {
+        // If damage is 0, it means the target is immune to the damage type, or that we missed.
+        if (damage.primaryValue == 0 && damage.secondaryValue == 0) {
+            return
+        }
+
+        if (damage.damageMultiplier > 0) {
+            damage.primaryValue += ((damage.primaryValue * damage.damageMultiplier) / 100.0).toInt()
+            damage.secondaryValue += ((damage.secondaryValue * damage.damageMultiplier) / 100.0).toInt()
+        }
+
+        if (attackerPlayer != null) {
+            damage.primaryValue -= attackerPlayer.wheel().getStat(WheelStat.DAMAGE)
+            if (damage.secondaryValue != 0) {
+                damage.secondaryValue -= attackerPlayer.wheel().getStat(WheelStat.DAMAGE)
+            }
+            if (damage.instantSpellName == "Ice Burst" || damage.instantSpellName == "Terra Burst") {
+                val damageBonus = attackerPlayer.wheel().checkTwinBurstByTarget(target)
+                if (damageBonus != 0) {
+                    damage.primaryValue += ((damage.primaryValue * damageBonus) / 100.0).toInt()
+                    damage.secondaryValue += ((damage.secondaryValue * damageBonus) / 100.0).toInt()
+                }
+            }
+            if (damage.instantSpellName == "Executioner's Throw") {
+                val damageBonus = attackerPlayer.wheel().checkExecutionersThrow(target)
+                if (damageBonus != 0) {
+                    damage.primaryValue += ((damage.primaryValue * damageBonus) / 100.0).toInt()
+                    damage.secondaryValue += ((damage.secondaryValue * damageBonus) / 100.0).toInt()
+                }
+            }
+            if (damage.instantSpellName == "Divine Grenade") {
+                val damageBonus = attackerPlayer.wheel().checkDivineGrenade(target)
+                if (damageBonus != 0) {
+                    damage.primaryValue += ((damage.primaryValue * damageBonus) / 100.0).toInt()
+                    damage.secondaryValue += ((damage.secondaryValue * damageBonus) / 100.0).toInt()
+                }
+            }
+        }
+    }
+
+    /** `Game::getIOWheel` (src/game/game.cpp:12347). */
+    fun getIOWheel(): IOWheel = ioWheel
 
     companion object {
         /** `INDEX_WHEREEVER` (src/items/cylinder.hpp:18). */

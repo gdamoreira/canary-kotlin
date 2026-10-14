@@ -439,15 +439,42 @@ class GameNpcPodiumTest {
         game.setItemCustomAttribute(item, "LookDirection", 0L)
         game.setItemCustomAttribute(item, "PodiumVisible", 1L)
         game.setItemCustomAttribute(item, "MonsterVisible", 1L)
-        val showOffs = mutableListOf<Pair<org.opentibia.canary.combat.condition.Outfit, Int>>()
-        game.playerSetShowOffSocket = { _, outfit, _, _, _, _, direction -> showOffs.add(outfit to direction) }
+        game.playerCanWear = { _, lookType, _ -> lookType == 128 }
+        game.getMountByClientID = { clientId ->
+            if (clientId == 7) {
+                org.opentibia.canary.systems.mount.Mount(
+                    id = 7,
+                    clientId = 7,
+                    name = "Bear",
+                    speed = 10,
+                    premium = false,
+                    type = "",
+                )
+            } else {
+                null
+            }
+        }
+        player.features.mounts.setOwnedMounts(setOf(7))
+        game.getOutfitByLookType = { _, lookType ->
+            if (lookType == 128) {
+                org.opentibia.canary.creatures.appearance.outfit.Outfit(
+                    name = "Citizen",
+                    lookType = 128,
+                    premium = false,
+                    unlocked = true,
+                    from = "",
+                )
+            } else {
+                null
+            }
+        }
 
         game.playerRotatePodium(player.id, center, 0, ITEM_PODIUM_OF_RENOWN1)
 
-        assertThat(showOffs).hasSize(1)
-        assertThat(showOffs.first().first.lookType).isEqualTo(128)
-        assertThat(showOffs.first().first.lookMount).isEqualTo(7)
-        assertThat(showOffs.first().second).isEqualTo(1)
+        assertThat(game.getItemCustomAttribute(item, "LookType")).isEqualTo(128L)
+        assertThat(game.getItemCustomAttribute(item, "LookMount")).isEqualTo(7L)
+        assertThat(game.getItemCustomAttribute(item, "LookDirection")).isEqualTo(1L)
+        assertThat(item.getAttribute(ItemAttribute.NAME)).isEqualTo("podium displaying the Citizen outfit on the Bear mount")
     }
 
     @Test
@@ -458,13 +485,10 @@ class GameNpcPodiumTest {
         game.tileWith(item)
         val cancels = mutableListOf<ReturnValue>()
         game.sendCancelMessage = { _, ret -> cancels.add(ret) }
-        var showOff = false
-        game.playerSetShowOffSocket = { _, _, _, _, _, _, _ -> showOff = true }
 
         game.playerRotatePodium(player.id, center, 0, ITEM_PODIUM_OF_RENOWN1)
 
         assertThat(cancels).containsExactly(ReturnValue.NOTPOSSIBLE)
-        assertThat(showOff).isFalse()
     }
 
     companion object {

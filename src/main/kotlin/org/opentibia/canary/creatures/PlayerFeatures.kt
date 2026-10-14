@@ -62,6 +62,12 @@ class PlayerFeatures(
     private val isPremiumProvider: () -> Boolean = { false },
     /** `Player::isAccessPlayer()` (`group->access`). */
     private val hasAccessProvider: () -> Boolean = { false },
+    /**
+     * `Player&` owner stored by Canary's `PlayerWheel(Player &initPlayer)`
+     * constructor (player_wheel.hpp:79,494); injected per AGENTS.md 1.1 so the
+     * wheel's `check<Spell>ByTarget` owner checks work without a global.
+     */
+    private val wheelPlayer: Player? = null,
     /** `Vocations::getInstance()` registry; when present it satisfies the offline-training requirement seam. */
     private val vocations: Vocations? = null,
     /** `Vocation::getReqSkillTries` / `Vocation::getReqMana` seam. */
@@ -92,7 +98,7 @@ class PlayerFeatures(
 ) {
     /** `PlayerWheel m_wheelPlayer` (player.hpp:1959); accessor `wheel()`. */
     val wheel: PlayerWheel by lazy(LazyThreadSafetyMode.NONE) {
-        PlayerWheel(vocationCipId = vocationIdProvider(), level = levelProvider())
+        PlayerWheel(vocationCipId = vocationIdProvider(), level = levelProvider(), player = wheelPlayer)
     }
 
     /** Offline-training engine over `Player::offlineTrainingSkill/Time` (player.hpp:1807-1808). */

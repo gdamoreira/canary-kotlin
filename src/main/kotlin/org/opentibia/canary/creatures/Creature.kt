@@ -1174,6 +1174,7 @@ class Player(
         vocationIdProvider = { vocationId },
         isPremiumProvider = { isPremium() },
         hasAccessProvider = { isAccessPlayer() },
+        wheelPlayer = this,
         vocationRequirementsProvider = {
             vocations?.getVocation(vocationId)
                 ?.let { VocationRequirementsAdapter(it) }
