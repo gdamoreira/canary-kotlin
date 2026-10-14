@@ -31,3 +31,7 @@
 ## Post-wave (§6)
 
 Update §1–§4, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+
+## Completion
+
+Completed: all 187 senders, full opcode application, game.cpp market/forge/wheel/podium, Player::death + walk queue, monster async pipelines, Lua class registry migration. 554 suites / 6079 tests.
