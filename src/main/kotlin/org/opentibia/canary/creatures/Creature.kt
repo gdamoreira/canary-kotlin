@@ -55,6 +55,7 @@ import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.ObjectCategory_t
 import org.opentibia.canary.items.Thing
 import org.opentibia.canary.items.containers.Inbox
+import org.opentibia.canary.items.containers.depot.DepotChest
 import org.opentibia.canary.items.containers.depot.DepotLocker
 import org.opentibia.canary.creatures.vocations.Vocation
 import org.opentibia.canary.creatures.vocations.VocationRequirementsAdapter
@@ -1616,7 +1617,20 @@ class Player(
     var chaseMode: ChaseMode = ChaseMode.StandStill,
     var secureMode: Boolean = true,
     var targetCreatureId: Long? = null,
-    var inCombat: Boolean = false
+    var inCombat: Boolean = false,
+    /**
+     * `Player::muteCountMap` (player.hpp:281): Canary keeps it as a static map
+     * shared by every player. Per AGENTS.md 1.1 the static is replaced by the
+     * composition root's instance, injected here (and forwarded to [features]);
+     * direct construction (tests/tooling) keeps a per-player default.
+     */
+    val muteCountMap: MutableMap<Long, Int> = mutableMapOf(),
+    /**
+     * `g_game().transformItem(item, item->getID(), charges - 1)` seam
+     * (player.cpp:1065, 7588, 7697, 7718) forwarded to [features]; the
+     * composition root binds the single world lambda over its `Game`.
+     */
+    val transformItemCharges: (Item) -> Unit = {},
 ) : Creature(id, name, maxHealth, health, maxMana, mana, speed, position), BatchUpdateActor {
 
     /**
@@ -1672,6 +1686,8 @@ class Player(
         cyclopediaPlayer = PlayerCyclopediaAdapter(this),
         cyclopediaTrackerClient = { cyclopediaMonsterTrackerClient },
         maxMessageBuffer = { maxMessageBuffer },
+        muteCountMap = muteCountMap,
+        transformItemCharges = transformItemCharges,
     )
 
     /**
@@ -2350,16 +2366,70 @@ class Player(
     private val depotLockerMap = mutableMapOf<Int, DepotLocker>()
 
     /**
+     * `Player::depotChests` (player.hpp:1673): depot-box id -> chest, the map
+     * `IOLoginDataLoad::loadPlayerDepotItems` and
+     * `IOLoginDataSave::savePlayerDepotItems` walk (iologindata_save_player.cpp:
+     * 583-586). Public accessor because the C++ field is public.
+     */
+    private val depotChests = mutableMapOf<Int, DepotChest>()
+
+    /** `Player::depotChests` (player.hpp:1673) read view; the C++ field is public. */
+    fun getDepotChests(): Map<Int, DepotChest> = depotChests
+
+    /**
+     * `Player::getDepotChest` (player.cpp:1998-2022): the map-scoped chest for
+     * [depotId], materialized when [autoCreate] is set. The port selector lives
+     * in [DepotChest.depotChestItemId].
+     */
+    fun getDepotChest(depotId: Int, autoCreate: Boolean): DepotChest? {
+        depotChests[depotId]?.let { return it }
+        if (!autoCreate) {
+            return null
+        }
+
+        val depotChest = DepotChest(DepotChest.depotChestItemId(depotId))
+        depotChests[depotId] = depotChest
+        return depotChest
+    }
+
+    /**
      * `Player::getDepotLocker` (player.cpp:2024-2058). The port always builds
-     * the locker through [DepotLocker.create] for the current (non-old)
-     * protocol, so it fills the stash slot exactly like `!client->oldProtocol`.
-     * PARITY GAPS: the depot-box reparenting reads `getDepotChest` persistence
-     * state the port does not model, and `IOLoginData` never assigns
-     * [lastDepotId].
+     * the locker for the current (non-old) protocol, so it fills the stash slot
+     * exactly like `!client->oldProtocol`; the `ITEM_DEPOT` box container holds
+     * the [getDepotChest] instances, so the locker, the depot search and the
+     * login/save walk all resolve the same chests.
+     *
+     * PARITY GAPS: `DEPOT_BOXES` is the [DepotLocker.DEPOT_BOXES] default instead
+     * of `g_configManager().getNumber(DEPOT_BOXES)` (configmanager.cpp:55), and
+     * `IOLoginData` never assigns [getLastDepotId].
+     *
+     * PARITY NOTE: the C++ cached branch reparents the boxes through
+     * `getItemByIndex(0)->getContainer()`, which resolves to the market item
+     * (`null` container); the port re-parents them to the `ITEM_DEPOT` container
+     * so the chests stay reachable through the locker tree.
      */
     fun getDepotLocker(depotId: Int): DepotLocker {
-        depotLockerMap[depotId]?.let { return it }
-        val locker = DepotLocker.create(depotId, inbox)
+        depotLockerMap[depotId]?.let { locker ->
+            inbox.setParent(locker)
+            val depotContainer = locker.items.firstOrNull { it.id == DepotLocker.ITEM_DEPOT }?.getContainer()
+            for (i in DepotLocker.DEPOT_BOXES downTo 1) {
+                getDepotChest(i, false)?.setParent(depotContainer)
+            }
+            return locker
+        }
+
+        val locker = DepotLocker(DepotLocker.ITEM_LOCKER, size = 4)
+        locker.setDepotId(depotId)
+        locker.internalAddThing(Item(DepotLocker.ITEM_MARKET))
+        locker.internalAddThing(inbox)
+        locker.internalAddThing(Item(DepotLocker.ITEM_STASH))
+        val depotContainer = Container(DepotLocker.ITEM_DEPOT, capacity = DepotLocker.DEPOT_BOXES)
+        for (i in DepotLocker.DEPOT_BOXES downTo 1) {
+            val depotBox = getDepotChest(i, true) ?: continue
+            depotContainer.internalAddThing(depotBox)
+            depotBox.setParent(depotContainer)
+        }
+        locker.internalAddThing(depotContainer)
         depotLockerMap[depotId] = locker
         return locker
     }

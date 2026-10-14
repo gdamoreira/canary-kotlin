@@ -82,22 +82,23 @@ import org.opentibia.canary.creatures.vocations.Vocations
  * [sendTextMessage]) default to the injected [wheelPlayer] view, which the
  * `Player` always supplies as itself.
  *
- * CALL-SITE NEEDS (`Creature.kt` constructs this holder per `Player` but has no
- * config/game access; the production composition root does not exist yet):
+ * COMPOSITION (`CanaryServer` composition root):
  *  - the `Player` feeds [maxMessageBuffer] from its own `maxMessageBuffer`
- *    property; the composition root must set it from
- *    `g_configManager().getNumber(MAX_MESSAGEBUFFER)` (configmanager.cpp:315),
- *    the `0` default keeps the mute pipeline inert.
- *  - the composition root must share one [muteCountMap] per world, exactly like
- *    Canary's `Player::muteCountMap` static (player.hpp:281), so the escalation
- *    survives player relogs; the per-holder default resets it per `Player`.
- *  - `Game` must bind [transformItemCharges] to
- *    `Game::transformItem(item, item->getID(), charges - 1)` (player.cpp:1065,
- *    7588, 7697, 7718) and the weapon-proficiency engine must bind
- *    [perfectShotBonus] to `WeaponProficiency::getPerfectShotBonus`
- *    (weapon_proficiency.cpp:1201); the base reflect arrays stay `{ 0 }` until
- *    the unported `Creature` arrays exist. [transformItemCharges] also backs
- *    [magicAffinity]'s charged-item reads.
+ *    property; `Game::addPlayer` copies it from
+ *    `g_configManager().getNumber(MAX_MESSAGEBUFFER)` (configmanager.cpp:315)
+ *    when the world composes a `ConfigManager`. The `0` default keeps the mute
+ *    pipeline inert for a directly constructed player.
+ *  - [muteCountMap] and [transformItemCharges] are injected through the
+ *    `Player` constructor; `CanaryServer` owns one map and one lambda per world
+ *    (Canary's `Player::muteCountMap` static, player.hpp:281, and
+ *    `Game::transformItem(item, item->getID(), charges - 1)`, player.cpp:1065,
+ *    7588, 7697, 7718) and shares them with every session, so the mute
+ *    escalation survives relogs.
+ *  - the weapon-proficiency engine must still bind [perfectShotBonus] to
+ *    `WeaponProficiency::getPerfectShotBonus` (weapon_proficiency.cpp:1201);
+ *    the base reflect arrays stay `{ 0 }` until the unported `Creature` arrays
+ *    exist. [transformItemCharges] also backs [magicAffinity]'s charged-item
+ *    reads.
  *  - [wheelSpecializedMagic] and [proficiencySpecializedMagic] stay `{ 0 }`
  *    until `PlayerWheel::getSpecializedMagic` (player_wheel.cpp:405) and
  *    `WeaponProficiency::getSpecializedMagic` (weapon_proficiency.hpp:65) are
@@ -168,8 +169,13 @@ class PlayerFeatures(
     private val getCharges: (Item) -> Int = { item ->
         (item.getAttribute(ItemAttribute.CHARGES) as? Number)?.toInt() ?: 0
     },
-    /** `g_game().transformItem(item, item->getID(), charges - 1)` seam of [combatBonuses] and [magicAffinity]. */
-    private val transformItemCharges: (Item) -> Unit = {},
+    /**
+     * `g_game().transformItem(item, item->getID(), charges - 1)` seam of
+     * [combatBonuses] and [magicAffinity]. Public read view: the composition
+     * root binds one world lambda (`Game::transformItem`, game.cpp) and shares
+     * it across every `Player`.
+     */
+    val transformItemCharges: (Item) -> Unit = {},
     /** `PlayerWheel::getSpecializedMagic(combat)` (player_wheel.cpp:405) seam of [magicAffinity]. */
     private val wheelSpecializedMagic: (CombatType) -> Int = { 0 },
     /** `WeaponProficiency::getSpecializedMagic(combat)` (weapon_proficiency.hpp:65) seam of [magicAffinity]. */
@@ -190,8 +196,12 @@ class PlayerFeatures(
     private val sendTextMessage: (MessageClass, String) -> Unit = { type, text ->
         wheelPlayer?.sendTextMessageTyped(type, text)
     },
-    /** `Player::muteCountMap` (player.hpp:281) shared per world; see the call-site note. */
-    private val muteCountMap: MutableMap<Long, Int> = mutableMapOf(),
+    /**
+     * `Player::muteCountMap` (player.hpp:281) shared per world; see the
+     * call-site note. Public read view so the composition root and transcript
+     * tests can observe that every `Player` gets the same instance.
+     */
+    val muteCountMap: MutableMap<Long, Int> = mutableMapOf(),
 ) {
     /** `PlayerWheel m_wheelPlayer` (player.hpp:1959); accessor `wheel()`. */
     val wheel: PlayerWheel by lazy(LazyThreadSafetyMode.NONE) {

@@ -11,6 +11,7 @@ import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.FlagAsyncClass_t
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.game.scheduling.CreatureAsyncTaskBuckets
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.scheduling.MonsterComputeConfig
@@ -479,5 +480,25 @@ class MonsterPipelinesHostTest {
 
         assertThat(attackTicks).isEmpty()
         assertThat(conditionTicks).isEmpty()
+    }
+
+    @Test
+    fun `the injected shared buckets admit the monster async batches`() {
+        val shared = CreatureAsyncTaskBuckets(dispatcher = { null })
+        val sharedHost = MonsterPipelinesHost(
+            service = service,
+            mapAccess = SpectatorMapAccess { _, _ -> SpectatorSector() },
+            resolveCreature = { creatures[it] },
+            clock = { now },
+            creatureAsyncTaskBuckets = shared,
+        )
+        val routed = Monster(id = 11, name = "Rat", maxHealth = 100, health = 100, position = origin)
+        sharedHost.register(routed)
+        var ran = 0
+
+        routed.scheduleAsyncTaskBatch { ran++ }
+
+        assertThat(ran).isEqualTo(1)
+        assertThat(shared.creatureAsyncBucketTelemetry.snapshotAndReset().workUnits).isEqualTo(1)
     }
 }
