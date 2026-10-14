@@ -90,6 +90,7 @@ internal fun serializeItemAttributes(count: Int, attributes: Map<ItemAttribute, 
     writeUInt16Attribute(out, attributes, ItemAttribute.AMOUNT, ATTR_AMOUNT)
     writeStringAttribute(out, attributes, ItemAttribute.STORE_INBOX_CATEGORY, ATTR_STORE_INBOX_CATEGORY)
     writeUInt32Attribute(out, attributes, ItemAttribute.OWNER, ATTR_OWNER)
+    writeCustomAttributes(out, attributes)
     writeUInt32Attribute(out, attributes, ItemAttribute.OBTAINCONTAINER, ATTR_OBTAINCONTAINER)
 
     return out.toByteArray()
@@ -148,6 +149,16 @@ internal fun deserializeItemAttributes(blob: ByteArray?): Map<ItemAttribute, Any
             ATTR_AMOUNT -> attributes[ItemAttribute.AMOUNT] = input.readShortLE().toLong()
             ATTR_STORE_INBOX_CATEGORY -> attributes[ItemAttribute.STORE_INBOX_CATEGORY] = input.readString()
             ATTR_OWNER -> attributes[ItemAttribute.OWNER] = input.readIntLE().toLong() and 0xFFFFFFFFL
+            ATTR_CUSTOM -> {
+                val custom = customAttributes(attributes)
+                readCustomAttributeBlock(input) { key, value -> custom[key] = value }
+            }
+            // Deprecated `ATTR_CUSTOM_ATTRIBUTES`; `readAttr` migrates it into
+            // the same store (src/items/item.cpp:1240-1268).
+            ATTR_CUSTOM_ATTRIBUTES -> {
+                val custom = customAttributes(attributes)
+                readCustomAttributeBlock(input) { key, value -> custom[key] = value }
+            }
             ATTR_OBTAINCONTAINER ->
                 attributes[ItemAttribute.OBTAINCONTAINER] = input.readIntLE().toLong() and 0xFFFFFFFFL
             // Read-only map/derived-class attributes handled by `readAttr`
@@ -197,13 +208,24 @@ private const val ATTR_SHOOTRANGE = 33
 private const val ATTR_SPECIAL = 34
 private const val ATTR_IMBUEMENT_SLOT = 35
 private const val ATTR_OPENCONTAINER = 36
+private const val ATTR_CUSTOM_ATTRIBUTES = 37
 private const val ATTR_QUICKLOOTCONTAINER = 38
 private const val ATTR_AMOUNT = 39
 private const val ATTR_TIER = 40
+private const val ATTR_CUSTOM = 41
 private const val ATTR_STORE_INBOX_CATEGORY = 42
 private const val ATTR_OWNER = 43
 private const val ATTR_OBTAINCONTAINER = 44
 private const val ATTR_MANTRA = 45
+
+// CustomAttribute wire variants (custom_attribute.cpp:88-153). The store is
+// carried on ItemAttribute.CUSTOM as `Map<String, Any>` with these four value
+// types; the map keys are the lowercased custom attribute keys like Canary's
+// `std::map<std::string, CustomAttribute>` (attribute.hpp:166).
+private const val CUSTOM_ATTRIBUTE_STRING = 1
+private const val CUSTOM_ATTRIBUTE_INTEGER = 2
+private const val CUSTOM_ATTRIBUTE_DOUBLE = 3
+private const val CUSTOM_ATTRIBUTE_BOOLEAN = 4
 
 // PropWriteStream/PropStream primitives (src/io/fileloader.hpp:57-163):
 // little-endian native words and uint16-length-prefixed raw string bytes.
@@ -312,6 +334,94 @@ private fun writeStringAttribute(
     }
 }
 
+/**
+ * `Item::serializeAttr`'s `hasCustomAttribute()` block (src/items/item.cpp:1827-1834):
+ * `ATTR_CUSTOM`, the `uint64` entry count and each lowercased key followed by
+ * the `CustomAttribute` variant. Keys iterate in the store's ascending order
+ * like Canary's `std::map` (attribute.hpp:166).
+ */
+private fun writeCustomAttributes(out: ByteArrayOutputStream, attributes: Map<ItemAttribute, Any>) {
+    val store = attributes[ItemAttribute.CUSTOM] as? Map<*, *> ?: return
+    if (store.isEmpty()) {
+        return
+    }
+
+    out.writeWireByte(ATTR_CUSTOM)
+    out.writeLongLE(store.size.toLong())
+    val entries = store.entries
+        .map { entry ->
+            val key = entry.key as? String
+                ?: throw IllegalArgumentException("custom attribute key must be a string")
+            key.lowercase() to entry.value
+        }
+        .sortedBy { it.first }
+    for ((key, value) in entries) {
+        out.writeString(key)
+        out.writeCustomAttributeValue(value)
+    }
+}
+
+/** `CustomAttribute::serialize` (custom_attribute.cpp:88-103). */
+private fun ByteArrayOutputStream.writeCustomAttributeValue(value: Any?) {
+    when (value) {
+        is String -> {
+            writeWireByte(CUSTOM_ATTRIBUTE_STRING)
+            writeString(value)
+        }
+
+        is Boolean -> {
+            writeWireByte(CUSTOM_ATTRIBUTE_BOOLEAN)
+            writeWireByte(if (value) 1 else 0)
+        }
+
+        is Double -> {
+            writeWireByte(CUSTOM_ATTRIBUTE_DOUBLE)
+            writeLongLE(java.lang.Double.doubleToRawLongBits(value))
+        }
+
+        is Float -> {
+            writeWireByte(CUSTOM_ATTRIBUTE_DOUBLE)
+            writeLongLE(java.lang.Double.doubleToRawLongBits(value.toDouble()))
+        }
+
+        is Number -> {
+            writeWireByte(CUSTOM_ATTRIBUTE_INTEGER)
+            writeLongLE(value.toLong())
+        }
+
+        else -> throw IllegalArgumentException(
+            "unsupported custom attribute value type ${value?.javaClass?.name ?: "null"}",
+        )
+    }
+}
+
+/**
+ * Resolves (and creates on demand) the `ItemAttribute.CUSTOM` store of the
+ * decoded [target] map, keyed by the lowercased custom attribute key exactly
+ * like `ItemProperties::addCustomAttribute` (attribute.cpp:141).
+ */
+private fun customAttributes(target: MutableMap<ItemAttribute, Any>): MutableMap<String, Any> {
+    val existing = target[ItemAttribute.CUSTOM]
+    if (existing is MutableMap<*, *>) {
+        @Suppress("UNCHECKED_CAST")
+        return existing as MutableMap<String, Any>
+    }
+    val created = linkedMapOf<String, Any>()
+    target[ItemAttribute.CUSTOM] = created
+    return created
+}
+
+/** `Item::readAttr`'s `ATTR_CUSTOM`/`ATTR_CUSTOM_ATTRIBUTES` block (src/items/item.cpp:2028-2058). */
+private fun readCustomAttributeBlock(input: BlobReader, store: (String, Any) -> Unit) {
+    val size = input.readLongLE()
+    var index = 0L
+    while (index < size) {
+        val key = input.readString()
+        store(key.lowercase(), input.readCustomAttributeValue())
+        index++
+    }
+}
+
 private class BlobReader(private val bytes: ByteArray) {
     private var position = 0
 
@@ -353,6 +463,18 @@ private class BlobReader(private val bytes: ByteArray) {
         val value = String(bytes, position, length, StandardCharsets.UTF_8)
         position += length
         return value
+    }
+
+    /** `CustomAttribute::unserialize` (custom_attribute.cpp:105-153). */
+    fun readCustomAttributeValue(): Any {
+        val type = readByte().toInt() and 0xFF
+        return when (type) {
+            CUSTOM_ATTRIBUTE_STRING -> readString()
+            CUSTOM_ATTRIBUTE_INTEGER -> readLongLE()
+            CUSTOM_ATTRIBUTE_DOUBLE -> java.lang.Double.longBitsToDouble(readLongLE())
+            CUSTOM_ATTRIBUTE_BOOLEAN -> readByte().toInt() != 0
+            else -> throw IllegalArgumentException("unsupported custom attribute wire type $type")
+        }
     }
 
     fun skip(count: Int) {
