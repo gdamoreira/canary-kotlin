@@ -1707,6 +1707,9 @@ class Player(
     /** `Player::hasImbuingItem` (player.cpp:2414-2416). */
     fun hasImbuingItem(): Boolean = imbuingItem != null
 
+    /** `Player::imbuingItem` read accessor (player.hpp:1761); the C++ field is public. */
+    fun getImbuingItem(): Item? = imbuingItem
+
     /** `Player::setImbuingItem` (player.cpp:2418-2420). */
     fun setImbuingItem(item: Item?) {
         imbuingItem = item

@@ -10,6 +10,7 @@ import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.Skill
 import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.players.PlayerTask
 import org.opentibia.canary.game.Game
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
@@ -83,9 +84,28 @@ class GameHandler(
      * root builds the production `IOMarket` with it so expired sell offers reach
      * the seller's inbox and expired buy offers credit the bank balance.
      */
-    val marketEscrow: MarketEscrow = GameMarketEscrow(game, itemTypes)
+    val marketEscrow: MarketEscrow = GameMarketEscrow({ game }, itemTypes)
 
     init {
+        // Host bindings for the `g_game()` seams the ported handlers call on the
+        // player they resolved: the C++ `Player::imbuingItem` field
+        // (player.hpp:1761) backing `Game::getImbuingItem` (game.cpp:7137) and
+        // the walk/follow entry points of `Game::playerMove`/`forcePlayerMove`/
+        // targeting (game.cpp:4282-4307, 7030-7040).
+        game.getImbuingItem = { player -> player.getImbuingItem() }
+        game.setNextWalkTask = { player, task -> player.setNextWalkTask(task as? PlayerTask) }
+        game.setNextWalkActionTask = { player, task -> player.setNextWalkActionTask(task as? PlayerTask) }
+        // The `Game` seam carries only the `ignoreConditions` flag; the C++
+        // `WalkStartPolicy` (creature.cpp:326) is not forwarded (PARITY GAP).
+        game.startAutoWalk = { player, listDir, ignoreConditions ->
+            player.startAutoWalk(listDir, ignoreConditions)
+        }
+        // `Creature::updateCreatureWalk` (creature.hpp:412) awaits
+        // `goToFollowCreature_async()`; the async follow pipeline is not ported,
+        // so the synchronous `Player::goToFollowCreature` (player.cpp:6161) is
+        // the nearest reachable host method (PARITY GAP).
+        game.updateCreatureWalk = { player -> player.goToFollowCreature() }
+
         val imbuementEngine = imbuements?.let(::ImbuementEngine)
         if (imbuementEngine != null) {
             game.createScrollImbuement = { player, imbuement ->
@@ -329,9 +349,16 @@ class GameHandler(
  * `Cylinder` overload.
  */
 class GameMarketEscrow(
-    private val game: Game,
+    /**
+     * Resolves the shared `g_game()` at call time so the composition root can
+     * build the market before the listener-owned `Game` that the escrow feeds
+     * (`IOMarket::getInstance()` construction order, iomarket.cpp:155).
+     */
+    private val gameProvider: () -> Game,
     private val itemTypes: Items? = null,
 ) : MarketEscrow {
+
+    private val game: Game get() = gameProvider()
 
     private class EscrowPlayerHandle(val player: Player) : MarketEscrowPlayer {
         override val playerId: Long get() = player.getGUID()

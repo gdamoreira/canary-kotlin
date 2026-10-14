@@ -12,10 +12,14 @@ import io.netty.channel.nio.NioEventLoopGroup
 import io.netty.channel.socket.SocketChannel
 import io.netty.channel.socket.nio.NioServerSocketChannel
 import io.netty.util.concurrent.GlobalEventExecutor
+import javax.sql.DataSource
 import org.opentibia.canary.account.AccountRepository
 import org.opentibia.canary.account.InMemoryAccountRepository
 import org.opentibia.canary.game.Game
+import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.io.IOMarket
+import org.opentibia.canary.items.Items
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.ScriptingDispatch
 import org.opentibia.canary.map.GameMap
@@ -24,8 +28,10 @@ import org.opentibia.canary.network.codec.TibiaFrameDecoder
 import org.opentibia.canary.network.codec.TibiaMessageEncoder
 import org.opentibia.canary.network.crypto.RsaCipher
 import org.opentibia.canary.network.protocol.GameHandler
+import org.opentibia.canary.network.protocol.GameMarketEscrow
 import org.opentibia.canary.network.protocol.LoginHandler
 import org.opentibia.canary.network.protocol.StatusHandler
+import org.opentibia.canary.systems.imbuement.Imbuements
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -55,10 +61,46 @@ class CanaryServer(
     private val dispatcher: GameDispatcher = GameDispatcher(),
     private val rsaCipher: RsaCipher = RsaCipher(),
     private val luaEnvironment: LuaEnvironment = LuaEnvironment().apply { initState() },
-    /** `g_game()` equivalent shared by every game connection served by this listener. */
-    val game: Game = Game(gameMap, dispatcher),
+    /** `Item::items` registry (`src/items/items.hpp:389`) loaded by the bootstrap. */
+    private val itemTypes: Items? = null,
+    /** `g_imbuements()` registry (imbuements.cpp:47) loaded by the bootstrap. */
+    private val imbuements: Imbuements? = null,
+    /** `g_database()` source backing the composed `IOMarket::getInstance()` (iomarket.cpp). */
+    private val dataSource: DataSource? = null,
+    suppliedGame: Game? = null,
 ) : ListenerBoot {
     val scriptingEnvironment: LuaEnvironment get() = luaEnvironment
+
+    /**
+     * `IOMarket::getInstance()` composition over the booted [dataSource]. The escrow
+     * resolves the listener-owned `g_game()` lazily (see [GameMarketEscrow]) and the
+     * expired-offer recheck reschedules on the world lane
+     * (`IOMarket::checkExpiredOffers`, iomarket.cpp:234-247) instead of the C++
+     * Maintenance lane, keeping player inbox/bank mutations confined (AGENTS.md 1.2).
+     */
+    val ioMarket: IOMarket? = dataSource?.let { source ->
+        IOMarket(
+            source,
+            escrow = GameMarketEscrow({ game }, itemTypes),
+            scheduleCheck = { delayMillis ->
+                dispatcher.schedule(delayMillis, DispatcherLane.WorldCommit) {
+                    ioMarket?.checkExpiredOffers()
+                }
+            },
+        )
+    }
+
+    /**
+     * `g_game()` equivalent shared by every game connection served by this listener,
+     * composed with the booted item/imbuement registries and market.
+     */
+    val game: Game = suppliedGame ?: Game(
+        gameMap,
+        dispatcher,
+        itemTypes = itemTypes,
+        ioMarket = ioMarket,
+        imbuements = imbuements,
+    )
 
     private val scriptingDispatch = ScriptingDispatch(luaEnvironment, dispatcher)
 
@@ -122,6 +164,12 @@ class CanaryServer(
         gameChannelFuture = gameBootstrap.bind(gamePort).sync()
         logger.info { "Canary Game World listener running on port $gamePort" }
 
+        // `IOMarket::checkExpiredOffers()` runs during server startup
+        // (src/canary_server.cpp:230) and reschedules itself from there.
+        ioMarket?.let { market ->
+            dispatcher.dispatch(DispatcherLane.WorldCommit) { market.checkExpiredOffers() }
+        }
+
         // Canary fires the `startup` global events during `GAME_STATE_INIT`
         // (g_globalEvents().startup(), src/game/game.cpp:988) before the world serves
         // players. Confined to the WorldCommit lane by ScriptingDispatch.
@@ -137,6 +185,9 @@ class CanaryServer(
         luaEnvironment,
         onPlayerAppear = { onPlayerAppear() },
         onPlayerDisappear = { onPlayerDisappear() },
+        itemTypes = itemTypes,
+        ioMarket = ioMarket,
+        imbuements = imbuements,
         game = game,
     )
 
