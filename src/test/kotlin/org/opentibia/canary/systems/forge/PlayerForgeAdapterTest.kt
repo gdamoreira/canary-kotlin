@@ -13,7 +13,7 @@ import org.opentibia.canary.map.Position
  * Transcript tests for [PlayerForgeAdapter] against the real Kotlin `Player`
  * inventory.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/players/player.cpp:6013 `getForgeItemFromId`
  *  - src/creatures/players/player.cpp:1561 `getForgeSliversAndCores`
  *  - src/creatures/players/player.cpp:5335,5361 `hasItemCountById` / `removeItemCountById`

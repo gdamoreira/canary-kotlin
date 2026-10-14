@@ -22,7 +22,7 @@ Pinnacle endgame team-hunting difficulty modifier.
 ## 6. Canary Original Code Reference
 - **C++ Engine Source Files**: `src/creatures/monsters/monster.hpp`, `src/creatures/monsters/monster.cpp`, `src/creatures/players/player.hpp`, `src/creatures/players/player.cpp`, `src/game/game.cpp`, `src/config/config_enums.hpp`
 - **Lua Source Files (stay Lua)**: `data/libs/systems/hazard.lua`, `data/scripts/eventcallbacks/monster/ondroploot_hazard.lua`, `data/scripts/lib/register_monster_type.lua`
-- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Canary Repository Root**: `../.projects/canary`
 - **Key Methods / Opcodes**: `Game::handleHazardSystemAttack`, `Monster::getHazard/setHazard`, `Player::parseAttackDealtHazardSystem`
 
 ## 7. Implementation Status

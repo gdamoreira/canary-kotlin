@@ -22,7 +22,7 @@ Long-term weapon mastery progression in protocol versions >= 13.30.
 ## 6. Canary Original Code Reference
 - **C++ Engine Source Files**: `src/enums/weapon_proficiency.hpp`, `src/creatures/players/components/weapon_proficiency.hpp`, `src/creatures/players/components/weapon_proficiency.cpp`, `src/server/network/protocol/protocol_profile.hpp`, `src/lua/functions/creatures/player/player_functions.cpp`
 - **Lua Source Files (stay Lua)**: `data/scripts/lib/proficiency_helper.lua`, `data/scripts/talkactions/god/weapon_proficiency.lua`, `data/items/proficiencies.json`
-- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Canary Repository Root**: `../.projects/canary`
 - **Key Methods / Opcodes**: `WeaponProficiency::loadFromJson`, `addWeaponExperience`/`addWeaponProficiencyExperience`, `OfficialWeaponProficiencyPayload`
 
 ## 7. Implementation Status

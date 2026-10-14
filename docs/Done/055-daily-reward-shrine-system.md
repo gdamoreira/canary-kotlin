@@ -22,7 +22,7 @@ Daily player retention driver and resting-zone passive regeneration.
 ## 6. Canary Original Code Reference
 - **C++ Engine Source Files**: `src/creatures/creatures_definitions.hpp` (`DailyRewardBonus`/`DailyRewardStatus`), `src/creatures/players/player.hpp`, `src/creatures/players/player.cpp`, `src/creatures/combat/condition.cpp`, `src/io/iologindata_save_player.cpp`, `src/io/iologindata_load_player.cpp`, `src/server/network/protocol/protocolgame.cpp`
 - **Lua Source Files (stay Lua)**: `data/libs/systems/daily_reward.lua`, `data/modules/scripts/daily_reward/daily_reward.lua`, `data/scripts/actions/objects/daily_reward_shrine.lua`
-- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Canary Repository Root**: `../.projects/canary`
 - **Key Methods / Opcodes**: `Player::setDailyReward`, `Player::isDailyReward`, cyclopedia daily-streak send
 
 ## 7. Implementation Status

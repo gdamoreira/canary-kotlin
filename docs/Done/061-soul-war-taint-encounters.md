@@ -22,7 +22,7 @@ Premier endgame questline mechanics and high-risk boss strategy.
 ## 6. Canary Original Code Reference
 - **C++ Engine Source Files**: `src/creatures/creatures_definitions.hpp` (conditions), `src/creatures/combat/condition.hpp`, `src/creatures/combat/condition.cpp`, `src/creatures/combat/combat.cpp`, `src/creatures/players/player.hpp`, `src/creatures/monsters/monsters.cpp`
 - **Lua Source Files (stay Lua)**: `data/libs/systems/encounters.lua`, `data/scripts/globalevents/encounters.lua`, `data-otservbr-global/scripts/quests/soul_war/*`, `data-otservbr-global/world/quest/soul_war/*`
-- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Canary Repository Root**: `../.projects/canary`
 - **Key Methods / Opcodes**: `Combat::checkFearConditionAffected`, `ConditionFeared`, `Player::setImmuneFear`
 
 ## 7. Implementation Status

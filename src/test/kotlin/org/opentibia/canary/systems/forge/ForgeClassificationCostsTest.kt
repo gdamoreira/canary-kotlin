@@ -19,7 +19,7 @@ import org.opentibia.canary.network.protocol.forge.ForgeEnterCommand
  *    (src/creatures/players/player.cpp:11589)
  *  - classification 4 price table of data/scripts/systems/item_tiers.lua
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  */
 class ForgeClassificationCostsTest {
 

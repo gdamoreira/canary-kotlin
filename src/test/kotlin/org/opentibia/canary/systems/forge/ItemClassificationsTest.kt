@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test
  *  - `ItemClassification::addTier` (src/items/items_classification.hpp:27-33)
  *  - `ItemType::upgradeClassification` default 0 (src/items/items.hpp:329)
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  */
 class ItemClassificationsTest {
 

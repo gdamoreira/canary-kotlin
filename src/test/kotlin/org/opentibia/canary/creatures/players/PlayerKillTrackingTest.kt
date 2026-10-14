@@ -17,7 +17,7 @@ import org.opentibia.canary.systems.taskhunting.TaskHuntingSlot
 /**
  * Transcript tests for the Player kill trackers.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/players/player.cpp:6606-6660 (hunting/bestiary/bosstiary kills)
  *  - src/creatures/players/player.cpp:6680-6698 (`onKilledMonster`)
  *  - src/config/configmanager.cpp:228,230,234 (kill multipliers / boss bonus)

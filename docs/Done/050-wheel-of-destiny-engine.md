@@ -23,7 +23,7 @@ Endgame character customization and power progression for level 50..1000+ charac
 ## 6. Canary Original Code Reference
 - **C++ Engine Source Files**: `src/io/io_wheel.cpp`, `src/io/io_wheel.hpp`, `src/creatures/players/components/wheel/player_wheel.cpp`, `src/creatures/players/components/wheel/player_wheel.hpp`, `src/creatures/players/components/wheel/wheel_gems.cpp`, `.../wheel_gems.hpp`, `.../wheel_spells.cpp`, `.../wheel_definitions.hpp`, `src/enums/player_wheel.hpp`, `src/server/network/protocol/protocolgame.cpp`
 - **Lua Source Files (stay Lua)**: `data/scripts/actions/items/wheel_scrolls.lua`
-- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Canary Repository Root**: `../.projects/canary`
 - **Key Methods / Opcodes**: `IOWheel::loadFromJson`, `PlayerWheel::getWheelPoints`/`getUnusedPoints`/`addPromotionPoints`, `parseOpenWheel` (0x61), `parseSaveWheel` (0x62), `parseWheelGemAction` (0xE7)
 
 ## 7. Implementation Status

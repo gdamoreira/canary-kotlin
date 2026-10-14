@@ -12,7 +12,7 @@ import org.opentibia.canary.map.Position
 /**
  * Transcript tests for the `Creature` async-task queue basics.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/creature.hpp:819-827 (`FlagAsyncClass_t`)
  *  - src/creatures/creature.hpp:977-1076 (`addAsyncTask`, flags, safeCall)
  *  - src/creatures/creature.cpp:2148-2184 (`executeAsyncTasks`)

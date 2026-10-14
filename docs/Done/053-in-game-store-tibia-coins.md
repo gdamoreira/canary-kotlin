@@ -22,7 +22,7 @@ Server monetization, premium item delivery, and automated service transactions.
 ## 6. Canary Original Code Reference
 - **C++ Engine Source Files**: `src/enums/account_coins.hpp`, `src/enums/account_type.hpp`, `src/account/account.hpp`, `src/account/account.cpp`, `src/database/account_repository_db.cpp`, `src/creatures/players/player.hpp`, `src/server/network/protocol/protocolgame.cpp`
 - **Lua Source Files (stay Lua)**: `data/libs/gamestore/*`, `data/modules/scripts/gamestore/*`
-- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Canary Repository Root**: `../.projects/canary`
 - **Key Methods / Opcodes**: `Account::getCoins/addCoins/removeCoins/registerCoinTransaction`, `Game::sendResourcesBalance`, `CoinType`, `CoinTransactionType`
 
 ## 7. Implementation Status

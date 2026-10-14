@@ -17,7 +17,7 @@ import org.opentibia.canary.spells.WorldType
 /**
  * Transcript tests for the Canary PvP components.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/players/components/pvp/player_pvp.hpp:14-27, player_pvp.cpp:14-38
  *  - src/creatures/players/player.cpp:4442-4483 (addPzLockTicks)
  *  - src/creatures/players/player.cpp:6226-6232 (setPvpMode/getPvpMode)

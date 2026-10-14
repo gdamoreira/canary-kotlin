@@ -8,7 +8,7 @@ import org.opentibia.canary.network.message.writeTibiaString
 /**
  * Transcript tests for the Canary engine core of the House Hirelings subsystem.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/game/game.cpp (m_hirelingSkills / m_hirelingOutfits + Game::getHirelingSkills/getHirelingOutfits)
  *  - src/creatures/players/player.cpp (Player::canSpeakWithHireling)
  *  - src/creatures/creatures_definitions.hpp (SPEECHBUBBLE_HIRELING)

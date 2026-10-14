@@ -23,7 +23,7 @@ Consumable gold sink and tactical preparation for bossing/hunting.
 ## 6. Canary Original Code Reference
 - **C++ Engine Source Files**: `src/utils/utils_definitions.hpp` (`Concoction_t`), `src/creatures/players/player.hpp`, `src/creatures/players/player.cpp`, `src/lua/functions/core/game/lua_enums.cpp`, `src/server/network/protocol/protocolgame.cpp`, `src/config/config_enums.hpp`
 - **Lua Source Files (stay Lua)**: `data/libs/systems/concoctions.lua`, `data/scripts/systems/concoctions.lua`, `data/scripts/creaturescripts/player/login.lua`
-- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Canary Repository Root**: `../.projects/canary`
 - **Key Methods / Opcodes**: `Player::updateConcoction`, `Player::getActiveConcoctions`, `player:updateConcoction`
 
 ## 7. Implementation Status

@@ -12,7 +12,7 @@ import org.opentibia.canary.map.Position
  * `Player::animusMastery()` state (player.cpp:12812) through the
  * [PlayerAnimusMasteryPersistence] save/load seam.
  *
- * Canary source of truth: `/Users/damoreira/.projects/canary`
+ * Canary source of truth: `../.projects/canary`
  *  - src/creatures/players/animus_mastery/animus_mastery.hpp:16-45
  *  - src/creatures/players/animus_mastery/animus_mastery.cpp:62-73
  *  - src/io/functions/iologindata_save_player.cpp:293-299

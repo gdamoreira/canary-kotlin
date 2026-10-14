@@ -120,7 +120,7 @@ private fun mount(id: Int): Mount = Mount(
 /**
  * Transcript tests for the Canary `PlayerTitle` component.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/players/components/player_title.hpp:19-101
  *  - src/creatures/players/components/player_title.cpp:20-329
  *  - src/game/game.cpp:12566-12594 (`Game::getTitleById/getTitleByName/getTitles`)

@@ -22,7 +22,7 @@ Private house utility, convenience for players, and gold sink.
 ## 6. Canary Original Code Reference
 - **C++ Engine Source Files**: `src/game/game.hpp`, `src/game/game.cpp`, `src/creatures/players/player.hpp`, `src/creatures/players/player.cpp`, `src/server/network/protocol/protocolgame.cpp`, `src/creatures/players/components/player_cyclopedia.cpp`
 - **Lua Source Files (stay Lua)**: `data/libs/systems/hireling.lua`, `data/modules/scripts/hirelings/hireling_module.lua`, `data/scripts/actions/items/hireling_lamp.lua`, `data/scripts/actions/items/hireling_foods.lua`, `data/scripts/globalevents/hireling_save.lua`
-- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Canary Repository Root**: `../.projects/canary`
 - **Key Methods / Opcodes**: `Player::canSpeakWithHireling`, `parseSetHirelingName` (0xEC)
 
 ## 7. Implementation Status

@@ -28,7 +28,7 @@ data class SetHirelingName(
 /**
  * Engine core of the House Hirelings subsystem.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/players/player.cpp (Player::canSpeakWithHireling)
  *  - src/creatures/creatures_definitions.hpp (SPEECHBUBBLE_HIRELING)
  *  - src/server/network/protocol/protocolgame.cpp (ProtocolGame::parseSetHirelingName, 0xEC)

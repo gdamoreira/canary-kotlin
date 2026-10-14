@@ -21,7 +21,7 @@ Mid-to-endgame solo hunting combat amplifier and boss support.
 ## 6. Canary Original Code Reference
 - **C++ Engine Source Files**: `src/creatures/players/grouping/familiars.hpp`, `src/creatures/players/grouping/familiars.cpp`, `src/creatures/players/player.hpp`, `src/creatures/players/player.cpp`, `src/creatures/players/components/player_storage.cpp`
 - **Lua Source Files (stay Lua)**: `data/libs/systems/familiar.lua`, `data/scripts/spells/familiar/*`, `data/scripts/creaturescripts/familiar/*`, `data/XML/familiars.xml`
-- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Canary Repository Root**: `../.projects/canary`
 - **Key Methods / Opcodes**: `Familiars::loadFromXml`, `Player::addFamiliar/removeFamiliar/canFamiliar`
 
 ## 7. Implementation Status

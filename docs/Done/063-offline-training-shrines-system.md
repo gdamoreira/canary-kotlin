@@ -23,7 +23,7 @@ Core daily progression for offline players.
 ## 6. Canary Original Code Reference
 - **C++ Engine Source Files**: `src/creatures/players/player.hpp`, `src/creatures/players/player.cpp`, `src/game/game.hpp`, `src/game/game.cpp`, `src/server/network/protocol/protocolgame.cpp`, `src/io/iologindata_save_player.cpp`, `src/io/iologindata_load_player.cpp`, `src/config/config_enums.hpp`
 - **Lua Source Files (stay Lua)**: `data/scripts/creaturescripts/player/offline_training.lua`
-- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Canary Repository Root**: `../.projects/canary`
 - **Key Methods / Opcodes**: `parseStartOfflineTraining` (0x74), `Game::sendOfflineTrainingDialog`, `Player::addOfflineTrainingTries`
 
 ## 7. Implementation Status

@@ -15,7 +15,7 @@ import org.opentibia.canary.spells.WorldType
 /**
  * Transcript tests for `Player::onKilledPlayer`.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/players/player.cpp:6595-6604 (`onKilledPlayer`)
  *  - src/creatures/players/player.cpp:7263-7301 (`addUnjustifiedDead`)
  *  - src/config/configmanager.cpp:386 (`WHITE_SKULL_TIME`, default 15 min)

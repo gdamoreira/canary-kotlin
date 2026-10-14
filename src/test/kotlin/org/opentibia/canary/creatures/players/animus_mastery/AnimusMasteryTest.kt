@@ -8,7 +8,7 @@ import org.opentibia.canary.io.PropWriteStream
 /**
  * Transcript tests for Canary `AnimusMastery`.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/players/animus_mastery/animus_mastery.hpp:16-45
  *  - src/creatures/players/animus_mastery/animus_mastery.cpp:17-74
  *  - src/io/fileloader.hpp:89-159 (`PropStream::readString` and

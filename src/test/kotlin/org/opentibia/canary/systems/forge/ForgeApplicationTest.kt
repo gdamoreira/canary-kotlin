@@ -7,7 +7,7 @@ import org.opentibia.canary.network.protocol.forge.ForgeEnterCommand
 /**
  * Transcript tests for [ForgeApplication].
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/server/network/protocol/protocolgame.cpp:7398 `parseForgeEnter` dispatch
  *  - src/game/game.cpp:11178-11239 `playerForgeFuseItems` /
  *    `playerForgeTransferItemTier` / `playerForgeResourceConversion`

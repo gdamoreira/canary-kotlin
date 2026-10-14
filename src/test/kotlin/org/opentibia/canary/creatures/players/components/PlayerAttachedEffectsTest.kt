@@ -18,7 +18,7 @@ import org.opentibia.canary.systems.rewardchest.ReturnValue
 /**
  * Transcript tests for the Canary `PlayerAttachedEffects` component.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/players/components/player_attached_effects.hpp:19-136
  *  - src/creatures/players/components/player_attached_effects.cpp:18-874
  *  - src/utils/const.hpp:54-68 (`PSTRG_WING_*`, `PSTRG_EFFECT_*`, `PSTRG_AURA_*`)

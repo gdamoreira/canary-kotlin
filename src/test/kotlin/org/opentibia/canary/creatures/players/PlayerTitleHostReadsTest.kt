@@ -13,7 +13,7 @@ import org.opentibia.canary.map.Position
  * [org.opentibia.canary.creatures.PlayerFeatures] must read the composed
  * player state instead of the zero/false defaults the wave-56 report recorded.
  *
- * Canary source of truth: `/Users/damoreira/.projects/canary`
+ * Canary source of truth: `../.projects/canary`
  *  - `PlayerTitle::checkGold` (player_title.cpp:183-185)
  *  - `PlayerTitle::checkOutfit` (player_title.cpp:197-199)
  *  - `PlayerTitle::checkOther` (player_title.cpp:276-328),

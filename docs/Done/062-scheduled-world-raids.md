@@ -22,7 +22,7 @@ Server-wide community events, rare loot opportunities, and activity surges.
 ## 6. Canary Original Code Reference
 - **C++ Engine Source Files**: `src/lua/creature/raids.hpp`, `src/lua/creature/raids.cpp`, `src/game/game.hpp`, `src/game/game.cpp`, `src/game/game_reload.cpp`, `src/tasks/task.hpp`
 - **Lua Source Files (stay Lua)**: `data/libs/systems/raids.lua`, `data/scripts/globalevents/raids.lua`, `data/scripts/globalevents/global_server_save.lua`, `data-canary/raids/raids.xml`
-- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Canary Repository Root**: `../.projects/canary`
 - **Key Methods / Opcodes**: `Raids::loadFromXml`, `Raid::startRaid`, `RaidEvent::executeRaidEvent`, `Game::raids`
 
 ## 7. Implementation Status

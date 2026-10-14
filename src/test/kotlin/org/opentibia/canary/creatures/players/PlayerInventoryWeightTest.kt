@@ -12,7 +12,7 @@ import org.opentibia.canary.map.Position
  * Transcript tests for `Player::updateInventoryWeight` and its interaction with
  * `Player::getFreeCapacity`.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/players/player.cpp:1072-1084 (`updateInventoryWeight`)
  *  - src/creatures/players/player.cpp:5468-5476 (`getFreeCapacity`)
  *  - src/creatures/players/player.hpp:1798 (`inventoryWeight`)

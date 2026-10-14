@@ -23,7 +23,7 @@ Endgame item sink, economy driver, and equipment progression.
 ## 6. Canary Original Code Reference
 - **C++ Engine Source Files**: `src/enums/forge_conversion.hpp`, `src/creatures/players/components/player_forge_history.hpp`, `.../player_forge_history.cpp`, `src/creatures/players/player.hpp` (forge API ~L1409-1430), `src/items/item.cpp` (tier attrs), `src/game/game.cpp` (`playerForge*`), `src/server/network/protocol/protocolgame.cpp`
 - **Lua Source Files (stay Lua)**: `data/libs/systems/exaltation_forge.lua`, `data/scripts/systems/item_tiers.lua`
-- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Canary Repository Root**: `../.projects/canary`
 - **Key Methods / Opcodes**: `Player::forgeFuseItems`, `forgeTransferItemTier`, `forgeResourceConversion`, `parseForgeEnter`, `sendOpenForge`, `sendForgeResult`
 
 ## 7. Implementation Status

@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Test
 /**
  * Transcript tests for the Canary `ExpertPvp` component.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/players/components/pvp/expert_pvp.hpp:24-61
  *  - src/creatures/players/components/pvp/expert_pvp.cpp:361-1030
  *  - src/creatures/players/components/pvp/expert_pvp_definitions.hpp:19-195

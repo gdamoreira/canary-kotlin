@@ -11,7 +11,7 @@ import org.opentibia.canary.map.Position
 /**
  * Transcript tests for the Canary Boss Reward Chest engine core.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/items/containers/rewards/reward.hpp/.cpp
  *  - src/items/containers/rewards/rewardchest.hpp/.cpp
  *  - src/creatures/players/player.cpp (Player::getReward/getRewardChest/removeReward/getRewardList)

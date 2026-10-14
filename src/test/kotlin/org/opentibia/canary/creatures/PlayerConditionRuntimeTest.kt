@@ -11,7 +11,7 @@ import org.opentibia.canary.map.Position
 /**
  * Transcript tests for the `Player` condition integration.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/creature.cpp:1393-1404 (`addCombatCondition`), 1224-1226
  *    (`onAddCombatCondition` base)
  *  - src/creatures/players/player.cpp:356-394 (`isSuppress`,

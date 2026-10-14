@@ -34,10 +34,10 @@ interface RewardChestOwner {
  * reward ownership previously held on `Player` (`rewardMap`) and the collection
  * algorithm from `Game::collectRewardChestItems`.
  *
- * Source: /Users/damoreira/.projects/canary/src/items/containers/rewards/rewardchest.hpp
- *         /Users/damoreira/.projects/canary/src/items/containers/rewards/rewardchest.cpp
- *         /Users/damoreira/.projects/canary/src/creatures/players/player.cpp:2058
- *         /Users/damoreira/.projects/canary/src/game/game.cpp:3898
+ * Source: ../.projects/canary/src/items/containers/rewards/rewardchest.hpp
+ *         ../.projects/canary/src/items/containers/rewards/rewardchest.cpp
+ *         ../.projects/canary/src/creatures/players/player.cpp:2058
+ *         ../.projects/canary/src/game/game.cpp:3898
  *
  * Constructor state mirrors `RewardChest(type): Container(type) { maxSize = 32;
  * unlocked = false; pagination = true; }` and `canRemove() == false`.

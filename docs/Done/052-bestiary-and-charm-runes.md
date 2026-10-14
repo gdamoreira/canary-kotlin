@@ -22,7 +22,7 @@ Core mid-to-endgame hunting incentive; affects combat DPS on high-health creatur
 ## 6. Canary Original Code Reference
 - **C++ Engine Source Files**: `src/io/iobestiary.cpp`, `src/io/iobestiary.hpp`, `src/creatures/players/player.hpp` (bestiary/charm state), `src/server/network/protocol/protocolgame.cpp`
 - **Lua Source Files (stay Lua)**: `data/scripts/systems/bestiary_charms.lua`, `data/scripts/lib/register_monster_type.lua`
-- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Canary Repository Root**: `../.projects/canary`
 - **Key Methods / Opcodes**: `IOBestiary::parseCharm`, `Player::addBestiaryKillCount`, `Game::createBestiaryCharm`, `parseBestiarySendRaces`, `parseSendBuyCharmRune`
 
 ## 7. Implementation Status

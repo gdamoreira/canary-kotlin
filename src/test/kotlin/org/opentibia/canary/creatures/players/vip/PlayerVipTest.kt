@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Test
 /**
  * Transcript tests for the Canary PlayerVIP component.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/players/components/player_vip.hpp:16-77
  *  - src/creatures/players/components/player_vip.cpp:18-253
  *  - src/io/iologindata.cpp:363-497 (VIP persistence statics)

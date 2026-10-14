@@ -11,7 +11,7 @@ import org.opentibia.canary.spells.WorldType
 /**
  * Transcript tests for the exiva (Find Person) restrictions.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/players/player.hpp:182-195 (`ExivaRestrictions`)
  *  - src/creatures/players/player.cpp:7000-7048 (`canExiva`)
  *  - src/creatures/players/player.cpp:13440-13446 (`getExivaRestrictions`)

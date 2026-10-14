@@ -3,7 +3,7 @@ package org.opentibia.canary.systems.rewardchest
 /**
  * Faithful transcription of Canary's `enum ReturnValue : uint16_t`.
  *
- * Source: /Users/damoreira/.projects/canary/src/items/items_definitions.hpp:36
+ * Source: ../.projects/canary/src/items/items_definitions.hpp:36
  *
  * The Kotlin constants drop the redundant `RETURNVALUE_` prefix while preserving
  * the exact declaration order so the ordinal value of every entry matches Canary.

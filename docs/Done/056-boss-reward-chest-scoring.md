@@ -23,7 +23,7 @@ Eliminates loot theft and griefing in large boss encounters.
 ## 6. Canary Original Code Reference
 - **C++ Engine Source Files**: `src/items/containers/rewards/reward.hpp`, `src/items/containers/rewards/reward.cpp`, `src/items/containers/rewards/rewardchest.hpp`, `src/items/containers/rewards/rewardchest.cpp`, `src/creatures/players/player.hpp`, `src/creatures/players/player.cpp`, `src/game/game.cpp`, `src/server/network/protocol/protocolgame.cpp`
 - **Lua Source Files (stay Lua)**: `data/scripts/systems/reward_chest.lua`, `data/libs/systems/reward_boss.lua`
-- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Canary Repository Root**: `../.projects/canary`
 - **Key Methods / Opcodes**: `Game::collectRewardChestItems`, `Player::addReward`, `parseRewardChestCollect` (0xFF)
 
 ## 7. Implementation Status

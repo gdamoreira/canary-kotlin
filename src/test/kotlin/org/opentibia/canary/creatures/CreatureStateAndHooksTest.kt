@@ -16,7 +16,7 @@ import org.opentibia.canary.map.Position
  * visibility and creature icons.
  *
  * Every expectation cites the exact Canary source it transcribes
- * (`/Users/damoreira/.projects/canary`).
+ * (`../.projects/canary`).
  */
 class CreatureStateAndHooksTest {
 

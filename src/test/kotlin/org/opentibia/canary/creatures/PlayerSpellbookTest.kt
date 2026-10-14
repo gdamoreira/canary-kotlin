@@ -15,7 +15,7 @@ import org.opentibia.canary.spells.Spells
  * Transcript tests for the `Player` learned-spell state and the spell/group
  * cooldown surface.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/players/player.cpp:3122-3145 (`learnInstantSpell`,
  *    `forgetInstantSpell`, `hasLearnedInstantSpell`)
  *  - src/creatures/players/player.cpp:8997-9007 (`sendSpellCooldown`,

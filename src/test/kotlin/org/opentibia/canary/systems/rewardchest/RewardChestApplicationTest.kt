@@ -10,7 +10,7 @@ import org.opentibia.canary.network.protocol.rewardchest.RewardChestCollectComma
 /**
  * Transcript tests for applying a parsed reward-chest collect command.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/server/network/protocol/protocolgame.cpp:4491 `parseRewardChestCollect`
  *    gates on `REWARD_CHEST_COLLECT_ENABLED` and passes
  *    `REWARD_CHEST_MAX_COLLECT_ITEMS` as `maxMoveItems`.

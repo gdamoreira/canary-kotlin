@@ -22,7 +22,7 @@ Movement speed progression, exploration pacing, and collection mechanics.
 ## 6. Canary Original Code Reference
 - **C++ Engine Source Files**: `src/creatures/appearance/mounts/mounts.hpp`, `src/creatures/appearance/mounts/mounts.cpp`, `src/creatures/players/player.hpp`, `src/creatures/players/player.cpp`, `src/creatures/players/components/player_storage.cpp`, `src/lua/functions/creatures/player/mount_functions.cpp`, `src/server/network/protocol/protocolgame.cpp`
 - **Lua Source Files (stay Lua)**: `data/scripts/actions/items/usable_mount_items.lua`, `data/scripts/talkactions/god/add_mount.lua`, `data/modules/scripts/gamestore/catalog/cosmetics_mounts.lua`, `data/XML/mounts.xml`
-- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Canary Repository Root**: `../.projects/canary`
 - **Key Methods / Opcodes**: `Mounts::loadFromXml`, `Player::toggleMount/hasMount/addMount`
 
 ## 7. Implementation Status

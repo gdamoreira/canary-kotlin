@@ -12,7 +12,7 @@ import org.opentibia.canary.systems.rewardchest.RewardChest
 /**
  * Transcript tests for wiring the boss reward chest into per-player state.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/players/player.cpp:2058 `Player::getRewardChest` (lazy
  *    `std::make_shared<RewardChest>(ITEM_REWARD_CHEST)`).
  *  - src/creatures/players/player.cpp:2067 `Player::getReward` (autoCreate adds

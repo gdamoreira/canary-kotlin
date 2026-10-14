@@ -26,7 +26,7 @@ private val ALL_BADGES = listOf(
 /**
  * Transcript tests for the Canary `PlayerBadge` component.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/players/components/player_badge.hpp:18-65
  *  - src/creatures/players/components/player_badge.cpp:19-189
  *  - src/game/game.cpp:12536-12564 (`Game::getBadgeById/getBadgeByName/getBadges`)

@@ -17,6 +17,6 @@
 
 ## 6. Canary Original Code Reference
 - **Source Files**: `src/.../file.cpp`, `src/.../file.hpp` (or `data/.../script.lua`)
-- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Canary Repository Root**: `../.projects/canary`
 - **Key Methods / Opcodes**: [List original C++ functions or opcode numbers, e.g. `ProtocolGame::parseAttack (0xA1)`]
 - **Original Canary Tests**: `tests/unit/.../test.cpp` (if applicable)

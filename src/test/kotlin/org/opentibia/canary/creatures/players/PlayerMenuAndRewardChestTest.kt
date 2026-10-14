@@ -8,7 +8,7 @@ import org.opentibia.canary.map.Position
 /**
  * Transcript tests for the remaining Player accessors.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/players/player.cpp:2058-2063 (`getRewardChest`)
  *  - src/creatures/players/player.cpp:6815-6833 (`setSpecialMenuAvailable`)
  */

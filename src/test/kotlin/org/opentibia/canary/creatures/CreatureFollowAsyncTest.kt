@@ -7,7 +7,7 @@ import org.opentibia.canary.map.Position
 /**
  * Transcript tests for the asynchronous follow pipeline.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/creature.hpp:412-416 (`updateCreatureWalk`,
  *    `goToFollowCreature_async`, `goToFollowCreature`)
  *  - src/creatures/creature.cpp:167 (`goToFollowCreature_async(onThink)`)

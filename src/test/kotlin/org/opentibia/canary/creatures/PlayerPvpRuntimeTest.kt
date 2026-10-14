@@ -11,7 +11,7 @@ import org.opentibia.canary.map.Position
 /**
  * Transcript tests for the `Player` PvP/in-fight runtime integration.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/players/player.cpp:3900-3902 (`isPzLocked`)
  *  - src/creatures/players/player.cpp:4442-4483 (`addPzLockTicks`)
  *  - src/creatures/players/player.cpp:4487-4505 (`addInFightTicks`)

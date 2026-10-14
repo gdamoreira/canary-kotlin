@@ -2,7 +2,7 @@
 
 This document tracks **C++ code that is not yet transcribed to the Kotlin port**, so remaining work is visible and measurable. It complements `docs/game-play-features.md` (the 56-feature gameplay matrix).
 
-- **Reference C++ repo:** `/Users/damoreira/.projects/canary` (`src/`)
+- **Reference C++ repo:** `../.projects/canary` (`src/`)
 - **Kotlin port:** `canary-kotlin/src/main/kotlin/org/opentibia/canary/`
 - **Status legend:** `DONE` = faithful, tested Kotlin counterpart; `PARTIAL` = engine core exists, significant behavior missing; `MISSING` = no meaningful counterpart.
 

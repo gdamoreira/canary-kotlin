@@ -15,7 +15,7 @@ import org.opentibia.canary.map.Position
  * (player.hpp:1956) reaching `m_player.outfits`/`m_player.familiars`
  * (player_storage.cpp:59-66).
  *
- * Canary source of truth: `/Users/damoreira/.projects/canary`
+ * Canary source of truth: `../.projects/canary`
  *  - src/creatures/players/components/player_storage.hpp:35-185
  *  - src/creatures/players/components/player_storage.cpp:27-161
  *  - src/creatures/players/player.hpp:1541-1542, 1686-1687, 1956-1968

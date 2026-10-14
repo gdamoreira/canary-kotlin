@@ -7,8 +7,8 @@ import org.opentibia.canary.items.Thing
 /**
  * Kotlin port of Canary `class Reward final : public Container`.
  *
- * Source: /Users/damoreira/.projects/canary/src/items/containers/rewards/reward.hpp
- *         /Users/damoreira/.projects/canary/src/items/containers/rewards/reward.cpp
+ * Source: ../.projects/canary/src/items/containers/rewards/reward.hpp
+ *         ../.projects/canary/src/items/containers/rewards/reward.cpp
  *
  * Mirrors the constructor state (`Container(ITEM_REWARD_CONTAINER); maxSize = 32;
  * unlocked = false; pagination = true;`) through the shared [Container] port and

@@ -8,7 +8,7 @@ import org.opentibia.canary.network.protocol.offline.StartOfflineTrainingCommand
  * Transcript tests for applying a parsed offline-training start command to the
  * offline-training engine core.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/game/game.cpp:11153 `Game::playerAnswerModalWindow` (offline training
  *    branch): accepts SKILL_FIST/SKILL_SWORD/SKILL_AXE/SKILL_CLUB/
  *    SKILL_DISTANCE/SKILL_MAGLEVEL and calls `setOfflineTrainingSkill(choice)`.

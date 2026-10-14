@@ -3,7 +3,7 @@ package org.opentibia.canary.systems.hireling
 /**
  * Engine-side hireling registry mirroring Canary's `Game` hireling maps.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/game/game.cpp (Game::m_hirelingSkills / Game::m_hirelingOutfits)
  *  - src/game/game.hpp (Game::getHirelingSkills / Game::getHirelingOutfits)
  */

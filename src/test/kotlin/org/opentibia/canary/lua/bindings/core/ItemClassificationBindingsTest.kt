@@ -17,7 +17,7 @@ import org.opentibia.canary.systems.forge.TierInfo
  *    data/scripts/lib/register_item_tier.lua consumed by
  *    data/scripts/systems/item_tiers.lua
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  */
 class ItemClassificationBindingsTest {
 

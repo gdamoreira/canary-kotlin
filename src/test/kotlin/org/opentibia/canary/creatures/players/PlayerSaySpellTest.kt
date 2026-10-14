@@ -15,7 +15,7 @@ import org.opentibia.canary.map.Spectators
 /**
  * Transcript tests for `Player::saySpell`.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/players/player.cpp:11026-11080 (`saySpell`)
  *  - src/utils/const.hpp:29 (`STORAGEVALUE_EMOTE = 30008`)
  *  - src/config/configmanager.cpp:98 (`EMOTE_SPELLS`, default false)

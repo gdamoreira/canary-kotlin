@@ -94,7 +94,7 @@ Each document must follow this layout:
 
 ## 6. Canary Original Code Reference
 - **Source Files**: `<path/to/canary/file.cpp>, <path/to/header.hpp>`
-- **Canary Repository Root**: `/Users/damoreira/.projects/canary`
+- **Canary Repository Root**: `../.projects/canary`
 - **Key Methods / Opcodes**: `<e.g. ProtocolGame::parseAttack, Combat::doCombat>`
 ```
 

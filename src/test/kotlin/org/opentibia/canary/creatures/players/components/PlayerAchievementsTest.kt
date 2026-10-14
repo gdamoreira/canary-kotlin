@@ -33,7 +33,7 @@ private val ALL_ACHIEVEMENTS = listOf(CASTLEMANIA, CHORISTER, THE_MILKMAN)
 /**
  * Transcript tests for the Canary `PlayerAchievement` component.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/players/components/player_achievement.hpp:15-48
  *  - src/creatures/players/components/player_achievement.cpp:16-140
  *  - src/game/game.cpp:12481-12503 (`Game::registerAchievement`,

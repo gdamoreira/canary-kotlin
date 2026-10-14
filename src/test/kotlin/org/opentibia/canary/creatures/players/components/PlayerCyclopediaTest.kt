@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Test
 /**
  * Transcript tests for the Canary `PlayerCyclopedia` component.
  *
- * Source of truth: /Users/damoreira/.projects/canary
+ * Source of truth: ../.projects/canary
  *  - src/creatures/players/components/player_cyclopedia.hpp:15-43
  *  - src/creatures/players/components/player_cyclopedia.cpp:19-254
  *  - src/enums/player_cyclopedia.hpp:40-48 (`Summary_t`)
