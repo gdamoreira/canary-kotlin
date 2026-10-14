@@ -360,8 +360,11 @@ class GameMap(
         }
 
         // `spectator->onCreatureMove(creature, newTile, newPos, oldTile, oldPos, teleport)`
-        // (map.cpp:788-790) is a PARITY GAP: `Creature::onCreatureMove`
-        // (creature.cpp:501) is not ported (Creature.kt out of scope).
+        // (map.cpp:788-790). The moving creature is part of its own spectator
+        // snapshot, so its self-move branch (Creature.cpp:519-548) runs here.
+        for (spectator in spectators) {
+            spectator.onCreatureMove(creature, newTile, newPos, oldTile, oldPos, teleport)
+        }
 
         // event method
         val events = {

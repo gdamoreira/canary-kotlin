@@ -45,14 +45,16 @@ class PlayerCombatHooksStateTest {
 
     @Test
     fun `drainHealth stays silent when the pain roll misses`() {
-        // player.cpp:3541: `10 >= uniform_random(1, 100)`.
+        // player.cpp:3541: `10 >= uniform_random(1, 100)`. The drain routes
+        // through `changeHealth(-damage, false)` (creature.cpp:893-899), so a
+        // non-lethal hit leaves the clamped health behind.
         val player = newPlayer()
         var sounds = 0
 
-        player.drainHealth(attacker = null, damage = 200, soundRoll = 50, playSound = { sounds++ })
+        player.drainHealth(attacker = null, damage = 60, soundRoll = 50, playSound = { sounds++ })
 
         assertThat(sounds).isZero()
-        assertThat(player.health).isZero()
+        assertThat(player.health).isEqualTo(40)
     }
 
     @Test

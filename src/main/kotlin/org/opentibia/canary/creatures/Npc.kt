@@ -73,7 +73,7 @@ class Npc(
     internal val listWalkDir = mutableListOf<Direction>()
 
     /** `Creature::eventWalk` (`src/creatures/creature.hpp:911`) as a pending-step latch. */
-    internal var eventWalk: Long = 0
+    override var eventWalk: Long = 0
 
     /** `Npc::walkTicks` (src/creatures/npcs/npc.hpp:160). */
     private var walkTicks: Int = 0

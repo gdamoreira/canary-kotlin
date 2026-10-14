@@ -19,8 +19,10 @@ import org.opentibia.canary.creatures.grouping.Party
 import org.opentibia.canary.creatures.grouping.PartyShields_t
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.players.CountBlock
+import org.opentibia.canary.creatures.players.PlayerActionTimers
 import org.opentibia.canary.creatures.players.PlayerDeathState
 import org.opentibia.canary.creatures.players.PlayerTask
+import org.opentibia.canary.creatures.players.PlayerTownState
 import org.opentibia.canary.creatures.players.PlayerWalkState
 import org.opentibia.canary.creatures.players.WalkStartPolicy
 import org.opentibia.canary.creatures.players.components.CyclopediaPlayer
@@ -36,6 +38,7 @@ import org.opentibia.canary.creatures.players.storages.Stash
 import org.opentibia.canary.game.QuickLootFilter_t
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.game.scheduling.DispatcherLane
+import org.opentibia.canary.game.zones.ZoneType
 import org.opentibia.canary.social.guild.Guild
 import org.opentibia.canary.social.guild.GuildRank
 import org.opentibia.canary.items.Container
@@ -51,6 +54,7 @@ import org.opentibia.canary.creatures.vocations.VocationRequirementsAdapter
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Tile
+import org.opentibia.canary.map.Town
 import org.opentibia.canary.network.protocol.MessageClass
 import org.opentibia.canary.network.protocol.ProtocolSink
 import org.opentibia.canary.network.protocol.SourceEffect
@@ -202,28 +206,184 @@ abstract class Creature(
     }
 
     /**
-     * `Creature::onRemoveCreature` (`creature.cpp:412-421`). The monster
-     * target/follow clearing of the tail (`creature.cpp:417-420`) is not modeled
-     * (PARITY GAP).
+     * `Creature::onRemoveCreature` (`creature.cpp:412-421`). The C++ body
+     * ignores its second parameter and always reports the disappearance; a
+     * monster whose attacked creature was removed re-points its target and
+     * follow to the removed creature exactly like the C++ tail.
      */
     open fun onRemoveCreature(creature: Creature, isLogout: Boolean) {
-        onCreatureDisappear(creature, isLogout)
+        onCreatureDisappear(creature, true)
+
+        // Update player from monster target list (avoid memory usage after clean)
+        if (this is Monster && getAttackedCreature() === creature) {
+            setAttackedCreature(creature)
+            setFollowCreature(creature)
+        }
     }
 
-    /**
-     * `Creature::onCreatureDisappear` (`creature.cpp:423-434`); the follow
-     * clearing (`creature.cpp:430-433`) is not modeled (PARITY GAP).
-     */
+    /** `Creature::onCreatureDisappear` (`creature.cpp:423-434`). */
     open fun onCreatureDisappear(creature: Creature, isLogout: Boolean) {
         if (getAttackedCreature() === creature) {
             setAttackedCreature(null)
             onAttackedCreatureDisappear(isLogout)
+        }
+
+        if (getFollowCreature() === creature) {
+            setFollowCreature(null)
+            onFollowCreatureDisappear(isLogout)
         }
     }
 
     /** `Creature::onAttackedCreatureDisappear` (creature.hpp:613) virtual hook. */
     open fun onAttackedCreatureDisappear(isLogout: Boolean) {
         // No behaviour.
+    }
+
+    /** `Creature::onFollowCreatureDisappear` (creature.hpp:614) virtual hook. */
+    open fun onFollowCreatureDisappear(isLogout: Boolean) {
+        // No behaviour.
+    }
+
+    // --- movement/zone hooks (creature.cpp:303-313, 436-577, 1856-1862) -----------
+
+    /** `Creature::lastStep` (creature.hpp:892). */
+    var lastStep: Long = 0
+
+    /** `Creature::lastStepCost` (creature.hpp:900), default 1. */
+    var lastStepCost: Int = 1
+
+    /** `Creature::eventWalk` (creature.hpp:895). */
+    open var eventWalk: Long = 0
+
+    /**
+     * `g_dispatcher().stopEvent(eventWalk)` (`creature.cpp:387`) admission
+     * seam; `Player` overrides the member with its dispatcher binding.
+     */
+    open var stopEvent: (Long) -> Unit = {}
+
+    /** `Creature::stopEventWalk` (creature.cpp:385-390). */
+    fun stopEventWalk() {
+        if (eventWalk != 0L) {
+            stopEvent(eventWalk)
+            eventWalk = 0
+        }
+    }
+
+    /**
+     * `Creature::resetMovementState` (creature.cpp:303-313). The walk queue and
+     * the player update-tile send live in the movement subsystem; the base
+     * creature owns no queue, so only `Player` overrides this hook.
+     */
+    open fun resetMovementState() {
+        // No behaviour.
+    }
+
+    /** `Creature::getZoneType` (creature.cpp:1856-1862). */
+    fun getZoneType(): ZoneType = getTile()?.getZoneType() ?: ZoneType.ZONE_NORMAL
+
+    /** `Creature::onChangeZone` (creature.cpp:436-442). */
+    open fun onChangeZone(zone: ZoneType) {
+        val attacked = getAttackedCreature()
+        if (attacked != null && zone == ZoneType.ZONE_PROTECTION) {
+            onCreatureDisappear(attacked, false)
+        }
+    }
+
+    /** `Creature::onAttackedCreatureChangeZone` (creature.cpp:444-452). */
+    open fun onAttackedCreatureChangeZone(zone: ZoneType) {
+        if (zone == ZoneType.ZONE_PROTECTION) {
+            val attacked = getAttackedCreature()
+            if (attacked != null) {
+                onCreatureDisappear(attacked, false)
+            }
+        }
+    }
+
+    /** `Creature::hasExtraSwing` (creature.hpp:956) virtual hook. */
+    open fun hasExtraSwing(): Boolean = false
+
+    /** `g_game().checkCreatureAttack(creature)` (creature.hpp:587) coordinator seam. */
+    var checkCreatureAttack: () -> Unit = {}
+
+    /** `Creature::updateCreatureWalk` (creature.hpp:412-414). */
+    open fun updateCreatureWalk() {
+        goToFollowCreature()
+    }
+
+    /**
+     * `Creature::onCreatureMove` (`creature.cpp:501-577`).
+     *
+     * PARITY GAPS: the summon relocation chain
+     * `checkSummonMove`/`isLostSummon`/`handleLostSummon` (creature.cpp:454-500,
+     * 1911-1926) is owned by the summon subsystem, and the
+     * `Player::isExerciseTraining` reset (creature.cpp:539-543) needs the
+     * unported exercise-training state; both are skipped. The rooted guard uses
+     * `hasCondition` directly (the C++ `hasTrackedConditionType` is the same
+     * list behind a derived cache, creature.hpp:856-860).
+     */
+    open fun onCreatureMove(
+        creature: Creature,
+        newTile: Tile?,
+        newPos: Position,
+        oldTile: Tile?,
+        oldPos: Position,
+        teleport: Boolean,
+    ) {
+        if (hasCondition(ConditionType.CONDITION_ROOTED)) {
+            resetMovementState()
+            return
+        }
+
+        val selfMove = creature === this
+        if (!selfMove && getFollowCreature() !== creature && getAttackedCreature() !== creature) {
+            return
+        }
+
+        if (selfMove) {
+            lastStep = now()
+            lastStepCost = 1
+
+            if (!teleport) {
+                if (oldPos.z != newPos.z) {
+                    lastStepCost = WALK_FLOOR_CHANGE_EXTRA_COST
+                } else if (abs(newPos.x - oldPos.x) >= 1 && abs(newPos.y - oldPos.y) >= 1) {
+                    lastStepCost = WALK_DIAGONAL_EXTRA_COST
+                }
+            } else {
+                stopEventWalk()
+            }
+
+            if (newTile != null && oldTile != null && newTile.getZoneType() != oldTile.getZoneType()) {
+                onChangeZone(getZoneType())
+            }
+        }
+
+        val followCreature = getFollowCreature()
+        if (followCreature != null && (selfMove || creature === followCreature)) {
+            if (hasFollowPath) {
+                isUpdatingPath = true
+                updateCreatureWalk()
+            }
+
+            if (newPos.z != oldPos.z || !canSee(followCreature.position)) {
+                onCreatureDisappear(followCreature, false)
+            }
+        }
+
+        val attackedCreature = getAttackedCreature()
+        if (attackedCreature != null && (creature === attackedCreature || selfMove)) {
+            if (newPos.z != oldPos.z || !canSee(attackedCreature.position)) {
+                onCreatureDisappear(attackedCreature, false)
+            } else {
+                if (hasExtraSwing()) {
+                    checkCreatureAttack()
+                }
+
+                if (newTile != null && oldTile != null && newTile.getZoneType() != oldTile.getZoneType()) {
+                    onAttackedCreatureChangeZone(attackedCreature.getZoneType())
+                }
+            }
+        }
     }
 
     /** `Creature::onPlacedCreature` (creature.hpp:618) virtual hook. */
@@ -373,12 +533,22 @@ abstract class Creature(
         return true
     }
 
+    /**
+     * `Creature::drainHealth` (`creature.cpp:893-899`) health core:
+     * `changeHealth(-damage, false)`, so a killing drain still reaches
+     * [onDeath] while the caller owns the spectator broadcast. The attacker
+     * `onAttackedCreatureDrainHealth` hook is not modelled (PARITY GAP).
+     */
     fun drainHealth(amount: Int) {
-        health = max(0, health - amount)
+        changeHealth(-amount, false)
     }
 
+    /**
+     * `ConditionTarget.addHealth` maps to `Creature::changeHealth(positive)`
+     * (`condition.cpp:1507-1510`), keeping the broadcast/death sink active.
+     */
     fun addHealth(amount: Int) {
-        health = kotlin.math.min(maxHealth, health + amount)
+        changeHealth(amount)
     }
 
     /**
@@ -1127,6 +1297,12 @@ abstract class Creature(
         /** `PLAYER_MAX_SPEED` (`src/creatures/players/player.hpp:125`). */
         const val PLAYER_MAX_SPEED = 65535
 
+        /** `WALK_FLOOR_CHANGE_EXTRA_COST` (`src/creatures/creature.hpp:44`). */
+        const val WALK_FLOOR_CHANGE_EXTRA_COST = 2
+
+        /** `WALK_DIAGONAL_EXTRA_COST` (`src/creatures/creature.hpp:45`). */
+        const val WALK_DIAGONAL_EXTRA_COST = 3
+
         /**
          * `Creature::canSee(myPos, pos, viewRangeX, viewRangeY)`
          * (`creature.cpp:68-87`).
@@ -1163,7 +1339,49 @@ class Monster(
     mana: Int = 0,
     speed: Int = 200,
     position: Position
-) : Creature(id, name, maxHealth, health, maxMana, mana, speed, position)
+) : Creature(id, name, maxHealth, health, maxMana, mana, speed, position) {
+
+    /**
+     * `MonsterPipelinesHost.onCreatureAppear`/`onRemoveCreature`/`onCreatureMove`
+     * coordinator seams for the non-Lua virtual-hook tails
+     * (monster.cpp:348-477). Bound where the world pipelines are composed
+     * (AGENTS.md 1.1); an unbound monster keeps the tail inert.
+     */
+    var onCreatureAppearHost: (Creature, Boolean) -> Unit = { _, _ -> }
+    var onRemoveCreatureHost: (Creature, Boolean) -> Unit = { _, _ -> }
+    var onCreatureMoveHost: (Creature, Position, Position) -> Unit = { _, _, _ -> }
+
+    /** `MonsterBehavior::hasExtraSwing` state projection (monster.cpp:2091-2093). */
+    var hasExtraSwingProvider: () -> Boolean = { false }
+
+    /** `Monster::onCreatureAppear` tail (monster.cpp:348-389). */
+    override fun onCreatureAppear(creature: Creature, isLogin: Boolean) {
+        super.onCreatureAppear(creature, isLogin)
+        onCreatureAppearHost(creature, isLogin)
+    }
+
+    /** `Monster::onRemoveCreature` tail (monster.cpp:391-432). */
+    override fun onRemoveCreature(creature: Creature, isLogout: Boolean) {
+        super.onRemoveCreature(creature, isLogout)
+        onRemoveCreatureHost(creature, isLogout)
+    }
+
+    /** `Monster::onCreatureMove` tail (monster.cpp:434-477). */
+    override fun onCreatureMove(
+        creature: Creature,
+        newTile: Tile?,
+        newPos: Position,
+        oldTile: Tile?,
+        oldPos: Position,
+        teleport: Boolean,
+    ) {
+        super.onCreatureMove(creature, newTile, newPos, oldTile, oldPos, teleport)
+        onCreatureMoveHost(creature, oldPos, newPos)
+    }
+
+    /** `Monster::hasExtraSwing` (monster.cpp:2091-2093). */
+    override fun hasExtraSwing(): Boolean = hasExtraSwingProvider()
+}
 
 enum class FightMode {
     Attack,
@@ -1343,6 +1561,17 @@ class Player(
 
     /** `Player::isAccessPlayer()` (player.cpp:7524). */
     fun isAccessPlayer(): Boolean = group?.access ?: false
+
+    /** `Player::ghostMode` (player.hpp:1868). */
+    var ghostMode: Boolean = false
+
+    /** `Player::isInGhostMode()` (player.hpp:566-569). */
+    override fun isInGhostMode(): Boolean = ghostMode
+
+    /** `Player::switchGhostMode()` (player.hpp:571-573). */
+    fun switchGhostMode() {
+        ghostMode = !ghostMode
+    }
 
     /** `Player::canSeeInvisibility()` (player.cpp:12989-12991). */
     override fun canSeeInvisibility(): Boolean =
@@ -1640,6 +1869,156 @@ class Player(
         return true
     }
 
+    // --- creature appear/remove/move hooks (player.cpp:12220-12425) ----------------
+
+    /**
+     * `Player::onCreatureAppear` (player.cpp:12220-12316).
+     *
+     * PARITY GAPS: `onEquipInventory`, the bed `wakeUp`, the protocol/livestream
+     * login block, the offline mute-condition decay,
+     * `Game::checkPlayersRecord` (owned by the login facade), the adventurer
+     * blessings, the current-mount re-toggle and `Game::changePlayerSpeed`
+     * (player.cpp:12224-12314) need their unported subsystems. The guild
+     * membership is already registered by the port's `setGuild`.
+     */
+    override fun onCreatureAppear(creature: Creature, isLogin: Boolean) {
+        super.onCreatureAppear(creature, isLogin)
+
+        if (!isLogin || creature !== this) {
+            return
+        }
+
+        refreshCyclopediaMonsterTracker(true)
+        refreshCyclopediaMonsterTracker(false)
+
+        for (condition in storedConditionList.toList()) {
+            addCondition(condition)
+        }
+        storedConditionList.clear()
+    }
+
+    /**
+     * `Player::onRemoveCreature` (player.cpp:12318-12360).
+     *
+     * PARITY GAPS: `onDeEquipInventory` (player.cpp:12323), the trade-window
+     * close (player.cpp:12347-12349), `closeShopWindow` (player.cpp:12351) and
+     * the `shopOwner` reset (player.cpp:12356-12359) need their unported state.
+     */
+    override fun onRemoveCreature(creature: Creature, isLogout: Boolean) {
+        super.onRemoveCreature(creature, isLogout)
+
+        if (creature === this) {
+            if (isLogout) {
+                getParty()?.leaveParty(this, true)
+                getGuild()?.removeMember(this)
+
+                setLoginPosition(if (isDead) getTemplePosition() else position)
+                lastLogout = now() / 1_000
+                clearPartyInvitations()
+            }
+
+            if (eventWalk != 0L) {
+                setFollowCreature(null)
+            }
+
+            savePlayer()
+        }
+    }
+
+    /**
+     * `Player::onCreatureMove` (player.cpp:12362-12425).
+     *
+     * PARITY GAPS: the shop-owner interaction close (player.cpp:12371-12374),
+     * the trade-range checks (player.cpp:12384-12393), the modal-window clear
+     * (player.cpp:12395-12405) and `Party::updatePlayerStatus`
+     * (player.cpp:12414) need their unported state.
+     */
+    override fun onCreatureMove(
+        creature: Creature,
+        newTile: Tile?,
+        newPos: Position,
+        oldTile: Tile?,
+        oldPos: Position,
+        teleport: Boolean,
+    ) {
+        super.onCreatureMove(creature, newTile, newPos, oldTile, oldPos, teleport)
+
+        val followCreature = getFollowCreature()
+        if (hasFollowPath && (creature === followCreature || (creature === this && followCreature != null))) {
+            isUpdatingPath = false
+            updateCreatureWalk()
+        }
+
+        if (creature !== this) {
+            return
+        }
+
+        if (!teleport && oldPos.z == newPos.z) {
+            updateParalyzeWalkExhaust()
+        }
+
+        if (isInMarket()) {
+            setInMarket(false)
+        }
+
+        getParty()?.updateSharedExperience()
+
+        if (teleport || oldPos.z != newPos.z) {
+            val ticks = stairhopDelay
+            if (ticks > 0) {
+                addCondition(
+                    Condition.createCondition(
+                        ConditionId.CONDITIONID_DEFAULT,
+                        ConditionType.CONDITION_PACIFIED,
+                        ticks,
+                        0,
+                        now = now,
+                    ),
+                )
+            }
+        }
+    }
+
+    /** `Player::onAttackedCreatureDisappear` (player.cpp:12448-12453). */
+    override fun onAttackedCreatureDisappear(isLogout: Boolean) {
+        sendCancelTarget()
+
+        if (!isLogout) {
+            sendTextMessage("Target lost.")
+        }
+    }
+
+    /** `Player::onFollowCreatureDisappear` (player.cpp:12456-12461). */
+    override fun onFollowCreatureDisappear(isLogout: Boolean) {
+        sendCancelTarget()
+
+        if (!isLogout) {
+            sendTextMessage("Target lost.")
+        }
+    }
+
+    /**
+     * `Player::storedConditionList` (player.hpp:1698). Canary fills it from the
+     * persisted conditions (`IOLoginDataLoad::loadPlayer`, iologindata_load_player.cpp:271);
+     * the port's login loader does not collect conditions yet, so the replay
+     * loop stays empty until that seam lands (PARITY GAP).
+     */
+    private val storedConditionList = mutableListOf<Condition>()
+
+    /** `Player::clearPartyInvitations` (player.cpp:7816-7821). */
+    fun clearPartyInvitations() {
+        for (invitingParty in partyInvitations.toList()) {
+            invitingParty.removeInvite(this, false)
+        }
+        partyInvitations.clear()
+    }
+
+    /** `g_saveManager().savePlayer(player)` (player.cpp:12353) persistence seam. */
+    var savePlayer: () -> Unit = {}
+
+    /** `g_configManager().getNumber(STAIRHOP_DELAY)` (player.cpp:12418) config seam. */
+    var stairhopDelay: Int = 0
+
     /** `Player::quickLootFallbackToMainContainer` (player.hpp:1875). */
     var quickLootFallbackToMainContainer: Boolean = false
 
@@ -1747,19 +2126,127 @@ class Player(
         return locker
     }
 
-    /** `Player::lastUIInteraction` (player.hpp:1742). */
-    internal var lastUIInteraction: Long = 0
+    // --- action/UI timers (player.cpp:3084-3477, 8540) ----------------------------
+
+    /**
+     * [PlayerActionTimers] host instance: `Player::isUIExhausted`,
+     * `Player::setNextAction`, the necklace/ring/potion gates, module delays,
+     * login protection and `Player::sendPing` (player.cpp:3084-3477, 8540).
+     * Constructed lazily so the injected [now] clock is read after composition;
+     * the world-lane confinement makes `NONE` the correct mode (AGENTS.md 1.2).
+     */
+    private val actionTimers: PlayerActionTimers by lazy(LazyThreadSafetyMode.NONE) {
+        PlayerActionTimers(
+            now = { now() },
+            hasClient = { hasClient() },
+            sendPingPacket = { sendPingPacket() },
+            clearAttackedCreature = { setAttackedCreature(null) },
+            canLogout = { canLogout() },
+            playerLogoutEvent = { playerLogoutEvent() },
+            logout = { logoutClient() },
+            removeCreature = { removeCreatureOnTimeout() },
+            logInfo = { logDebug(it) },
+            getPlayerName = { name },
+            hasAttackedCreature = { getAttackedCreature() != null },
+        )
+    }
+
+    /** `Player::client != nullptr` (player.cpp:2314, 2333) for [actionTimers]. */
+    var hasClient: () -> Boolean = { protocolSink != null }
+
+    /** `Player::client->sendPing()` (player.cpp:2315) for [actionTimers]. */
+    var sendPingPacket: () -> Unit = {}
+
+    /** `Player::canLogout()` (player.cpp:2329) for [actionTimers]. */
+    var canLogout: () -> Boolean = { false }
+
+    /** `g_creatureEvents().playerLogout(player)` (player.cpp:2329) for [actionTimers]. */
+    var playerLogoutEvent: () -> Boolean = { false }
+
+    /** `Player::client->logout(true, true)` (player.cpp:2332) for [actionTimers]. */
+    var logoutClient: () -> Unit = {}
+
+    /** `g_game().removeCreature(player, true)` (player.cpp:2334) for [actionTimers]. */
+    var removeCreatureOnTimeout: () -> Unit = {}
 
     /**
      * `Player::isUIExhausted` (player.cpp:3412-3414) with the header default
      * `exhaustionTime = 250` (player.hpp:1263).
      */
-    fun isUIExhausted(exhaustionTime: Int = 250): Boolean =
-        getTimeNow() - lastUIInteraction < exhaustionTime
+    fun isUIExhausted(exhaustionTime: Int = 250): Boolean = actionTimers.isUIExhausted(exhaustionTime)
 
     /** `Player::updateUIExhausted` (player.cpp:3416-3418). */
     fun updateUIExhausted() {
-        lastUIInteraction = getTimeNow()
+        actionTimers.updateUIExhausted()
+    }
+
+    /** `Player::setNextAction` (player.cpp:3429-3433). */
+    fun setNextAction(time: Long) {
+        actionTimers.setNextAction(time)
+    }
+
+    /** `Player::canDoAction` (player.cpp:3435-3437). */
+    fun canDoAction(): Boolean = actionTimers.canDoAction()
+
+    /** `Player::getNextActionTime` (player.cpp:3084-3086). */
+    fun getNextActionTime(): Long = actionTimers.getNextActionTime()
+
+    /** `Player::setNextNecklaceAction` (player.cpp:3439-3443). */
+    fun setNextNecklaceAction(time: Long) {
+        actionTimers.setNextNecklaceAction(time)
+    }
+
+    /** `Player::setNextRingAction` (player.cpp:3445-3449). */
+    fun setNextRingAction(time: Long) {
+        actionTimers.setNextRingAction(time)
+    }
+
+    /** `Player::canEquipNecklace` (player.cpp:3451-3453). */
+    fun canEquipNecklace(): Boolean = actionTimers.canEquipNecklace()
+
+    /** `Player::canEquipRing` (player.cpp:3455-3457). */
+    fun canEquipRing(): Boolean = actionTimers.canEquipRing()
+
+    /** `Player::setNextPotionAction` (player.cpp:3459-3463). */
+    fun setNextPotionAction(time: Long) {
+        actionTimers.setNextPotionAction(time)
+    }
+
+    /** `Player::canDoPotionAction` (player.cpp:3465-3467). */
+    fun canDoPotionAction(): Boolean = actionTimers.canDoPotionAction()
+
+    /** `Player::getNextPotionActionTime` (player.cpp:3088-3090). */
+    fun getNextPotionActionTime(): Long = actionTimers.getNextPotionActionTime()
+
+    /** `Player::setLoginProtection` (player.cpp:3469-3471). */
+    fun setLoginProtection(time: Long) {
+        actionTimers.setLoginProtection(time)
+    }
+
+    /** `Player::isLoginProtected` (player.cpp:3472-3474). */
+    fun isLoginProtected(): Boolean = actionTimers.isLoginProtected()
+
+    /** `Player::resetLoginProtection` (player.cpp:3475-3477). */
+    fun resetLoginProtection() {
+        actionTimers.resetLoginProtection()
+    }
+
+    /** `Player::setModuleDelay` (player.cpp:3078-3080). */
+    fun setModuleDelay(byteortype: Int, delay: Int) {
+        actionTimers.setModuleDelay(byteortype, delay)
+    }
+
+    /** `Player::canRunModule` (player.cpp:3082-3085). */
+    fun canRunModule(byteortype: Int): Boolean = actionTimers.canRunModule(byteortype)
+
+    /** `Player::receivePing` (player.cpp:8540-8542). */
+    fun receivePing() {
+        actionTimers.receivePing()
+    }
+
+    /** `Player::sendPing` (player.cpp:2308-2345). */
+    fun sendPing() {
+        actionTimers.sendPing()
     }
 
     /**
@@ -3563,15 +4050,34 @@ class Player(
     /** `g_game().addPlayerMana(player)` (game.cpp) protocol seam used by the no-loss death. */
     var addPlayerMana: (Player) -> Unit = {}
 
-    /**
-     * `Player::getTemplePosition()` (player.cpp:8319-8326) seam. PARITY GAP:
-     * [org.opentibia.canary.creatures.players.PlayerTownState] is not composed
-     * into the host yet.
-     */
-    var templePositionProvider: () -> Position = { Position(0, 0, 0) }
+    /** `Player::town`/`Player::loginPosition` (player.hpp:1713, 1771) state. */
+    private val townState: PlayerTownState = PlayerTownState()
 
-    /** `Player::loginPosition = town->getTemplePosition()` (player.cpp:4040) seam. */
-    var setLoginPosition: (Position) -> Unit = {}
+    /** `Player::getTown` (player.cpp:8307-8309). */
+    fun getTown(): Town? = townState.getTown()
+
+    /** `Player::setTown` (player.cpp:8310-8312). */
+    fun setTown(newTown: Town?) {
+        townState.setTown(newTown)
+    }
+
+    /** `Player::getTown()->getTemplePosition()` (player.cpp:8319-8326). */
+    fun getTemplePosition(): Position = townState.getTemplePosition()
+
+    /** `Player::getLoginPosition` (player.hpp:635-637). */
+    fun getLoginPosition(): Position = townState.getLoginPosition()
+
+    /**
+     * `Player::getTemplePosition()` seam the death state reads; defaults to the
+     * composed [townState] and stays overridable for tests/composition.
+     */
+    var templePositionProvider: () -> Position = { townState.getTemplePosition() }
+
+    /**
+     * `Player::loginPosition = ...` (player.cpp:4040, 12333-12336) seam;
+     * defaults to the composed [townState].
+     */
+    var setLoginPosition: (Position) -> Unit = { townState.loginPosition = it }
 
     /** `g_configManager().getBoolean(TOGGLE_MOUNT_IN_PZ)` (configmanager.cpp:373, default false). */
     var toggleMountInPz: Boolean = false
@@ -3582,8 +4088,8 @@ class Player(
     /** `g_dispatcher().scheduleEvent` (dispatcher.hpp:144-145) seam; 0 means rejected. */
     var scheduleEvent: (DispatcherLane, Long, String, () -> Unit) -> Long = { _, _, _, _ -> 0L }
 
-    /** `g_dispatcher().stopEvent` (player.cpp:2984, 2998) seam. */
-    var stopEvent: (Long) -> Unit = {}
+    /** `g_dispatcher().stopEvent` (player.cpp:2984, 2998) seam; overrides `Creature::stopEvent`. */
+    override var stopEvent: (Long) -> Unit = {}
 
     /** `Creature::addEventWalk` (creature.cpp:342-383) scheduler admission seam. */
     var addEventWalk: (WalkStartPolicy) -> Unit = {}
@@ -3744,6 +4250,21 @@ class Player(
     /** `Player::goToFollowCreature` (player.cpp:6161-6171). */
     override fun goToFollowCreature() {
         walkState.goToFollowCreature()
+    }
+
+    /**
+     * `Creature::resetMovementState` (creature.cpp:303-313) player body: the
+     * next-walk latch and the walk event reset, the queue is cleared through
+     * [PlayerWalkState.startAutoWalk] with an empty list (the port's only
+     * queue-owner mutation) and the cancel-walk send fires. The
+     * `Player::sendUpdateTile` call (creature.cpp:310-312) is a protocol side
+     * effect owned by the movement subsystem (PARITY GAP).
+     */
+    override fun resetMovementState() {
+        cancelNextWalk = false
+        eventWalk = 0
+        walkState.startAutoWalk(emptyList())
+        sendCancelWalk()
     }
 
     /** `Player::canWalkthrough` (player.cpp:1424-1489). */
