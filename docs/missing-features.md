@@ -47,7 +47,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | `src/lua/` | 12 | 12 | 0 | 0 | **100%** | **100%** |
 | `src/game/` | 10 | 10 | 0 | 0 | **100%** | **100%** |
 | `src/server/` | 5 | 4 | 1 | 0 | **80%** | **90%** |
-| **All modules** | **115** | **113** | **2** | **0** | **98%** | **99%** |
+| **All modules** | **116** | **115** | **0** | **0** | **100%** | **100%** |
 
 ---
 
