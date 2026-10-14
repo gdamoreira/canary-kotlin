@@ -30,6 +30,7 @@ import org.opentibia.canary.spells.SoundEffect
 import org.opentibia.canary.spells.SoundMusicEffect
 import org.opentibia.canary.spells.SpellType
 import org.opentibia.canary.spells.WorldType
+import org.opentibia.canary.systems.bestiary.BestiaryRace
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 
 /**
@@ -942,6 +943,7 @@ object LuaEnums {
         MessageClass.entries.forEach { env.registerEnum(it.name, it.value) }
         PlayerFlags_t.entries.forEach { env.registerEnum(it.name, it.value) }
         BosstiaryRarity_t.entries.forEach { env.registerEnum(it.name, it.value) }
+        BestiaryRace.entries.forEach { env.registerEnum(it.name, it.value) }
         CreatureIconCategory_t.entries.forEach { env.registerEnum("CreatureIconCategory_${it.name}", it.value) }
         CreatureIconModifications_t.entries.forEach {
             env.registerEnum("CreatureIconModifications_${it.name}", it.value)

@@ -46,6 +46,14 @@ class LuaEnvironment {
     lateinit var classes: LuaClassRegistry
         private set
 
+    /**
+     * The world seam owner installed by [initState]; `null` while the state is closed.
+     * The boot attaches the `g_monsters()` registry here before running the monster
+     * registration scripts (`WorldLuaOperations.attachMonsters`).
+     */
+    var worldOperations: WorldLuaOperations? = null
+        private set
+
     val actions = Actions()
     val talkActions = TalkActions()
     val eventCallbacks = EventCallbacks()
@@ -89,7 +97,9 @@ class LuaEnvironment {
         userdata = UserdataRegistry(globals, classes)
 
         // Install the Canary-named engine primitives backed by the world domain objects.
-        WorldLuaOperations.forEnvironment(this).install(this)
+        val world = WorldLuaOperations.forEnvironment(this)
+        worldOperations = world
+        world.install(this)
         org.opentibia.canary.lua.bindings.core.ItemClassificationFunctions.install(this, itemClassifications)
 
         ActionBindings.install(this)
@@ -110,6 +120,7 @@ class LuaEnvironment {
             return false
         }
         state = null
+        worldOperations = null
         return true
     }
 

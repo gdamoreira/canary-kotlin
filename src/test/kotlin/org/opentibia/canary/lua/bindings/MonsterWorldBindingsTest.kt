@@ -4,6 +4,8 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.monsters.MonsterType as DomainMonsterType
+import org.opentibia.canary.creatures.monsters.RespawnPeriod
 import org.opentibia.canary.creatures.spawns.MonsterType
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.WorldLuaOperations
@@ -175,7 +177,7 @@ class MonsterWorldBindingsTest {
 
     @Test
     fun `World MonsterType getters and setters round-trip through the shared info`() {
-        val type = MonsterType("Rat")
+        val type = DomainMonsterType("Rat")
         val environment = env(WorldLuaOperations(monsterTypesByName = mapOf("Rat" to type)))
         environment.globals.set("t", environment.userdata.wrap("MonsterType", type))
 
@@ -220,7 +222,7 @@ class MonsterWorldBindingsTest {
 
     @Test
     fun `World MonsterType race and blockable use the domain and shared info`() {
-        val type = MonsterType("Rat", isBlockable = true)
+        val type = DomainMonsterType("Rat").apply { info.isBlockable = true }
         val environment = env(WorldLuaOperations(monsterTypesByName = mapOf("Rat" to type)))
         environment.globals.set("t", environment.userdata.wrap("MonsterType", type))
 
@@ -241,9 +243,15 @@ class MonsterWorldBindingsTest {
 
     @Test
     fun `World MonsterType canSpawn delegates to the domain callback`() {
-        val asked = mutableListOf<Position>()
-        val type = MonsterType("Rat", canSpawnAt = { asked += it; it.z > 7 })
-        val environment = env(WorldLuaOperations(monsterTypesByName = mapOf("Rat" to type)))
+        // A night-only type asked during the day: only an underground position survives
+        // (`MonsterType::canSpawn`, monsters.cpp:35-45).
+        val type = DomainMonsterType("Rat").apply {
+            info.respawnType.period = RespawnPeriod.RESPAWNPERIOD_NIGHT
+            info.respawnType.underground = true
+        }
+        val environment = env(
+            WorldLuaOperations(monsterTypesByName = mapOf("Rat" to type), isDay = { true }),
+        )
         environment.globals.set("t", environment.userdata.wrap("MonsterType", type))
         environment.globals.set("surface", environment.userdata.wrap("Position", Position(10, 20, 7)))
         environment.globals.set("underground", environment.userdata.wrap("Position", Position(10, 20, 8)))
@@ -253,12 +261,11 @@ class MonsterWorldBindingsTest {
 
         assertThat(environment.getGlobal("surfaceAllowed").toboolean()).isFalse()
         assertThat(environment.getGlobal("undergroundAllowed").toboolean()).isTrue()
-        assertThat(asked).containsExactly(Position(10, 20, 7), Position(10, 20, 8))
     }
 
     @Test
     fun `World Loot creation and MonsterType addLoot getLoot round-trip`() {
-        val type = MonsterType("Rat")
+        val type = DomainMonsterType("Rat")
         val environment = env(
             WorldLuaOperations(
                 itemIdsByName = mapOf("crystal coin" to 2160),

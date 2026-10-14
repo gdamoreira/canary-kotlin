@@ -44,8 +44,12 @@ import org.opentibia.canary.items.functions.ItemParse
 import org.opentibia.canary.items.functions.ItemParseRegistry
 import org.opentibia.canary.items.functions.XmlAttribute
 import org.opentibia.canary.items.functions.XmlNode
+import org.opentibia.canary.lua.bindings.LootFunctions
+import org.opentibia.canary.lua.bindings.library.ConfigFunctions
+import org.opentibia.canary.lua.bindings.library.WorldConfigOperations
 import org.opentibia.canary.lua.loader.Scripts
 import org.opentibia.canary.lua.runtime.LuaEnvironment
+import org.opentibia.canary.lua.runtime.WorldLootOperations
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.network.CanaryServer
 import org.opentibia.canary.network.ListenerBoot
@@ -153,9 +157,21 @@ fun interface ImbuementBoot {
  * the monster-type registry injected into the world as the
  * `Monsters::getMonsterType` `monsterTypeProvider` seam
  * (`Game.internalPlaceCreature`, game.cpp:1495).
+ *
+ * Canary fills the registry from the datapack Lua scripts
+ * (`CanaryServer::loadModules`, src/canary_server.cpp:599): the core
+ * `data/scripts/lib` registration helper defines `MonsterType:register` and every
+ * datapack Lua monster script registers its type through
+ * `Game.createMonsterType` / the `MonsterType` setters. The booted environment and
+ * the typed `g_configManager()` are the inputs that make that path runnable.
  */
 fun interface MonsterBoot {
-    fun load(config: ServerConfig): Monsters
+    fun load(
+        config: ServerConfig,
+        luaEnvironment: LuaEnvironment,
+        configManager: ConfigManager,
+        itemTypes: Items,
+    ): Monsters
 }
 
 /**
@@ -361,7 +377,7 @@ class ServerBootstrap(
         val appearances = appearanceBoot.load(config)
         val imbuements = imbuementBoot.load(config)
         val itemTypes = itemBoot.load(config, appearances)
-        val monsters = monsterBoot.load(config)
+        val monsters = monsterBoot.load(config, luaEnvironment, configManager, itemTypes)
         val vocations = vocationsBoot.load(itemTypes, configManager)
 
         // `g_monsterComputeService().start(monsterComputeConfig)` after
@@ -483,24 +499,95 @@ private class ItemsParseRegistry(private val items: Items) : ItemParseRegistry {
 }
 
 /**
- * Production [MonsterBoot]: registers every `*.xml` found recursively under
- * `{DATA_DIRECTORY}/monster` through the existing XML/model path
- * (`MonsterPipelineService` definition parsing mapped onto [MonsterType],
- * `Monsters::tryAddMonsterType`, monsters.cpp:390-399).
+ * Production [MonsterBoot]: reproduces Canary's module load order for monster types
+ * (`CanaryServer::loadModules`, src/canary_server.cpp:568-601):
  *
- * Canary populates `g_monsters()` from the datapack Lua scripts under
- * `{DATA_DIRECTORY}/monster` (`Game.createMonsterType`; `GameReload::reloadMonsters`,
- * game_reload.cpp:211-226). That Lua registration path is not composed yet
- * (PARITY GAP), so the XML definitions are the only source this boot consumes:
- * a datapack without XML definitions leaves the registry empty and the world
- * pipeline type seams inert.
+ * 1. the core `data/scripts/lib` registration helper runs first
+ *    (`register_monster_type.lua` defines `MonsterType:register`; the same order is
+ *    replayed by `GameReload::reloadMonsters`, game_reload.cpp:216-217);
+ * 2. every `*.lua` under `{DATA_DIRECTORY}/monster` runs through the booted Lua
+ *    bridge, registering its type with `Game.createMonsterType` and applying the mask
+ *    onto the `MonsterType` the registry holds;
+ * 3. XML definitions under `{DATA_DIRECTORY}/monster` remain a fallback for datapacks
+ *    that ship them (`MonsterPipelineService` -> `Monsters::tryAddMonsterType`,
+ *    monsters.cpp:390-399).
+ *
+ * The monster scripts need the typed `g_configManager()` (`elements`/`reflects` read
+ * `MIN_ELEMENTAL_RESISTANCE`, `MAX_ELEMENTAL_RESISTANCE`, `MAX_DAMAGE_REFLECTION` and
+ * `SORT_LOOT_BY_CHANCE`), so this boot re-installs `configManager` over
+ * [WorldConfigOperations] before running them, and re-installs the `Loot` seam over the
+ * booted [Items] `nameToItems` catalog so named loot resolves like
+ * `Item::items.getItemIdByName`. When no Lua state was booted (a test composition root
+ * injecting a bare [LuaEnvironment]) the Lua half is skipped and the XML fallback alone
+ * runs.
  */
-internal fun defaultMonsterBoot(config: ServerConfig): Monsters {
+internal fun defaultMonsterBoot(
+    config: ServerConfig,
+    luaEnvironment: LuaEnvironment,
+    configManager: ConfigManager,
+    itemTypes: Items,
+): Monsters {
     val registry = Monsters()
+    loadMonsterTypesFromLua(config, luaEnvironment, configManager, itemTypes, registry)
+    loadMonsterTypesFromXml(config, registry)
+    return registry
+}
+
+/**
+ * Loads `g_monsters()` from the datapack Lua scripts
+ * (`CanaryServer::loadModules`, src/canary_server.cpp:590-601): core `scripts/lib`
+ * then `{DATA_DIRECTORY}/monster`.
+ */
+private fun loadMonsterTypesFromLua(
+    config: ServerConfig,
+    luaEnvironment: LuaEnvironment,
+    configManager: ConfigManager,
+    itemTypes: Items,
+    registry: Monsters,
+) {
+    val world = luaEnvironment.worldOperations
+    if (luaEnvironment.getLuaState() == null || world == null) {
+        logger.info { "Lua state not booted; skipping the datapack monster scripts" }
+        return
+    }
+
+    world.attachMonsters(registry)
+    ConfigFunctions.install(luaEnvironment, WorldConfigOperations(configManager))
+    // `MonsterType:createLoot` resolves named loot through `Item::items.getItemIdByName`
+    // (`Loot:setIdFromName`); the item catalog is loaded before the monster scripts run,
+    // so re-install the loot seam over the booted `Item::items` (`nameToItems`) view.
+    val itemIdsByName = itemTypes.nameToItems.mapValues { it.value.first() }
+    LootFunctions.install(luaEnvironment, WorldLootOperations(itemIdsByName))
+
+    val scripts = Scripts(luaEnvironment)
+    scripts.setDirectories(Path.of(config.dataDir), Path.of(DEFAULT_CORE_DIRECTORY))
+
+    val coreLib = Path.of(DEFAULT_CORE_DIRECTORY, "scripts", "lib")
+    if (!Files.isDirectory(coreLib)) {
+        logger.warn { "[defaultMonsterBoot] - Core monster registration libs missing under $coreLib" }
+    } else {
+        scripts.loadScripts(coreLib)
+    }
+
     val directory = Path.of(config.dataDir, "monster")
     if (!Files.isDirectory(directory)) {
-        logger.info { "No XML monster definitions under $directory; g_monsters() stays empty" }
-        return registry
+        logger.info { "No Lua monster definitions under $directory" }
+        return
+    }
+
+    val before = registry.monsters.size
+    scripts.loadScripts(directory)
+    logger.info {
+        "Registered ${registry.monsters.size - before} monster types from Lua scripts under $directory"
+    }
+}
+
+/** XML fallback for datapacks that ship XML monster definitions under the datapack. */
+private fun loadMonsterTypesFromXml(config: ServerConfig, registry: Monsters) {
+    val directory = Path.of(config.dataDir, "monster")
+    if (!Files.isDirectory(directory)) {
+        logger.info { "No XML monster definitions under $directory" }
+        return
     }
 
     val pipeline = MonsterPipelineService()
@@ -526,8 +613,9 @@ internal fun defaultMonsterBoot(config: ServerConfig): Monsters {
                 }
             }
     }
-    logger.info { "Loaded $loaded monster types from $directory" }
-    return registry
+    if (loaded > 0) {
+        logger.info { "Loaded $loaded XML monster types from $directory" }
+    }
 }
 
 /** Maps a `MonsterPipelineService` XML definition onto the [MonsterType] model. */

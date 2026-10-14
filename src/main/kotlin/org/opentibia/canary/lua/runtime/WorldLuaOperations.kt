@@ -1,17 +1,30 @@
 package org.opentibia.canary.lua.runtime
 
 import org.opentibia.canary.combat.condition.CombatType
+import org.luaj.vm2.LuaError
 import org.luaj.vm2.LuaValue
 import org.opentibia.canary.combat.AreaCombat
+import org.opentibia.canary.combat.Weapons as CombatWeapons
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionId
 import org.opentibia.canary.combat.condition.ConditionType
+import org.opentibia.canary.combat.condition.LightInfo
+import org.opentibia.canary.combat.condition.Outfit
 import org.opentibia.canary.creatures.ChaseMode
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.Slots_t
+import org.opentibia.canary.creatures.monsters.BosstiaryRarity_t
+import org.opentibia.canary.creatures.monsters.Faction
+import org.opentibia.canary.creatures.monsters.Monsters
+import org.opentibia.canary.creatures.monsters.RaceType
+import org.opentibia.canary.creatures.monsters.RespawnPeriod
 import org.opentibia.canary.creatures.monsters.RespawnType
+import org.opentibia.canary.creatures.monsters.SpellBlock
+import org.opentibia.canary.creatures.monsters.SummonBlock
+import org.opentibia.canary.creatures.monsters.VoiceBlock
+import org.opentibia.canary.creatures.monsters.LootBlock
 import org.opentibia.canary.creatures.monsters.MonsterType as FullMonsterType
 import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.creatures.vocations.Vocation
@@ -41,7 +54,10 @@ import org.opentibia.canary.lua.bindings.LuaCombat
 import org.opentibia.canary.lua.bindings.MonsterAttackInfo
 import org.opentibia.canary.lua.bindings.MonsterFunctions
 import org.opentibia.canary.lua.bindings.MonsterOperations
+import org.opentibia.canary.lua.bindings.MonsterSpellData
 import org.opentibia.canary.lua.bindings.MonsterSpellFunctions
+import org.opentibia.canary.lua.bindings.MonsterSummonInfo
+import org.opentibia.canary.lua.bindings.MonsterVoiceInfo
 import org.opentibia.canary.lua.bindings.MonsterTypeFunctions
 import org.opentibia.canary.lua.bindings.MonsterTypeOperations
 import org.opentibia.canary.lua.bindings.NpcFunctions
@@ -116,6 +132,8 @@ import org.opentibia.canary.map.Town
 import org.opentibia.canary.map.Towns
 import org.opentibia.canary.map.house.House
 import org.opentibia.canary.network.protocol.MessageClass
+import org.opentibia.canary.spells.SoundEffect
+import org.opentibia.canary.systems.bestiary.BestiaryRace
 import org.opentibia.canary.systems.forge.ItemClassifications
 import org.opentibia.canary.systems.imbuement.BaseImbuement
 import org.opentibia.canary.systems.imbuement.CategoryImbuement
@@ -180,6 +198,8 @@ import kotlin.random.Random
  * @param startTrade optional `g_game().internalStartTrade` backing `house:startTrade`.
  * @param kv the `g_kv()` root store backing the `kv` table and `KV` userdata class;
  *   defaults to the in-memory `KVMemory` when no SQL-backed `KVSQL` is injected.
+ * @param isDay `g_game().gameIsDay()` read by `MonsterType::canSpawn`; defaults to day
+ *   because the Lua seam owns no world-light clock (PARITY GAP).
  */
 class WorldLuaOperations(
     private val itemTypes: ItemTypeRegistry? = null,
@@ -195,6 +215,7 @@ class WorldLuaOperations(
     teleportByUid: (Int) -> Teleport? = { null },
     playerByGuid: (Long) -> Player? = { null },
     startTrade: (Player, Player, Item) -> Boolean = { _, _, _ -> false },
+    isDay: () -> Boolean = { true },
     private val kv: KV = KVMemory(),
 ) {
     private val worldGame: WorldGameOperations =
@@ -216,9 +237,29 @@ class WorldLuaOperations(
 
     val position: PositionOperations = WorldPositionOperations(gameMap)
 
-    val monster: MonsterOperations = WorldMonsterOperations(monsterTypesByName, monsterTypesByRaceId)
+    private val worldMonster: WorldMonsterOperations =
+        WorldMonsterOperations(monsterTypesByName, monsterTypesByRaceId)
 
-    val monsterType: MonsterTypeOperations = WorldMonsterTypeOperations(monsterTypesByName, monsterTypesByRaceId)
+    val monster: MonsterOperations = worldMonster
+
+    private val worldMonsterType: WorldMonsterTypeOperations =
+        WorldMonsterTypeOperations(monsterTypesByName, monsterTypesByRaceId, isDay)
+
+    val monsterType: MonsterTypeOperations = worldMonsterType
+
+    /**
+     * Wires the booted `g_monsters()` registry (`Monsters`, monsters.hpp:242) into the
+     * already-installed `Game`/`Monster`/`MonsterType` seams. Canary's monster scripts
+     * register into the global registry while `CanaryServer::loadModules` runs
+     * (src/canary_server.cpp:599) and `GameReload::reloadMonsters` reloads it through
+     * the same path (game_reload.cpp:211-226); the port installs the bindings before
+     * the registry exists, so the boot attaches it here.
+     */
+    fun attachMonsters(monsters: Monsters) {
+        worldGame.attachMonsters(monsters)
+        worldMonster.attachMonsters(monsters)
+        worldMonsterType.attachMonsters(monsters)
+    }
 
     val loot: LootOperations = WorldLootOperations(itemIdsByName)
 
@@ -332,6 +373,53 @@ class WorldGameOperations(
     private var gameState: Int = 0
     private var worldType: Int = 0
 
+    /** The booted `g_monsters()` registry, attached by `WorldLuaOperations.attachMonsters`. */
+    private var monsters: Monsters? = null
+
+    /** Wires the booted `g_monsters()` registry after binding install. */
+    fun attachMonsters(monsters: Monsters) {
+        this.monsters = monsters
+    }
+
+    /**
+     * `GameFunctions::luaGameCreateMonsterType` (game_functions.cpp:118-168): a new
+     * `MonsterType` is created, its variant/alternate names are expanded exactly like
+     * the C++ `std::set<std::string>` path, and every expanded name is registered
+     * through `Monsters::tryAddMonsterType`; a duplicate name raises the C++
+     * `lua_error` branch. The created type is returned for the binding to wrap.
+     */
+    override fun createMonsterType(name: String, variant: String, alternateName: String): Any? {
+        val registry = monsters ?: return null
+        val monsterType = FullMonsterType(name)
+
+        var variantName = variant
+        val names = sortedSetOf<String>()
+        if (variantName.startsWith("!")) {
+            names += name
+            variantName = variantName.substring(1)
+        }
+        var uniqueName = name
+        if (variantName.isNotEmpty()) {
+            uniqueName = "$variantName|$name"
+        }
+        names += uniqueName
+
+        monsterType.name = name
+        if (alternateName.isNotEmpty()) {
+            names += alternateName
+            monsterType.name = alternateName
+        }
+        monsterType.variantName = variantName
+        monsterType.nameDescription = "a $name"
+
+        for (registeredName in names) {
+            if (!registry.tryAddMonsterType(registeredName, monsterType)) {
+                throw LuaError("The monster with name $registeredName already registered")
+            }
+        }
+        return monsterType
+    }
+
     /**
      * `Game.getEventCallbacks()` loaders, populated by `EventCallbackFunctions.install`
      * with the `luaEventCallbackLoad` table Canary builds from `EventCallback_t`.
@@ -431,10 +519,12 @@ class WorldGameOperations(
     override fun createTile(position: Position, isDynamic: Boolean): Any? = gameMap?.getOrCreateTile(position)
 
     /** Mirrors `g_monsters().getMonsterType(name)`; null when no monster catalog is wired. */
-    override fun getMonsterTypeByName(name: String): Any? = monsterTypesByName[name]
+    override fun getMonsterTypeByName(name: String): Any? =
+        monsters?.getMonsterType(name, silent = true) ?: monsterTypesByName[name]
 
     /** Mirrors `g_monsters().monsters`; empty when no monster catalog is wired. */
-    override fun getMonsterTypes(): Map<String, Any> = monsterTypesByName
+    override fun getMonsterTypes(): Map<String, Any> =
+        monsters?.monsters ?: monsterTypesByName
 
     /** Mirrors `Game::getItemsClassification(id, create = true)`; null when no catalog is wired. */
     override fun createItemClassification(id: Int): Any? = itemClassifications?.createClassification(id)
@@ -1556,6 +1646,14 @@ class WorldMonsterOperations(
     private val monsterTypesByName: Map<String, Any> = emptyMap(),
     private val monsterTypesByRaceId: Map<Int, Any> = emptyMap(),
 ) : MonsterOperations {
+    /** The booted `g_monsters()` registry, attached by `WorldLuaOperations.attachMonsters`. */
+    private var monsters: Monsters? = null
+
+    /** Wires the booted `g_monsters()` registry after binding install. */
+    fun attachMonsters(monsters: Monsters) {
+        this.monsters = monsters
+    }
+
     private val idleStatus = mutableMapOf<Long, Boolean>()
     private val friendList = mutableMapOf<Long, MutableList<Any>>()
     private val targetList = mutableMapOf<Long, MutableList<Any>>()
@@ -1584,7 +1682,9 @@ class WorldMonsterOperations(
 
     /** Resolves the monster's type: `setType` override first, then the name catalog. */
     private fun resolvedType(monster: Monster): Any? =
-        typeOverrides[monster.id] ?: monsterTypesByName[monster.name]
+        typeOverrides[monster.id]
+            ?: monsters?.getMonsterType(monster.name, silent = true)
+            ?: monsterTypesByName[monster.name]
 
     private fun flagKey(monster: Monster, name: String): Boolean =
         hazardFlags[monster.id]?.get(name) ?: false
@@ -2061,158 +2161,814 @@ class WorldMonsterOperations(
 }
 
 /**
- * `MonsterType` metatable seam backed by the spawn-engine [MonsterType] plus the
- * mutable attribute bag Canary stores in `MonsterType::MonsterInfo`. The bag lives in a
- * [WeakHashMap] keyed by the type identity, so script-created attributes are released
- * with the type.
+ * `MonsterType` metatable seam backed by the domain [FullMonsterType]. Every setter
+ * writes the very `MonsterType::info` fields the spawn/combat seams read
+ * (`shield`/attack target selection, `MonsterTypeState` spell copies, the forge
+ * hazard path), exactly like the C++ `MonsterTypeFunctions` setters
+ * (src/lua/functions/creatures/monster/monster_type_functions.cpp).
  *
- * Defaults mirror `MonsterInfo`'s C++ defaults (health/healthMax 100, baseSpeed 110,
- * race `RACE_BLOOD`, attackable/hostile true, summonable/convinceable/blockable false),
- * and `blockable` is seeded from the domain type's `isBlockable` flag. The domain's
- * `canSpawn` callback is used for `canSpawn`.
+ * The seams not carried by `MonsterInfo` remain documented approximations:
+ * - `sb.spell` (`g_spells().getSpellByName`) has no spell registry here, so
+ *   `addAttack`/`addDefense` deserialize only the scalar `spellBlock_t` fields
+ *   (`Monsters::deserializeSpell`, monsters.cpp:61-229; the `CombatSpell` actor and the
+ *   `Combat` param/area/condition build are not ported);
+ * - `MonsterType::loadLoot`'s child-loot retention needs the item container check and a
+ *   `LootBlock.childLoot` slot the Kotlin `LootBlock` does not carry;
+ * - `registerEvent` does not push the event onto already-spawned monsters
+ *   (`g_game().getMonsters()` walk) because the seam owns no creature registry;
+ * - `setOutfit`'s `WARN_UNSAFE_SCRIPTS` look-type gate needs `Game::isLookTypeRegistered`,
+ *   which the appearance registry does not expose to this seam.
+ *
+ * `getMonstersByRace`/`getMonstersByBestiaryStars` and `MonsterType(raceId)` resolve
+ * through the `Game::addBestiaryList` / `IOBosstiary::addBosstiaryMonster` side maps
+ * recorded by the `raceId`/`bossRaceId` setters.
  */
 class WorldMonsterTypeOperations(
     private val typesByName: Map<String, Any> = emptyMap(),
     private val typesByRaceId: Map<Int, Any> = emptyMap(),
+    /**
+     * `g_game().gameIsDay()` read by `MonsterType::canSpawn` (monsters.cpp:35-45). The
+     * Lua seam owns no world-light clock (PARITY GAP), so it defaults to day; the spawn
+     * path passes the real value through `MonsterSpawnPath.canSpawnAt`.
+     */
+    private val isDay: () -> Boolean = { true },
 ) : MonsterTypeOperations {
-    private class Info {
-        var nameOverride: String? = null
-        var health = 100
-        var maxHealth = 100
-        var experience = 0L
-        var baseSpeed = 110
-        var race = RACE_BLOOD
-        var bestiaryClass = ""
-        var corpseId = 0
-        var attackable = true
-        var summonable = false
-        var convinceable = false
-        var hostile = true
-        var blockable = false
-        val loot = mutableListOf<LootData>()
-        val attacks = mutableListOf<MonsterAttackInfo>()
+    /** The booted `g_monsters()` registry, attached by `WorldLuaOperations.attachMonsters`. */
+    private var monsters: Monsters? = null
+
+    /** `Game::bestiaryList` (game.cpp): race id -> registered name, fed by `raceId`. */
+    private val bestiaryList: MutableMap<Int, String> = linkedMapOf()
+
+    /** `IOBosstiary::bosstiaryMonsters` subset: boss race id -> type name. */
+    private val bosstiaryList: MutableMap<Int, String> = linkedMapOf()
+
+    /** Wires the booted `g_monsters()` registry after binding install. */
+    fun attachMonsters(monsters: Monsters) {
+        this.monsters = monsters
     }
 
-    private val infos = WeakHashMap<Any, Info>()
+    private fun type(value: Any): FullMonsterType? = value as? FullMonsterType
+
+    private fun resolveByName(name: String): Any? =
+        monsters?.getMonsterType(name, silent = true) ?: typesByName[name]
+
+    private fun resolveByRaceId(raceId: Int): Any? =
+        (bestiaryList[raceId] ?: bosstiaryList[raceId])?.let(::resolveByName) ?: typesByRaceId[raceId]
 
     override fun create(nameOrRaceId: Any): Any? = when (nameOrRaceId) {
-        is Number -> typesByRaceId[nameOrRaceId.toInt()]
-        is String -> typesByName[nameOrRaceId]
+        is Number -> resolveByRaceId(nameOrRaceId.toInt())
+        is String -> resolveByName(nameOrRaceId)
         else -> null
     }
 
-    override fun getName(monsterType: Any): String? {
-        val domain = monsterType as? MonsterType ?: return null
-        return info(domain).nameOverride ?: domain.name
-    }
+    override fun getName(monsterType: Any): String? = type(monsterType)?.name
 
     override fun setName(monsterType: Any, name: String): Boolean? {
-        info(monsterType as? MonsterType ?: return null).nameOverride = name
+        val target = type(monsterType) ?: return null
+        target.name = name
         return true
     }
 
-    override fun getHealth(monsterType: Any): Int? = infoOrNull(monsterType)?.health
+    override fun getHealth(monsterType: Any): Int? = type(monsterType)?.info?.health
 
     override fun setHealth(monsterType: Any, health: Int): Boolean? {
-        info(monsterType as? MonsterType ?: return null).health = health
+        val info = type(monsterType)?.info ?: return null
+        info.health = health
         return true
     }
 
-    override fun getMaxHealth(monsterType: Any): Int? = infoOrNull(monsterType)?.maxHealth
+    override fun getMaxHealth(monsterType: Any): Int? = type(monsterType)?.info?.healthMax
 
     override fun setMaxHealth(monsterType: Any, maxHealth: Int): Boolean? {
-        info(monsterType as? MonsterType ?: return null).maxHealth = maxHealth
+        val info = type(monsterType)?.info ?: return null
+        info.healthMax = maxHealth
         return true
     }
 
-    override fun getExperience(monsterType: Any): Long? = infoOrNull(monsterType)?.experience
+    override fun getExperience(monsterType: Any): Long? = type(monsterType)?.info?.experience
 
     override fun setExperience(monsterType: Any, experience: Long): Boolean? {
-        info(monsterType as? MonsterType ?: return null).experience = experience
+        val info = type(monsterType)?.info ?: return null
+        info.experience = experience
         return true
     }
 
-    override fun getBaseSpeed(monsterType: Any): Int? = infoOrNull(monsterType)?.baseSpeed
+    override fun getBaseSpeed(monsterType: Any): Int? = type(monsterType)?.getBaseSpeed()
 
     override fun setBaseSpeed(monsterType: Any, speed: Int): Boolean? {
-        info(monsterType as? MonsterType ?: return null).baseSpeed = speed
+        val target = type(monsterType) ?: return null
+        target.setBaseSpeed(speed)
         return true
     }
 
-    override fun getRace(monsterType: Any): Int? = infoOrNull(monsterType)?.race
+    override fun getRace(monsterType: Any): Int? = type(monsterType)?.info?.race?.value
 
     override fun setRace(monsterType: Any, race: Int): Boolean? {
-        info(monsterType as? MonsterType ?: return null).race = race
+        val target = type(monsterType) ?: return null
+        target.info.race = RaceType.entries.firstOrNull { it.value == race } ?: return null
         return true
     }
 
-    override fun getBestiaryClass(monsterType: Any): String? = infoOrNull(monsterType)?.bestiaryClass
+    override fun getBestiaryClass(monsterType: Any): String? = type(monsterType)?.info?.bestiaryClass
 
     override fun setBestiaryClass(monsterType: Any, bestiaryClass: String): Boolean? {
-        info(monsterType as? MonsterType ?: return null).bestiaryClass = bestiaryClass
+        val info = type(monsterType)?.info ?: return null
+        info.bestiaryClass = bestiaryClass
         return true
     }
 
-    override fun getCorpseId(monsterType: Any): Int? = infoOrNull(monsterType)?.corpseId
+    override fun getCorpseId(monsterType: Any): Int? = type(monsterType)?.info?.lookcorpse
 
-    override fun getTypeName(monsterType: Any): String? = (monsterType as? MonsterType)?.name
+    override fun setCorpseId(monsterType: Any, corpseId: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.lookcorpse = corpseId
+        return true
+    }
 
-    override fun isAttackable(monsterType: Any): Boolean? = infoOrNull(monsterType)?.attackable
+    override fun getTypeName(monsterType: Any): String? = type(monsterType)?.typeName
+
+    override fun isAttackable(monsterType: Any): Boolean? = type(monsterType)?.info?.isAttackable
 
     override fun setAttackable(monsterType: Any, value: Boolean): Boolean? {
-        info(monsterType as? MonsterType ?: return null).attackable = value
+        val info = type(monsterType)?.info ?: return null
+        info.isAttackable = value
         return true
     }
 
-    override fun isSummonable(monsterType: Any): Boolean? = infoOrNull(monsterType)?.summonable
+    override fun isSummonable(monsterType: Any): Boolean? = type(monsterType)?.info?.isSummonable
 
     override fun setSummonable(monsterType: Any, value: Boolean): Boolean? {
-        info(monsterType as? MonsterType ?: return null).summonable = value
+        val info = type(monsterType)?.info ?: return null
+        info.isSummonable = value
         return true
     }
 
-    override fun isConvinceable(monsterType: Any): Boolean? = infoOrNull(monsterType)?.convinceable
+    override fun isConvinceable(monsterType: Any): Boolean? = type(monsterType)?.info?.isConvinceable
 
     override fun setConvinceable(monsterType: Any, value: Boolean): Boolean? {
-        info(monsterType as? MonsterType ?: return null).convinceable = value
+        val info = type(monsterType)?.info ?: return null
+        info.isConvinceable = value
         return true
     }
 
-    override fun isHostile(monsterType: Any): Boolean? = infoOrNull(monsterType)?.hostile
+    override fun isHostile(monsterType: Any): Boolean? = type(monsterType)?.info?.isHostile
 
     override fun setHostile(monsterType: Any, value: Boolean): Boolean? {
-        info(monsterType as? MonsterType ?: return null).hostile = value
+        val info = type(monsterType)?.info ?: return null
+        info.isHostile = value
         return true
     }
 
-    override fun isBlockable(monsterType: Any): Boolean? = infoOrNull(monsterType)?.blockable
+    override fun isBlockable(monsterType: Any): Boolean? = type(monsterType)?.info?.isBlockable
 
     override fun setBlockable(monsterType: Any, value: Boolean): Boolean? {
-        info(monsterType as? MonsterType ?: return null).blockable = value
+        val info = type(monsterType)?.info ?: return null
+        info.isBlockable = value
         return true
     }
 
     override fun canSpawn(monsterType: Any, position: Position): Boolean? =
-        (monsterType as? MonsterType)?.canSpawn(position)
+        type(monsterType)?.canSpawn(position, isDay())
 
-    override fun getLoot(monsterType: Any): List<LootData>? = infoOrNull(monsterType)?.loot?.toList()
+    override fun getLoot(monsterType: Any): List<LootData>? =
+        type(monsterType)?.info?.lootItems?.map { lootDataOf(it) }
 
     override fun addLoot(monsterType: Any, loot: LootData): Boolean? {
-        val info = info(monsterType as? MonsterType ?: return null)
-        info.loot += loot.deepCopy()
+        val target = type(monsterType) ?: return null
+        target.info.lootItems += LootBlock(
+            id = loot.id,
+            countMin = loot.countMin,
+            countMax = loot.countMax,
+            chance = loot.chance,
+            unique = loot.unique,
+        )
         return true
     }
 
-    override fun getAttackList(monsterType: Any): List<MonsterAttackInfo>? = infoOrNull(monsterType)?.attacks?.toList()
+    override fun getAttackList(monsterType: Any): List<MonsterAttackInfo>? =
+        type(monsterType)?.info?.attackSpells?.map { attackInfoOf(it) }
 
-    private fun infoOrNull(monsterType: Any): Info? = (monsterType as? MonsterType)?.let(::info)
+    override fun getDefenseList(monsterType: Any): List<MonsterAttackInfo>? =
+        type(monsterType)?.info?.defenseSpells?.map { attackInfoOf(it) }
 
-    private fun info(monsterType: MonsterType): Info = infos.getOrPut(monsterType) {
-        Info().also { it.blockable = monsterType.isBlockable }
+    override fun addAttack(monsterType: Any, spell: Any?): Boolean? = addSpell(monsterType, spell, attack = true)
+
+    override fun addDefense(monsterType: Any, spell: Any?): Boolean? = addSpell(monsterType, spell, attack = false)
+
+    private fun addSpell(monsterType: Any, spell: Any?, attack: Boolean): Boolean? {
+        val target = type(monsterType) ?: return null
+        val monsterSpell = spell as? MonsterSpellData ?: return null
+        val block = deserializeSpell(monsterSpell) ?: return null
+        if (attack) {
+            target.info.attackSpells += block
+        } else {
+            target.info.defenseSpells += block
+        }
+        return true
     }
 
+    /**
+     * `Monsters::deserializeSpell` (src/creatures/monsters/monsters.cpp:61-229) scalar
+     * half. `sb.spell = g_spells().getSpellByName(name)` and the `CombatSpell`/`Combat`
+     * actor build are not ported (PARITY GAP), so `combatSpell` is true and the block
+     * carries only chance/speed/range/values/sounds.
+     */
+    private fun deserializeSpell(spell: MonsterSpellData): SpellBlock? {
+        if (spell.scriptName.isEmpty() && spell.name.isEmpty()) {
+            return null
+        }
+        val block = SpellBlock(
+            chance = minOf(spell.chance, 100),
+            speed = spell.interval,
+            range = minOf(spell.range, Creature.MAP_MAX_VIEW_PORT_X * 2),
+            minCombatValue = minOf(spell.minCombatValue, spell.maxCombatValue),
+            maxCombatValue = maxOf(spell.minCombatValue, spell.maxCombatValue),
+            soundCastEffect = soundEffectOf(spell.soundCastEffect),
+            soundImpactEffect = soundEffectOf(spell.soundImpactEffect),
+        )
+        block.combatSpell = true
+
+        if (spell.name.lowercase() == "melee") {
+            block.isMelee = true
+            if (spell.attack > 0 && spell.skill > 0) {
+                block.minCombatValue = 0
+                block.maxCombatValue = -CombatWeapons.getMaxMeleeDamage(spell.skill, spell.attack)
+            }
+            block.range = 1
+        }
+        return block
+    }
+
+    private fun attackInfoOf(block: SpellBlock) = MonsterAttackInfo(
+        chance = block.chance,
+        isCombatSpell = block.combatSpell,
+        isMelee = block.isMelee,
+        minCombatValue = block.minCombatValue,
+        maxCombatValue = block.maxCombatValue,
+        range = block.range,
+        speed = block.speed,
+        spell = block.spell,
+    )
+
+    private fun lootDataOf(block: LootBlock) = LootData(
+        id = block.id,
+        chance = block.chance,
+        countMin = block.countMin,
+        countMax = block.countMax,
+        unique = block.unique,
+    )
+
+    override fun isPreyable(monsterType: Any): Boolean? = type(monsterType)?.info?.isPreyable
+
+    override fun setPreyable(monsterType: Any, value: Boolean): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.isPreyable = value
+        return true
+    }
+
+    override fun isPreyExclusive(monsterType: Any): Boolean? = type(monsterType)?.info?.isPreyExclusive
+
+    override fun setPreyExclusive(monsterType: Any, value: Boolean): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.isPreyExclusive = value
+        return true
+    }
+
+    override fun isIllusionable(monsterType: Any): Boolean? = type(monsterType)?.info?.isIllusionable
+
+    override fun setIllusionable(monsterType: Any, value: Boolean): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.isIllusionable = value
+        return true
+    }
+
+    override fun isPushable(monsterType: Any): Boolean? = type(monsterType)?.info?.pushable
+
+    override fun setPushable(monsterType: Any, value: Boolean): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.pushable = value
+        return true
+    }
+
+    override fun isHealthHidden(monsterType: Any): Boolean? = type(monsterType)?.info?.hiddenHealth
+
+    override fun setHealthHidden(monsterType: Any, value: Boolean): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.hiddenHealth = value
+        return true
+    }
+
+    override fun isForgeCreature(monsterType: Any): Boolean? = type(monsterType)?.info?.isForgeCreature
+
+    override fun setForgeCreature(monsterType: Any, value: Boolean): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.isForgeCreature = value
+        return true
+    }
+
+    override fun isFamiliar(monsterType: Any): Boolean? = type(monsterType)?.info?.isFamiliar
+
+    override fun setFamiliar(monsterType: Any, value: Boolean): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.isFamiliar = value
+        return true
+    }
+
+    override fun isRewardBoss(monsterType: Any): Boolean? = type(monsterType)?.info?.isRewardBoss
+
+    override fun setRewardBoss(monsterType: Any, value: Boolean): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.isRewardBoss = value
+        return true
+    }
+
+    override fun canPushItems(monsterType: Any): Boolean? = type(monsterType)?.info?.canPushItems
+
+    override fun setCanPushItems(monsterType: Any, value: Boolean): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.canPushItems = value
+        return true
+    }
+
+    override fun canPushCreatures(monsterType: Any): Boolean? = type(monsterType)?.info?.canPushCreatures
+
+    override fun setCanPushCreatures(monsterType: Any, value: Boolean): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.canPushCreatures = value
+        return true
+    }
+
+    override fun canWalkOnEnergy(monsterType: Any): Boolean? = type(monsterType)?.info?.canWalkOnEnergy
+
+    override fun setCanWalkOnEnergy(monsterType: Any, value: Boolean): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.canWalkOnEnergy = value
+        return true
+    }
+
+    override fun canWalkOnFire(monsterType: Any): Boolean? = type(monsterType)?.info?.canWalkOnFire
+
+    override fun setCanWalkOnFire(monsterType: Any, value: Boolean): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.canWalkOnFire = value
+        return true
+    }
+
+    override fun canWalkOnPoison(monsterType: Any): Boolean? = type(monsterType)?.info?.canWalkOnPoison
+
+    override fun setCanWalkOnPoison(monsterType: Any, value: Boolean): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.canWalkOnPoison = value
+        return true
+    }
+
+    override fun isTargetPreferPlayer(monsterType: Any): Boolean? = type(monsterType)?.info?.targetPreferPlayer
+
+    override fun setTargetPreferPlayer(monsterType: Any, value: Boolean): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.targetPreferPlayer = value
+        return true
+    }
+
+    override fun isTargetPreferMaster(monsterType: Any): Boolean? = type(monsterType)?.info?.targetPreferMaster
+
+    override fun setTargetPreferMaster(monsterType: Any, value: Boolean): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.targetPreferMaster = value
+        return true
+    }
+
+    override fun getNameDescription(monsterType: Any): String? = type(monsterType)?.nameDescription
+
+    override fun setNameDescription(monsterType: Any, value: String): Boolean? {
+        val target = type(monsterType) ?: return null
+        target.nameDescription = value
+        return true
+    }
+
+    override fun getRunHealth(monsterType: Any): Int? = type(monsterType)?.info?.runAwayHealth
+
+    override fun setRunHealth(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.runAwayHealth = value
+        return true
+    }
+
+    override fun getCritChance(monsterType: Any): Int? = type(monsterType)?.info?.critChance
+
+    override fun setCritChance(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.critChance = value
+        return true
+    }
+
+    override fun getFaction(monsterType: Any): Int? = type(monsterType)?.info?.faction?.value
+
+    override fun setFaction(monsterType: Any, value: Int): Boolean? {
+        val target = type(monsterType) ?: return null
+        target.info.faction = Faction.entries.firstOrNull { it.value == value } ?: return null
+        return true
+    }
+
+    override fun getEnemyFactions(monsterType: Any): List<Int>? =
+        type(monsterType)?.info?.enemyFactions?.map { it.value }
+
+    override fun addEnemyFaction(monsterType: Any, faction: Int): Boolean? {
+        val target = type(monsterType) ?: return null
+        target.info.enemyFactions += Faction.entries.firstOrNull { it.value == faction } ?: return null
+        return true
+    }
+
+    override fun getRaceId(monsterType: Any): Int? = type(monsterType)?.info?.raceid
+
+    override fun setRaceId(monsterType: Any, raceId: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.raceid = raceId
+        return true
+    }
+
+    override fun addBestiaryList(raceId: Int, name: String) {
+        bestiaryList[raceId] = name
+    }
+
+    override fun getBestiaryOccurrence(monsterType: Any): Int? = type(monsterType)?.info?.bestiaryOccurrence
+
+    override fun setBestiaryOccurrence(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.bestiaryOccurrence = value
+        return true
+    }
+
+    override fun getBestiaryLocations(monsterType: Any): String? = type(monsterType)?.info?.bestiaryLocations
+
+    override fun setBestiaryLocations(monsterType: Any, value: String): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.bestiaryLocations = value
+        return true
+    }
+
+    override fun getBestiaryStars(monsterType: Any): Int? = type(monsterType)?.info?.bestiaryStars
+
+    override fun setBestiaryStars(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.bestiaryStars = value
+        return true
+    }
+
+    override fun getBestiaryCharmsPoints(monsterType: Any): Int? = type(monsterType)?.info?.bestiaryCharmsPoints
+
+    override fun setBestiaryCharmsPoints(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.bestiaryCharmsPoints = value
+        return true
+    }
+
+    override fun getBestiarySecondUnlock(monsterType: Any): Int? = type(monsterType)?.info?.bestiarySecondUnlock
+
+    override fun setBestiarySecondUnlock(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.bestiarySecondUnlock = value
+        return true
+    }
+
+    override fun getBestiaryFirstUnlock(monsterType: Any): Int? = type(monsterType)?.info?.bestiaryFirstUnlock
+
+    override fun setBestiaryFirstUnlock(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.bestiaryFirstUnlock = value
+        return true
+    }
+
+    override fun getBestiaryToKill(monsterType: Any): Int? = type(monsterType)?.info?.bestiaryToUnlock
+
+    override fun setBestiaryToKill(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.bestiaryToUnlock = value
+        return true
+    }
+
+    override fun getBestiaryRace(monsterType: Any): Int? = type(monsterType)?.info?.bestiaryRace?.value
+
+    override fun setBestiaryRace(monsterType: Any, value: Int): Boolean? {
+        val target = type(monsterType) ?: return null
+        target.info.bestiaryRace = BestiaryRace.entries.firstOrNull { it.value == value } ?: return null
+        return true
+    }
+
+    override fun getCombatImmunities(monsterType: Any): List<Boolean>? {
+        val info = type(monsterType)?.info ?: return null
+        return (0 until COMBAT_COUNT).map { index -> info.m_damageImmunities.any { it.ordinal == index } }
+    }
+
+    override fun setCombatImmunity(monsterType: Any, combatType: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.m_damageImmunities += CombatType.entries.firstOrNull { it.value == combatType } ?: return null
+        return true
+    }
+
+    override fun getConditionImmunities(monsterType: Any): List<Boolean>? {
+        val info = type(monsterType)?.info ?: return null
+        return (0 until CONDITION_COUNT).map { index -> info.m_conditionImmunities.any { it.value == index } }
+    }
+
+    override fun setConditionImmunity(monsterType: Any, conditionType: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.m_conditionImmunities += ConditionType.entries.firstOrNull { it.value == conditionType } ?: return null
+        return true
+    }
+
+    override fun getElementList(monsterType: Any): Map<Int, Int>? =
+        type(monsterType)?.info?.elementMap?.mapKeys { it.key.value }
+
+    override fun addElement(monsterType: Any, element: Int, percent: Int): Boolean? =
+        addElementTo(monsterType, element) { info, combatType -> info.elementMap[combatType] = percent }
+
+    override fun addReflect(monsterType: Any, element: Int, percent: Int): Boolean? =
+        addElementTo(monsterType, element) { info, combatType -> info.reflectMap[combatType] = percent }
+
+    override fun addHealing(monsterType: Any, element: Int, percent: Int): Boolean? =
+        addElementTo(monsterType, element) { info, combatType -> info.healingMap[combatType] = percent }
+
+    private fun addElementTo(
+        monsterType: Any,
+        element: Int,
+        write: (org.opentibia.canary.creatures.monsters.MonsterInfo, CombatType) -> Unit,
+    ): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        val combatType = CombatType.entries.firstOrNull { it.value == element } ?: return null
+        write(info, combatType)
+        return true
+    }
+
+    override fun getVoices(monsterType: Any): List<MonsterVoiceInfo>? =
+        type(monsterType)?.info?.voiceVector?.map { MonsterVoiceInfo(text = it.text, yellText = it.yellText) }
+
+    override fun addVoice(monsterType: Any, text: String, interval: Int, chance: Int, yell: Boolean): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.yellSpeedTicks = interval
+        info.yellChance = chance
+        info.voiceVector += VoiceBlock(text = text, yellText = yell)
+        return true
+    }
+
+    override fun getCreatureEvents(monsterType: Any): List<String>? = type(monsterType)?.info?.scripts?.toList()
+
+    override fun registerEvent(monsterType: Any, name: String): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.scripts += name
+        return true
+    }
+
+    override fun getSummonList(monsterType: Any): List<MonsterSummonInfo>? =
+        type(monsterType)?.info?.summons?.map { MonsterSummonInfo(name = it.name, speed = it.speed, chance = it.chance) }
+
+    override fun addSummon(monsterType: Any, name: String, speed: Int, chance: Int, count: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.summons += SummonBlock(name = name, chance = chance, speed = speed, count = count)
+        return true
+    }
+
+    override fun getMaxSummons(monsterType: Any): Int? = type(monsterType)?.info?.maxSummons
+
+    override fun setMaxSummons(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.maxSummons = value
+        return true
+    }
+
+    override fun getArmor(monsterType: Any): Int? = type(monsterType)?.info?.armor
+
+    override fun setArmor(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.armor = value
+        return true
+    }
+
+    override fun getMitigation(monsterType: Any): Float? = type(monsterType)?.info?.mitigation
+
+    override fun setMitigation(monsterType: Any, value: Float): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.mitigation = value
+        return true
+    }
+
+    override fun getDefense(monsterType: Any): Int? = type(monsterType)?.info?.defense
+
+    override fun setDefense(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.defense = value
+        return true
+    }
+
+    override fun getOutfit(monsterType: Any): Outfit? = type(monsterType)?.info?.outfit
+
+    override fun setOutfit(monsterType: Any, outfit: Outfit): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.outfit = outfit.copy()
+        return true
+    }
+
+    override fun getManaCost(monsterType: Any): Int? = type(monsterType)?.info?.manaCost
+
+    override fun setManaCost(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.manaCost = value
+        return true
+    }
+
+    override fun getLight(monsterType: Any): LightInfo? = type(monsterType)?.info?.light
+
+    override fun setLight(monsterType: Any, color: Int, level: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.light.color = color
+        info.light.level = level
+        return true
+    }
+
+    override fun getStaticAttackChance(monsterType: Any): Int? = type(monsterType)?.info?.staticAttackChance
+
+    override fun setStaticAttackChance(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.staticAttackChance = value
+        return true
+    }
+
+    override fun getTargetDistance(monsterType: Any): Int? = type(monsterType)?.info?.targetDistance
+
+    override fun setTargetDistance(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.targetDistance = value
+        return true
+    }
+
+    override fun getYellChance(monsterType: Any): Int? = type(monsterType)?.info?.yellChance
+
+    override fun setYellChance(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.yellChance = value
+        return true
+    }
+
+    override fun getYellSpeedTicks(monsterType: Any): Int? = type(monsterType)?.info?.yellSpeedTicks
+
+    override fun setYellSpeedTicks(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.yellSpeedTicks = value
+        return true
+    }
+
+    override fun getChangeTargetChance(monsterType: Any): Int? = type(monsterType)?.info?.changeTargetChance
+
+    override fun setChangeTargetChance(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.changeTargetChance = value
+        return true
+    }
+
+    override fun getChangeTargetSpeed(monsterType: Any): Int? = type(monsterType)?.info?.changeTargetSpeed
+
+    override fun setChangeTargetSpeed(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.changeTargetSpeed = value
+        return true
+    }
+
+    override fun getStrategiesTargetNearest(monsterType: Any): Int? = type(monsterType)?.info?.strategiesTargetNearest
+
+    override fun setStrategiesTargetNearest(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.strategiesTargetNearest = value
+        return true
+    }
+
+    override fun getStrategiesTargetHealth(monsterType: Any): Int? = type(monsterType)?.info?.strategiesTargetHealth
+
+    override fun setStrategiesTargetHealth(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.strategiesTargetHealth = value
+        return true
+    }
+
+    override fun getStrategiesTargetDamage(monsterType: Any): Int? = type(monsterType)?.info?.strategiesTargetDamage
+
+    override fun setStrategiesTargetDamage(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.strategiesTargetDamage = value
+        return true
+    }
+
+    override fun getStrategiesTargetRandom(monsterType: Any): Int? = type(monsterType)?.info?.strategiesTargetRandom
+
+    override fun setStrategiesTargetRandom(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.strategiesTargetRandom = value
+        return true
+    }
+
+    override fun getRespawnTypePeriod(monsterType: Any): Int? = type(monsterType)?.info?.respawnType?.period?.value
+
+    override fun setRespawnTypePeriod(monsterType: Any, period: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.respawnType.period = RespawnPeriod.entries.firstOrNull { it.value == period } ?: return null
+        return true
+    }
+
+    override fun isRespawnTypeUnderground(monsterType: Any): Boolean? = type(monsterType)?.info?.respawnType?.underground
+
+    override fun setRespawnTypeUnderground(monsterType: Any, underground: Boolean): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.respawnType.underground = underground
+        return true
+    }
+
+    override fun getBossRace(monsterType: Any): String? = type(monsterType)?.info?.bosstiaryClass
+
+    override fun setBossRace(monsterType: Any, raceId: Int, bossClass: String): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.bosstiaryRace = BosstiaryRarity_t.entries.firstOrNull { it.value == raceId } ?: return null
+        info.bosstiaryClass = bossClass
+        return true
+    }
+
+    override fun getBossRaceId(monsterType: Any): Int? {
+        val info = type(monsterType)?.info ?: return null
+        return if (info.bosstiaryClass.isEmpty()) 0 else info.bosstiaryRace.value
+    }
+
+    override fun setBossRaceId(monsterType: Any, raceId: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.raceid = raceId
+        return true
+    }
+
+    override fun addBosstiaryMonster(raceId: Int, name: String) {
+        bosstiaryList[raceId] = name
+    }
+
+    override fun getSoundChance(monsterType: Any): Int? = type(monsterType)?.info?.soundChance
+
+    override fun setSoundChance(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.soundChance = value
+        return true
+    }
+
+    override fun getSoundSpeedTicks(monsterType: Any): Int? = type(monsterType)?.info?.soundSpeedTicks
+
+    override fun setSoundSpeedTicks(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.soundSpeedTicks = value
+        return true
+    }
+
+    override fun addSound(monsterType: Any, soundId: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.soundVector += soundEffectOf(soundId)
+        return true
+    }
+
+    override fun getSounds(monsterType: Any): List<Int>? = type(monsterType)?.info?.soundVector?.map { it.value }
+
+    override fun getDeathSound(monsterType: Any): Int? = type(monsterType)?.info?.deathSound?.value
+
+    override fun setDeathSound(monsterType: Any, value: Int): Boolean? {
+        val info = type(monsterType)?.info ?: return null
+        info.deathSound = soundEffectOf(value)
+        return true
+    }
+
+    override fun getVariant(monsterType: Any): String? = type(monsterType)?.variantName
+
+    override fun setVariant(monsterType: Any, value: String): Boolean? {
+        val target = type(monsterType) ?: return null
+        target.variantName = value
+        return true
+    }
+
+    /**
+     * `Monsters::getMonstersByRace` (monsters.cpp:401-412): walks the bestiary list
+     * recorded by `raceId` and keeps the types whose `bestiaryRace` matches.
+     */
+    override fun getMonstersByRace(race: Int): List<Any> {
+        val resolved = bestiaryList.values.mapNotNull(::resolveByName)
+        return resolved.filter { (it as? FullMonsterType)?.info?.bestiaryRace?.value == race }
+    }
+
+    /** `Monsters::getMonstersByBestiaryStars` (monsters.cpp:414-425). */
+    override fun getMonstersByBestiaryStars(stars: Int): List<Any> {
+        val resolved = bestiaryList.values.mapNotNull(::resolveByName)
+        return resolved.filter { (it as? FullMonsterType)?.info?.bestiaryStars == stars }
+    }
+
+    private fun soundEffectOf(value: Int): SoundEffect =
+        SoundEffect.entries.firstOrNull { it.value == value } ?: SoundEffect.SILENCE
+
     private companion object {
-        const val RACE_BLOOD = 2
+        /** `COMBAT_COUNT` (creatures_definitions.hpp). */
+        const val COMBAT_COUNT = 14
+
+        /** `CONDITION_COUNT` (creatures_definitions.hpp). */
+        const val CONDITION_COUNT = 40
     }
 }
 
@@ -2220,7 +2976,8 @@ class WorldMonsterTypeOperations(
 class WorldLootOperations(
     private val itemIdsByName: Map<String, Int> = emptyMap(),
 ) : LootOperations {
-    override fun itemIdByName(name: String): Int = itemIdsByName[name] ?: 0
+    /** `Item::items.getItemIdByName` lowercases the name before the `nameToItems` lookup. */
+    override fun itemIdByName(name: String): Int = itemIdsByName[name.lowercase()] ?: 0
 }
 
 /**

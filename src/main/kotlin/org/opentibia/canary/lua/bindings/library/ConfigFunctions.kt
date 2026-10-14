@@ -414,14 +414,17 @@ object UnwiredConfigOperations : ConfigOperations {
  * (PARITY GAP).
  */
 class WorldConfigOperations(private val configManager: ConfigManager) : ConfigOperations {
-    override fun getString(key: Int): String? = keyFor(key)?.let { configManager.getString(it) }
+    override fun getString(key: Int): String? =
+        keyFor(key)?.let { configManager.getString(it, it.defaultValue as? String ?: "") }
 
-    override fun getNumber(key: Int): Int? = keyFor(key)?.let { configManager.getNumber(it) }
+    override fun getNumber(key: Int): Int? =
+        keyFor(key)?.let { configManager.getNumber(it, it.defaultValue as? Int ?: 0) }
 
-    override fun getBoolean(key: Int): Boolean? = keyFor(key)?.let { configManager.getBoolean(it) }
+    override fun getBoolean(key: Int): Boolean? =
+        keyFor(key)?.let { configManager.getBoolean(it, it.defaultValue as? Boolean ?: false) }
 
     override fun getFloat(key: Int, shouldRound: Boolean): Double? {
-        val value = keyFor(key)?.let { configManager.getFloat(it) } ?: return null
+        val value = keyFor(key)?.let { configManager.getFloat(it, it.defaultValue as? Float ?: 0f) } ?: return null
         return if (shouldRound) round(value * 100.0) / 100.0 else value.toDouble()
     }
 

@@ -294,7 +294,13 @@ class MonsterType(name: String) {
  * are not ported yet (PARITY GAPS): they need the bosstiary and bestiary stores.
  */
 class Monsters {
-    private val monsters: MutableMap<String, MonsterType> = TreeMap()
+    private val monsterMap: MutableMap<String, MonsterType> = TreeMap()
+
+    /**
+     * `Monsters::monsters` (src/creatures/monsters/monsters.hpp:245): the public
+     * name-ordered registry keyed by the lowercased registration name.
+     */
+    val monsters: Map<String, MonsterType> get() = monsterMap
 
     /**
      * `Monsters::reloadEpoch` (`src/creatures/monsters/monsters.hpp:266`), a
@@ -306,7 +312,7 @@ class Monsters {
 
     /** `Monsters::clear` (`src/creatures/monsters/monsters.cpp:352-357`). */
     fun clear() {
-        monsters.clear()
+        monsterMap.clear()
         if (++reloadEpoch == 0L) {
             reloadEpoch = 1L
         }
@@ -318,7 +324,7 @@ class Monsters {
     /** `Monsters::getMonsterType` (`src/creatures/monsters/monsters.cpp:363-373`). */
     fun getMonsterType(name: String, silent: Boolean = false): MonsterType? {
         val lowerCaseName = name.lowercase()
-        monsters[lowerCaseName]?.let { return it }
+        monsterMap[lowerCaseName]?.let { return it }
         if (!silent) {
             logger.error { "[Monsters::getMonsterType] - Monster with name $lowerCaseName not exist" }
         }
@@ -328,12 +334,12 @@ class Monsters {
     /** `Monsters::tryAddMonsterType` (`src/creatures/monsters/monsters.cpp:390-399`). */
     fun tryAddMonsterType(name: String, mType: MonsterType): Boolean {
         val lowerName = name.lowercase()
-        if (monsters.containsKey(lowerName)) {
+        if (monsterMap.containsKey(lowerName)) {
             logger.debug { "[tryAddMonsterType] the monster with name '$name' already exist" }
             return false
         }
 
-        monsters[lowerName] = mType
+        monsterMap[lowerName] = mType
         return true
     }
 }
