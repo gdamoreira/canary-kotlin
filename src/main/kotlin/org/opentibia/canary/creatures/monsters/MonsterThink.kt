@@ -38,8 +38,8 @@ class MonsterThinkRequest(
  * sub-rule is a seam. [searchTarget] takes the `TargetSearchType_t` of
  * `Monster::searchTarget`, `updateSummonTarget`/`updateTargetList` are the
  * deferred-epoch checked callbacks and `queuePostThinkAfterAsync` closes the
- * tick. [targetListPopulatedByRefresh] models `updateTargetList` finding
- * targets inside this tick.
+ * tick. [targetListEmptyAfterRefresh] re-reads `targetList.empty()` after the
+ * friendly-fire refresh (monster.cpp:1716) without capturing the list.
  */
 class MonsterThinkAsyncRequest(
     val state: MonsterBehaviorState,
@@ -52,7 +52,7 @@ class MonsterThinkAsyncRequest(
     val followCreatureId: Long? = null,
     val hasFollowPath: Boolean = false,
     val targetDistance: Int = 1,
-    val targetListPopulatedByRefresh: Boolean = false,
+    val targetListEmptyAfterRefresh: () -> Boolean = { targetListEmpty },
     val canUseAttack: (Position) -> Boolean = { true },
     val isFleeing: Boolean = false,
     val addEventWalk: () -> Unit = {},
@@ -194,7 +194,7 @@ object MonsterThink {
             var targetListEmpty = request.targetListEmpty
             if (request.monsterPerfTestFriendlyFire && targetListEmpty) {
                 request.updateTargetList()
-                targetListEmpty = !request.targetListPopulatedByRefresh
+                targetListEmpty = request.targetListEmptyAfterRefresh()
             }
 
             if (!targetListEmpty) {
