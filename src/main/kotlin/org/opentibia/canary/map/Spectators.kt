@@ -46,13 +46,13 @@ class SpectatorsCache {
  * the flat `creature_list` plus the per-species lists and the `sectorS`/
  * `sectorE` neighbour links used to walk the viewport.
  *
- * CROSS-FILE NEED: the existing `MapSector`/`GameMap` (`MapGrid.kt:21-116`)
- * model 32x32 tile-only sectors and track no creatures, species lists or
- * neighbour links. Wiring the world must implement [SpectatorMapAccess] with
- * Canary's 16x16 sector semantics and keep these lists current via
- * [addCreature]/[removeCreature] on creature placement/removal.
+ * `org.opentibia.canary.map.cache.MapSector` (the Canary `MapSector` port)
+ * extends this class, `GameMap` maintains the 16x16 registry through
+ * `getBestMapSector`/`getMapSector` and implements [SpectatorMapAccess], and the
+ * creature list updates run from `GameMap.placeCreature`/`moveCreature` and
+ * `Tile.removeCreature`.
  */
-class SpectatorSector {
+open class SpectatorSector {
     /** `MapSector::creature_list` (`src/map/utils/mapsector.hpp:139`). */
     val creatureList: MutableList<Creature> = mutableListOf()
 

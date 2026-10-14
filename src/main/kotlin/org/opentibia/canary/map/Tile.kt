@@ -1111,6 +1111,7 @@ open class Tile(override val position: Position) : Cylinder {
 
         val creature = thing.getCreature()
         if (creature != null) {
+            Spectators.clearCache()
             creature.setParent(this)
             _creatures.add(0, creature)
             return
@@ -1267,6 +1268,7 @@ open class Tile(override val position: Position) : Cylinder {
         if (creature != null) {
             val index = _creatures.indexOfFirst { it === creature }
             if (index >= 0) {
+                Spectators.clearCache()
                 _creatures.removeAt(index)
             }
             return
@@ -1312,11 +1314,12 @@ open class Tile(override val position: Position) : Cylinder {
         }
     }
 
-    /** `Tile::removeCreature` (src/items/tile.cpp:1434-1441); the map-sector removal is a PARITY GAP. */
+    /** `Tile::removeCreature` (src/items/tile.cpp:1434-1441). */
     fun removeCreature(creature: Creature?) {
         if (creature == null) {
             return
         }
+        map?.getMapSector(position.x, position.y)?.removeCreature(creature)
         removeThing(creature, 0)
     }
 
@@ -1351,6 +1354,7 @@ open class Tile(override val position: Position) : Cylinder {
 
         val creature = thing.getCreature()
         if (creature != null) {
+            Spectators.clearCache()
             _creatures.add(0, creature)
             return
         }
