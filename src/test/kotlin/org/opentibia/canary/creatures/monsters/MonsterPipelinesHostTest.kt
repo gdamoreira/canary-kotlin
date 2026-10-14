@@ -383,7 +383,7 @@ class MonsterPipelinesHostTest {
     }
 
     @Test
-    fun `register hands the monster async batch to the dispatcher WorkerCompletion lane`() = runBlocking<Unit> {
+    fun `register routes the monster async batch through the dispatcher instead of running it inline`() = runBlocking<Unit> {
         val dispatcher = GameDispatcher()
         dispatcher.start()
         try {
@@ -400,6 +400,53 @@ class MonsterPipelinesHostTest {
 
             gate.complete(Unit)
             withTimeout(2_000) { done.await() }
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    @Test
+    fun `the monster async batch runs on the creature ai barrier lane`() = runBlocking<Unit> {
+        val dispatcher = GameDispatcher(barrierWorkerCount = 2)
+        dispatcher.start()
+        try {
+            host.dispatcher = dispatcher
+            val routed = Monster(id = 9, name = "Rat", maxHealth = 100, health = 100, position = origin)
+            host.register(routed)
+            val done = CompletableDeferred<Unit>()
+
+            routed.addAsyncTask { done.complete(Unit) }
+
+            withTimeout(2_000) { done.await() }
+
+            val background = dispatcher.laneTelemetry[DispatcherLane.MonsterAI.ordinal].barrierRuntime.snapshotAndReset()
+            val visible = dispatcher.laneTelemetry[DispatcherLane.VisibleMonsterAI.ordinal].barrierRuntime.snapshotAndReset()
+            assertThat(background.workUnits).isEqualTo(1)
+            assertThat(visible.workUnits).isZero()
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    @Test
+    fun `a rejected async batch admission clears the AsyncTaskRunning latch and stays reschedulable`() = runBlocking<Unit> {
+        val dispatcher = GameDispatcher()
+        host.dispatcher = dispatcher
+        val routed = Monster(id = 9, name = "Rat", maxHealth = 100, health = 100, position = origin)
+        host.register(routed)
+        var firstRan = false
+
+        routed.addAsyncTask { firstRan = true }
+
+        assertThat(routed.hasAsyncTaskFlag(FlagAsyncClass_t.AsyncTaskRunning)).isFalse()
+        assertThat(firstRan).isFalse()
+
+        dispatcher.start()
+        try {
+            val done = CompletableDeferred<Unit>()
+            routed.addAsyncTask { done.complete(Unit) }
+            withTimeout(2_000) { done.await() }
+            assertThat(firstRan).isTrue()
         } finally {
             dispatcher.shutdown()
         }

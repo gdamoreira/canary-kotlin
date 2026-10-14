@@ -43,6 +43,12 @@ enum class ExecutionMode {
     BackgroundCompletion,
 }
 
+/** `struct CreatureAsyncSliceLimits` (src/game/scheduling/dispatcher.hpp:49-52). */
+data class CreatureAsyncSliceLimits(
+    val tasksPerBucket: Int = 16,
+    val maxRuntimeUs: Long = 2000,
+)
+
 /** `struct TaskMeta` (src/game/scheduling/dispatcher_types.hpp:41-48). */
 data class TaskMeta(
     val lane: DispatcherLane = DispatcherLane.WorldCommit,

@@ -9,6 +9,7 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.game.scheduling.ConcurrentTimedWork
+import org.opentibia.canary.game.scheduling.CreatureAsyncTaskBuckets
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.scheduling.MonsterComputeService
@@ -63,13 +64,14 @@ import java.lang.ref.WeakReference
  *   a monster enters the world and `monsterHost.unregister(id)` when it is
  *   removed. `register` binds the creature-hook hosts
  *   (`onCreatureAppearHost`/`onRemoveCreatureHost`/`onCreatureMoveHost`), the
- *   `onExecuteAsyncTasksHost` body (monster.cpp:3972-3996), the
- *   `Creature.asyncTaskDispatcher` batch hand-back (creature.cpp:2048-2054) and
- *   the attack/extra-swing state (`hasExtraSwingProvider`,
+ *   `onExecuteAsyncTasksHost` body (monster.cpp:3972-3996), the shared
+ *   [creatureAsyncTaskBuckets] (`Creature::enqueueAsyncTask`,
+ *   creature.cpp:2031-2054, on the `VisibleMonsterAI`/`MonsterAI` barrier
+ *   lanes) and the attack/extra-swing state (`hasExtraSwingProvider`,
  *   `checkCreatureAttack`) onto the `Monster`, so the existing virtual-hook
  *   overrides in `Creature.kt`/`Creature.Monster` need no call-site change.
- *   Attach [dispatcher] before registering; the hand-back binds its value at
- *   registration time.
+ *   Attach [dispatcher] before registering; the bucket schedule reads it at
+ *   enqueue time.
  * - `Creature.kt`/`Game.kt` call-site needs:
  *   `Game.internalPlaceCreature` must still bind `creature.asyncTaskDispatcher`
  *   for every non-monster creature it places (Creature.kt:464-471).
@@ -229,6 +231,19 @@ class MonsterPipelinesHost(
     private val entries = mutableMapOf<Long, Entry>()
     private val visiblePostThinkQueue = MonsterPostThinkQueue(MonsterPostThinkQueue.VISIBLE_BATCH_SIZE)
     private val backgroundPostThinkQueue = MonsterPostThinkQueue(MonsterPostThinkQueue.BACKGROUND_BATCH_SIZE)
+
+    /**
+     * Shared creature async buckets (`Creature::enqueueAsyncTask`,
+     * creature.cpp:34-55, 2031-2146), one registry per world host. [register]
+     * rebinds each monster's `Creature.scheduleAsyncTaskBatch` to it; the
+     * per-entry closures carry the owner identity so removed/replaced monsters
+     * can neither run nor roll back through a successor (AGENTS.md
+     * deferred-callback lifetime safety). Non-monster creatures still use the
+     * serial `Creature.asyncTaskDispatcher` hand-back until the composition root
+     * binds them to a shared registry (`Creature.kt` CALL-SITE NEED:
+     * `Game.internalPlaceCreature` and `GameHandler` session login).
+     */
+    internal val creatureAsyncTaskBuckets = CreatureAsyncTaskBuckets(dispatcher = { dispatcher })
     private val rejectedPostThink = longArrayOf(0L, 0L)
 
     /** Registry lookup; `null` once the owner was unregistered/replaced. */
@@ -281,17 +296,26 @@ class MonsterPipelinesHost(
      * `onExecuteAsyncTasks` tails (monster.cpp:348-477, 3972-3996) bound onto
      * the owning [Monster]. Every lambda re-resolves the entry by id so a
      * removed/replaced owner becomes a no-op; the batch hand-back carries its
-     * own generation guard (Creature.sendAsyncTasks).
+     * own generation guard (Creature.sendAsyncTasks) and is admitted through
+     * the shared [creatureAsyncTaskBuckets].
      *
-     * [dispatcher] must be attached before the monster is registered: the
-     * async-task hand-back is bound from its value at registration time, like
-     * the C++ composition root wiring `g_dispatcher()` before world monsters
-     * spawn.
+     * [dispatcher] must be attached before the monster is registered so the
+     * bucket admission sees the same composition-root `g_dispatcher()` the C++
+     * world uses; the bucket provider re-reads it per enqueue.
      */
     private fun bindMonsterHooks(entry: Entry) {
         val monster = entry.monster
         val monsterId = monster.id
         monster.asyncTaskDispatcher = dispatcher
+        monster.scheduleAsyncTaskBatch = { task ->
+            creatureAsyncTaskBuckets.enqueueAsyncTask(
+                creatureId = monsterId,
+                task = task,
+                playerVisible = entry.pipeline.isPlayerVisibleForScheduling(),
+                isPlayerVisibleForScheduling = { entry.pipeline.isPlayerVisibleForScheduling() },
+                clearAsyncTaskRunning = { monster.setAsyncTaskFlag(FlagAsyncClass_t.AsyncTaskRunning, false) },
+            )
+        }
         monster.hasExtraSwingProvider = { MonsterBehavior.hasExtraSwing(entry.behaviorState) }
         monster.checkCreatureAttack = { checkCreatureAttack(monster) }
         monster.onExecuteAsyncTasksHost = {
