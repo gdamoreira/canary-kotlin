@@ -78,13 +78,13 @@ fun Player.triggerTranscendence(
     /** `Player::checkLastAggressiveActionWithin(2000)` (player.cpp:11201). */
     checkLastAggressiveActionWithin: (Int) -> Boolean = { false },
     /** `Player::sendSkills()` (player.cpp:11215). */
-    sendSkills: () -> Unit = {},
+    sendSkills: () -> Unit = { this.sendSkills() },
     /** `Player::sendStats()` (player.cpp:11216). */
-    sendStats: () -> Unit = {},
+    sendStats: () -> Unit = { this.sendStats() },
     /** `Player::sendBasicData()` (player.cpp:11217). */
-    sendBasicData: () -> Unit = {},
+    sendBasicData: () -> Unit = { this.sendBasicData() },
     /** `Player::sendTextMessage(MESSAGE_ATTENTION, ...)` (player.cpp:11219). */
-    sendTextMessage: (MessageClass, String) -> Unit = { _, _ -> },
+    sendTextMessage: (MessageClass, String) -> Unit = { type, text -> this.sendTextMessageTyped(type, text) },
     /** `g_game().addMagicEffect(getPosition(), CONST_ME_AVATAR_APPEAR)` (player.cpp:11214). */
     addMagicEffect: (Position, Int) -> Unit = { _, _ -> },
     /** `g_dispatcher().scheduleEvent(task)` (player.cpp:11228). */
@@ -92,7 +92,7 @@ fun Player.triggerTranscendence(
     /** `PlayerWheel::sendGiftOfLifeCooldown()` (player.cpp:11239). */
     sendGiftOfLifeCooldown: () -> Unit = {},
     /** `g_game().reloadCreature(getPlayer())` (player.cpp:11240). */
-    reloadCreature: () -> Unit = {},
+    reloadCreature: () -> Unit = { this.sendCreatureReload(this) },
 ) {
     if (wheel().getOnThinkTimer(WheelOnThink.AVATAR_FORGE) > now) {
         return

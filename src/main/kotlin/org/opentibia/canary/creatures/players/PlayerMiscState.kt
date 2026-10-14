@@ -194,9 +194,9 @@ fun Player.updateState(
     /** `Player::updateItemsLight()` (player.cpp:6284-6305). */
     updateItemsLight: () -> Unit = {},
     /** `Player::sendInventoryIds()` (player.cpp:9287-9291). */
-    sendInventoryIds: () -> Unit = {},
+    sendInventoryIds: () -> Unit = { this.sendInventoryIds() },
     /** `Player::sendStats()` (player.cpp:2347-2352). */
-    sendStats: () -> Unit = {},
+    sendStats: () -> Unit = { this.sendStats() },
     /** `Player::updateSaleShopList()` (player.cpp:6051-6054). */
     updateSaleShopList: () -> Unit = {},
     /** `Player::shopOwner != nullptr` (player.cpp:6061). */

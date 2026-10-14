@@ -47,7 +47,7 @@ fun Player.setChaseMode(mode: Boolean) {
  * `Player::setFightMode` (player.cpp:6215-6220). `Player::sendStats()` is the
  * injected protocol seam; `Player::sendSkills()` uses the player's own seam.
  */
-fun Player.setFightMode(mode: FightMode, sendStats: () -> Unit = {}) {
+fun Player.setFightMode(mode: FightMode, sendStats: () -> Unit = { this.sendStats() }) {
     fightMode = mode
 
     sendStats()

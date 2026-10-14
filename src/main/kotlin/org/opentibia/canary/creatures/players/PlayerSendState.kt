@@ -65,9 +65,9 @@ fun Player.sendPlayerPartyIcons(
     /** The `player` argument (player.cpp:7797). */
     player: Player,
     /** `Player::sendPartyCreatureShield(player)` (player.cpp:7798). */
-    clientSendPartyCreatureShield: (Player) -> Unit = {},
+    clientSendPartyCreatureShield: (Player) -> Unit = { target -> sendPartyCreatureShield(target) },
     /** `Player::sendPartyCreatureSkull(player)` (player.cpp:7799). */
-    clientSendPartyCreatureSkull: (Player) -> Unit = {},
+    clientSendPartyCreatureSkull: (Player) -> Unit = { target -> sendPartyCreatureSkull(target) },
 ) {
     clientSendPartyCreatureShield(player)
     clientSendPartyCreatureSkull(player)

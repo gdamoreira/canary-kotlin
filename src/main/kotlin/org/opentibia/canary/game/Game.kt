@@ -69,6 +69,11 @@ import org.opentibia.canary.creatures.monsters.MonsterTargeting
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.npcs.NpcInfo
 import org.opentibia.canary.creatures.players.PlayerTask
+import org.opentibia.canary.creatures.players.playerSendSink
+import org.opentibia.canary.creatures.players.sendCreatureReload
+import org.opentibia.canary.creatures.players.sendForgingData
+import org.opentibia.canary.creatures.players.sendPartyPlayerMana
+import org.opentibia.canary.creatures.players.sendPartyPlayerVocation
 import org.opentibia.canary.creatures.vocations.Vocation
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.database.Database
@@ -2663,7 +2668,9 @@ class Game(
     var sendCreatureIcon: (Player, Creature) -> Unit = { _, _ -> }
 
     /** `Player::reloadCreature(creature)` protocol seam (game.cpp:7829). */
-    var reloadCreatureClient: (Player, Creature) -> Unit = { _, _ -> }
+    var reloadCreatureClient: (Player, Creature) -> Unit = { player, creature ->
+        player.sendCreatureReload(creature)
+    }
 
     /** `Player::sendUpdateCreature(creature)` protocol seam (game.cpp:11878). */
     var sendUpdateCreatureClient: (Player, Creature) -> Unit = { _, _ -> }
@@ -2794,11 +2801,58 @@ class Game(
         }
     }
 
-    /** `Party::updatePlayerMana(target, manaPercent)` (party.cpp) seam; the Kotlin [Party] does not model the update yet (PARITY GAP). */
-    var partyUpdatePlayerMana: (Party, Player, Int) -> Unit = { _, _, _ -> }
+    /**
+     * `Party::updatePlayerMana(target, manaPercent)` (party.cpp:846-863): every
+     * online member and the leader within `PARTY_LIST_MAX_DISTANCE` receive
+     * `Player::sendPartyPlayerMana`.
+     */
+    var partyUpdatePlayerMana: (Party, Player, Int) -> Unit = mana@{ party, target, manaPercent ->
+        val leader = party.getLeader() ?: return@mana
+        val maxDistance = partyListMaxDistance()
+        for (member in party.getMembers()) {
+            if (withinPartyListDistance(target, member, maxDistance)) {
+                member.sendPartyPlayerMana(target, manaPercent)
+            }
+        }
+        if (withinPartyListDistance(target, leader, maxDistance)) {
+            leader.sendPartyPlayerMana(target, manaPercent)
+        }
+    }
 
-    /** `Party::updatePlayerVocation(target)` (party.cpp) seam; the Kotlin [Party] does not model the update yet (PARITY GAP). */
-    var partyUpdatePlayerVocation: (Party, Player) -> Unit = { _, _ -> }
+    /**
+     * `Party::updatePlayerVocation(target)` (party.cpp:865-882): every online
+     * member and the leader within `PARTY_LIST_MAX_DISTANCE` receive
+     * `Player::sendPartyPlayerVocation`.
+     */
+    var partyUpdatePlayerVocation: (Party, Player) -> Unit = vocation@{ party, target ->
+        val leader = party.getLeader() ?: return@vocation
+        val maxDistance = partyListMaxDistance()
+        for (member in party.getMembers()) {
+            if (withinPartyListDistance(target, member, maxDistance)) {
+                member.sendPartyPlayerVocation(target)
+            }
+        }
+        if (withinPartyListDistance(target, leader, maxDistance)) {
+            leader.sendPartyPlayerVocation(target)
+        }
+    }
+
+    /** `g_configManager().getNumber(PARTY_LIST_MAX_DISTANCE)` behind the party updates (configmanager.cpp). */
+    private fun partyListMaxDistance(): Int = configManager?.let { config ->
+        ConfigKeys.byName("PARTY_LIST_MAX_DISTANCE")?.let { key ->
+            config.getNumber(key, key.defaultValue as Int)
+        }
+    } ?: 0
+
+    /** `maxDistance == 0 || (getDistanceX <= max && getDistanceY <= max)` (party.cpp:835). */
+    private fun withinPartyListDistance(from: Player, to: Player, maxDistance: Int): Boolean {
+        if (maxDistance == 0) {
+            return true
+        }
+
+        return getDistanceX(from.position, to.position) <= maxDistance &&
+            getDistanceY(from.position, to.position) <= maxDistance
+    }
 
     /** `Game::addPlayerMana` (src/game/game.cpp:9326): the party mana percent reaches the online party only. */
     fun addPlayerMana(target: Player) {
@@ -3723,9 +3777,9 @@ class Game(
 
     /**
      * `Game::playerSetFightModes` (src/game/game.cpp:7044): stores the fight,
-     * chase and secure modes; the PvP stance is only applied when expert PvP is
-     * enabled. PARITY GAP: the Kotlin `Player` stores the plain fields without
-     * `Player::setFightMode`'s client resend.
+     * chase and secure modes; `Player::setFightMode`'s `sendStats`/`sendSkills`
+     * client resend is emitted through the player's sink and the PvP stance is
+     * only applied when expert PvP is enabled.
      */
     fun playerSetFightModes(
         playerId: Long,
@@ -3737,6 +3791,8 @@ class Game(
         val player = getPlayerByID(playerId) ?: return
 
         player.fightMode = fightMode
+        player.sendStats()
+        player.sendSkills()
         player.chaseMode = if (chaseMode) ChaseMode.Follow else ChaseMode.StandStill
         player.secureMode = secureMode
         if (expertPvpEnabled) {
@@ -7070,8 +7126,9 @@ class Game(
     }
 
     /**
-     * `Game::playerRequestCloseDepotSearch` (src/game/game.cpp:6933). PARITY GAP:
-     * the `Player::sendCloseDepotSearch` reply is not ported.
+     * `Game::playerRequestCloseDepotSearch` (src/game/game.cpp:6933): the open
+     * depot search is closed and the `Player::sendCloseDepotSearch` reply is
+     * emitted through the player's sink.
      */
     fun playerRequestCloseDepotSearch(playerId: Long) {
         val player = getPlayerByID(playerId) ?: return
@@ -7080,6 +7137,7 @@ class Game(
         }
 
         player.setDepotSearchIsOpen(0, 0)
+        player.playerSendSink?.sendCloseDepotSearch()
     }
 
     // --- stash / depot-search seams (game.cpp:2297, 5665-5755, 6920-7000, 12231-12355) ---
@@ -7106,7 +7164,7 @@ class Game(
     var sendOpenStash: (Player, Boolean) -> Unit = { _, _ -> }
 
     /** `Player::sendForgingData()` protocol seam used by the batch item handlers (player.hpp). */
-    var sendForgingData: (Player) -> Unit = { _ -> }
+    var sendForgingData: (Player) -> Unit = { player -> player.sendForgingData() }
 
     // --- use-item / container handler seams (game.cpp:4500-5800) --------------
 
