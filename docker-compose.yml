@@ -1,67 +1,7 @@
-services:
-  db:
-    image: postgres:16-alpine
-    container_name: canary-kotlin-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: "${CANARY_DB_NAME:-canary}"
-      POSTGRES_USER: "${CANARY_DB_USER:-canary}"
-      POSTGRES_PASSWORD: "${CANARY_DB_PASSWORD:-canary}"
-    networks:
-      - canary-net
-    ports:
-      - "${CANARY_DB_PORT:-5432}:5432"
-    volumes:
-      - canary-pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${CANARY_DB_USER:-canary} -d ${CANARY_DB_NAME:-canary}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-  server:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: canary-kotlin-server
-    restart: unless-stopped
-    environment:
-      CANARY_DB_HOST: "db"
-      CANARY_DB_PORT: "5432"
-      CANARY_DB_NAME: "${CANARY_DB_NAME:-canary}"
-      CANARY_DB_USER: "${CANARY_DB_USER:-canary}"
-      CANARY_DB_PASSWORD: "${CANARY_DB_PASSWORD:-canary}"
-      CANARY_SERVER_NAME: "${CANARY_SERVER_NAME:-Canary Kotlin Server}"
-      CANARY_IP: "${CANARY_IP:-127.0.0.1}"
-      CANARY_LOGIN_PORT: "${CANARY_LOGIN_PORT:-7171}"
-      CANARY_GAME_PORT: "${CANARY_GAME_PORT:-7172}"
-      CANARY_STATUS_PORT: "${CANARY_STATUS_PORT:-7171}"
-      # Optional RSA handshake override; omit to use the built-in OpenTibia pair.
-      CANARY_RSA_P: "${CANARY_RSA_P:-}"
-      CANARY_RSA_Q: "${CANARY_RSA_Q:-}"
-    ports:
-      - "${CANARY_LOGIN_PORT:-7171}:7171"
-      - "${CANARY_GAME_PORT:-7172}:7172"
-    volumes:
-      # Game data (Lua datapacks) mounted read-only; see docker/DOCKER.md.
-      - ./data:/app/data:ro
-      - ./data-canary:/app/data-canary:ro
-      - ./data-otservbr-global:/app/data-otservbr-global:ro
-    networks:
-      - canary-net
-    healthcheck:
-      test: ["CMD-SHELL", "nc -z 127.0.0.1 7171 || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 90s
-    depends_on:
-      db:
-        condition: service_healthy
-
-volumes:
-  canary-pgdata:
-
-networks:
-  canary-net:
-    driver: bridge
+# The canonical Canary Kotlin stack lives in docker/docker-compose.yml
+# (upstream Canary keeps its compose file in the docker folder). This wrapper
+# keeps `docker compose up` working from the repository root.
+#
+# Requires Docker Compose v2.20+ (Compose `include`).
+include:
+  - docker/docker-compose.yml

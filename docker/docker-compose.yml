@@ -1,0 +1,85 @@
+---
+# Canonical Canary Kotlin Docker stack (adapted from canary/docker/docker-compose.yml).
+#
+# The repository-root `docker-compose.yml` includes this file, so run Compose from
+# the repository root (or use docker/up.sh / docker/up.ps1):
+#
+#   cp docker/.env.dist .env        # optional; defaults work out of the box
+#   docker compose up -d --build
+#
+# Relative paths resolve against this file, so the build context and the game
+# data folders point at the repository root regardless of where Compose runs.
+name: canary-kotlin
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: canary-kotlin-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${CANARY_DB_NAME:-canary}"
+      POSTGRES_USER: "${CANARY_DB_USER:-canary}"
+      POSTGRES_PASSWORD: "${CANARY_DB_PASSWORD:-canary}"
+    networks:
+      - canary-net
+    ports:
+      - "${CANARY_DB_PORT:-5432}:5432"
+    volumes:
+      - db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${CANARY_DB_USER:-canary} -d ${CANARY_DB_NAME:-canary}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: canary-kotlin-server
+    restart: unless-stopped
+    environment:
+      CANARY_DB_HOST: "db"
+      CANARY_DB_PORT: "5432"
+      CANARY_DB_NAME: "${CANARY_DB_NAME:-canary}"
+      CANARY_DB_USER: "${CANARY_DB_USER:-canary}"
+      CANARY_DB_PASSWORD: "${CANARY_DB_PASSWORD:-canary}"
+      CANARY_SERVER_NAME: "${CANARY_SERVER_NAME:-Canary Kotlin Server}"
+      CANARY_IP: "${CANARY_IP:-127.0.0.1}"
+      CANARY_LOGIN_PORT: "${CANARY_LOGIN_PORT:-7171}"
+      CANARY_GAME_PORT: "${CANARY_GAME_PORT:-7172}"
+      CANARY_STATUS_PORT: "${CANARY_STATUS_PORT:-7171}"
+      # Optional RSA handshake override; omit to use the built-in OpenTibia pair.
+      CANARY_RSA_P: "${CANARY_RSA_P:-}"
+      CANARY_RSA_Q: "${CANARY_RSA_Q:-}"
+      # Optional Prometheus exporter (see metrics/README.md).
+      CANARY_METRICS_ENABLE_PROMETHEUS: "${CANARY_METRICS_ENABLE_PROMETHEUS:-false}"
+      CANARY_METRICS_PROMETHEUS_ADDRESS: "${CANARY_METRICS_PROMETHEUS_ADDRESS:-0.0.0.0:9464}"
+    ports:
+      - "${CANARY_LOGIN_PORT:-7171}:7171"
+      - "${CANARY_GAME_PORT:-7172}:7172"
+      # Prometheus exporter (serves only when CANARY_METRICS_ENABLE_PROMETHEUS=true).
+      - "${CANARY_METRICS_PORT:-9464}:9464"
+    volumes:
+      # Game data (Lua datapacks) mounted read-only; see docker/DOCKER.md.
+      - ../data:/app/data:ro
+      - ../data-canary:/app/data-canary:ro
+      - ../data-otservbr-global:/app/data-otservbr-global:ro
+    networks:
+      - canary-net
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 7171 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db-volume:
+
+networks:
+  canary-net:
+    driver: bridge

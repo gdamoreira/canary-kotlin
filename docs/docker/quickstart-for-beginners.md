@@ -2,8 +2,9 @@
 
 > Adapted from canary/docs/docker/quickstart-for-beginners.md for the Kotlin/JVM
 > engine.
-> Canary-Kotlin status: adapted to the repository-root `docker-compose.yml`
-> (PostgreSQL 16 + the Kotlin server built from `Dockerfile`). The upstream
+> Canary-Kotlin status: adapted to the canonical `docker/docker-compose.yml`
+> (PostgreSQL 16 + the Kotlin server built from the root `Dockerfile`; the
+> repository-root `docker-compose.yml` includes it). The upstream
 > quickstart extras (MyAAC website and `opentibiabr/login-server`) are **not**
 > part of this port; the native login server on `7171` is the entry point.
 

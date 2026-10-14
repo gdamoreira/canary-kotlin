@@ -1,0 +1,24 @@
+# syntax=docker/dockerfile:1.7
+#
+# Development image for the Canary Kotlin server, adapted from
+# canary/docker/Dockerfile.dev. The repository is bind-mounted at /app so Gradle
+# runs against the live sources; dependencies are cached in the Gradle home.
+#
+# Build from the repository root:
+#   docker build -f docker/Dockerfile.dev -t canary-kotlin-dev .
+#
+# Run the server (or any Gradle task):
+#   docker run --rm -it -p 7171:7171 -p 7172:7172 \
+#     -v "$PWD:/app" -v canary-gradle:/root/.gradle canary-kotlin-dev
+#   docker run --rm -it -v "$PWD:/app" canary-kotlin-dev ./gradlew test
+FROM eclipse-temurin:25-jdk AS dev
+
+ENV GRADLE_USER_HOME=/root/.gradle
+WORKDIR /app
+
+# Warm the wrapper and dependency resolution when the build files change.
+COPY gradlew gradlew.bat settings.gradle.kts build.gradle.kts gradle.properties ./
+COPY gradle ./gradle
+RUN ./gradlew --no-daemon --version
+
+CMD ["./gradlew", "run", "--console=plain"]

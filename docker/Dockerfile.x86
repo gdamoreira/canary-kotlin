@@ -1,0 +1,18 @@
+# syntax=docker/dockerfile:1.7
+#
+# x86_64 (linux/amd64) server image, adapted from canary/docker/Dockerfile.x86.
+# The JVM distribution is platform-neutral; this file pins the build and the
+# runtime to amd64 for hosts that need an explicit architecture.
+#
+# Build from the repository root:
+#   docker build -f docker/Dockerfile.x86 -t canary-kotlin:x86 .
+FROM --platform=linux/amd64 gradle:9.8.1-jdk25 AS build
+WORKDIR /app
+COPY . .
+RUN gradle installDist --no-daemon
+
+FROM --platform=linux/amd64 eclipse-temurin:25-jre-alpine
+WORKDIR /app
+COPY --from=build /app/build/install/canary-kotlin /app
+EXPOSE 7171 7172 9464
+ENTRYPOINT ["/app/bin/canary-kotlin"]

@@ -1,16 +1,35 @@
 # Docker Deployment Guide — Canary Kotlin Edition
 
-This guide covers the containerized stack for the Kotlin server. The compose
-file lives at the **repository root** (`docker-compose.yml`) because it builds
-the server from the root `Dockerfile`; the guides and helpers live in this
-`docker/` directory.
+This guide covers the containerized stack for the Kotlin server. It is adapted
+from `canary/docker/DOCKER.md`; the main differences are PostgreSQL 16 instead
+of MariaDB and the native login server instead of `opentibiabr/login-server`.
+
+The canonical compose file lives in this folder (`docker/docker-compose.yml`,
+the upstream Canary layout); the repository-root `docker-compose.yml` includes
+it so `docker compose up` also works from the root.
 
 For a beginner walkthrough see
 [`docs/docker/quickstart-for-beginners.md`](../docs/docker/quickstart-for-beginners.md).
 
-> The upstream C++ quickstart extras (MyAAC website, `opentibiabr/login-server`)
-> are **not** part of this port. The native Kotlin login/status server on port
-> `7171` is the client entry point.
+---
+
+## Folder layout
+
+| Path | Purpose |
+| --- | --- |
+| `docker-compose.yml` | Canonical stack: PostgreSQL 16 + server (built from the root `Dockerfile`). |
+| `.env.dist` | Environment template; copy to `.env` at the repository root. |
+| `DOCKER.md` | This guide. |
+| `config.sh` | Substitutes `CANARY_*` values into `config.lua` and `.env`. |
+| `data/` | Adapted test-account SQL dumps (PostgreSQL) + `start.sh` helper. |
+| `up.sh` / `up.ps1` | Guarded start scripts (never remove database volumes). |
+| `Dockerfile.dev` | Development image (JDK 25 + Gradle wrapper, sources mounted). |
+| `Dockerfile.x86` / `Dockerfile.arm` | Platform-pinned server images. |
+| `quickstart/myaac/` | Upstream MyAAC reference files (NOT wired; see below). |
+| `.dockerignore` | Context exclusions for builds using this folder as context. |
+
+The server image itself is built from the **repository-root `Dockerfile`**
+(Gradle 9.8.1 + JDK 25 → Temurin 25 JRE).
 
 ---
 
@@ -19,16 +38,16 @@ For a beginner walkthrough see
 | Service | Image / build | Purpose | Ports |
 | --- | --- | --- | --- |
 | `db` | `postgres:16-alpine` | Game database (Flyway migrates on boot) | `${CANARY_DB_PORT:-5432}` |
-| `server` | built from root `Dockerfile` (Gradle 9.8.1 + JDK 25 → Temurin 25 JRE) | Login/status + game world | `7171`, `7172` |
+| `server` | root `Dockerfile` | Login/status + game world | `7171`, `7172`, metrics `9464` |
 
 Game data is bind-mounted read-only into the server container:
 
-- `./data` → `/app/data` (engine Lua core, items, XML)
-- `./data-canary` → `/app/data-canary` (Canary datapack)
-- `./data-otservbr-global` → `/app/data-otservbr-global` (global datapack)
+- `../data` → `/app/data` (engine Lua core, items, XML)
+- `../data-canary` → `/app/data-canary` (Canary datapack)
+- `../data-otservbr-global` → `/app/data-otservbr-global` (global datapack)
 
-The main world map (`otservbr.otbm`) is not committed; the server fetches it
-on boot via `mapDownloadUrl` (`MapDownload`). Ensure outbound network access or
+The main world map (`otservbr.otbm`) is not committed; the server fetches it on
+boot via `mapDownloadUrl` (`MapDownload`). Ensure outbound network access or
 place a local map file where the configuration expects it.
 
 ---
@@ -51,6 +70,9 @@ sh docker/up.sh          # Linux / macOS / WSL
 ```powershell
 .\docker\up.ps1          # Windows PowerShell
 ```
+
+Useful knobs: `NO_BUILD=true`, `SKIP_CLEANUP=true`, `CLEANUP_UNTIL=168h`,
+`LAN=true` (advertise the detected LAN IP in `.env`).
 
 Stop and clean up:
 
@@ -75,14 +97,97 @@ for the full list with defaults.
 | `CANARY_LOGIN_PORT` / `CANARY_GAME_PORT` | `7171` / `7172` | Must match the client. |
 | `CANARY_STATUS_PORT` | `7171` | Status shares the login port in this port. |
 | `CANARY_RSA_P` / `CANARY_RSA_Q` | built-in pair | Optional RSA override; both or neither. |
+| `CANARY_METRICS_ENABLE_PROMETHEUS` | `false` | Enables the `/metrics` exporter. |
+| `CANARY_METRICS_PROMETHEUS_ADDRESS` | `0.0.0.0:9464` | Exporter bind address. |
+| `CANARY_METRICS_PORT` | `9464` | Host port published for the exporter. |
 
 ---
 
-## Test account
+## Configuration files
 
-The database seed (Flyway `V2`) creates account **`1` / password `1`** with the
-characters `Knight Hero` and `Sorcerer Master`. Change or remove these before
+Two mechanisms exist, matching upstream:
+
+1. **Environment (`CANARY_*`)** — always applied; the compose stack uses this.
+2. **`config.lua`** — copy `config.lua.dist` to `config.lua` and start the
+   server with `--config config.lua` (or place it next to the executable; the
+   installed distribution resolves it automatically). The same key surface as
+   upstream Canary is read (`serverName`, `loginProtocolPort`,
+   `dataPackDirectory`, `OTCRFeatures`, ...).
+
+`docker/config.sh` rewrites a `config.lua` from `.env` values:
+
+```bash
+sh docker/config.sh                      # .env -> config.lua (repo root)
+sh docker/config.sh serverName MyServer  # ad-hoc substitutions
+```
+
+---
+
+## Test accounts
+
+Two layers, mirroring upstream:
+
+1. **Flyway seed (automatic)** — migration `V2` creates account `1` / password
+   `1` with the characters `Knight Hero` and `Sorcerer Master`.
+2. **Quickstart dumps (optional)** — `docker/data/01-test_account.sql` and
+   `02-test_account_players.sql` are the upstream MariaDB dumps adapted to
+   PostgreSQL (16 accounts, 178 characters; every account password is `1`).
+   Apply them after the server's first boot (schema created by Flyway):
+
+```bash
+sh docker/data/start.sh                  # waits for the DB/schema, then imports
+sh docker/data/start.sh --write-config   # also writes config.lua from .env
+```
+
+Or manually:
+
+```bash
+docker compose exec -T db psql -U canary -d canary < docker/data/01-test_account.sql
+docker compose exec -T db psql -U canary -d canary < docker/data/02-test_account_players.sql
+```
+
+The dumps are idempotent (`ON CONFLICT DO NOTHING`) and keep the BIGSERIAL
+sequences ahead of the seeded ids. Change or remove the accounts before
 exposing the server to any untrusted network.
+
+---
+
+## Image variants
+
+| File | Build | Use |
+| --- | --- | --- |
+| `Dockerfile` (root) | `docker build -t canary-kotlin .` | Default multi-stage image (also used by compose). |
+| `docker/Dockerfile.x86` | `docker build -f docker/Dockerfile.x86 -t canary-kotlin:x86 .` | Pinned `linux/amd64`. |
+| `docker/Dockerfile.arm` | `docker build -f docker/Dockerfile.arm -t canary-kotlin:arm .` | Pinned `linux/arm64`. |
+| `docker/Dockerfile.dev` | `docker build -f docker/Dockerfile.dev -t canary-kotlin-dev .` | JDK 25 + Gradle wrapper; mount the repo and run `./gradlew run`. |
+
+---
+
+## Metrics
+
+The Prometheus exporter is optional; enable it with
+`CANARY_METRICS_ENABLE_PROMETHEUS=true` and scrape
+`http://<host>:9464/metrics`. A full Prometheus + Grafana stack lives in
+[`../metrics/`](../metrics/README.md).
+
+---
+
+## Upstream quickstart extras (NOT ported)
+
+Upstream Canary's quickstart also ships two components that do not apply to
+this port:
+
+- **MyAAC website/admin** — PHP/MySQL only (`pdo_mysql`, `mysql:` DSNs). The
+  Kotlin stack runs on PostgreSQL, so MyAAC cannot read its database. The
+  upstream reference files are kept in `quickstart/myaac/` with a README; they
+  are not wired into the compose stack.
+- **`opentibiabr/login-server`** — the upstream client login webservice reads a
+  MySQL database. This port logs in natively on `CANARY_LOGIN_PORT` (7171), so
+  no separate login webservice is needed.
+
+`docker/config.sh`, `docker/data/`, the guarded `up` scripts and the Dockerfile
+variants are the parts of the upstream docker folder that were ported and
+adapted.
 
 ---
 
@@ -91,8 +196,9 @@ exposing the server to any untrusted network.
 | Symptom | Fix |
 | --- | --- |
 | Server exits during boot | `docker compose logs server` — most often the database was still starting; the compose healthcheck handles this, retry with `docker compose up -d`. |
-| `address already in use` | Another server/container holds `7171`/`7172`; stop it or override the port variables in `.env`. |
-| Client cannot reach the game world | `CANARY_IP` must be the address the client dials; for LAN play set your host IP, not `127.0.0.1`. |
+| `address already in use` | Another server/container holds `7171`/`7172`/`9464`; stop it or override the port variables in `.env`. |
+| Client cannot reach the game world | `CANARY_IP` must be the address the client dials; for LAN play run `LAN=true sh docker/up.sh` or set it manually. |
 | Map download fails | Allow outbound HTTPS or provide a local map; see the log line from `MapDownload`. |
 | Rebuild after code changes | `docker compose build server && docker compose up -d server`. |
 | Stale database schema | Flyway migrates automatically on boot; never edit applied migrations (see `AGENTS.md` §2.1). |
+| Metrics endpoint unreachable | Set `CANARY_METRICS_ENABLE_PROMETHEUS=true` and restart; the exporter only binds when enabled. |

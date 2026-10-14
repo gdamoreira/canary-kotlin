@@ -1,0 +1,9 @@
+# Build-context exclusions for Docker builds that use the docker/ folder as
+# context (adapted from canary/docker/.dockerignore). Server image builds use
+# the repository root context, governed by the root .dockerignore.
+quickstart/**/node_modules
+
+*.md
+.*
+gdb_debug
+client_assertions.txt
