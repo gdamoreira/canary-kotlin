@@ -12,17 +12,19 @@ import org.opentibia.canary.items.ItemType
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.systems.imbuement.Imbuement
+import org.opentibia.canary.systems.imbuement.Imbuements
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
  * Router application tests for the imbuement window opcodes:
  * `0xD7` (`Game::playerCloseImbuementWindow`, game.cpp:7178) clears
- * `Player::imbuingItem`, and `0xB2` `PickItem`
+ * `Player::imbuingItem`, `0xB2` `PickItem`
  * (`ProtocolGame::parseImbuementAction` + `openImbuementWindow`,
- * protocolgame.cpp:3065, 10193) stores the resolved tile item. `0xD5`/`0xD6`
- * stay decode-only until the `ImbuementEngine` item seam is backed by the real
- * `Item` attribute store and `Player` exposes the imbuing item to the engine.
+ * protocolgame.cpp:3065, 10193) stores the resolved tile item, and `0xD5`/`0xD6`
+ * (`Game::playerApplyImbuement`/`playerClearImbuement`, game.cpp:7116, 7153)
+ * drive the imbuement engine over the `Game` seams.
  */
 class OpcodeApplicationImbuementRouterTest {
 
@@ -30,12 +32,21 @@ class OpcodeApplicationImbuementRouterTest {
     private lateinit var map: GameMap
     private lateinit var game: Game
 
-    private fun start() {
+    private fun start(imbuements: Imbuements? = null) {
         dispatcher = GameDispatcher()
         dispatcher.start()
         map = GameMap()
-        game = Game(map, dispatcher)
+        game = Game(map, dispatcher, imbuements = imbuements)
+        game.isUIExhausted = { it.isUIExhausted() }
+        game.updateUIExhausted = { it.updateUIExhausted() }
     }
+
+    private fun imbuements(): Imbuements = Imbuements().apply {
+        assertThat(loadFromXml(IMBUEMENT_XML)).isTrue()
+    }
+
+    private fun strike(imbuements: Imbuements): Imbuement =
+        imbuements.imbuementMap.values.single { it.name == "Strike" }
 
     private fun stop() {
         dispatcher.shutdown()
@@ -183,4 +194,164 @@ class OpcodeApplicationImbuementRouterTest {
             stop()
         }
     }
+
+    private fun writeApplyImbuement(frame: ByteBuf, slot: Int, imbuementId: Long) {
+        frame.writeByte(ImbuementPacketHandler.OPCODE_APPLY_IMBUEMENT)
+        frame.writeByte(slot)
+        frame.writeIntLE(imbuementId.toInt())
+    }
+
+    private fun writeClearImbuement(frame: ByteBuf, slot: Int) {
+        frame.writeByte(ImbuementPacketHandler.OPCODE_CLEAR_IMBUEMENT)
+        frame.writeByte(slot)
+    }
+
+    @Test
+    fun `apply imbuement opcode 0xD5 applies through the game handler and consumes the UI interaction`() {
+        val imbuements = imbuements()
+        start(imbuements)
+        try {
+            val player = hero()
+            val item = Item(id = 2160, count = 1)
+            player.setImbuingItem(item)
+            game.getImbuingItem = { if (it === player) item else null }
+            val applied = mutableListOf<Pair<Int, Int>>()
+            game.onApplyImbuement = { _, imbuement, appliedItem, slot ->
+                applied.add(imbuement.id to slot)
+                assertThat(appliedItem).isSameAs(item)
+            }
+            val strike = strike(imbuements)
+            assertThat(player.isUIExhausted(500)).isFalse()
+
+            val frame = Unpooled.buffer()
+            writeApplyImbuement(frame, slot = 1, imbuementId = strike.id.toLong())
+
+            assertThat(route(frame, player)).isEqualTo(1)
+            assertThat(applied).containsExactly(strike.id to 1)
+            assertThat(player.isUIExhausted(500)).isTrue()
+        } finally {
+            stop()
+        }
+    }
+
+    @Test
+    fun `apply imbuement opcode 0xD5 drops an id above uint16 max`() {
+        val imbuements = imbuements()
+        start(imbuements)
+        try {
+            val player = hero()
+            var applied = false
+            game.onApplyImbuement = { _, _, _, _ -> applied = true }
+
+            val frame = Unpooled.buffer()
+            writeApplyImbuement(frame, slot = 0, imbuementId = 0x1_0000L)
+
+            assertThat(route(frame, player)).isEqualTo(1)
+            assertThat(applied).isFalse()
+            assertThat(player.isUIExhausted(500)).isFalse()
+        } finally {
+            stop()
+        }
+    }
+
+    @Test
+    fun `apply imbuement opcode 0xD5 without an imbuing item creates the scroll imbuement`() {
+        val imbuements = imbuements()
+        start(imbuements)
+        try {
+            val player = hero()
+            val scrolls = mutableListOf<Int>()
+            game.createScrollImbuement = { _, imbuement -> scrolls.add(imbuement.id) }
+            val strike = strike(imbuements)
+
+            val frame = Unpooled.buffer()
+            writeApplyImbuement(frame, slot = 0, imbuementId = strike.id.toLong())
+
+            assertThat(route(frame, player)).isEqualTo(1)
+            assertThat(scrolls).containsExactly(strike.id)
+            assertThat(player.isUIExhausted(500)).isTrue()
+        } finally {
+            stop()
+        }
+    }
+
+    @Test
+    fun `apply imbuement opcode 0xD5 ignores an unknown imbuement id`() {
+        val imbuements = imbuements()
+        start(imbuements)
+        try {
+            val player = hero()
+            var applied = false
+            var scrolled = false
+            game.onApplyImbuement = { _, _, _, _ -> applied = true }
+            game.createScrollImbuement = { _, _ -> scrolled = true }
+
+            val frame = Unpooled.buffer()
+            writeApplyImbuement(frame, slot = 0, imbuementId = 4242)
+
+            assertThat(route(frame, player)).isEqualTo(1)
+            assertThat(applied).isFalse()
+            assertThat(scrolled).isFalse()
+            assertThat(player.isUIExhausted(500)).isTrue()
+        } finally {
+            stop()
+        }
+    }
+
+    @Test
+    fun `clear imbuement opcode 0xD6 clears the slot through the game handler`() {
+        val imbuements = imbuements()
+        start(imbuements)
+        try {
+            val player = hero()
+            val item = Item(id = 2160, count = 1)
+            player.setImbuingItem(item)
+            game.getImbuingItem = { if (it === player) item else null }
+            val cleared = mutableListOf<Pair<Int, Int>>()
+            game.onClearImbuement = { _, clearedItem, slot ->
+                cleared.add(clearedItem.id to slot)
+            }
+
+            val frame = Unpooled.buffer()
+            writeClearImbuement(frame, slot = 2)
+
+            assertThat(route(frame, player)).isEqualTo(1)
+            assertThat(cleared).containsExactly(2160 to 2)
+            assertThat(player.isUIExhausted(500)).isTrue()
+        } finally {
+            stop()
+        }
+    }
+
+    @Test
+    fun `clear imbuement opcode 0xD6 without an imbuing item is inert but consumes the interaction`() {
+        val imbuements = imbuements()
+        start(imbuements)
+        try {
+            val player = hero()
+            var cleared = false
+            game.onClearImbuement = { _, _, _ -> cleared = true }
+
+            val frame = Unpooled.buffer()
+            writeClearImbuement(frame, slot = 0)
+
+            assertThat(route(frame, player)).isEqualTo(1)
+            assertThat(cleared).isFalse()
+            assertThat(player.isUIExhausted(500)).isTrue()
+        } finally {
+            stop()
+        }
+    }
 }
+
+private const val IMBUEMENT_XML = """
+<imbuements>
+    <base id="1" name="Basic" price="5000" protectionPrice="10000" percent="90" removecost="15000" duration="72000"/>
+    <category id="3" name="Critical Hit" agressive="1"/>
+    <imbuement name="Strike" base="1" category="3" iconid="1" premium="0" storage="0">
+        <attribute key="description" value="Raises crit hit damage by 15% and crit hit chance by 10%."/>
+        <attribute key="effect" type="skill" value="critical" bonus="1500" chance="1000"/>
+        <attribute key="item" value="11444" count="20"/>
+    </imbuement>
+</imbuements>
+"""
