@@ -490,9 +490,11 @@ data class BoostedCreatureRecord(
  *    `getPlayersOnline`/`getMonstersOnline` game.hpp:195-200)
  *  - map seams: `internalPlaceCreature`/`placeCreature`/`removeCreature`
  *    delegate to `Map::placeCreature`/`Map::removeCreature` and every
- *    `Spectators().find` fanout resolves through the map sectors; the forge
- *    seams read/write `MonsterPipelinesHost.typeStateOf` through
- *    [MonsterForge]
+ *    `Spectators().find` fanout resolves through the map sectors; a placed
+ *    monster is registered with [monsterHost] using [monsterTypeProvider] and
+ *    unregistered again on removal, so its deferred pipelines activate and
+ *    deactivate with the world lifecycle; the forge seams read/write
+ *    `MonsterPipelinesHost.typeStateOf` through [MonsterForge]
  *  - stash/depot search (`isTryingToStow` game.cpp:2297, `playerStowItem`
  *    game.cpp:5665, `playerStashWithdraw` game.cpp:5706,
  *    `playerRequestDepotItems` game.cpp:6920, `playerRequestDepotSearchItem`
@@ -605,6 +607,16 @@ class Game(
      * fallback inert until the host is injected.
      */
     private val monsterHost: MonsterPipelinesHost? = null,
+    /**
+     * `g_monsters().getMonsterType(name, silent)` (`Monsters::getMonsterType`,
+     * src/creatures/monsters/monsters.cpp:363-373) seam resolving
+     * `Monster::m_monsterType` (src/creatures/monsters/monster.hpp:363) when a
+     * monster enters the world: [internalPlaceCreature] passes the result to
+     * `MonsterPipelinesHost.register` so the type-driven host seams are bound.
+     * The composition root injects the `Monsters` registry; without one the
+     * pipeline still activates with inert type-driven seams.
+     */
+    private val monsterTypeProvider: (String) -> MonsterType? = { null },
     /** `g_chat()` (chat.cpp) seam behind the channel handlers (game.cpp:4324-4441). */
     private val chatManager: ChatManager? = null,
     /** `Game::m_achievements` registry (game.hpp) behind [getAchievementById]/[getAchievementByName]. */
@@ -2164,6 +2176,12 @@ class Game(
      * index mirrors the tile the creature ended up on for the zone/registry
      * accessors.
      *
+     * A monster is registered with the injected [monsterHost] before the map
+     * placement so the `Monster::onCreatureAppear` fanout the map layer folds
+     * in (GameMap.kt) already reaches its pipeline; a rejected map placement
+     * unregisters again and keeps the host inert. The type comes from the
+     * injected [monsterTypeProvider] (`Monster::m_monsterType`, monster.hpp:363).
+     *
      * Parity gaps: `Creature::setID`, `Creature::addList` and
      * `Creature::updateCalculatedStepSpeed` (game.cpp:1512-1514) have no Kotlin
      * counterpart.
@@ -2185,7 +2203,15 @@ class Game(
             return false
         }
 
+        val monster = creature as? Monster
+        if (monster != null) {
+            monsterHost?.register(monster, monsterTypeProvider(monster.name))
+        }
+
         if (!map.placeCreature(pos, creature, extendedPos, forced, centerTile)) {
+            if (monster != null) {
+                monsterHost?.unregister(monster.id)
+            }
             return false
         }
         placedCreatures[creature] = creature.getTile() ?: centerTile
@@ -2250,7 +2276,10 @@ class Game(
      * (`Map::removeCreature` ports the game.cpp:1563-1593 block), the master
      * link is cleared, the zone transition and `Creature::setRemoved()` run,
      * the creature leaves the think buckets and every summon is removed first
-     * with `setSkillLoss(false)`.
+     * with `setSkillLoss(false)`. A monster's host entry is dropped after
+     * `Creature::setRemoved()` so its pending completions re-resolve to `null`
+     * and the bound hooks turn inert (AGENTS.md deferred-callback lifetime
+     * safety).
      *
      * Parity gaps: `Cylinder::postRemoveNotification`, `Creature::removeList`
      * and the team-finder logout cleanup (game.cpp:1599-1617) are not modeled.
@@ -2278,6 +2307,10 @@ class Game(
 
         creature.setRemoved()
         removeCreatureCheck(creature)
+
+        if (creature is Monster) {
+            monsterHost?.unregister(creature.id)
+        }
 
         for (summon in creature.getSummons().toList()) {
             summon.setSkillLoss(false)

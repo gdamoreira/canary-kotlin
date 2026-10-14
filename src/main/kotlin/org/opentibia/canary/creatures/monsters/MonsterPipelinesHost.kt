@@ -63,9 +63,11 @@ import java.lang.ref.WeakReference
  * - `Game.checkCreatures` (game.cpp:7719-7741): after `creature.onThink(...)`
  *   call `monsterHost.trySchedulePostThink(creature)`; non-monster creatures
  *   keep the `onAttacking`/`executeConditions` fallback.
- * - `Monster` placement/removal: `monsterHost.register(this, monsterType)` when
- *   a monster enters the world and `monsterHost.unregister(id)` when it is
- *   removed. `register` binds the creature-hook hosts
+ * - `Monster` placement/removal: wired by `Game.internalPlaceCreature`
+ *   (registers the placed monster, resolving `Monster::m_monsterType` through
+ *   its injected `monsterTypeProvider`) and `Game.removeCreature`
+ *   (`unregister(id)` after `Creature::setRemoved()`), so the deferred state
+ *   lives with the world lifecycle. `register` binds the creature-hook hosts
  *   (`onCreatureAppearHost`/`onRemoveCreatureHost`/`onCreatureMoveHost`), the
  *   `onExecuteAsyncTasksHost` body (monster.cpp:3972-3996), the shared
  *   [creatureAsyncTaskBuckets] (`Creature::enqueueAsyncTask`,
@@ -99,7 +101,10 @@ import java.lang.ref.WeakReference
  *   say/sound/turn senders. `Game.checkCreatureAttack` does not exist in this
  *   Canary revision; the attack entry is `Creature::checkCreatureAttack`
  *   (creature.cpp:174-186), bound by `register` and scheduled through
- *   [dispatcher] when present.
+ *   [dispatcher] when present. `Game` resolves the placed monster's
+ *   `MonsterType` through its injected `monsterTypeProvider`
+ *   (`g_monsters().getMonsterType`), so the composition root injects the
+ *   `Monsters` registry there.
  * - The creature async buckets, the post-think queue lane hops, the lateness
  *   observations and the `Creature::safeCall` continuation all observe through
  *   the attached [GameDispatcher] when one is reachable; the embedded/test
