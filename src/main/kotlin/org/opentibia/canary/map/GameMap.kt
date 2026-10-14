@@ -2,6 +2,7 @@ package org.opentibia.canary.map
 
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.FindPathParams
+import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.spawns.SpawnsMonster
 import org.opentibia.canary.creatures.spawns.SpawnsNpc
 import org.opentibia.canary.game.CylinderFlags
@@ -14,6 +15,8 @@ import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.game.zones.Zone
 import org.opentibia.canary.game.zones.Zones
 import org.opentibia.canary.items.ItemProperty
+import org.opentibia.canary.map.cache.MapCache
+import org.opentibia.canary.map.cache.MapSector as CacheMapSector
 import org.opentibia.canary.map.house.Houses
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import kotlin.math.abs
@@ -21,16 +24,25 @@ import kotlin.math.abs
 /**
  * Port of `class Map` (src/map/map.hpp:33-202, src/map/map.cpp).
  *
- * The spatial storage (sectors, tiles) is ported; every method whose C++
- * body reaches a singleton (`g_game()`, `g_dispatcher()`, spectators, item
- * types) keeps that reach behind a documented seam or a PARITY GAP.
+ * Like the C++ `class Map final : public MapCache`, the port extends
+ * [MapCache] and inherits its 16x16 `MapSector` registry: every tile creation
+ * resolves `getBestMapSector` (`MapCache::setBasicTile`, mapcache.cpp:397-404)
+ * so the spectator sector lists and `sectorS`/`sectorE` viewport links are
+ * available to [Spectators] through [getMapSector]. The spatial storage
+ * (tiles, sectors) is ported; every method whose C++ body reaches a singleton
+ * (`g_game()`, `g_dispatcher()`, spectators, item types) keeps that reach
+ * behind a documented seam or a PARITY GAP.
  */
 class GameMap(
     val houses: Houses = Houses(),
     /** `Map::towns` (src/map/map.hpp:168). */
     val towns: Towns = Towns(),
     val zones: Zones = Zones(),
-) {
+) : MapCache(houses = houses, zones = { position -> zones.getZones(position) }), SpectatorMapAccess {
+
+    /** `MapCache::getMapSector` (src/map/mapcache.hpp:174-182); also the [SpectatorMapAccess] seam. */
+    override fun getMapSector(x: Int, y: Int): CacheMapSector? = super.getMapSector(x, y)
+
     /** `Map::spawnsMonster` (`src/map/map.hpp:178`), loaded by `IOMap::loadMonsters`. */
     var spawnsMonster: SpawnsMonster = SpawnsMonster()
 
@@ -80,6 +92,11 @@ class GameMap(
     /** `IOMapSerialize::saveHouseItems` (src/io/iomapserialize.cpp:82-92) seam. */
     var saveHouseItems: (() -> Boolean)? = null
 
+    // Kotlin-only 32x32 tile chunking (`MapGrid.kt`). Canary stores tiles on
+    // the 16x16 `MapSector` floors; the port keeps the pre-existing tile
+    // storage and maintains the Canary sectors alongside for the spectator
+    // lists and viewport links (PARITY GAP: `getTile`/`getOrCreateTile` do not
+    // read through `Floor`).
     // Sector key: (z.toLong() shl 32) or ((sectorX.toLong() and 0xFFFF) shl 16) or (sectorY.toLong() and 0xFFFF)
     private val sectors = mutableMapOf<Long, MapSector>()
 
@@ -88,6 +105,10 @@ class GameMap(
     }
 
     fun getOrCreateTile(position: Position): Tile {
+        // `MapCache::setBasicTile` (mapcache.cpp:397-404): materializing a tile
+        // creates and links its 16x16 spectator sector.
+        getBestMapSector(position.x, position.y)
+
         val sx = position.x shr 5
         val sy = position.y shr 5
         val key = getSectorKey(sx, sy, position.z)
@@ -210,9 +231,23 @@ class GameMap(
             val result = tile.queryDestination(0, creature, null, 0)
             result.cylinder?.internalAddThing(creature)
 
-            // `getMapSector(dest.x, dest.y)->addCreature(creature)` (map.cpp:674)
-            // is a PARITY GAP: the Kotlin MapSector does not model the C++
-            // creature/player/monster/npc lists yet.
+            if (creature != null) {
+                // `getMapSector(dest.x, dest.y)->addCreature(creature)` (map.cpp:674).
+                val dest = result.cylinder?.position ?: tile.position
+                val destSector = getMapSector(dest.x, dest.y) ?: getBestMapSector(dest.x, dest.y)
+                destSector.addCreature(creature)
+
+                // `Game::placeCreature` spectator fanout (game.cpp:1532-1541).
+                // C++ splits the appear send between `Game::placeCreature` and
+                // `Map::placeCreature`; the port folds the fanout into the map
+                // layer because `Game.kt` is outside this work's ownership. The
+                // `hasPlayerSpectators`/`addCreatureCheck`/`Creature::onPlacedCreature`
+                // tail stays with `Game.placeCreature` (Game.kt:1371).
+                for (spectator in Spectators(this).find<Creature>(creature.position, true)) {
+                    (spectator as? Player)?.sendCreatureAppear(creature, creature.position, true)
+                    spectator.onCreatureAppear(creature, true)
+                }
+            }
         }
         return true
     }
@@ -241,15 +276,54 @@ class GameMap(
 
         val teleport = forceTeleport || newTile.ground == null || !areInRange(oldPos, newPos, 1, 1, 0)
 
-        // `Spectators spectators; find<Creature>(...)` plus the player
-        // sendCreatureMove/onCreatureMove fanout (map.cpp:706-747, 778-791) are
-        // PARITY GAPS owned by the spectators wave.
+        // `Spectators spectators; find<Creature>(...)` (map.cpp:706-722). The
+        // neighbouring-step query widens the leading viewport edge; teleports
+        // merge the queries at both endpoints. The typed `find` returns the
+        // snapshot by value (Spectators.snapshot), so every call rebinds.
+        var spectators = Spectators(this)
+        if (!teleport && oldPos.z == newPos.z) {
+            var minRangeX = Creature.MAP_MAX_VIEW_PORT_X
+            var maxRangeX = Creature.MAP_MAX_VIEW_PORT_X
+            var minRangeY = Creature.MAP_MAX_VIEW_PORT_Y
+            var maxRangeY = Creature.MAP_MAX_VIEW_PORT_Y
+
+            if (oldPos.y > newPos.y) {
+                ++minRangeY
+            } else if (oldPos.y < newPos.y) {
+                ++maxRangeY
+            }
+
+            if (oldPos.x < newPos.x) {
+                ++maxRangeX
+            } else if (oldPos.x > newPos.x) {
+                ++minRangeX
+            }
+
+            spectators = spectators.find<Creature>(oldPos, true, minRangeX, maxRangeX, minRangeY, maxRangeY, false)
+        } else {
+            spectators = spectators.find<Creature>(oldPos, true, 0, 0, 0, 0, false)
+            spectators = spectators.find<Creature>(newPos, true, 0, 0, 0, 0, false)
+        }
+
+        val playerSpectators = spectators.data().filterIsInstance<Player>()
+        val oldStackPosVector = playerSpectators.map { player ->
+            if (player.canSeeCreature(creature)) {
+                oldTile.getClientIndexOfCreature(player, creature)
+            } else {
+                -1
+            }
+        }
 
         // remove the creature
         oldTile.removeThing(creature, 0)
 
-        // Switch the node ownership (map.cpp:752-759) is a PARITY GAP: the Kotlin
-        // MapSector does not model the C++ creature lists.
+        // Switch the node ownership (map.cpp:752-759)
+        val oldSector = getMapSector(oldPos.x, oldPos.y)
+        val newSector = getMapSector(newPos.x, newPos.y)
+        if (oldSector !== newSector) {
+            oldSector?.removeCreature(creature)
+            newSector?.addCreature(creature)
+        }
 
         // add the creature
         newTile.addThing(creature)
@@ -268,6 +342,27 @@ class GameMap(
             }
         }
 
+        // send to client (map.cpp:778-786): the new stack position is resolved
+        // after the tile insertion, the old one was captured before removal.
+        var stackPosIndex = 0
+        for (player in playerSpectators) {
+            val stackpos = oldStackPosVector[stackPosIndex++]
+            if (stackpos != -1) {
+                player.sendCreatureMove(
+                    creature,
+                    newPos,
+                    newTile.getClientIndexOfCreature(player, creature),
+                    oldPos,
+                    stackpos,
+                    teleport,
+                )
+            }
+        }
+
+        // `spectator->onCreatureMove(creature, newTile, newPos, oldTile, oldPos, teleport)`
+        // (map.cpp:788-790) is a PARITY GAP: `Creature::onCreatureMove`
+        // (creature.cpp:501) is not ported (Creature.kt out of scope).
+
         // event method
         val events = {
             oldTile.postRemoveNotification(creature, newTile, 0)
@@ -278,6 +373,53 @@ class GameMap(
         scheduleMoveEvents(events)
 
         // The forceTeleport player magic effects (map.cpp:808-813) are a PARITY GAP.
+    }
+
+    /**
+     * Port of the tile/spectator block of `Game::removeCreature`
+     * (src/game/game.cpp:1561-1593): resolves the tile spectators through the
+     * 16x16 sector lists with `multifloor`, captures every player spectator's
+     * client stack position, removes the creature from the tile (which drops
+     * the sector entry through `Tile::removeCreature`, tile.cpp:1434-1441),
+     * fans `Player::sendRemoveTileThing` out to those spectators and
+     * `Creature::onRemoveCreature` to all of them.
+     *
+     * PARITY GAP: the creature-state tail of `Game::removeCreature`
+     * (game.cpp:1595-1617: master clearing, `afterCreatureZoneChange`,
+     * `Creature::setRemoved`, `removeCreatureCheck` and the summon recursion)
+     * stays with the `Game` facade (`Game.removeCreature`, Game.kt:1405).
+     */
+    fun removeCreature(creature: Creature?, isLogout: Boolean = true): Boolean {
+        if (creature == null || creature.isRemoved()) {
+            return false
+        }
+
+        val tile = creature.getTile()
+        if (tile != null) {
+            val spectators = Spectators(this).find<Creature>(tile.position, true)
+            val playerSpectators = spectators.data().filterIsInstance<Player>()
+            val oldStackPosVector = playerSpectators.map { player ->
+                if (player.canSeeCreature(creature)) {
+                    tile.getClientIndexOfCreature(player, creature)
+                } else {
+                    -1
+                }
+            }
+
+            tile.removeCreature(creature)
+
+            // C++ sends unconditionally here, unlike the move fanout.
+            var stackPosIndex = 0
+            for (player in playerSpectators) {
+                player.sendRemoveTileThing(tile.position, oldStackPosVector[stackPosIndex++])
+            }
+
+            for (spectator in spectators) {
+                spectator.onRemoveCreature(creature, isLogout)
+            }
+        }
+
+        return true
     }
 
     /** `Map::canThrowObjectTo` (src/map/map.cpp:816-843). */

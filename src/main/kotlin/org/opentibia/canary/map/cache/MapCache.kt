@@ -17,6 +17,7 @@ import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.Items
 import org.opentibia.canary.items.containers.depot.DepotLocker
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.map.SpectatorSector
 import org.opentibia.canary.map.Tile
 import org.opentibia.canary.map.house.Houses
 
@@ -444,17 +445,13 @@ class Floor(private val z: Int) {
 }
 
 /**
- * Port of the cache-facing half of `class MapSector`
- * (src/map/utils/mapsector.hpp:88-154, src/map/utils/mapsector.cpp:18-47):
- * floors, revisions and the neighbour links `getBestMapSector` maintains.
- *
- * The creature/player/monster/npc lists and the spectator callbacks are
- * owned by the map-core port and are not modelled here (PARITY GAP).
+ * Port of `class MapSector` (src/map/utils/mapsector.hpp:88-154,
+ * src/map/utils/mapsector.cpp:18-102): floors, revisions, the neighbour links
+ * `getBestMapSector` maintains, and the creature/player/monster/npc lists
+ * inherited from [SpectatorSector] (`MapSector::creature_list` etc.,
+ * mapsector.hpp:136-142).
  */
-class MapSector {
-
-    internal var sectorS: MapSector? = null
-    internal var sectorE: MapSector? = null
+class MapSector : SpectatorSector() {
 
     private val floors: Array<Floor?> = arrayOfNulls(MAP_MAX_LAYERS)
     private val topologyRevisions: LongArray = LongArray(MAP_MAX_LAYERS) { 1L }
@@ -917,7 +914,7 @@ open class MapCache(
     }
 
     /** `MapCache::getMapSector` (mapcache.hpp:174-182). */
-    fun getMapSector(x: Int, y: Int): MapSector? =
+    open fun getMapSector(x: Int, y: Int): MapSector? =
         mapSectors[(x / SECTOR_SIZE) or ((y / SECTOR_SIZE) shl 16)]
 
     /**
