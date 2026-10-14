@@ -6,10 +6,20 @@ import io.netty.buffer.Unpooled
 import io.netty.channel.ChannelHandlerContext
 import io.netty.channel.SimpleChannelInboundHandler
 import org.opentibia.canary.account.AccountRepository
+import org.opentibia.canary.combat.condition.ConditionType
+import org.opentibia.canary.combat.condition.Skill
+import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.game.Game
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.game.zones.TileFlags
+import org.opentibia.canary.io.IOMarket
+import org.opentibia.canary.io.MarketEscrow
+import org.opentibia.canary.io.MarketEscrowItemType
+import org.opentibia.canary.io.MarketEscrowPlayer
+import org.opentibia.canary.items.Item
+import org.opentibia.canary.items.Items
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.ScriptingDispatch
 import org.opentibia.canary.map.GameMap
@@ -21,6 +31,12 @@ import org.opentibia.canary.network.crypto.XteaCipher
 import org.opentibia.canary.network.message.readTibiaString
 import org.opentibia.canary.network.message.writeTibiaString
 import org.opentibia.canary.persistence.PlayerPersistenceService
+import org.opentibia.canary.systems.imbuement.ImbuementAction
+import org.opentibia.canary.systems.imbuement.ImbuementEngine
+import org.opentibia.canary.systems.imbuement.ImbuementItem
+import org.opentibia.canary.systems.imbuement.ImbuementPlayer
+import org.opentibia.canary.systems.imbuement.Imbuements
+import org.opentibia.canary.systems.rewardchest.ReturnValue
 
 private val logger = KotlinLogging.logger {}
 
@@ -36,17 +52,67 @@ class GameHandler(
     private val persistenceService: PlayerPersistenceService? = null,
     private val onPlayerAppear: () -> Unit = {},
     private val onPlayerDisappear: () -> Unit = {},
+    /** `Item::items` registry (src/items/items.hpp:389) used by the market and imbuement compositions. */
+    private val itemTypes: Items? = null,
+    /** `IOMarket::getInstance()` (game.cpp:10297) shared by the market opcodes. */
+    private val ioMarket: IOMarket? = null,
+    /** `g_imbuements()` (imbuements.cpp:47) registry backing the composed `ImbuementEngine`. */
+    private val imbuements: Imbuements? = null,
     /**
      * `g_game()` seam shared by every game connection. [CanaryServer] injects its
      * single instance; a directly constructed handler falls back to a private
-     * instance over the same map/dispatcher.
+     * instance over the same map/dispatcher, composed with the injected item,
+     * market and imbuement services.
      */
-    val game: Game = Game(gameMap, dispatcher),
+    val game: Game = Game(
+        gameMap,
+        dispatcher,
+        itemTypes = itemTypes,
+        ioMarket = ioMarket,
+        imbuements = imbuements,
+    ),
 ) : SimpleChannelInboundHandler<ByteBuf>() {
 
     private var player: Player? = null
     private var xteaCipher: XteaCipher? = null
     private val scriptingDispatch = ScriptingDispatch(luaEnvironment, dispatcher)
+
+    /**
+     * Production `IOMarket` escrow over this handler's `Game`
+     * (`IOMarket::processExpiredOffers`, iomarket.cpp:155-232). The composition
+     * root builds the production `IOMarket` with it so expired sell offers reach
+     * the seller's inbox and expired buy offers credit the bank balance.
+     */
+    val marketEscrow: MarketEscrow = GameMarketEscrow(game, itemTypes)
+
+    init {
+        val imbuementEngine = imbuements?.let(::ImbuementEngine)
+        if (imbuementEngine != null) {
+            game.createScrollImbuement = { player, imbuement ->
+                imbuementEngine.createScrollImbuement(
+                    imbuement,
+                    ImbuementPlayerAdapter(game, player, itemTypes),
+                )
+            }
+            game.onApplyImbuement = { player, imbuement, item, slot ->
+                val adapter = ImbuementPlayerAdapter(game, player, itemTypes)
+                val view = ImbuementItem(item).also {
+                    it.parent = adapter
+                    it.holdingPlayer = adapter
+                }
+                imbuementEngine.onApplyImbuement(imbuement, view, slot, adapter)
+            }
+            game.onClearImbuement = { player, item, slot ->
+                val adapter = ImbuementPlayerAdapter(game, player, itemTypes)
+                val view = ImbuementItem(item).also {
+                    it.parent = adapter
+                    it.holdingPlayer = adapter
+                }
+                imbuementEngine.onClearImbuement(view, slot, adapter)
+            }
+            game.sendImbuementResult = { player, message -> player.sendTextMessage(message) }
+        }
+    }
 
     companion object {
         const val PACKET_SELF_APPEAR = 0x0A
@@ -219,6 +285,8 @@ class GameHandler(
                         dispatcher = dispatcher,
                         luaEnvironment = luaEnvironment,
                         game = game,
+                        ioMarket = ioMarket,
+                        itemTypes = itemTypes,
                     )
                 )
             } finally {
@@ -247,4 +315,204 @@ class GameHandler(
         out.writeTibiaString(message)
         ctx.writeAndFlush(out).addListener { ctx.close() }
     }
+}
+
+/**
+ * Production [MarketEscrow] over the live [Game]
+ * (`IOMarket::processExpiredOffers`, iomarket.cpp:155-232): resolve the offer
+ * owner through `Game::getPlayerByGUID`, deliver the escrowed item through the
+ * player inbox and credit the offer price through `Player::setBankBalance`.
+ *
+ * PARITY GAPS: the Kotlin `Player` carries no online flag (`isOffline` reports
+ * false) and no save-manager seam (`save` is inert); the inbox insertion uses
+ * `Container::addItem` because the port's `Game::internalAddItem` has no public
+ * `Cylinder` overload.
+ */
+class GameMarketEscrow(
+    private val game: Game,
+    private val itemTypes: Items? = null,
+) : MarketEscrow {
+
+    private class EscrowPlayerHandle(val player: Player) : MarketEscrowPlayer {
+        override val playerId: Long get() = player.getGUID()
+
+        /** PARITY GAP: the Kotlin `Player` has no online flag. */
+        override fun isOffline(): Boolean = false
+
+        /** PARITY GAP: no save-manager seam on the network host. */
+        override fun save() = Unit
+    }
+
+    /** `Item::items[itemId]` (iomarket.cpp:169); null mirrors `itemType.id == 0`. */
+    override fun getItemType(itemId: Int): MarketEscrowItemType? {
+        val itemType = itemTypes?.get(itemId) ?: return null
+        if (itemType.id == 0) {
+            return null
+        }
+        return MarketEscrowItemType(
+            id = itemType.id,
+            stackable = itemType.isStackable,
+            charges = itemType.charges,
+        )
+    }
+
+    /** `Game::getPlayerByGUID(guid, allowOffline)` (game.cpp:1419). */
+    override fun resolvePlayer(playerId: Long, allowOffline: Boolean): MarketEscrowPlayer? =
+        game.getPlayerByGUID(playerId, allowOffline)?.let(::EscrowPlayerHandle)
+
+    /** `Game::internalAddItem(player->getInbox(), item, INDEX_WHEREEVER, FLAG_NOLIMIT)`. */
+    override fun addItemToInbox(player: MarketEscrowPlayer, itemId: Int, count: Int, tier: Int): Boolean {
+        val target = (player as? EscrowPlayerHandle)?.player ?: return false
+        val inbox = target.inbox
+        if (inbox.capacity <= inbox.size()) {
+            return false
+        }
+
+        val item = Item(id = itemId, count = count, type = itemTypes?.get(itemId))
+        if (tier != 0) {
+            item.setTier(tier)
+        }
+        inbox.addItem(item)
+        return true
+    }
+
+    /** `Player::setBankBalance(player->getBankBalance() + amount)` (iomarket.cpp:226). */
+    override fun addBankBalance(player: MarketEscrowPlayer, amount: Long) {
+        val target = (player as? EscrowPlayerHandle)?.player ?: return
+        game.setBankBalance(target, game.getBankBalance(target) + amount)
+    }
+}
+
+/**
+ * [ImbuementPlayer] bridge over a live [Player] for the production composition:
+ * inventory/stash counts, `Game::removeMoney`, `Game::changeSpeed` and the
+ * player text/protocol seams.
+ *
+ * PARITY GAPS (recorded, not invented):
+ *  - `Player::setVarSkill` has no Kotlin counterpart (the domain models no
+ *    `varSkills` array), `Player::setBonusCapacity` has no `bonusCapacity`
+ *    field, and `Player::sendStats` has no player seam; those callbacks are
+ *    inert.
+ *  - `Player::getStorageValue` lives in the Lua operations layer, not on
+ *    `Player`, so the shrine gate reports -1 (unset).
+ *  - `Player::updateImbuementTrackerStats` has no protocol seam.
+ */
+internal class ImbuementPlayerAdapter(
+    private val game: Game,
+    private val player: Player,
+    private val itemTypes: Items?,
+) : ImbuementPlayer {
+
+    override fun getCapacity(): Int = player.capacity.toInt()
+
+    /** PARITY GAP: `Player` models no `varSkills` array. */
+    override fun setVarSkill(skill: Skill, value: Int) = Unit
+
+    override fun setVarStats(stat: Stat, value: Int) {
+        player.setVarStats(stat, value)
+    }
+
+    override fun changeSpeed(value: Int) {
+        game.changeSpeed(player, value)
+    }
+
+    /** PARITY GAP: `Player` models no `bonusCapacity` field. */
+    override fun setBonusCapacity(value: Int) = Unit
+
+    /** PARITY GAP: `Player::sendStats` has no player-level seam. */
+    override fun sendStats() = Unit
+
+    override fun sendSkills() {
+        player.sendSkills()
+    }
+
+    /** PARITY GAP: storage lives in the Lua operations layer, not on `Player`. */
+    override fun getStorageValue(key: Int): Int = -1
+
+    override fun sendImbuementResult(message: String) {
+        player.sendTextMessage(message)
+    }
+
+    override fun sendTextMessage(message: String) {
+        player.sendTextMessage(message)
+    }
+
+    override fun removeMoney(amount: Long): Boolean = game.removeMoney(player, amount, 0, true)
+
+    override fun getItemTypeCount(itemId: Int): Int = player.getItemCount(itemId).toInt()
+
+    override fun getStashItemCount(itemId: Int): Int = player.stash.getStashItemCount(itemId)
+
+    override fun getItemTypeName(itemId: Int): String = itemTypes?.get(itemId)?.name ?: ""
+
+    override fun removeItemOfType(itemId: Int, count: Int, subType: Int, ignoreEquipped: Boolean): Boolean {
+        var remaining = count
+        for (item in player.getInventoryItemsFromId(itemId, ignoreEquipped)) {
+            if (remaining <= 0) {
+                break
+            }
+            if (subType != -1 && item.getSubType() != subType) {
+                continue
+            }
+            val remove = minOf(remaining, item.getItemCount())
+            player.removeItem(item, remove)
+            remaining -= remove
+        }
+        return remaining <= 0
+    }
+
+    override fun withdrawItem(itemId: Int, amount: Int) {
+        player.stash.withdrawItem(itemId, amount)
+    }
+
+    override fun internalRemoveItem(item: ImbuementItem, count: Int): Boolean {
+        val realItem = item.sourceItem ?: return false
+        return game.internalRemoveItem(realItem, count) != ReturnValue.NOTPOSSIBLE
+    }
+
+    override fun removeItemCountById(itemId: Int, itemAmount: Int, removeFromStash: Boolean): Boolean {
+        var remaining = itemAmount
+        val inventoryItemCount = getItemTypeCount(itemId)
+        if (inventoryItemCount > 0) {
+            val removeFromInventory = minOf(inventoryItemCount, itemAmount)
+            if (!removeItemOfType(itemId, removeFromInventory, -1, false)) {
+                return false
+            }
+            remaining -= removeFromInventory
+        }
+
+        if (remaining <= 0) {
+            return true
+        }
+        if (!removeFromStash) {
+            return false
+        }
+
+        if (getStashItemCount(itemId) < remaining) {
+            return false
+        }
+        withdrawItem(itemId, remaining)
+        return true
+    }
+
+    override fun internalAddItem(item: ImbuementItem, count: Int): Boolean {
+        val itemType = itemTypes?.get(item.id)
+        if (itemType == null || itemType.id == 0) {
+            return false
+        }
+        val realItem = Item.create(item.id, count, itemTypes)
+        return player.addItem(realItem) == ReturnValue.NOERROR
+    }
+
+    override fun openImbuementWindow(action: ImbuementAction, item: ImbuementItem?) {
+        player.setImbuingItem(item?.sourceItem)
+    }
+
+    /** PARITY GAP: no imbuement-tracker protocol seam. */
+    override fun updateImbuementTrackerStats() = Unit
+
+    override fun isInProtectionZone(): Boolean =
+        game.map.getTile(player.position)?.hasFlag(TileFlags.TILESTATE_PROTECTIONZONE.value) == true
+
+    override fun hasConditionInFight(): Boolean = player.hasCondition(ConditionType.CONDITION_INFIGHT)
 }

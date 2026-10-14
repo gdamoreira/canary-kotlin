@@ -13,7 +13,6 @@ import org.opentibia.canary.creatures.players.components.AchievementPlayer
 import org.opentibia.canary.creatures.players.components.AchievementRegistry
 import org.opentibia.canary.creatures.players.components.InMemoryAchievementRegistry
 import org.opentibia.canary.creatures.players.components.PlayerAchievement
-import org.opentibia.canary.creatures.players.storages.Stash
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.lua.runtime.LuaEnvironment
@@ -2504,8 +2503,6 @@ class WorldPlayerBatch3Operations(
     private val spells: Spells? = null,
 ) : PlayerBatch3Operations {
 
-    private val stashes = mutableMapOf<Long, Stash>()
-
     private val achievements = mutableMapOf<Long, PlayerAchievement>()
 
     override fun itemIdByName(name: String): Int = itemIdsByName[name] ?: 0
@@ -2856,7 +2853,7 @@ class WorldPlayerBatch3Operations(
 
     override fun getStashItemCount(player: Any, itemId: Int): Long? {
         val target = player as? Player ?: return null
-        return stashOf(target).getStashItemCount(itemId).toLong()
+        return target.stash.getStashItemCount(itemId).toLong()
     }
 
     /** PARITY GAP: no special-container menu state; succeeds inertly. */
@@ -2869,7 +2866,7 @@ class WorldPlayerBatch3Operations(
 
     override fun getStashCount(player: Any): Int? {
         val target = player as? Player ?: return null
-        return stashOf(target).getStashItems().values.sum()
+        return target.stash.getStashItems().values.sum()
     }
 
     /** PARITY GAP: no stash-open protocol sink; succeeds inertly. */
@@ -2877,13 +2874,13 @@ class WorldPlayerBatch3Operations(
 
     override fun addItemStash(player: Any, itemId: Int, count: Int): Boolean? {
         val target = player as? Player ?: return null
-        stashOf(target).addItemOnStash(itemId, count)
+        target.stash.addItemOnStash(itemId, count)
         return true
     }
 
     override fun removeStashItem(player: Any, itemId: Int, count: Int): Boolean? {
         val target = player as? Player ?: return null
-        return stashOf(target).withdrawItem(itemId, count)
+        return target.stash.withdrawItem(itemId, count)
     }
 
     /** PARITY GAP: no paginated-container insertion engine; Canary's zero added count. */
@@ -3000,8 +2997,6 @@ class WorldPlayerBatch3Operations(
 
     /** PARITY GAP: no save-manager seam; reports success without persisting. */
     override fun save(player: Any): Boolean? = (player as? Player)?.let { true }
-
-    private fun stashOf(player: Player): Stash = stashes.getOrPut(player.id) { Stash() }
 
     private fun achievementsOf(player: Player): PlayerAchievement = achievements.getOrPut(player.id) {
         PlayerAchievement(
