@@ -93,6 +93,20 @@ cp config.lua.dist config.lua
 ./gradlew run --args="--config config.lua"
 ```
 
+**Built distribution:** `./gradlew installDist` bundles `config.lua.dist` and the
+`data`, `data-canary` and `data-otservbr-global` folders next to the executable
+(`build/install/canary-kotlin/`). The server resolves them from the executable's
+own folder, so it runs from any working directory:
+
+```bash
+./gradlew installDist
+cp build/install/canary-kotlin/config.lua.dist build/install/canary-kotlin/config.lua
+build/install/canary-kotlin/bin/canary-kotlin
+```
+
+Without `--config`, a `config.lua` next to the executable (or in the working
+directory for development runs) is picked up automatically.
+
 ### Running Locally (Zero-Configuration Mode)
 
 ```bash

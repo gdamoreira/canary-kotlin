@@ -601,8 +601,15 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 61: Executable-Relative Paths & Distribution Bundling (15:00 – 16:00)
+- **AppPaths** — `config.lua` and the `data`/`data-canary`/`data-otservbr-global` folders resolve from the executable home (`APP_HOME` or the JAR location); `installDist` bundles them so the distribution is self-contained (verified: 67 monster types + listener on 7172 running from `/tmp`).
+- **Lua require shim** — directory-prefixed `require(DATA_DIRECTORY .. ".lib.core.quests")` no longer breaks on dotted install paths.
+- **693 suites / 7648 tests, all green.**
+
+---
+
 ### Current Status
-- **Automated Tests**: **690 test suites / 7636 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **693 test suites / 7648 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/game-play-features.md`.
