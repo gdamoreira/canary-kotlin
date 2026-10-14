@@ -5,10 +5,11 @@ CREATE TABLE IF NOT EXISTS server_config (
     "value" VARCHAR(256) NOT NULL DEFAULT ''
 );
 
-MERGE INTO server_config (config, "value") KEY(config) VALUES 
-('db_version', '1'), 
-('motd_hash', ''), 
-('motd_num', '1'), 
+-- Portable seed (H2 and PostgreSQL): the table was just created, so a plain INSERT applies.
+INSERT INTO server_config (config, "value") VALUES
+('db_version', '1'),
+('motd_hash', ''),
+('motd_num', '1'),
 ('players_record', '0');
 
 -- Table structure accounts
