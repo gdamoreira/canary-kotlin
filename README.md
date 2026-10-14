@@ -69,6 +69,23 @@ It translates 15+ years of C++20 engine evolution into idiomatic, testable, and 
 ./gradlew build
 ```
 
+### Server Configuration (`config.lua.dist`)
+
+[`config.lua.dist`](config.lua.dist) is the upstream Canary configuration
+template, shipped verbatim. In upstream Canary you copy it to `config.lua` and
+the server executes it, reading globals such as `serverName`,
+`dataPackDirectory` or `mapDownloadUrl`.
+
+This port exposes the same key surface through `ConfigManager`:
+
+- `CANARY_*` environment variables, and
+- an optional `--config <properties>` file keyed by the `config.lua`
+  identifiers (for example `serverName = My Server`).
+
+Executing a Lua `config.lua` file at boot is **not wired yet** — the template
+ships for parity and reference, and `MapDownload` already reads the upstream
+`config.lua.dist` to discover `mapDownloadUrl`.
+
 ### Running Locally (Zero-Configuration Mode)
 
 ```bash
