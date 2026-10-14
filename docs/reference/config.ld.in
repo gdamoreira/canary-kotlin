@@ -1,0 +1,14 @@
+-- Adapted from canary/docs/config.ld.in.
+-- Upstream C++ LDoc/LuaLS configuration, kept under docs/reference/ for parity
+-- maintenance. It targets the upstream C++ engine at ../.projects/canary and is
+-- not consumed by the Kotlin/Gradle build.
+
+-- https://github.com/stevedonovan/LDoc/blob/master/doc/doc.md#fields-allowed-in-configld
+project='OTS'
+title='OTS documentation'
+description='OTS Lua Scripts Documentation'
+format='discount'
+file='@CMAKE_CURRENT_SOURCE_DIR@/data/'
+dir='@CMAKE_CURRENT_BINARY_DIR@/doc/scripts/'
+ext='html'
+backtick_references=false
