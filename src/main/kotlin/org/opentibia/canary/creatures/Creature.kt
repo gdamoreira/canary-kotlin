@@ -44,6 +44,7 @@ import org.opentibia.canary.game.QuickLootFilter_t
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.game.scheduling.barrierContinuationLane
 import org.opentibia.canary.game.zones.ZoneType
 import org.opentibia.canary.social.guild.Guild
 import org.opentibia.canary.social.guild.GuildRank
@@ -78,6 +79,7 @@ import org.opentibia.canary.spells.SpellBook
 import org.opentibia.canary.spells.Spells
 import org.opentibia.canary.spells.WorldType
 import org.opentibia.canary.utils.BatchUpdateActor
+import java.lang.ref.WeakReference
 import java.util.Collections
 import java.util.IdentityHashMap
 import kotlin.math.abs
@@ -642,12 +644,30 @@ abstract class Creature(
     }
 
     /**
-     * `Creature::safeCall` (`creature.cpp:2195-2217`) serial path: the
-     * dispatcher barrier branch (`creature.cpp:2196-2209`) is a lane concern of
-     * the eliminated `g_dispatcher()`; the port runs confined to the world lane
-     * (AGENTS.md 1.2).
+     * `Creature::safeCall` (`creature.cpp:2195-2217`). Inside a barrier-parallel
+     * dispatcher context the action hops to
+     * `barrierContinuationLane(context lane)` through `Dispatcher::addEvent`
+     * (creature.cpp:2196-2209); the deferred callback re-resolves the owner
+     * through a weak reference and drops the action once it was internally
+     * removed (AGENTS.md deferred-callback lifetime safety). Outside that
+     * context the action runs immediately, and a removed creature refuses it
+     * (creature.cpp:2210-2216).
      */
     fun safeCall(action: () -> Unit): Boolean {
+        val dispatcher = asyncTaskDispatcher
+        if (dispatcher != null) {
+            val context = dispatcher.context()
+            if (context.isBarrierParallel()) {
+                val weakSelf = WeakReference(this)
+                return dispatcher.dispatch(barrierContinuationLane(context.lane), context.taskName) {
+                    val self = weakSelf.get() ?: return@dispatch
+                    if (!self.isRemoved()) {
+                        action()
+                    }
+                }
+            }
+        }
+
         if (isRemoved()) {
             return false
         }
