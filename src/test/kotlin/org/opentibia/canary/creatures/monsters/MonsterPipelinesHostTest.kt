@@ -1,5 +1,8 @@
 package org.opentibia.canary.creatures.monsters
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -8,6 +11,8 @@ import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.FlagAsyncClass_t
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.game.scheduling.DispatcherLane
+import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.scheduling.MonsterComputeConfig
 import org.opentibia.canary.game.scheduling.MonsterComputeService
 import org.opentibia.canary.map.Position
@@ -362,5 +367,70 @@ class MonsterPipelinesHostTest {
 
         assertThat(entry.pipeline.postThinkWaitingForTargetDecision).isFalse()
         assertThat(attackTicks).containsExactly(MonsterPipelinesHost.EVENT_CREATURE_THINK_INTERVAL)
+    }
+
+    // --- register bindings: async task dispatcher / execute-async hook ----------
+
+    @Test
+    fun `register binds the host dispatcher to the monster async hand-back`() {
+        val dispatcher = GameDispatcher()
+
+        host.dispatcher = dispatcher
+        host.unregister(7)
+        host.register(monster)
+
+        assertThat(monster.asyncTaskDispatcher).isSameAs(dispatcher)
+    }
+
+    @Test
+    fun `register hands the monster async batch to the dispatcher WorkerCompletion lane`() = runBlocking<Unit> {
+        val dispatcher = GameDispatcher()
+        dispatcher.start()
+        try {
+            val gate = CompletableDeferred<Unit>()
+            dispatcher.dispatch(DispatcherLane.WorkerCompletion) { gate.await() }
+            host.dispatcher = dispatcher
+            val routed = Monster(id = 9, name = "Rat", maxHealth = 100, health = 100, position = origin)
+            host.register(routed)
+            val done = CompletableDeferred<Unit>()
+
+            routed.addAsyncTask { done.complete(Unit) }
+
+            assertThat(done.isCompleted).isFalse()
+
+            gate.complete(Unit)
+            withTimeout(2_000) { done.await() }
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    @Test
+    fun `the monster execute async override drives the registered pipeline`() {
+        monster.setAsyncTaskFlag(FlagAsyncClass_t.OnThink, true)
+        host.trySchedulePostThink(monster)
+
+        monster.onExecuteAsyncTasks()
+
+        assertThat(attackTicks).containsExactly(MonsterPipelinesHost.EVENT_CREATURE_THINK_INTERVAL)
+        assertThat(conditionTicks).containsExactly(MonsterPipelinesHost.EVENT_CREATURE_THINK_INTERVAL)
+    }
+
+    @Test
+    fun `a stale owner cannot drive the replacement execute async body`() {
+        host.unregister(7)
+        val replacement = Monster(id = 7, name = "Rat", maxHealth = 100, health = 100, position = origin)
+        replacement.scheduleAsyncTaskBatch = { }
+        host.register(replacement)
+        val replacementEntry = host.entryOf(7)!!
+        replacementEntry.host.onAttacking = { attackTicks.add(it) }
+        replacementEntry.host.executeConditions = { conditionTicks.add(it) }
+        replacement.setAsyncTaskFlag(FlagAsyncClass_t.OnThink, true)
+        host.trySchedulePostThink(replacement)
+
+        monster.onExecuteAsyncTasks()
+
+        assertThat(attackTicks).isEmpty()
+        assertThat(conditionTicks).isEmpty()
     }
 }

@@ -1,5 +1,9 @@
 package org.opentibia.canary.creatures
 
+import org.opentibia.canary.combat.condition.Condition
+import org.opentibia.canary.creatures.players.PlayerActiveFoods
+import org.opentibia.canary.creatures.players.PlayerCombatBonusState
+import org.opentibia.canary.creatures.players.PlayerMessageBuffer
 import org.opentibia.canary.creatures.players.components.CyclopediaPlayer
 import org.opentibia.canary.creatures.players.components.InMemoryKV
 import org.opentibia.canary.creatures.players.components.KV
@@ -7,6 +11,10 @@ import org.opentibia.canary.creatures.players.components.PlayerAsyncTask
 import org.opentibia.canary.creatures.players.components.PlayerCyclopedia
 import org.opentibia.canary.creatures.players.components.RecentDeathEntry
 import org.opentibia.canary.creatures.players.components.RecentPvPKillEntry
+import org.opentibia.canary.creatures.players.getEquippedItems
+import org.opentibia.canary.items.Item
+import org.opentibia.canary.items.ItemAttribute
+import org.opentibia.canary.network.protocol.MessageClass
 import org.opentibia.canary.systems.bestiary.PlayerBestiaryState
 import org.opentibia.canary.systems.concoction.PlayerConcoctions
 import org.opentibia.canary.systems.dailyreward.PlayerDailyReward
@@ -24,6 +32,7 @@ import org.opentibia.canary.systems.offlinetraining.VocationRequirements
 import org.opentibia.canary.systems.prey.PlayerPreyState
 import org.opentibia.canary.systems.prey.PreyEngine
 import org.opentibia.canary.systems.proficiency.WeaponProficiencyData
+import org.opentibia.canary.systems.proficiency.WeaponProficiencyPerfectShotBonus
 import org.opentibia.canary.systems.rewardchest.RewardChest
 import org.opentibia.canary.systems.taskhunting.PlayerTaskHuntingState
 import org.opentibia.canary.systems.taskhunting.TaskHuntingEngine
@@ -50,6 +59,31 @@ import org.opentibia.canary.creatures.vocations.Vocations
  * Every dependency Canary resolves through a global (`Mounts::getInstance`,
  * `Familiars::getInstance`, `Vocations`, the account group) is injected here
  * with a default, per AGENTS.md 1.1.
+ *
+ * The remaining standalone `Player` state holders are composed here so routed
+ * opcodes/Lua bindings share the same instance as the `Player`:
+ * [combatBonuses] (`Player::cleavePercent`/`perfectShot` and the reflect
+ * queries), [activeFoods] (`Player::m_activeFoods`) and [messageBuffer]
+ * (`Player::MessageBufferCount`). Their `Player`-backed seams
+ * ([getEquippedItems], [cannotBeMuted], [addCondition], [sendTextMessage])
+ * default to the injected [wheelPlayer] view, which the `Player` always
+ * supplies as itself.
+ *
+ * CALL-SITE NEEDS (`Creature.kt:1629` constructs this holder per `Player` but
+ * has no config/game access; the production composition root does not exist
+ * yet):
+ *  - `Creature.kt`/the composition root must inject [maxMessageBuffer] from
+ *    `g_configManager().getNumber(MAX_MESSAGEBUFFER)` (configmanager.cpp:315);
+ *    the `{ 0 }` default keeps the mute pipeline inert.
+ *  - the composition root must share one [muteCountMap] per world, exactly like
+ *    Canary's `Player::muteCountMap` static (player.hpp:281), so the escalation
+ *    survives player relogs; the per-holder default resets it per `Player`.
+ *  - `Game` must bind [transformItemCharges] to
+ *    `Game::transformItem(item, item->getID(), charges - 1)` (player.cpp:1065,
+ *    7588, 7697, 7718) and the weapon-proficiency engine must bind
+ *    [perfectShotBonus] to `WeaponProficiency::getPerfectShotBonus`
+ *    (weapon_proficiency.cpp:1201); the base reflect arrays stay `{ 0 }` until
+ *    the unported `Creature` arrays exist.
  */
 class PlayerFeatures(
     /** `Player::getGUID()`, used to scope forge-history persistence. */
@@ -95,6 +129,38 @@ class PlayerFeatures(
      * when the holder is constructed without a player (tooling/tests).
      */
     private val cyclopediaPlayer: CyclopediaPlayer? = null,
+    /**
+     * `Player::getEquippedItems()` (player.cpp:5949) seam of [combatBonuses];
+     * defaults to the injected [wheelPlayer] inventory.
+     */
+    private val getEquippedItems: () -> List<Item> = { wheelPlayer?.getEquippedItems() ?: emptyList() },
+    /**
+     * `Item::getCharges()` (src/items/item.hpp:107) seam of [combatBonuses];
+     * defaults to the port's `ItemAttribute.CHARGES` backing store.
+     */
+    private val getCharges: (Item) -> Int = { item ->
+        (item.getAttribute(ItemAttribute.CHARGES) as? Number)?.toInt() ?: 0
+    },
+    /** `g_game().transformItem(item, item->getID(), charges - 1)` seam of [combatBonuses]. */
+    private val transformItemCharges: (Item) -> Unit = {},
+    /** `WeaponProficiency::getPerfectShotBonus()` (weapon_proficiency.cpp:1201) seam of [combatBonuses]. */
+    private val perfectShotBonus: () -> WeaponProficiencyPerfectShotBonus? = { null },
+    /** `Creature::reflectPercent[combatTypeToIndex(combat)]` (creature.hpp:911) seam of [combatBonuses]. */
+    private val baseReflectPercent: (Int) -> Double = { 0.0 },
+    /** `Creature::reflectFlat[combatTypeToIndex(combat)]` (creature.hpp:912) seam of [combatBonuses]. */
+    private val baseReflectFlat: (Int) -> Int = { 0 },
+    /** `g_configManager().getNumber(MAX_MESSAGEBUFFER)` (configmanager.cpp:315) seam of [messageBuffer]. */
+    private val maxMessageBuffer: () -> Int = { 0 },
+    /** `Player::hasFlag(PlayerFlags_t::CannotBeMuted)` seam of [messageBuffer]. */
+    private val cannotBeMuted: () -> Boolean = { wheelPlayer?.hasFlag(PlayerFlags_t.CannotBeMuted) ?: false },
+    /** `Player::addCondition(condition)` (player.cpp:3537) seam of [messageBuffer]. */
+    private val addCondition: (Condition) -> Unit = { condition -> wheelPlayer?.addCondition(condition) },
+    /** `Player::sendTextMessage(MESSAGE_FAILURE, ...)` (player.cpp:3541) seam of [messageBuffer]. */
+    private val sendTextMessage: (MessageClass, String) -> Unit = { type, text ->
+        wheelPlayer?.sendTextMessageTyped(type, text)
+    },
+    /** `Player::muteCountMap` (player.hpp:281) shared per world; see the call-site note. */
+    private val muteCountMap: MutableMap<Long, Int> = mutableMapOf(),
 ) {
     /** `PlayerWheel m_wheelPlayer` (player.hpp:1959); accessor `wheel()`. */
     val wheel: PlayerWheel by lazy(LazyThreadSafetyMode.NONE) {
@@ -178,6 +244,35 @@ class PlayerFeatures(
      * into this holder (see PARITY GAPS).
      */
     val weaponProficiencies: MutableMap<Int, WeaponProficiencyData> = linkedMapOf()
+
+    /**
+     * `Player::cleavePercent`/`perfectShot` and the equipped-item reflect
+     * queries (player.cpp:1051-1069, 7560-7600, 7683-7723) over [getEquippedItems].
+     */
+    val combatBonuses: PlayerCombatBonusState = PlayerCombatBonusState(
+        getEquippedItems = getEquippedItems,
+        getCharges = getCharges,
+        transformItemCharges = transformItemCharges,
+        perfectShotBonus = perfectShotBonus,
+        baseReflectPercent = baseReflectPercent,
+        baseReflectFlat = baseReflectFlat,
+    )
+
+    /** `Player::m_activeFoods` (player.hpp:1677) food-duration state. */
+    val activeFoods: PlayerActiveFoods = PlayerActiveFoods()
+
+    /**
+     * `Player::MessageBufferCount` chat anti-spam state (player.hpp:1804,
+     * player.cpp:3508-3543).
+     */
+    val messageBuffer: PlayerMessageBuffer = PlayerMessageBuffer(
+        maxMessageBuffer = maxMessageBuffer,
+        cannotBeMuted = cannotBeMuted,
+        guid = { playerId },
+        addCondition = addCondition,
+        sendTextMessage = sendTextMessage,
+        muteCountMap = muteCountMap,
+    )
 }
 
 /**
