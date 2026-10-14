@@ -20,7 +20,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | Inbound `ProtocolGame` opcodes | 141 active (148 cases − 7 commented-out) | 141 decoded | **100%** | ~46/141 (**~33%**) fully applied; the rest decode + WorldCommit confinement boundary (engine state machine unapplied) |
 | Outbound `ProtocolGame` senders | 187 `ProtocolGame::send*` | 187 ported + wired | **100%** | wave 45 added the `ProtocolSink` and wired creature/item/container/stats state changes to frames |
 | Lua bindings (`src/lua/functions/*`) | 1,961 registrations (1,246 methods + 34 meta + 673 enums + 8 classes) | 1,246 methods + ~1,300 enums | **100%** methods | remaining: a few `SOUND_EFFECT_TYPE_*` names; `luascript.cpp` sandboxing partial |
-| `Player` methods (`player.cpp`) | 821 `Player::` methods | 754 functions in `creatures/players/**` | **~92%** raw count | +14 wave 52, +7 wave 53 (loot message, market leave, party icons, prey/task data, tile item/creature sends); remainder = 38 `send*` seams each with a writer counterpart + 4 composition items |
+| `Player` methods (`player.cpp`) | 821 `Player::` methods | 754 functions in `creatures/players/**` | **~92%** raw count | wave 54 bound all 38 `send*` seams via `PlayerSendSink`; remainder = Lua/client-transport wiring + a few composition accessors |
 | Monster engine (`monster.cpp`, 4,014 lines) | 198 unique `Monster::` methods | 89 name-matched + async pipelines + host + type state + barrier buckets | **~85%** | wave 51: barrier-parallel creature async buckets, budget/requeue/promotion/rollback |
 | Map engine (`map.cpp`) | — | — | **~85%** | sight/`canWalkTo`/pathing/caches/spectators/houses/towns (wave 38) |
 | Persistence (`iologindata*`, `iomapserialize`) | — | — | **~80%** | 24/24 iologindata, 10/10 iomapserialize, market/prey/bestiary/bosstiary/guild/storage (V10–V14) |
@@ -242,12 +242,12 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 ## 3. Highest-Impact Gaps (ranked, verified)
 
-**The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Remaining work is seam binding/composition:
+**The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Remaining work is transport/composition wiring:
 
-1. **`send*` seam binding** — 38 `Player::send*` methods are real logic only in the protocol layer; each has a writer counterpart (list in `PlayerSendState` report). Bind the remaining call sites as features need them.
-2. **Composition details** — `ServerBootstrap` config/buckets into `CanaryServer`; `MonsterPipelinesHost` production composition; `IOLoginData` `depotChests` persistence walk; `savePlayerGuard` shared transaction at the root.
-3. **Component accessors** — `achiev()`, `animusMastery()` component composition into `Player`/`PlayerFeatures`.
-4. **Monster async** — `MonsterAsyncPipelines` private `safeCall` continuation hop; host lateness → `observeInternalWork`.
+1. **Live transport** — install `PlayerSendSink` in `GameHandler` (the base `NettyProtocolSink` lacks the 38 player senders).
+2. **Monster registration** — `Game.internalPlaceCreature`/`removeCreature` must call `monsterHost.register/unregister` (+`monsterTypeProvider`) so production pipelines activate.
+3. **Login load** — `GameHandler` still creates a stub `Player`; wire `IOLoginData.loadPlayerById` into login.
+4. **Lua delegation** — Lua bindings keep duplicate per-player achievement/animus state instead of the composed components.
 
 ---
 

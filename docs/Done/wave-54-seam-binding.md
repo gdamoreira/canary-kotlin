@@ -27,3 +27,7 @@
 ## Post-wave (§6)
 
 Update §1–§3, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+
+## Completion
+
+Completed: send-seam binding (38/38), composition root 2, component accessors (achievement/animusMastery), monster async final. 663 suites / 7424 tests.
