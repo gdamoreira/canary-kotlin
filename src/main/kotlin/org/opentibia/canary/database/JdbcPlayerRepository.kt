@@ -3,22 +3,40 @@ package org.opentibia.canary.database
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerPronoun_t
 import org.opentibia.canary.creatures.players.components.PlayerSex_t
+import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.persistence.PlayerStorage
 import java.sql.ResultSet
 import javax.sql.DataSource
 
 /**
+ * One persisted `skills_t` slot of [PlayerRecord], mirroring the
+ * `skill_<skill>` / `skill_<skill>_tries` column pair `IOLoginDataLoad::loadPlayerSkill`
+ * (src/io/functions/iologindata_load_player.cpp:344-369) reads and
+ * `IOLoginDataSave::savePlayerFirst` (iologindata_save_player.cpp:325-372)
+ * writes.
+ */
+data class PlayerSkillRecord(
+    val level: Int,
+    val tries: Long,
+)
+
+/**
  * Persisted player row, mirroring the subset of the `players` row that the
- * Kotlin `Player` can hold after the V10 `pronoun`/`balance`/`blessingsN`
- * columns. Read by `IOLoginData::loadPlayerById` / `loadPlayerByName`
- * (src/io/iologindata.cpp:81-93) into `IOLoginDataLoad::loadPlayerBasicInfo` /
- * `loadPlayerExperience` / `loadPlayerBlessings`
- * (src/io/functions/iologindata_load_player.cpp:121-255).
+ * Kotlin `Player` can hold after the V10 `pronoun`/`balance`/`blessingsN` and
+ * V18 `skill_<skill>[_tries]` columns. Read by `IOLoginData::loadPlayerById` /
+ * `loadPlayerByName` (src/io/iologindata.cpp:81-93) into
+ * `IOLoginDataLoad::loadPlayerBasicInfo` / `loadPlayerExperience` /
+ * `loadPlayerBlessings` / `loadPlayerSkill`
+ * (src/io/functions/iologindata_load_player.cpp:121-369).
  *
  * [capacity] is the Canary `Player::capacity` value: the C++ loader multiplies
  * the persisted `cap` column by 100 (iologindata_load_player.cpp:153) and the
  * saver divides it back (iologindata_save_player.cpp:268).
+ *
+ * [skills] is ordered by the Canary `skills_t` value (`SKILL_FIST` first,
+ * `SKILL_MANA_LEECH_AMOUNT` last, creatures_definitions.hpp:466-487); missing
+ * rows default to the `players` column defaults (10/0 for the combat skills).
  */
 data class PlayerRecord(
     val id: Long,
@@ -42,6 +60,7 @@ data class PlayerRecord(
     val balance: Long,
     val deletion: Long,
     val blessings: List<Int>,
+    val skills: List<PlayerSkillRecord> = emptyList(),
 )
 
 /**
@@ -109,6 +128,7 @@ class JdbcPlayerRepository(
     }
 
     override fun savePlayerRecord(player: Player): Boolean {
+        val skillColumns = SKILL_COLUMNS.joinToString("") { ", $it = ?, ${it}_tries = ?" }
         val sql = """
             UPDATE players SET
                 name = ?, level = ?, vocation = ?, health = ?, healthmax = ?,
@@ -116,6 +136,7 @@ class JdbcPlayerRepository(
                 posx = ?, posy = ?, posz = ?, sex = ?, pronoun = ?,
                 blessings1 = ?, blessings2 = ?, blessings3 = ?, blessings4 = ?,
                 blessings5 = ?, blessings6 = ?, blessings7 = ?, blessings8 = ?
+                $skillColumns
             WHERE id = ?
         """.trimIndent()
 
@@ -139,7 +160,16 @@ class JdbcPlayerRepository(
                 for (index in 1..8) {
                     stmt.setInt(15 + index, player.getBlessingCount(index))
                 }
-                stmt.setLong(24, player.id)
+
+                // `IOLoginDataSave::savePlayerFirst` writes every `skills_t`
+                // slot as (level, tries) (iologindata_save_player.cpp:325-372).
+                var parameter = 24
+                for (skill in skills_t.FIRST..skills_t.LAST) {
+                    val slot = skills_t.fromValue(skill) ?: continue
+                    stmt.setInt(parameter++, player.getBaseSkill(slot))
+                    stmt.setLong(parameter++, player.getSkillTries(slot))
+                }
+                stmt.setLong(parameter, player.id)
                 return stmt.executeUpdate() > 0
             }
         }
@@ -261,6 +291,7 @@ class JdbcPlayerRepository(
         balance = rs.getLong("balance"),
         deletion = rs.getLong("deletion"),
         blessings = (1..8).map { rs.getInt("blessings$it") },
+        skills = SKILL_COLUMNS.map { PlayerSkillRecord(rs.getInt(it), rs.getLong("${it}_tries")) },
     )
 
     private fun toPlayer(record: PlayerRecord): Player {
@@ -292,11 +323,41 @@ class JdbcPlayerRepository(
     }
 
     private companion object {
+        /**
+         * The persisted `skills_t` column bases in Canary's enum order
+         * (creatures_definitions.hpp:466-487): `SKILL_FIST .. SKILL_MANA_LEECH_AMOUNT`.
+         */
+        val SKILL_COLUMNS: List<String> = listOf(
+            "skill_fist",
+            "skill_club",
+            "skill_sword",
+            "skill_axe",
+            "skill_dist",
+            "skill_shielding",
+            "skill_fishing",
+            "skill_critical_hit_chance",
+            "skill_critical_hit_damage",
+            "skill_life_leech_chance",
+            "skill_life_leech_amount",
+            "skill_mana_leech_chance",
+            "skill_mana_leech_amount",
+        )
+
         const val RECORD_COLUMNS = """
             SELECT id, name, account_id, group_id, vocation, level, health, healthmax,
                    mana, manamax, cap, speed, experience, posx, posy, posz, sex, pronoun,
                    balance, deletion, blessings1, blessings2, blessings3, blessings4,
-                   blessings5, blessings6, blessings7, blessings8
+                   blessings5, blessings6, blessings7, blessings8,
+                   skill_fist, skill_fist_tries, skill_club, skill_club_tries,
+                   skill_sword, skill_sword_tries, skill_axe, skill_axe_tries,
+                   skill_dist, skill_dist_tries, skill_shielding, skill_shielding_tries,
+                   skill_fishing, skill_fishing_tries,
+                   skill_critical_hit_chance, skill_critical_hit_chance_tries,
+                   skill_critical_hit_damage, skill_critical_hit_damage_tries,
+                   skill_life_leech_chance, skill_life_leech_chance_tries,
+                   skill_life_leech_amount, skill_life_leech_amount_tries,
+                   skill_mana_leech_chance, skill_mana_leech_chance_tries,
+                   skill_mana_leech_amount, skill_mana_leech_amount_tries
             FROM players
         """
     }

@@ -8,11 +8,13 @@ import org.opentibia.canary.creatures.OpenContainer
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerPronoun_t
 import org.opentibia.canary.creatures.Slots_t
+import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.creatures.players.components.PlayerSex_t
 import org.opentibia.canary.creatures.players.components.PlayerStorage
 import org.opentibia.canary.creatures.players.pvp.Kill
 import org.opentibia.canary.creatures.players.vip.VipEntry
 import org.opentibia.canary.creatures.players.vip.VipGroup
+import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.database.AccountLoginRepository
 import org.opentibia.canary.database.FeatureStateRepository
 import org.opentibia.canary.database.GuidNameEx
@@ -76,7 +78,13 @@ typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
  * items through [loadItems] (plus [loadPlayerInventoryItems],
  * [loadPlayerDepotItems] and [loadPlayerInboxItems]), rebuilding the
  * `Container` trees in Canary's descending-`sid` order and re-arming decay
- * and imbuement decay through the injected seams.
+ * and imbuement decay through the injected seams. [loadPlayer] drives the
+ * whole login load: the persisted row (vitals/experience/blessings), skills,
+ * kills, stash, inventory, depot chests, inbox, instant spell list and, when
+ * `disableIrrelevantInfo` is unset, the advanced feature state. The remaining
+ * Canary sub-loads (guild, outfit, skull, conditions, store inbox, reward
+ * chest, storage map, VIP, prey/task hunting) are not ported yet (PARITY
+ * GAPS).
  *
  * The live item walks are ported as [saveItems] plus [savePlayerItem(player)]
  * (inventory), [savePlayerDepotItems(player)], [saveRewardItems(player)] and
@@ -175,6 +183,15 @@ class IOLoginData(
      * pre-existing per-repository commits (PARITY GAP).
      */
     private val saveTransaction: PlayerSaveTransaction? = null,
+    /**
+     * `g_vocations()` lookup `IOLoginDataLoad::loadPlayerSkill` resolves through
+     * `Player::getVocation()` (iologindata_load_player.cpp:350-360). The port
+     * replaces the global with injection (AGENTS.md 1.1); the player's own
+     * [Player.vocations] registry takes precedence when set, otherwise this
+     * loader-owned registry is used. `null` keeps the C++ "no vocation" early
+     * return, leaving the persisted skills unapplied.
+     */
+    private val vocations: Vocations? = null,
 ) {
 
     private val featureLoader: PlayerFeatureStateLoader? by lazy(LazyThreadSafetyMode.NONE) {
@@ -255,6 +272,14 @@ class IOLoginData(
      * `IOLoginData::loadPlayer` (src/io/iologindata.cpp:95-185). The C++
      * `DBResult` parameter becomes the already-mapped [PlayerRecord]; `null`
      * mirrors the missing-result guard.
+     *
+     * The ported sub-loads keep Canary's order for the systems the Kotlin state
+     * models: basic info, experience, blessings, skills, kills, stash,
+     * inventory tree, depot chests, inbox, instant spell list and (when the
+     * login is not a preload) the advanced feature state. The guild, outfit,
+     * skull, conditions, store inbox, reward chest, storage map, VIP, prey and
+     * task-hunting loads are not ported yet (PARITY GAPS): each has no Kotlin
+     * state holder or composition seam.
      */
     fun loadPlayer(player: Player, record: PlayerRecord?, disableIrrelevantInfo: Boolean = false): Boolean {
         if (record == null) {
@@ -265,6 +290,12 @@ class IOLoginData(
         loadPlayerBasicInfo(player, record)
         loadPlayerExperience(player, record)
         loadPlayerBlessings(player, record)
+        loadPlayerSkill(player, record)
+        loadPlayerKills(player)
+        loadPlayerStashItems(player)
+        loadPlayerInventoryItems(player)
+        loadPlayerDepotItems(player)
+        loadPlayerInboxItems(player)
         loadPlayerInstantSpellList(player)
 
         if (!disableIrrelevantInfo) {
@@ -278,9 +309,40 @@ class IOLoginData(
      * `IOLoginData::loadOnlyDataForOnlinePlayer` (src/io/iologindata.cpp:187-193):
      * loads the advanced-feature state Canary keeps out of the login preload.
      * The forge/bosstiary/wheel systems already live in the feature repository.
+     * `IOLoginDataLoad::loadPlayerUpdateSystem`
+     * (iologindata_load_player.cpp:1031-1039) `updateInventoryWeight` is
+     * re-applied once the whole inventory tree is attached.
      */
     fun loadOnlyDataForOnlinePlayer(player: Player, record: PlayerRecord?) {
         featureLoader?.loadInto(player.id, player.features)
+        player.updateInventoryWeight()
+    }
+
+    /**
+     * `IOLoginDataLoad::loadPlayerSkill` (iologindata_load_player.cpp:344-369):
+     * the 13 persisted `skill_<skill>`/`skill_<skill>_tries` column pairs are
+     * written into `Player::skills` and the percent is recomputed from the
+     * vocation's required tries. Like the C++, a stored tries count above the
+     * next requirement is clamped to 0 and the load is inert when no vocation
+     * resolves for the player.
+     */
+    fun loadPlayerSkill(player: Player, record: PlayerRecord) {
+        val vocation = player.vocations?.getVocation(player.vocationId)
+            ?: vocations?.getVocation(player.vocationId)
+            ?: return
+
+        for (skill in skills_t.FIRST..skills_t.LAST) {
+            val stored = record.skills.getOrNull(skill) ?: continue
+            var skillTries = stored.tries
+            val nextSkillTries = vocation.getReqSkillTries(skill, stored.level + 1)
+            if (skillTries > nextSkillTries) {
+                skillTries = 0L
+            }
+
+            player.skills[skill].level = stored.level
+            player.skills[skill].tries = skillTries
+            player.skills[skill].percent = Player.getPercentLevel(skillTries, nextSkillTries)
+        }
     }
 
     /** `IOLoginData::savePlayerFirst` (src/io/functions/iologindata_save_player.cpp:191-372). */
@@ -693,6 +755,17 @@ class IOLoginData(
     }
 
     /**
+     * `IOLoginDataLoad::loadPlayerInventoryItems` live form
+     * (iologindata_load_player.cpp:543-632): the repository rows are read and
+     * materialized into the player through `Player::internalAddThing(pid, item)`
+     * exactly like the C++ `internalAddThing(pid, item)` call.
+     */
+    fun loadPlayerInventoryItems(player: Player): ItemsMap =
+        loadPlayerInventoryItems(player, loadPlayerInventoryItems(player.id)) { slot, item ->
+            player.internalAddThing(slot, item)
+        }
+
+    /**
      * `IOLoginDataLoad::loadPlayerInventoryItems`
      * (iologindata_load_player.cpp:543-632): items are attached in descending
      * `sid` order. A `pid` in `CONST_SLOT_FIRST..CONST_SLOT_LAST` is a direct
@@ -783,6 +856,18 @@ class IOLoginData(
     }
 
     /**
+     * `IOLoginDataLoad::loadPlayerDepotItems` live form
+     * (iologindata_load_player.cpp:663-708): the repository rows are read and
+     * materialized through `Player::getDepotChest(pid, true)`, the accessor
+     * `Player::getDepotLocker` (player.cpp:2024-2058) populates for boxes
+     * `1..DEPOT_BOXES`.
+     */
+    fun loadPlayerDepotItems(player: Player): ItemsMap =
+        loadPlayerDepotItems(player, loadPlayerDepotItems(player.id)) { depotId ->
+            player.getDepotChest(depotId, true)
+        }
+
+    /**
      * `IOLoginDataLoad::loadPlayerDepotItems`
      * (iologindata_load_player.cpp:663-708): `pid` below 100 targets the town
      * depot chest (`Player::getDepotChest(pid, true)`), any other `pid` is the
@@ -820,6 +905,15 @@ class IOLoginData(
 
         return depotItems
     }
+
+    /**
+     * `IOLoginDataLoad::loadPlayerInboxItems` live form
+     * (iologindata_load_player.cpp:710-758): the repository rows are read and
+     * materialized into `Player::inbox` (player.hpp:1760), the container the
+     * depot locker and the store inbox delivery share.
+     */
+    fun loadPlayerInboxItems(player: Player): ItemsMap =
+        loadPlayerInboxItems(player, loadPlayerInboxItems(player.id)) { player.inbox }
 
     /**
      * `IOLoginDataLoad::loadPlayerInboxItems`
@@ -887,9 +981,7 @@ class IOLoginData(
 
     /**
      * `IOLoginDataLoad::loadPlayerKills` (iologindata_load_player.cpp:371-392).
-     * Rows outside the `FRAG_TIME` window are dropped like the C++ loop; the
-     * `Player::updateLastKillTimeCache` side effect has no Kotlin sink yet
-     * (PARITY GAP).
+     * Rows outside the `FRAG_TIME` window are dropped like the C++ loop.
      */
     fun loadPlayerKills(playerId: Long, now: Long = getTimeNow(), fragTime: Long = FRAG_TIME_DEFAULT_SECONDS): List<Kill> {
         val result = mutableListOf<Kill>()
@@ -901,6 +993,32 @@ class IOLoginData(
         return result
     }
 
+    /**
+     * `IOLoginDataLoad::loadPlayerKills` live form
+     * (iologindata_load_player.cpp:371-392): the in-window rows replace
+     * `Player::unjustifiedKills` and `Player::updateLastKillTimeCache` receives
+     * the newest in-window kill time. Like the C++, both mutations are skipped
+     * when the repository holds no rows at all.
+     */
+    fun loadPlayerKills(player: Player, now: Long = getTimeNow(), fragTime: Long = FRAG_TIME_DEFAULT_SECONDS) {
+        val rows = kills.load(player.id)
+        if (rows.isEmpty()) {
+            return
+        }
+
+        var lastKillTime = 0L
+        val loadedKills = mutableListOf<Kill>()
+        for (kill in rows) {
+            if (now - kill.time <= fragTime) {
+                loadedKills.add(kill)
+                lastKillTime = maxOf(lastKillTime, kill.time)
+            }
+        }
+
+        player.pvpPlayer.setUnjustifiedKills(loadedKills)
+        player.pvpPlayer.updateLastKillTimeCache(lastKillTime)
+    }
+
     /** `IOLoginDataSave::savePlayerKills` (iologindata_save_player.cpp:447-476). */
     fun savePlayerKills(playerId: Long, killList: List<Kill>): Boolean {
         kills.save(playerId, killList)
@@ -909,6 +1027,32 @@ class IOLoginData(
 
     /** `IOLoginDataLoad::loadPlayerStashItems` (iologindata_load_player.cpp:444-470) row read. */
     fun loadPlayerStashItems(playerId: Long): Map<Int, Int> = stash.load(playerId)
+
+    /**
+     * `IOLoginDataLoad::loadPlayerStashItems` live form
+     * (iologindata_load_player.cpp:444-470): every persisted counter is
+     * re-added through `Player::addItemOnStash`, with Canary's decay and ware
+     * filters applied through the injected [itemTypes] registry. An unwired
+     * registry or unknown item id keeps the default `ItemType` behavior
+     * (no filter), exactly like the loader's `Item::items[itemId]` default.
+     */
+    fun loadPlayerStashItems(player: Player) {
+        for ((itemId, itemCount) in loadPlayerStashItems(player.id)) {
+            val itemType = itemTypes?.get(itemId)
+            if (itemType != null) {
+                if (itemType.decayTo >= 0 && itemType.decayTime > 0) {
+                    continue
+                }
+                if (itemType.wareId > 0 && itemType.wareId != itemType.id) {
+                    logger.warn {
+                        "[loadPlayerStashItems] - Item ID $itemId is a ware item, for player: ${player.name}, skipping."
+                    }
+                    continue
+                }
+            }
+            player.stash.addItemOnStash(itemId, itemCount)
+        }
+    }
 
     /** `IOLoginDataSave::savePlayerStash` (iologindata_save_player.cpp:374-414). */
     fun savePlayerStash(playerId: Long, stashItems: Map<Int, Int>): Boolean {

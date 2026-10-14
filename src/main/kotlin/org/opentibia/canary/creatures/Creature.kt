@@ -3366,8 +3366,15 @@ class Player(
     /** `Player::inventory[CONST_SLOT_LAST + 1]` (player.hpp:1763). */
     private val inventory = arrayOfNulls<Item>(Slots_t.LAST + 1)
 
-    /** `Player::skills[SKILL_LAST + 1]` (player.hpp:1711). */
-    private val skills = Array(skills_t.LAST + 1) { SkillState() }
+    /**
+     * `Player::skills[SKILL_LAST + 1]` (player.hpp:1711). Canary keeps the
+     * array private and grants `IOLoginDataLoad`, `IOLoginDataSave` and
+     * `PlayerFunctions` friend access (player.hpp:1939, 1948-1949); the port
+     * models that friendship as `internal` while the public readers
+     * [getBaseSkill]/[getSkillTries]/[getSkillPercent] stay the only source
+     * for other modules.
+     */
+    internal val skills = Array(skills_t.LAST + 1) { SkillState() }
 
     /** `Player::getInventoryItem` (player.cpp:337). */
     fun getInventoryItem(slot: Slots_t): Item? {
@@ -3375,6 +3382,29 @@ class Player(
             return null
         }
         return inventory[slot.value]
+    }
+
+    /**
+     * `Player::internalAddThing(index, thing)` (player.cpp:6082-6101): places
+     * a bare item into the given inventory slot with no capacity or protocol
+     * side effects, used by `IOLoginDataLoad::loadPlayerInventoryItems`
+     * (iologindata_load_player.cpp:582) and `loadPlayerStoreInbox`.
+     *
+     * PARITY GAP: the C++ body also parents the item to the player
+     * (`item->setParent(...)`); the port's `Player` does not implement the
+     * [Cylinder] contract yet, so the slot is filled without the parent link.
+     */
+    fun internalAddThing(index: Int, thing: Thing?) {
+        if (index < Slots_t.FIRST || index > Slots_t.LAST) {
+            return
+        }
+
+        val item = thing?.getItem() ?: return
+        if (inventory[index] != null) {
+            return
+        }
+
+        inventory[index] = item
     }
 
     /**
