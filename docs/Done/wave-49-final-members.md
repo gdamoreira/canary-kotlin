@@ -27,3 +27,7 @@
 ## Post-wave (§6)
 
 Update §1–§3, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+
+## Completion
+
+Completed: game.cpp final batch (7 members left), player depth 6 (672/821), composition final, login item materialization + ATTR_CUSTOM codec. 625 suites / 7029 tests.
