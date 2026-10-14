@@ -62,19 +62,21 @@ import java.lang.ref.WeakReference
  * - `Monster` placement/removal: `monsterHost.register(this, monsterType)` when
  *   a monster enters the world and `monsterHost.unregister(id)` when it is
  *   removed. `register` binds the creature-hook hosts
- *   (`onCreatureAppearHost`/`onRemoveCreatureHost`/`onCreatureMoveHost`) and the
- *   attack/extra-swing state (`hasExtraSwingProvider`, `checkCreatureAttack`)
- *   onto the `Monster`, so the existing virtual-hook overrides in
- *   `Creature.kt`/`Creature.Monster` need no call-site change.
- * - `Creature.kt` call-site needs (the overrides do not exist yet):
- *   `Monster.onExecuteAsyncTasks` must delegate to
- *   `monsterHost.onExecuteAsyncTasks(id)` (monster.cpp:3972-3996), and
- *   `Creature.scheduleAsyncTaskBatch` for each registered monster must route
- *   the batch to the dispatcher's `WorkerCompletion` lane instead of the
- *   inline default (creature.cpp:2048-2054). `Monster.updateCreatureWalk`
- *   (`goToFollowCreature`, creature.hpp:412-414) has no Monster override yet:
- *   the pathfinder flag hop (`executeAsyncTasks` → `goToFollowCreature`,
- *   creature.cpp:2162-2164) is the remaining call-site so the bound
+ *   (`onCreatureAppearHost`/`onRemoveCreatureHost`/`onCreatureMoveHost`), the
+ *   `onExecuteAsyncTasksHost` body (monster.cpp:3972-3996), the
+ *   `Creature.asyncTaskDispatcher` batch hand-back (creature.cpp:2048-2054) and
+ *   the attack/extra-swing state (`hasExtraSwingProvider`,
+ *   `checkCreatureAttack`) onto the `Monster`, so the existing virtual-hook
+ *   overrides in `Creature.kt`/`Creature.Monster` need no call-site change.
+ *   Attach [dispatcher] before registering; the hand-back binds its value at
+ *   registration time.
+ * - `Creature.kt`/`Game.kt` call-site needs:
+ *   `Game.internalPlaceCreature` must still bind `creature.asyncTaskDispatcher`
+ *   for every non-monster creature it places (Creature.kt:464-471).
+ *   `Monster.updateCreatureWalk` (`goToFollowCreature`, creature.hpp:412-414)
+ *   has no Monster override yet: the pathfinder flag hop
+ *   (`executeAsyncTasks` → `goToFollowCreature`, creature.cpp:2162-2164) is the
+ *   remaining call-site so the bound
  *   [MonsterAsyncHost.goToFollowCreatureAsync] can be reached from movement.
  * - The environment seams below are constructor-injected per AGENTS.md 1.1 and
  *   default to inert/inline values until the production composition root (no
@@ -272,16 +274,29 @@ class MonsterPipelinesHost(
 
     /**
      * `Monster::hasExtraSwing` (monster.cpp:2091-2093),
-     * `Creature::checkCreatureAttack` (creature.cpp:174-186) and the
-     * `Monster::onCreatureAppear`/`onRemoveCreature`/`onCreatureMove` tails
-     * (monster.cpp:348-477) bound onto the owning [Monster]. Every lambda
-     * re-resolves the entry by id so a removed/replaced owner becomes a no-op.
+     * `Creature::checkCreatureAttack` (creature.cpp:174-186),
+     * `Creature::enqueueAsyncTask`'s dispatcher hand-back
+     * (creature.cpp:2031-2055) and the
+     * `Monster::onCreatureAppear`/`onRemoveCreature`/`onCreatureMove`/
+     * `onExecuteAsyncTasks` tails (monster.cpp:348-477, 3972-3996) bound onto
+     * the owning [Monster]. Every lambda re-resolves the entry by id so a
+     * removed/replaced owner becomes a no-op; the batch hand-back carries its
+     * own generation guard (Creature.sendAsyncTasks).
+     *
+     * [dispatcher] must be attached before the monster is registered: the
+     * async-task hand-back is bound from its value at registration time, like
+     * the C++ composition root wiring `g_dispatcher()` before world monsters
+     * spawn.
      */
     private fun bindMonsterHooks(entry: Entry) {
         val monster = entry.monster
         val monsterId = monster.id
+        monster.asyncTaskDispatcher = dispatcher
         monster.hasExtraSwingProvider = { MonsterBehavior.hasExtraSwing(entry.behaviorState) }
         monster.checkCreatureAttack = { checkCreatureAttack(monster) }
+        monster.onExecuteAsyncTasksHost = {
+            if (isCurrentOwner(monsterId, monster)) onExecuteAsyncTasks(monsterId)
+        }
         monster.onCreatureAppearHost = { creature, isLogin ->
             if (isCurrentOwner(monsterId, monster)) onCreatureAppear(monsterId, creature, isLogin)
         }

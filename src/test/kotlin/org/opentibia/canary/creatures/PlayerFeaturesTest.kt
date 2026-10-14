@@ -2,7 +2,13 @@ package org.opentibia.canary.creatures
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.combat.condition.Condition
+import org.opentibia.canary.combat.condition.ConditionType
+import org.opentibia.canary.items.Abilities
+import org.opentibia.canary.items.Item
+import org.opentibia.canary.items.ItemType
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.network.protocol.MessageClass
 import org.opentibia.canary.systems.concoction.ConcoctionType
 import org.opentibia.canary.systems.dailyreward.DailyRewardStatus
 import org.opentibia.canary.systems.forge.ForgeHistory
@@ -90,5 +96,86 @@ class PlayerFeaturesTest {
     fun `existing positional player construction still compiles and exposes features`() {
         val player = Player(1, "Adventurer", 100, 100, position = Position(100, 100, 7))
         assertThat(player.features).isNotNull
+    }
+
+    // --- composed player state holders (combat bonuses / foods / message buffer) -
+
+    @Test
+    fun `player features compose the combat bonus food and message buffer holders`() {
+        val player = newPlayer()
+        val type = ItemType(id = 1, name = "Cleave Sword")
+        type.abilities = Abilities().apply { cleavePercent = 12 }
+        player.addItem(Item(id = 1, count = 1, type = type), Slots_t.CONST_SLOT_RIGHT)
+
+        assertThat(player.features.combatBonuses.getCleavePercent()).isEqualTo(12)
+
+        player.features.activeFoods.updateFood(1234, 60_000)
+        assertThat(player.features.activeFoods.isFoodActive(1234)).isTrue()
+
+        assertThat(player.features.messageBuffer.messageBufferCount).isZero()
+    }
+
+    @Test
+    fun `the composed message buffer keeps the escalation through the injected seams`() {
+        val conditions = mutableListOf<Condition>()
+        val messages = mutableListOf<Pair<MessageClass, String>>()
+        val sharedMuteCounts = mutableMapOf<Long, Int>()
+        val features = PlayerFeatures(
+            playerId = 42,
+            maxMessageBuffer = { 4 },
+            addCondition = { conditions.add(it) },
+            sendTextMessage = { type, text -> messages.add(type to text) },
+            muteCountMap = sharedMuteCounts,
+        )
+
+        repeat(5) { features.messageBuffer.removeMessageBuffer() }
+
+        assertThat(conditions).hasSize(1)
+        assertThat(messages).containsExactly(MessageClass.MESSAGE_FAILURE to "You are muted for 5 seconds.")
+        assertThat(sharedMuteCounts).containsEntry(42L, 2)
+    }
+
+    @Test
+    fun `the composed combat bonuses read the injected equipped items seam`() {
+        val type = ItemType(id = 1, name = "Cleave Sword")
+        type.abilities = Abilities().apply { cleavePercent = 9 }
+        val item = Item(id = 1, count = 1, type = type)
+        val features = PlayerFeatures(
+            playerId = 42,
+            getEquippedItems = { listOf(item) },
+        )
+
+        assertThat(features.combatBonuses.getCleavePercent()).isEqualTo(9)
+    }
+
+    @Test
+    fun `the composed message buffer routes the mute through the owning player`() {
+        val player = newPlayer()
+        val features = PlayerFeatures(
+            playerId = player.id,
+            wheelPlayer = player,
+            maxMessageBuffer = { 4 },
+        )
+
+        repeat(5) { features.messageBuffer.removeMessageBuffer() }
+
+        assertThat(features.messageBuffer.messageBufferCount).isEqualTo(5)
+        assertThat(player.getCondition(ConditionType.CONDITION_MUTED)).isNotNull()
+    }
+
+    @Test
+    fun `the composed message buffer honors the player cannot be muted flag`() {
+        val player = newPlayer()
+        player.setFlag(PlayerFlags_t.CannotBeMuted)
+        val features = PlayerFeatures(
+            playerId = player.id,
+            wheelPlayer = player,
+            maxMessageBuffer = { 4 },
+        )
+
+        features.messageBuffer.removeMessageBuffer()
+
+        assertThat(features.messageBuffer.messageBufferCount).isZero()
+        assertThat(player.getCondition(ConditionType.CONDITION_MUTED)).isNull()
     }
 }
