@@ -1,5 +1,6 @@
 package org.opentibia.canary.creatures.monsters
 
+import org.opentibia.canary.chat.SpeakClasses
 import org.opentibia.canary.combat.CombatType
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.FindPathParams
@@ -581,18 +582,31 @@ class MonsterPipelinesHost(
     }
 
     /**
-     * `Monster::onCreatureAppear` tail (monster.cpp:348-389) after the Lua
-     * `creatureAppearEvent` dispatch and `Creature::onCreatureAppear`.
+     * `Monster::onCreatureAppear` (monster.cpp:348-389) after the
+     * `Creature::onCreatureAppear` base call: the Lua `creatureAppearEvent`
+     * dispatch runs first and, when it handles the event, stops the default
+     * flow. The port fires `Monster::onSpawn` on the first self appear because
+     * the spawn engine entry point is not part of this host (monster.cpp:627-648
+     * runs after `Game::placeCreature` returns); the latch keeps a re-appear
+     * from firing it twice.
      */
     fun onCreatureAppear(monsterId: Long, creature: Creature, isLogin: Boolean) {
         val entry = entries[monsterId] ?: return
+        val handled = entry.typeState.runCreatureAppearEvent(entry.monster, creature)
+
         if (creature === entry.monster) {
+            if (!handled) {
+                requestUpdateTargetList(monsterId)
+                entry.host.updateIdleStatus()
+            }
             if (!entry.spawnEventDispatched) {
                 entry.spawnEventDispatched = true
                 entry.typeState.runSpawnEvent(entry.monster, entry.monster.position)
             }
-            requestUpdateTargetList(monsterId)
-            entry.host.updateIdleStatus()
+            return
+        }
+
+        if (handled) {
             return
         }
 
@@ -603,8 +617,9 @@ class MonsterPipelinesHost(
     }
 
     /**
-     * `Monster::onRemoveCreature` tail (monster.cpp:391-432) after the Lua
-     * `creatureDisappearEvent` dispatch and `Creature::onRemoveCreature`.
+     * `Monster::onRemoveCreature` (monster.cpp:391-432) after the
+     * `Creature::onRemoveCreature` base call: the Lua `creatureDisappearEvent`
+     * runs first and, when it handles the event, stops the default flow.
      *
      * PARITY GAP: the self branch drops the spawn-owner
      * `startSpawnMonsterCheck()` (monster.cpp:414-416) and the `setIdle(true)`
@@ -613,6 +628,9 @@ class MonsterPipelinesHost(
      */
     fun onRemoveCreature(monsterId: Long, creature: Creature, isLogout: Boolean) {
         val entry = entries[monsterId] ?: return
+        if (entry.typeState.runCreatureDisappearEvent(entry.monster, creature)) {
+            return
+        }
         if (creature === entry.monster) {
             entry.behaviorState.isIdle = true
             return
@@ -621,14 +639,18 @@ class MonsterPipelinesHost(
     }
 
     /**
-     * `Monster::onCreatureMove` tail (monster.cpp:434-477) after the Lua
-     * `creatureMoveEvent` dispatch and `Creature::onCreatureMove`: a self move
+     * `Monster::onCreatureMove` (monster.cpp:434-477) after the
+     * `Creature::onCreatureMove` base call: the Lua `creatureMoveEvent` runs
+     * first and, when it handles the event, stops the default flow. A self move
      * refreshes the target list and the idle status; another creature's move is
      * coalesced through [MonsterAsyncPipelines.queueMovementAiRefresh] when the
      * movement commit owns the context, otherwise processed inline.
      */
     fun onCreatureMove(monsterId: Long, creature: Creature, oldPos: Position, newPos: Position) {
         val entry = entries[monsterId] ?: return
+        if (entry.typeState.runCreatureMoveEvent(entry.monster, creature, oldPos, newPos)) {
+            return
+        }
         if (creature === entry.monster) {
             runUpdateTargetList(entry)
             runUpdateIdleStatus(entry)
@@ -641,6 +663,58 @@ class MonsterPipelinesHost(
         } else {
             entry.pipeline.processMovementAiRefresh(facts, oldPos, newPos)
         }
+    }
+
+    /**
+     * `Monster::onCreatureSay` (monster.cpp:568-598): runs the captured type
+     * `creatureSayEvent` (`onSay(self, speaker, type, message)`). The base
+     * `Creature::onCreatureSay` call is a no-op and the C++ `callVoidFunction`
+     * ignores the callback result. The identity check keeps a reused monster id
+     * from driving a successor's event (AGENTS.md deferred-callback lifetime
+     * safety).
+     */
+    fun onCreatureSay(monster: Monster, speaker: Creature, type: SpeakClasses, text: String) {
+        val entry = entries[monster.id] ?: return
+        if (entry.monster !== monster) {
+            return
+        }
+        entry.typeState.runCreatureSayEvent(entry.monster, speaker, type.value, text)
+    }
+
+    /**
+     * `Monster::onAttackedByPlayer` (monster.cpp:600-625): runs the captured
+     * type `monsterAttackedByPlayerEvent` (`onPlayerAttack(self, attacker)`).
+     * Called by the player-attacking-monster damage path exactly like
+     * `Combat::CombatHealthFunc` (combat.cpp:898-899). The identity check keeps
+     * a reused monster id from driving a successor's event.
+     */
+    fun onAttackedByPlayer(monster: Monster, attackerPlayer: Player) {
+        val entry = entries[monster.id] ?: return
+        if (entry.monster !== monster) {
+            return
+        }
+        entry.typeState.runAttackedByPlayerEvent(entry.monster, attackerPlayer)
+    }
+
+    /**
+     * `MonsterTypeFunctions::luaMonsterTypeRegisterEvent`
+     * (monster_type_functions.cpp:1235-1242) live-monster push: every monster
+     * whose `Monster::m_monsterType` is [monsterType] receives the newly
+     * registered creature event (`Monster::registerCreatureEvent`). The port's
+     * live monsters are the registered host entries (`Game::internalPlaceCreature`
+     * registers each placed monster and `Game::removeCreature` unregisters it),
+     * so this walk has the `g_game().getMonsters()` set semantics. Returns
+     * whether any live monster matched.
+     */
+    fun registerCreatureEventForType(monsterType: MonsterType, name: String): Boolean {
+        var pushed = false
+        for (entry in entries.values) {
+            if (entry.typeState.monsterType === monsterType) {
+                entry.typeState.registerCreatureEvent(name)
+                pushed = true
+            }
+        }
+        return pushed
     }
 
     /**

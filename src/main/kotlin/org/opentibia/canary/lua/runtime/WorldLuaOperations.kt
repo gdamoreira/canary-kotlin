@@ -262,6 +262,19 @@ class WorldLuaOperations(
         worldMonsterType.attachMonsters(monsters)
     }
 
+    /**
+     * Wires the live-monster half of `MonsterTypeFunctions::luaMonsterTypeRegisterEvent`
+     * (monster_type_functions.cpp:1235-1242) once the world exists:
+     * `g_game().getMonsters()` becomes [liveMonsterEvents] and the
+     * `GAME_STATE_STARTUP` gate becomes [isStartup].
+     */
+    fun attachMonsterEvents(
+        liveMonsterEvents: (FullMonsterType, String) -> Unit,
+        isStartup: () -> Boolean,
+    ) {
+        worldMonsterType.attachMonsterEvents(liveMonsterEvents, isStartup)
+    }
+
     val loot: LootOperations = WorldLootOperations(itemIdsByName)
 
     val npc: NpcOperations = WorldNpcOperations(itemTypes)
@@ -2173,8 +2186,9 @@ class WorldMonsterOperations(
  *   so `addAttack`/`addDefense` always build the `CombatSpell` actor
  *   (`MonsterSpellFunctions.deserializeSpell`, `Monsters::deserializeSpell`,
  *   monsters.cpp:61-283);
- * - `registerEvent` does not push the event onto already-spawned monsters
- *   (`g_game().getMonsters()` walk) because the seam owns no creature registry;
+ * - `registerEvent` pushes a late registration onto already-spawned monsters only
+ *   after the world composition root attaches the live-monster walk
+ *   ([attachMonsterEvents]); an unwired seam keeps the C++ startup behavior;
  * - `setOutfit`'s `WARN_UNSAFE_SCRIPTS` look-type gate needs `Game::isLookTypeRegistered`,
  *   which the appearance registry does not expose to this seam.
  *
@@ -2195,6 +2209,18 @@ class WorldMonsterTypeOperations(
     /** The booted `g_monsters()` registry, attached by `WorldLuaOperations.attachMonsters`. */
     private var monsters: Monsters? = null
 
+    /**
+     * `g_game().getMonsters()` walk of `MonsterTypeFunctions::luaMonsterTypeRegisterEvent`
+     * (monster_type_functions.cpp:1235-1242), attached by the world composition
+     * root once live monsters exist. Before the attach (and without a wired
+     * world) a late registration only updates `info.scripts`, exactly like the
+     * C++ startup path.
+     */
+    private var liveMonsterEvents: (FullMonsterType, String) -> Unit = { _, _ -> }
+
+    /** `g_game().getGameState() != GAME_STATE_STARTUP` gate (monster_type_functions.cpp:1235). */
+    private var isStartup: () -> Boolean = { true }
+
     /** `Game::bestiaryList` (game.cpp): race id -> registered name, fed by `raceId`. */
     private val bestiaryList: MutableMap<Int, String> = linkedMapOf()
 
@@ -2204,6 +2230,18 @@ class WorldMonsterTypeOperations(
     /** Wires the booted `g_monsters()` registry after binding install. */
     fun attachMonsters(monsters: Monsters) {
         this.monsters = monsters
+    }
+
+    /**
+     * Wires the live-world half of `MonsterTypeFunctions::luaMonsterTypeRegisterEvent`
+     * (monster_type_functions.cpp:1235-1242). [liveMonsterEvents] pushes a late
+     * registration onto every already-spawned monster of the type (the port's
+     * `g_game().getMonsters()` walk); [isStartup] is
+     * `g_game().getGameState() == GAME_STATE_STARTUP`.
+     */
+    fun attachMonsterEvents(liveMonsterEvents: (FullMonsterType, String) -> Unit, isStartup: () -> Boolean) {
+        this.liveMonsterEvents = liveMonsterEvents
+        this.isStartup = isStartup
     }
 
     private fun type(value: Any): FullMonsterType? = value as? FullMonsterType
@@ -2706,18 +2744,22 @@ class WorldMonsterTypeOperations(
 
     override fun getCreatureEvents(monsterType: Any): List<String>? = type(monsterType)?.info?.scripts?.toList()
 
+    /**
+     * `MonsterTypeFunctions::luaMonsterTypeRegisterEvent`
+     * (monster_type_functions.cpp:1224-1246): records the event name on
+     * `info.scripts` and, outside startup, pushes it onto every already-spawned
+     * monster of the type through the attached world walk.
+     */
     override fun registerEvent(monsterType: Any, name: String): Boolean? {
-        val info = type(monsterType)?.info ?: return null
-        info.scripts += name
+        val target = type(monsterType) ?: return null
+        target.info.scripts += name
+        if (!isStartup()) {
+            liveMonsterEvents(target, name)
+        }
         return true
     }
 
-    /**
-     * `MonsterType::loadCallback` (monsters.cpp:285-322) over the captured
-     * script-interface event. PARITY GAP: `registerEvent` does not push the event
-     * onto already-spawned monsters of the type (`g_game().getMonsters()` walk)
-     * because the seam owns no live-creature registry.
-     */
+    /** `MonsterType::loadCallback` (monsters.cpp:285-322) over the captured script-interface event. */
     override fun loadCallback(monsterType: Any, scriptInterface: Any?): Boolean? {
         val target = type(monsterType) ?: return null
         return target.loadCallback(scriptInterface as? MonsterTypeScriptInterface)

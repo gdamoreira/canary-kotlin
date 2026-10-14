@@ -14,6 +14,7 @@ import org.opentibia.canary.lua.bindings.core.luaToPosition
 import org.opentibia.canary.lua.bindings.core.retrieveUserdata
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
+import java.util.WeakHashMap
 
 /**
  * Port of the `spellBlock_t` fields exposed by
@@ -388,6 +389,13 @@ object MonsterTypeFunctions {
     )
 
     fun install(env: LuaEnvironment, operations: MonsterTypeOperations = UnwiredMonsterTypeOperations) {
+        // One `LuaScriptInterface` per registration script, exactly like the C++
+        // `LuaScriptInterface` owned by the file that registers the monster type:
+        // every callback captured for one `MonsterType` shares the interface, so
+        // the event ids of different callbacks do not collide. The weak keys keep
+        // a discarded type from retaining the environment.
+        val scriptInterfaces = WeakHashMap<Any, LuaMonsterTypeScriptInterface>()
+
         env.userdata.registerClass(MONSTER_TYPE_TYPE, "", luaFunction { args ->
             val argument = args.arg(1)
             val monsterType = when {
@@ -729,13 +737,13 @@ object MonsterTypeFunctions {
                 ?: LuaValue.NIL
         })
 
-        registerCallback(env, "onThink", operations)
-        registerCallback(env, "onAppear", operations)
-        registerCallback(env, "onDisappear", operations)
-        registerCallback(env, "onMove", operations)
-        registerCallback(env, "onSay", operations)
-        registerCallback(env, "onPlayerAttack", operations)
-        registerCallback(env, "onSpawn", operations)
+        registerCallback(env, "onThink", operations, scriptInterfaces)
+        registerCallback(env, "onAppear", operations, scriptInterfaces)
+        registerCallback(env, "onDisappear", operations, scriptInterfaces)
+        registerCallback(env, "onMove", operations, scriptInterfaces)
+        registerCallback(env, "onSay", operations, scriptInterfaces)
+        registerCallback(env, "onPlayerAttack", operations, scriptInterfaces)
+        registerCallback(env, "onSpawn", operations, scriptInterfaces)
 
         // Mirrors the `MonsterTypeNewIndex` hook of
         // data/libs/functions/revscriptsys.lua:272-304, which maps the datapack's
@@ -748,7 +756,7 @@ object MonsterTypeFunctions {
             val event = MONSTER_EVENT_BY_KEY[args.arg(2).tojstring()]
             if (event != null) {
                 operations.setEventType(monsterType, event.value)
-                operations.loadCallback(monsterType, scriptInterfaceOf(env, args.arg(3)))
+                operations.loadCallback(monsterType, scriptInterfaceOf(env, scriptInterfaces, monsterType, args.arg(3)))
             }
             LuaValue.NONE
         })
@@ -989,16 +997,26 @@ object MonsterTypeFunctions {
      * interface and ignores its argument; the port captures the passed Lua
      * function as that event (AGENTS.md 1.4: the callback stays Lua).
      */
-    private fun registerCallback(env: LuaEnvironment, name: String, operations: MonsterTypeOperations) {
+    private fun registerCallback(
+        env: LuaEnvironment,
+        name: String,
+        operations: MonsterTypeOperations,
+        scriptInterfaces: MutableMap<Any, LuaMonsterTypeScriptInterface>,
+    ) {
         env.userdata.registerMethod(MONSTER_TYPE_TYPE, name, luaFunction { args ->
             val monsterType = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            val scriptInterface = scriptInterfaceOf(env, args.arg(2))
+            val scriptInterface = scriptInterfaceOf(env, scriptInterfaces, monsterType, args.arg(2))
             operations.loadCallback(monsterType, scriptInterface)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
         })
     }
 
-    private fun scriptInterfaceOf(env: LuaEnvironment, callback: LuaValue): LuaMonsterTypeScriptInterface =
-        LuaMonsterTypeScriptInterface(env).apply { capture(callback) }
+    private fun scriptInterfaceOf(
+        env: LuaEnvironment,
+        scriptInterfaces: MutableMap<Any, LuaMonsterTypeScriptInterface>,
+        monsterType: Any,
+        callback: LuaValue,
+    ): LuaMonsterTypeScriptInterface =
+        scriptInterfaces.getOrPut(monsterType) { LuaMonsterTypeScriptInterface(env) }.apply { capture(callback) }
 
     /** Mirrors `luaMonsterTypeCombatImmunities`'s string -> `CombatType_t` map. */
     private fun combatTypeIndexByName(immunity: String): Int? = when (immunity) {

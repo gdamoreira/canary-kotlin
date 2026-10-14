@@ -3153,10 +3153,15 @@ class Game(
      * `Creature::onCreatureSay(speaker, type, text)` event hook
      * (creature.cpp:1563) behind [playerWhisper] and [playerSpeakTo]. The base
      * [Creature] hook is not ported yet (PARITY GAP), so the default dispatches
-     * the npc dialogue engine only.
+     * the npc dialogue engine and the monster `creatureSayEvent`
+     * (`Monster::onCreatureSay`, monster.cpp:568-598) through [monsterHost].
      */
     var onCreatureSayEvent: (Creature, Creature, SpeakClasses, String) -> Unit = { target, speaker, type, text ->
-        (target as? Npc)?.onCreatureSay(speaker, type.value, text)
+        when (target) {
+            is Npc -> target.onCreatureSay(speaker, type.value, text)
+            is Monster -> monsterHost?.onCreatureSay(target, speaker, type, text)
+            else -> Unit
+        }
     }
 
     /** `g_chat().talkToChannel(player, type, text, channelId)` (chat.cpp:236) seam. */
@@ -11600,6 +11605,9 @@ class Game(
             handleHazardSystemAttack(damage, targetPlayer, attackerMonster, false)
         } else if (attackerPlayer != null && targetMonster != null) {
             handleHazardSystemAttack(damage, attackerPlayer, targetMonster, true)
+
+            // Monster type onPlayerAttack event (combat.cpp:898-899).
+            monsterHost?.onAttackedByPlayer(targetMonster, attackerPlayer)
 
             if ((damage.primaryValue == 0 && damage.secondaryValue == 0) || damage.hazardDodge) {
                 notifySpectators(spectators, targetPos, attackerPlayer, targetMonster)

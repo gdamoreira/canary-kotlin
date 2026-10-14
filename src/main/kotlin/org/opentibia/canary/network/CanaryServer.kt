@@ -23,6 +23,7 @@ import org.opentibia.canary.creatures.monsters.Monsters
 import org.opentibia.canary.creatures.spawns.MonsterSpawnPath
 import org.opentibia.canary.creatures.spawns.dispatcherSpawnScheduler
 import org.opentibia.canary.game.Game
+import org.opentibia.canary.game.GameState_t
 import org.opentibia.canary.game.scheduling.CreatureAsyncTaskBuckets
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
@@ -225,6 +226,15 @@ class CanaryServer(
             addCreatureCheck = { monster -> game.addCreatureCheck(monster) }
             removeCreatureCheck = { monster -> game.removeCreatureCheck(monster) }
             internalCreatureTurn = { monster, direction -> game.internalCreatureTurn(monster, direction) }
+
+            // `MonsterTypeFunctions::luaMonsterTypeRegisterEvent`
+            // (monster_type_functions.cpp:1235-1242): a late registration walks
+            // `g_game().getMonsters()` and pushes the event onto every live
+            // monster of the type unless the game is still starting up.
+            luaEnvironment.worldOperations?.attachMonsterEvents(
+                liveMonsterEvents = { monsterType, name -> registerCreatureEventForType(monsterType, name) },
+                isStartup = { game.getGameState() == GameState_t.GAME_STATE_STARTUP },
+            )
         }
     }
 

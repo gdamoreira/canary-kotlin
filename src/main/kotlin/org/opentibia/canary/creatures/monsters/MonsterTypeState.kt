@@ -2,6 +2,7 @@ package org.opentibia.canary.creatures.monsters
 
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Monster
+import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.map.Position
 
 /**
@@ -56,6 +57,93 @@ class MonsterTypeState(
         monsterType?.info?.defenseSpells?.map { it.toMonsterSpellBlock() }?.toMutableList() ?: mutableListOf()
 
     /**
+     * `Creature::eventsList` (`src/creatures/creature.hpp:646-660`) as the
+     * attached named creature events. `Monster::Monster` registers every
+     * `mType->info.scripts` entry (monster.cpp:107-114) and
+     * `MonsterTypeFunctions::luaMonsterTypeRegisterEvent` pushes late
+     * registrations onto already-spawned monsters
+     * (monster_type_functions.cpp:1235-1242).
+     *
+     * PARITY GAP: the set records the attachment only; the named
+     * `CreatureEvent` handlers are not dispatched per creature yet, because the
+     * port keeps the `g_creatureEvents()` registry in `LuaEnvironment` and
+     * `ScriptingDispatch` still fires every registered event (see
+     * ScriptingDispatch.kt).
+     */
+    val creatureEvents: MutableSet<String> = linkedSetOf<String>().apply {
+        addAll(monsterType?.info?.scripts ?: emptySet())
+    }
+
+    /**
+     * `Creature::registerCreatureEvent` (`src/creatures/creature.cpp:1674-1693`):
+     * attaches [name] to the live monster; false when it was already attached
+     * (the C++ duplicate branch) or, in the C++, unknown to `g_creatureEvents()`.
+     */
+    fun registerCreatureEvent(name: String): Boolean = creatureEvents.add(name)
+
+    /** Whether [name] is attached to this live monster (`hasEventRegistered`). */
+    fun hasCreatureEvent(name: String): Boolean = creatureEvents.contains(name)
+
+    /**
+     * `Monster::onCreatureAppear` Lua dispatch (monster.cpp:351-376):
+     * `onAppear(self, creature)`. Returns true when the callback handled the
+     * event (`callFunction` true), which stops the default appear flow.
+     */
+    fun runCreatureAppearEvent(monster: Monster, creature: Creature): Boolean =
+        runCallback(monsterType?.info?.creatureAppearEvent) { listOf(monster, creature) }
+
+    /**
+     * `Monster::onRemoveCreature` Lua dispatch (monster.cpp:394-419):
+     * `onDisappear(self, creature)`. Returns true when the callback handled the
+     * event, which stops the default disappear flow.
+     */
+    fun runCreatureDisappearEvent(monster: Monster, creature: Creature): Boolean =
+        runCallback(monsterType?.info?.creatureDisappearEvent) { listOf(monster, creature) }
+
+    /**
+     * `Monster::onCreatureMove` Lua dispatch (monster.cpp:437-465):
+     * `onMove(self, creature, oldPosition, newPosition)`. Returns true when the
+     * callback handled the event, which stops the default movement flow.
+     */
+    fun runCreatureMoveEvent(
+        monster: Monster,
+        creature: Creature,
+        oldPosition: Position,
+        newPosition: Position,
+    ): Boolean = runCallback(monsterType?.info?.creatureMoveEvent) {
+        listOf(monster, creature, oldPosition, newPosition)
+    }
+
+    /**
+     * `Monster::onCreatureSay` Lua dispatch (monster.cpp:571-597):
+     * `onSay(self, creature, type, message)`. The C++ uses `callVoidFunction`,
+     * so the callback result is ignored.
+     */
+    fun runCreatureSayEvent(monster: Monster, creature: Creature, type: Int, text: String) {
+        val info = monsterType?.info ?: return
+        if (info.creatureSayEvent == -1) {
+            return
+        }
+        info.scriptInterface?.callEvent(info.creatureSayEvent, listOf(monster, creature, type, text))
+    }
+
+    /**
+     * `Monster::onAttackedByPlayer` Lua dispatch (monster.cpp:600-625):
+     * `onPlayerAttack(self, attackerPlayer)`. The C++ uses `callVoidFunction`,
+     * so the callback result is ignored.
+     */
+    fun runAttackedByPlayerEvent(monster: Monster, attackerPlayer: Player) {
+        val info = monsterType?.info ?: return
+        if (info.monsterAttackedByPlayerEvent == -1) {
+            return
+        }
+        info.scriptInterface?.callEvent(
+            info.monsterAttackedByPlayerEvent,
+            listOf(monster, attackerPlayer),
+        )
+    }
+
+    /**
      * `Monster::onSpawn` Lua event (monster.cpp:627-648): when the type captured
      * an `onSpawn` event, calls it with the monster and the spawn position.
      */
@@ -65,6 +153,15 @@ class MonsterTypeState(
             return
         }
         info.scriptInterface?.callEvent(info.spawnEvent, listOf(monster, position))
+    }
+
+    /** Shared `-1`-gated dispatch for the `callFunction` creature events. */
+    private fun runCallback(eventId: Int?, arguments: () -> List<Any?>): Boolean {
+        if (eventId == null || eventId == -1) {
+            return false
+        }
+        val info = monsterType?.info ?: return false
+        return info.scriptInterface?.callEvent(eventId, arguments()) ?: false
     }
 
     /**

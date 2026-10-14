@@ -44,6 +44,21 @@ class ScriptingBootTest {
     }
 
     @Test
+    fun `boot loads the revscriptsys library`() {
+        val environment = bootEnvironment()
+
+        environment.loadChunk(
+            """
+            has_create_functions = (type(createFunctions) == "function")
+            monster_type_new_index = (type(rawgetmetatable("MonsterType").__newindex) == "function")
+            """.trimIndent()
+        )
+
+        assertThat(environment.getGlobal("has_create_functions").toboolean()).isTrue()
+        assertThat(environment.getGlobal("monster_type_new_index").toboolean()).isTrue()
+    }
+
+    @Test
     fun `boot loads shipped action scripts that register with the runtime`() {
         val environment = bootEnvironment()
 

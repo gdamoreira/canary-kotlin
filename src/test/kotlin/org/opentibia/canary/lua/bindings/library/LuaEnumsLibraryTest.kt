@@ -111,6 +111,33 @@ class LuaEnumsLibraryTest {
     }
 
     @Test
+    fun `the full MONSTERS_EVENT family matches MonstersEvent_t`() {
+        val environment = environment()
+
+        environment.loadChunk(
+            """
+            none = MONSTERS_EVENT_NONE
+            think = MONSTERS_EVENT_THINK
+            appear = MONSTERS_EVENT_APPEAR
+            disappear = MONSTERS_EVENT_DISAPPEAR
+            move = MONSTERS_EVENT_MOVE
+            say = MONSTERS_EVENT_SAY
+            attackedByPlayer = MONSTERS_EVENT_ATTACKED_BY_PLAYER
+            onSpawn = MONSTERS_EVENT_ON_SPAWN
+            """.trimIndent(),
+        )
+
+        assertThat(environment.getGlobal("none").toint()).isEqualTo(0)
+        assertThat(environment.getGlobal("think").toint()).isEqualTo(1)
+        assertThat(environment.getGlobal("appear").toint()).isEqualTo(2)
+        assertThat(environment.getGlobal("disappear").toint()).isEqualTo(3)
+        assertThat(environment.getGlobal("move").toint()).isEqualTo(4)
+        assertThat(environment.getGlobal("say").toint()).isEqualTo(5)
+        assertThat(environment.getGlobal("attackedByPlayer").toint()).isEqualTo(6)
+        assertThat(environment.getGlobal("onSpawn").toint()).isEqualTo(7)
+    }
+
+    @Test
     fun `direction game state and creature event enums match the C++ values`() {
         val environment = environment()
 
