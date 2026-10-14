@@ -4,6 +4,11 @@ import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
 import org.opentibia.canary.combat.condition.LightInfo
 import org.opentibia.canary.combat.condition.Outfit
+import org.opentibia.canary.creatures.Creature
+import org.opentibia.canary.creatures.Monster
+import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.monsters.MonsterTypeScriptInterface
+import org.opentibia.canary.creatures.monsters.MonstersEvent
 import org.opentibia.canary.lua.bindings.core.luaFunction
 import org.opentibia.canary.lua.bindings.core.luaToPosition
 import org.opentibia.canary.lua.bindings.core.retrieveUserdata
@@ -188,8 +193,12 @@ interface MonsterTypeOperations {
     fun getCreatureEvents(monsterType: Any): List<String>? = null
     fun registerEvent(monsterType: Any, name: String): Boolean? = null
 
-    /** Mirrors `MonsterType::loadCallback` for the `onThink`/`onAppear`/... group. */
-    fun loadCallback(monsterType: Any): Boolean? = null
+    /**
+     * Mirrors `MonsterType::loadCallback` for the `onThink`/`onAppear`/... group:
+     * the binding supplies the captured Lua callback as the script-interface
+     * event (`LuaScriptInterface::getEvent()` hoisted out of the C++ call).
+     */
+    fun loadCallback(monsterType: Any, scriptInterface: Any?): Boolean? = null
     fun setEventType(monsterType: Any, eventType: Int): Boolean? = null
 
     fun getSummonList(monsterType: Any): List<MonsterSummonInfo>? = null
@@ -298,6 +307,7 @@ interface MonsterTypeOperations {
  *   monsterType:getLoot()/addLoot(loot)
  *   monsterType:getCreatureEvents()/registerEvent(name)
  *   monsterType:onThink/onAppear/onDisappear/onMove/onSay/onPlayerAttack/onSpawn(callback)
+ *   monsterType.onThink/onAppear/... = callback (revscriptsys `MonsterTypeNewIndex`)
  *   monsterType:eventType(event)
  *   monsterType:getSummonList()/addSummon(name, interval, chance[, count = 1])
  *   monsterType:bossRace([raceId, class])/bossRaceId([raceId])
@@ -361,6 +371,21 @@ object MonsterTypeFunctions {
     private const val CONDITION_FREEZING = 21
     private const val CONDITION_DAZZLED = 22
     private const val CONDITION_CURSED = 23
+
+    /**
+     * `MonsterTypeNewIndex` event keys (`data/libs/functions/revscriptsys.lua:272-304`):
+     * the datapack assigns `mtype.onSpawn = function(...)` and the hook maps the key
+     * onto `MonsterType:eventType` plus the matching `on<Event>` call.
+     */
+    private val MONSTER_EVENT_BY_KEY: Map<String, MonstersEvent> = mapOf(
+        "onThink" to MonstersEvent.MONSTERS_EVENT_THINK,
+        "onAppear" to MonstersEvent.MONSTERS_EVENT_APPEAR,
+        "onDisappear" to MonstersEvent.MONSTERS_EVENT_DISAPPEAR,
+        "onMove" to MonstersEvent.MONSTERS_EVENT_MOVE,
+        "onSay" to MonstersEvent.MONSTERS_EVENT_SAY,
+        "onPlayerAttack" to MonstersEvent.MONSTERS_EVENT_ATTACKED_BY_PLAYER,
+        "onSpawn" to MonstersEvent.MONSTERS_EVENT_ON_SPAWN,
+    )
 
     fun install(env: LuaEnvironment, operations: MonsterTypeOperations = UnwiredMonsterTypeOperations) {
         env.userdata.registerClass(MONSTER_TYPE_TYPE, "", luaFunction { args ->
@@ -712,6 +737,22 @@ object MonsterTypeFunctions {
         registerCallback(env, "onPlayerAttack", operations)
         registerCallback(env, "onSpawn", operations)
 
+        // Mirrors the `MonsterTypeNewIndex` hook of
+        // data/libs/functions/revscriptsys.lua:272-304, which maps the datapack's
+        // `mtype.onSpawn = function(...)` field assignment onto `eventType` plus the
+        // matching `on<Event>` method. The C++ LuaJIT userdata turns that assignment
+        // into this metamethod call; unknown keys are ignored (LuaJ cannot rawset a
+        // userdata field), which is also what WeaponFunctions/SpellFunctions do.
+        env.userdata.registerMetaMethod(MONSTER_TYPE_TYPE, "__newindex", luaFunction { args ->
+            val monsterType = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NONE
+            val event = MONSTER_EVENT_BY_KEY[args.arg(2).tojstring()]
+            if (event != null) {
+                operations.setEventType(monsterType, event.value)
+                operations.loadCallback(monsterType, scriptInterfaceOf(env, args.arg(3)))
+            }
+            LuaValue.NONE
+        })
+
         // luaMonsterTypeEventType (monster_type_functions.cpp:1269) always reads
         // argument 2, so a getter-style call stores MonstersEvent_t 0 and returns true.
         env.userdata.registerMethod(MONSTER_TYPE_TYPE, "eventType", luaFunction { args ->
@@ -942,13 +983,22 @@ object MonsterTypeFunctions {
         })
     }
 
-    /** Registers one of the `onThink`/`onAppear`/... callback methods. */
+    /**
+     * Registers one of the `onThink`/`onAppear`/... callback methods. The C++
+     * `luaMonsterTypeEventOnCallback` reads the event from the executing script
+     * interface and ignores its argument; the port captures the passed Lua
+     * function as that event (AGENTS.md 1.4: the callback stays Lua).
+     */
     private fun registerCallback(env: LuaEnvironment, name: String, operations: MonsterTypeOperations) {
         env.userdata.registerMethod(MONSTER_TYPE_TYPE, name, luaFunction { args ->
             val monsterType = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            operations.loadCallback(monsterType)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+            val scriptInterface = scriptInterfaceOf(env, args.arg(2))
+            operations.loadCallback(monsterType, scriptInterface)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
         })
     }
+
+    private fun scriptInterfaceOf(env: LuaEnvironment, callback: LuaValue): LuaMonsterTypeScriptInterface =
+        LuaMonsterTypeScriptInterface(env).apply { capture(callback) }
 
     /** Mirrors `luaMonsterTypeCombatImmunities`'s string -> `CombatType_t` map. */
     private fun combatTypeIndexByName(immunity: String): Int? = when (immunity) {
@@ -1408,7 +1458,7 @@ internal object UnwiredMonsterTypeOperations : MonsterTypeOperations {
     override fun registerEvent(monsterType: Any, name: String): Boolean? =
         throw NotImplementedError("MonsterTypeFunctions.registerEvent seam is not wired")
 
-    override fun loadCallback(monsterType: Any): Boolean? =
+    override fun loadCallback(monsterType: Any, scriptInterface: Any?): Boolean? =
         throw NotImplementedError("MonsterTypeFunctions.loadCallback seam is not wired")
 
     override fun setEventType(monsterType: Any, eventType: Int): Boolean? =
@@ -1584,4 +1634,71 @@ internal object UnwiredMonsterTypeOperations : MonsterTypeOperations {
 
     override fun getMonstersByBestiaryStars(stars: Int): List<Any> =
         throw NotImplementedError("MonsterTypeFunctions.getMonstersByBestiaryStars seam is not wired")
+}
+
+/**
+ * Lua-backed [MonsterTypeScriptInterface]: the port of the `LuaScriptInterface`
+ * slice a monster registration script exposes while its `onThink`/`onSpawn`/...
+ * callbacks are captured (AGENTS.md 1.4 keeps the function itself Lua).
+ *
+ * Each captured callback is registered under a fresh event id, so the domain
+ * `thinkEvent`/`spawnEvent`/... slots hold re-resolvable ids exactly like the
+ * C++ `LuaScriptInterface::loadFile` bookkeeping.
+ */
+internal class LuaMonsterTypeScriptInterface(
+    private val env: LuaEnvironment,
+) : MonsterTypeScriptInterface {
+
+    private val events: MutableMap<Int, LuaValue> = linkedMapOf()
+    private var nextEventId: Int = 1
+    private var currentEvent: Int = -1
+
+    /** Registers [callback] as the current event, returning its new id. */
+    fun capture(callback: LuaValue): Int {
+        val id = nextEventId++
+        events[id] = callback
+        currentEvent = id
+        return id
+    }
+
+    override fun getEvent(): Int = currentEvent
+
+    override fun callEvent(eventId: Int, arguments: List<Any?>): Boolean {
+        val callback = events[eventId] ?: return false
+        if (!callback.isfunction()) {
+            return false
+        }
+
+        val wrapped = arguments.map { argument ->
+            when (argument) {
+                null -> LuaValue.NIL
+                is LuaValue -> argument
+                is Position -> pushPosition(argument)
+                is Player -> env.userdata.wrap("Player", argument)
+                is Monster -> env.userdata.wrap("Monster", argument)
+                is Creature -> env.userdata.wrap("Creature", argument)
+                is Boolean -> LuaValue.valueOf(argument)
+                is Int -> LuaValue.valueOf(argument)
+                is Long -> LuaValue.valueOf(argument.toDouble())
+                is Double -> LuaValue.valueOf(argument)
+                is Float -> LuaValue.valueOf(argument.toDouble())
+                is String -> LuaValue.valueOf(argument)
+                else -> LuaValue.NIL
+            }
+        }
+        val result = callback.invoke(LuaValue.varargsOf(wrapped.toTypedArray())).arg1()
+
+        // `lua_toboolean`: false only for nil/false; LuaJ's nil toboolean is true.
+        return !result.isnil() && result.toboolean()
+    }
+
+    /** `Lua::pushPosition` (`src/lua/functions/lua_functions_loader.cpp:707-719`). */
+    private fun pushPosition(position: Position): LuaTable =
+        LuaTable().also { table ->
+            table.set("x", LuaValue.valueOf(position.x))
+            table.set("y", LuaValue.valueOf(position.y))
+            table.set("z", LuaValue.valueOf(position.z))
+            table.set("stackpos", LuaValue.valueOf(0))
+            table.setmetatable(env.userdata.metatable("Position"))
+        }
 }

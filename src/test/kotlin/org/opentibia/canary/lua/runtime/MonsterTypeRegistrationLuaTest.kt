@@ -369,6 +369,11 @@ class MonsterTypeRegistrationLuaTest {
         assertThat(block.get("isMelee").toint()).isEqualTo(1)
         assertThat(block.get("isCombatSpell").toint()).isEqualTo(1)
         assertThat(block.get("speed").toint()).isEqualTo(2000)
-        assertThat(block.get("spell").isnil()).isTrue()
+        // `luaMonsterTypeGetAttackList` pushes `spellBlock.spell` as the CombatSpell
+        // userdata (monster_type_functions.cpp:995-997); the deserializer always
+        // builds the actor when no registered spell matches the name.
+        assertThat(block.get("spell").isnil()).isFalse()
+        assertThat(block.get("spell").touserdata())
+            .isInstanceOf(org.opentibia.canary.creatures.monsters.MonsterCombatSpell::class.java)
     }
 }

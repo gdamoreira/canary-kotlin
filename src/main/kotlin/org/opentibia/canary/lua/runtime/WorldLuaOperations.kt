@@ -4,7 +4,6 @@ import org.opentibia.canary.combat.condition.CombatType
 import org.luaj.vm2.LuaError
 import org.luaj.vm2.LuaValue
 import org.opentibia.canary.combat.AreaCombat
-import org.opentibia.canary.combat.Weapons as CombatWeapons
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionId
 import org.opentibia.canary.combat.condition.ConditionType
@@ -18,6 +17,7 @@ import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.monsters.BosstiaryRarity_t
 import org.opentibia.canary.creatures.monsters.Faction
 import org.opentibia.canary.creatures.monsters.Monsters
+import org.opentibia.canary.creatures.monsters.MonstersEvent
 import org.opentibia.canary.creatures.monsters.RaceType
 import org.opentibia.canary.creatures.monsters.RespawnPeriod
 import org.opentibia.canary.creatures.monsters.RespawnType
@@ -26,6 +26,7 @@ import org.opentibia.canary.creatures.monsters.SummonBlock
 import org.opentibia.canary.creatures.monsters.VoiceBlock
 import org.opentibia.canary.creatures.monsters.LootBlock
 import org.opentibia.canary.creatures.monsters.MonsterType as FullMonsterType
+import org.opentibia.canary.creatures.monsters.MonsterTypeScriptInterface
 import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.creatures.vocations.Vocation
 import org.opentibia.canary.creatures.spawns.MonsterType
@@ -2168,12 +2169,10 @@ class WorldMonsterOperations(
  * (src/lua/functions/creatures/monster/monster_type_functions.cpp).
  *
  * The seams not carried by `MonsterInfo` remain documented approximations:
- * - `sb.spell` (`g_spells().getSpellByName`) has no spell registry here, so
- *   `addAttack`/`addDefense` deserialize only the scalar `spellBlock_t` fields
- *   (`Monsters::deserializeSpell`, monsters.cpp:61-229; the `CombatSpell` actor and the
- *   `Combat` param/area/condition build are not ported);
- * - `MonsterType::loadLoot`'s child-loot retention needs the item container check and a
- *   `LootBlock.childLoot` slot the Kotlin `LootBlock` does not carry;
+ * - `sb.spell = g_spells().getSpellByName(name)` has no compiled spell registry here,
+ *   so `addAttack`/`addDefense` always build the `CombatSpell` actor
+ *   (`MonsterSpellFunctions.deserializeSpell`, `Monsters::deserializeSpell`,
+ *   monsters.cpp:61-283);
  * - `registerEvent` does not push the event onto already-spawned monsters
  *   (`g_game().getMonsters()` walk) because the seam owns no creature registry;
  * - `setOutfit`'s `WARN_UNSAFE_SCRIPTS` look-type gate needs `Game::isLookTypeRegistered`,
@@ -2335,13 +2334,7 @@ class WorldMonsterTypeOperations(
 
     override fun addLoot(monsterType: Any, loot: LootData): Boolean? {
         val target = type(monsterType) ?: return null
-        target.info.lootItems += LootBlock(
-            id = loot.id,
-            countMin = loot.countMin,
-            countMax = loot.countMax,
-            chance = loot.chance,
-            unique = loot.unique,
-        )
+        target.info.lootItems += lootBlockOf(loot)
         return true
     }
 
@@ -2358,45 +2351,13 @@ class WorldMonsterTypeOperations(
     private fun addSpell(monsterType: Any, spell: Any?, attack: Boolean): Boolean? {
         val target = type(monsterType) ?: return null
         val monsterSpell = spell as? MonsterSpellData ?: return null
-        val block = deserializeSpell(monsterSpell) ?: return null
+        val block = MonsterSpellFunctions.deserializeSpell(monsterSpell) ?: return null
         if (attack) {
             target.info.attackSpells += block
         } else {
             target.info.defenseSpells += block
         }
         return true
-    }
-
-    /**
-     * `Monsters::deserializeSpell` (src/creatures/monsters/monsters.cpp:61-229) scalar
-     * half. `sb.spell = g_spells().getSpellByName(name)` and the `CombatSpell`/`Combat`
-     * actor build are not ported (PARITY GAP), so `combatSpell` is true and the block
-     * carries only chance/speed/range/values/sounds.
-     */
-    private fun deserializeSpell(spell: MonsterSpellData): SpellBlock? {
-        if (spell.scriptName.isEmpty() && spell.name.isEmpty()) {
-            return null
-        }
-        val block = SpellBlock(
-            chance = minOf(spell.chance, 100),
-            speed = spell.interval,
-            range = minOf(spell.range, Creature.MAP_MAX_VIEW_PORT_X * 2),
-            minCombatValue = minOf(spell.minCombatValue, spell.maxCombatValue),
-            maxCombatValue = maxOf(spell.minCombatValue, spell.maxCombatValue),
-            soundCastEffect = soundEffectOf(spell.soundCastEffect),
-            soundImpactEffect = soundEffectOf(spell.soundImpactEffect),
-        )
-        block.combatSpell = true
-
-        if (spell.name.lowercase() == "melee") {
-            block.isMelee = true
-            if (spell.attack > 0 && spell.skill > 0) {
-                block.minCombatValue = 0
-                block.maxCombatValue = -CombatWeapons.getMaxMeleeDamage(spell.skill, spell.attack)
-            }
-            block.range = 1
-        }
-        return block
     }
 
     private fun attackInfoOf(block: SpellBlock) = MonsterAttackInfo(
@@ -2410,12 +2371,44 @@ class WorldMonsterTypeOperations(
         spell = block.spell,
     )
 
-    private fun lootDataOf(block: LootBlock) = LootData(
+    private fun lootDataOf(block: LootBlock): LootData = LootData(
         id = block.id,
         chance = block.chance,
+        subType = block.subType,
         countMin = block.countMin,
         countMax = block.countMax,
+        actionId = block.actionId,
+        text = block.text,
+        name = block.name,
+        article = block.article,
+        attack = block.attack,
+        defense = block.defense,
+        extraDefense = block.extraDefense,
+        armor = block.armor,
+        shootRange = block.shootRange,
+        hitChance = block.hitChance,
         unique = block.unique,
+        childLoot = block.childLoot.mapTo(mutableListOf()) { lootDataOf(it) },
+    )
+
+    private fun lootBlockOf(loot: LootData): LootBlock = LootBlock(
+        id = loot.id,
+        chance = loot.chance,
+        subType = loot.subType,
+        countMin = loot.countMin,
+        countMax = loot.countMax,
+        actionId = loot.actionId,
+        text = loot.text,
+        name = loot.name,
+        article = loot.article,
+        attack = loot.attack,
+        defense = loot.defense,
+        extraDefense = loot.extraDefense,
+        armor = loot.armor,
+        shootRange = loot.shootRange,
+        hitChance = loot.hitChance,
+        unique = loot.unique,
+        childLoot = loot.childLoot.map { lootBlockOf(it) },
     )
 
     override fun isPreyable(monsterType: Any): Boolean? = type(monsterType)?.info?.isPreyable
@@ -2716,6 +2709,24 @@ class WorldMonsterTypeOperations(
     override fun registerEvent(monsterType: Any, name: String): Boolean? {
         val info = type(monsterType)?.info ?: return null
         info.scripts += name
+        return true
+    }
+
+    /**
+     * `MonsterType::loadCallback` (monsters.cpp:285-322) over the captured
+     * script-interface event. PARITY GAP: `registerEvent` does not push the event
+     * onto already-spawned monsters of the type (`g_game().getMonsters()` walk)
+     * because the seam owns no live-creature registry.
+     */
+    override fun loadCallback(monsterType: Any, scriptInterface: Any?): Boolean? {
+        val target = type(monsterType) ?: return null
+        return target.loadCallback(scriptInterface as? MonsterTypeScriptInterface)
+    }
+
+    override fun setEventType(monsterType: Any, eventType: Int): Boolean? {
+        val target = type(monsterType) ?: return null
+        target.info.eventType = MonstersEvent.entries.firstOrNull { it.value == eventType }
+            ?: MonstersEvent.MONSTERS_EVENT_NONE
         return true
     }
 

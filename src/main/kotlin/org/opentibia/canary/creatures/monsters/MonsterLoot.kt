@@ -5,9 +5,10 @@ import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
 
 /**
- * Port of the loot fields read by the drop-loot roll; the optional
- * `subType`/`actionId`/`text`/`childLoot` columns of `struct LootBlock`
- * (src/creatures/creatures_definitions.hpp:1765-1802) are not modeled yet (PARITY GAP).
+ * Port of the full `struct LootBlock` (src/creatures/creatures_definitions.hpp:1765-1802).
+ * Every field keeps the C++ name and default, including the optional
+ * `subType`/`actionId`/`text`/`name`/`article`/`attack`/`defense`/`extraDefense`/`armor`/
+ * `shootRange`/`hitChance` columns and the nested `childLoot` vector.
  *
  * [chance] is a basis point value out of [MonsterLoot.MAX_LOOT_CHANCE].
  */
@@ -17,6 +18,18 @@ data class LootBlock(
     val countMax: Int = 1,
     val chance: Int = 0,
     val unique: Boolean = false,
+    val subType: Int = -1,
+    val actionId: Int = -1,
+    val text: String = "",
+    val name: String = "",
+    val article: String = "",
+    val attack: Int = -1,
+    val defense: Int = -1,
+    val extraDefense: Int = -1,
+    val armor: Int = -1,
+    val shootRange: Int = -1,
+    val hitChance: Int = -1,
+    val childLoot: List<LootBlock> = emptyList(),
 )
 
 /**

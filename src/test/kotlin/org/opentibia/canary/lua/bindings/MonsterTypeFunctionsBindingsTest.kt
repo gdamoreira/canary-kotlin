@@ -69,6 +69,7 @@ class MonsterTypeFunctionsBindingsTest {
         val voices: MutableList<MonsterVoiceInfo> = mutableListOf(),
         val creatureEvents: MutableList<String> = mutableListOf(),
         var callbackLoaded: Boolean? = true,
+        var loadedScriptInterface: Any? = null,
         var eventType: Int? = 0,
         val summons: MutableList<MonsterSummonInfo> = mutableListOf(),
         var lastSummonCount: Int? = null,
@@ -549,7 +550,11 @@ class MonsterTypeFunctionsBindingsTest {
             return true
         }
 
-        override fun loadCallback(monsterType: Any): Boolean? = fake(monsterType)?.callbackLoaded
+        override fun loadCallback(monsterType: Any, scriptInterface: Any?): Boolean? {
+            val type = fake(monsterType) ?: return null
+            type.loadedScriptInterface = scriptInterface
+            return type.callbackLoaded
+        }
 
         override fun setEventType(monsterType: Any, eventType: Int): Boolean? {
             val type = fake(monsterType) ?: return null
@@ -1636,12 +1641,19 @@ class MonsterTypeFunctionsBindingsTest {
             events = t:getCreatureEvents()
             first = events[1]
             count = #events
+            t:eventType(1)
             think = t:onThink(function() return true end)
+            t:eventType(2)
             appear = t:onAppear(function() return true end)
+            t:eventType(3)
             disappear = t:onDisappear(function() return true end)
+            t:eventType(4)
             move = t:onMove(function() return true end)
+            t:eventType(5)
             say = t:onSay(function() return true end)
+            t:eventType(6)
             attack = t:onPlayerAttack(function() return true end)
+            t:eventType(7)
             spawn = t:onSpawn(function() return true end)
             eventType = t:eventType(5)
             """.trimIndent(),

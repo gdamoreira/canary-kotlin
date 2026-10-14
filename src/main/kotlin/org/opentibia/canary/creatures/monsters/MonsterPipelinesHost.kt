@@ -254,7 +254,15 @@ class MonsterPipelinesHost(
         val typeState: MonsterTypeState,
         val host: MonsterAsyncHost,
         val pipeline: MonsterAsyncPipelines,
-    )
+    ) {
+        /**
+         * `Monster::onSpawn` is a creation-time event in C++ (called by the spawn
+         * engine and `Game::createMonster` after placement). The port fires it on
+         * the first self `onCreatureAppear` so a rejected placement cannot trigger
+         * it; the latch keeps a re-appear from firing it twice.
+         */
+        internal var spawnEventDispatched: Boolean = false
+    }
 
     private val entries = mutableMapOf<Long, Entry>()
     private val visiblePostThinkQueue = MonsterPostThinkQueue(MonsterPostThinkQueue.VISIBLE_BATCH_SIZE)
@@ -477,9 +485,20 @@ class MonsterPipelinesHost(
      * `Monster::trySchedulePostThink` host entry for `Game::checkCreatures`
      * (game.cpp:7727-7729). The creature id re-resolves the owner, so a removed
      * or non-monster creature is a no-op.
+     *
+     * `Monster::onThink` runs the Lua `thinkEvent` before the deferred work
+     * (monster.cpp:1581-1600); the port reaches that event here, after
+     * `Creature::onThink`, because the `Monster::onThink` override lives in the
+     * out-of-scope `Creature.kt`. A callback that returns true consumes the tick
+     * and nothing is scheduled, exactly like the C++ early return.
      */
-    fun trySchedulePostThink(creature: Creature): Boolean =
-        entries[creature.id]?.pipeline?.trySchedulePostThink() ?: false
+    fun trySchedulePostThink(creature: Creature): Boolean {
+        val entry = entries[creature.id] ?: return false
+        if (entry.typeState.runThinkEvent(entry.monster, MonsterThink.EVENT_CREATURE_THINK_INTERVAL)) {
+            return false
+        }
+        return entry.pipeline.trySchedulePostThink()
+    }
 
     /**
      * `Monster::onExecuteAsyncTasks` body (monster.cpp:3972-3996) for the
@@ -568,6 +587,10 @@ class MonsterPipelinesHost(
     fun onCreatureAppear(monsterId: Long, creature: Creature, isLogin: Boolean) {
         val entry = entries[monsterId] ?: return
         if (creature === entry.monster) {
+            if (!entry.spawnEventDispatched) {
+                entry.spawnEventDispatched = true
+                entry.typeState.runSpawnEvent(entry.monster, entry.monster.position)
+            }
             requestUpdateTargetList(monsterId)
             entry.host.updateIdleStatus()
             return

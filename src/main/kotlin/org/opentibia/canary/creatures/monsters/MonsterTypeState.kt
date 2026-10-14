@@ -2,6 +2,7 @@ package org.opentibia.canary.creatures.monsters
 
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Monster
+import org.opentibia.canary.map.Position
 
 /**
  * Per-`Monster` runtime state derived from its [MonsterType]:
@@ -53,6 +54,31 @@ class MonsterTypeState(
     /** `Monster::defenseSpells` instance copy (monster.cpp:105, monster.hpp:449). */
     val defenseSpells: MutableList<MonsterSpellBlock> =
         monsterType?.info?.defenseSpells?.map { it.toMonsterSpellBlock() }?.toMutableList() ?: mutableListOf()
+
+    /**
+     * `Monster::onSpawn` Lua event (monster.cpp:627-648): when the type captured
+     * an `onSpawn` event, calls it with the monster and the spawn position.
+     */
+    fun runSpawnEvent(monster: Monster, position: Position) {
+        val info = monsterType?.info ?: return
+        if (info.spawnEvent == -1) {
+            return
+        }
+        info.scriptInterface?.callEvent(info.spawnEvent, listOf(monster, position))
+    }
+
+    /**
+     * `Monster::onThink` Lua event prefix (monster.cpp:1581-1600): returns true
+     * when the captured callback handled the tick (`callFunction` true), which
+     * stops the default think flow.
+     */
+    fun runThinkEvent(monster: Monster, interval: Int): Boolean {
+        val info = monsterType?.info ?: return false
+        if (info.thinkEvent == -1) {
+            return false
+        }
+        return info.scriptInterface?.callEvent(info.thinkEvent, listOf(monster, interval)) ?: false
+    }
 
     /**
      * Replaces the inert [MonsterAsyncHost] type seams with this state so the

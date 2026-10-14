@@ -1,9 +1,31 @@
 package org.opentibia.canary.lua.bindings
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import org.luaj.vm2.LuaValue
+import org.opentibia.canary.combat.AreaCombat
+import org.opentibia.canary.combat.CombatOrigin
+import org.opentibia.canary.combat.FormulaType
+import org.opentibia.canary.combat.Weapons as CombatWeapons
+import org.opentibia.canary.combat.condition.Condition
+import org.opentibia.canary.combat.condition.ConditionDamage
+import org.opentibia.canary.combat.condition.ConditionId
+import org.opentibia.canary.combat.condition.ConditionOutfit
+import org.opentibia.canary.combat.condition.ConditionParam
+import org.opentibia.canary.combat.condition.ConditionSpeed
+import org.opentibia.canary.combat.condition.ConditionType
+import org.opentibia.canary.combat.condition.Outfit
+import org.opentibia.canary.creatures.Creature
+import org.opentibia.canary.creatures.monsters.MonsterCombatSpell
+import org.opentibia.canary.creatures.monsters.MonsterCombatSpellCombat
+import org.opentibia.canary.creatures.monsters.SpellBlock
 import org.opentibia.canary.lua.bindings.core.luaFunction
 import org.opentibia.canary.lua.bindings.core.retrieveUserdata
 import org.opentibia.canary.lua.runtime.LuaEnvironment
+import org.opentibia.canary.spells.SoundEffect
+import kotlin.math.abs
+import kotlin.math.max
+
+private val logger = KotlinLogging.logger {}
 
 /**
  * Port of Canary's `MonsterSpell` (src/creatures/monsters/monsters.hpp:194-240) as
@@ -244,6 +266,297 @@ object MonsterSpellFunctions {
         })
     }
 
+    /**
+     * `Monsters::deserializeSpell` (`src/creatures/monsters/monsters.cpp:61-283`):
+     * turns a `MonsterSpell` registration into the `spellBlock_t` the type's
+     * `attackSpells`/`defenseSpells` vectors hold, building the `Combat` payload
+     * and the [MonsterCombatSpell] actor that carries the combat type, impact
+     * effect and shoot the scalar-only deserializer dropped.
+     *
+     * PARITY GAP: `sb.spell = g_spells().getSpellByName(spell->name)` is not
+     * modelled because no compiled `Spells` registry is wired into the boot; the
+     * combat-spell branch below always builds the actor, exactly like Canary does
+     * when the name resolves to no registered spell.
+     */
+    fun deserializeSpell(spell: MonsterSpellData): SpellBlock? {
+        if (spell.scriptName.isEmpty() && spell.name.isEmpty()) {
+            return null
+        }
+
+        val block = SpellBlock(
+            chance = minOf(spell.chance, 100),
+            speed = spell.interval,
+            range = minOf(spell.range, Creature.MAP_MAX_VIEW_PORT_X * 2),
+            minCombatValue = minOf(spell.minCombatValue, spell.maxCombatValue),
+            maxCombatValue = maxOf(spell.minCombatValue, spell.maxCombatValue),
+            soundCastEffect = soundEffectOf(spell.soundCastEffect),
+            soundImpactEffect = soundEffectOf(spell.soundImpactEffect),
+        )
+
+        val combat = MonsterCombatSpellCombat()
+        block.combatSpell = true
+
+        var needDirection = false
+        if (spell.length > 0) {
+            spell.spread = max(0, spell.spread)
+
+            combat.area = AreaCombat().also { it.setupArea(spell.length, spell.spread) }
+            needDirection = true
+        }
+
+        if (spell.radius > 0) {
+            combat.area = AreaCombat().also { it.setupArea(spell.radius) }
+        }
+
+        when (val spellName = spell.name.lowercase()) {
+            "melee" -> {
+                block.isMelee = true
+
+                if (spell.attack > 0 && spell.skill > 0) {
+                    block.minCombatValue = 0
+                    block.maxCombatValue = -CombatWeapons.getMaxMeleeDamage(spell.skill, spell.attack)
+                }
+
+                block.range = 1
+                combat.setParam(MonsterCombatSpellCombat.COMBAT_PARAM_TYPE, COMBAT_PHYSICALDAMAGE)
+                combat.setParam(MonsterCombatSpellCombat.COMBAT_PARAM_BLOCKARMOR, 1)
+                combat.setParam(MonsterCombatSpellCombat.COMBAT_PARAM_BLOCKSHIELD, 1)
+                combat.params.origin = CombatOrigin.MELEE
+            }
+
+            "combat" -> {
+                if (spell.combatType == COMBAT_PHYSICALDAMAGE) {
+                    combat.setParam(MonsterCombatSpellCombat.COMBAT_PARAM_BLOCKARMOR, 1)
+                    combat.params.origin = CombatOrigin.RANGED
+                } else if (spell.combatType == COMBAT_HEALING) {
+                    combat.setParam(MonsterCombatSpellCombat.COMBAT_PARAM_AGGRESSIVE, 0)
+                }
+
+                combat.setParam(MonsterCombatSpellCombat.COMBAT_PARAM_TYPE, spell.combatType)
+            }
+
+            "speed" -> {
+                var speedChange = 0
+                var duration = 10000
+
+                if (spell.duration != 0) {
+                    duration = spell.duration
+                }
+
+                if (spell.speedChange != 0) {
+                    speedChange = spell.speedChange
+                    if (speedChange < -1000) {
+                        // Cant be slower than 100%
+                        speedChange = -1000
+                    }
+                }
+
+                val conditionType = if (speedChange > 0) {
+                    combat.setParam(MonsterCombatSpellCombat.COMBAT_PARAM_AGGRESSIVE, 0)
+                    ConditionType.CONDITION_HASTE
+                } else {
+                    ConditionType.CONDITION_PARALYZE
+                }
+                val condition = Condition.createCondition(ConditionId.CONDITIONID_COMBAT, conditionType, duration, 0)
+                    as? ConditionSpeed
+                    ?: return null
+                val multiplier = 1.0f + speedChange / 1000.0f
+                condition.setFormulaVars(multiplier / 2, 40f, multiplier, 40f)
+                combat.params.conditionList += condition
+            }
+
+            "outfit" -> {
+                var duration = 10000
+
+                if (spell.duration != 0) {
+                    duration = spell.duration
+                }
+
+                val condition = Condition.createCondition(
+                    ConditionId.CONDITIONID_COMBAT,
+                    ConditionType.CONDITION_OUTFIT,
+                    duration,
+                    0,
+                ) as? ConditionOutfit ?: return null
+
+                if (spell.outfitMonster.isNotEmpty()) {
+                    condition.setLazyMonsterOutfit(spell.outfitMonster)
+                } else if (spell.outfitItem > 0) {
+                    condition.setOutfit(Outfit(lookTypeEx = spell.outfitItem))
+                } else {
+                    logger.error {
+                        "[Monsters::deserializeSpell] - Missing outfit monster or item in outfit spell for: ${spell.name}"
+                    }
+                    return null
+                }
+
+                combat.setParam(MonsterCombatSpellCombat.COMBAT_PARAM_AGGRESSIVE, 0)
+                combat.params.conditionList += condition
+            }
+
+            "invisible" -> {
+                var duration = 10000
+
+                if (spell.duration != 0) {
+                    duration = spell.duration
+                }
+
+                val condition = Condition.createCondition(
+                    ConditionId.CONDITIONID_COMBAT,
+                    ConditionType.CONDITION_INVISIBLE,
+                    duration,
+                    0,
+                ) ?: return null
+                combat.setParam(MonsterCombatSpellCombat.COMBAT_PARAM_AGGRESSIVE, 0)
+                combat.params.conditionList += condition
+            }
+
+            "drunk" -> {
+                var duration = 10000
+
+                if (spell.duration != 0) {
+                    duration = spell.duration
+                }
+
+                val condition = Condition.createCondition(
+                    ConditionId.CONDITIONID_COMBAT,
+                    ConditionType.CONDITION_DRUNK,
+                    duration,
+                    0,
+                ) ?: return null
+                combat.params.conditionList += condition
+            }
+
+            "soulwars fear", "fear" -> {
+                var duration = 6000
+
+                if (spell.duration != 0) {
+                    duration = spell.duration
+                }
+
+                val condition = Condition.createCondition(
+                    ConditionId.CONDITIONID_COMBAT,
+                    ConditionType.CONDITION_FEARED,
+                    duration,
+                    0,
+                ) ?: return null
+                combat.params.conditionList += condition
+            }
+
+            "firefield" -> combat.setParam(MonsterCombatSpellCombat.COMBAT_PARAM_CREATEITEM, ITEM_FIREFIELD_PVP_FULL)
+
+            "poisonfield" -> combat.setParam(MonsterCombatSpellCombat.COMBAT_PARAM_CREATEITEM, ITEM_POISONFIELD_PVP)
+
+            "energyfield" -> combat.setParam(MonsterCombatSpellCombat.COMBAT_PARAM_CREATEITEM, ITEM_ENERGYFIELD_PVP)
+
+            "condition" -> {
+                if (spell.conditionType == CONDITION_NONE) {
+                    logger.error { "[Monsters::deserializeSpell] - ${spell.name} condition is not set for spell" }
+                }
+            }
+
+            "strength", "effect" -> Unit
+
+            else -> {
+                logger.error {
+                    "[Monsters::deserializeSpell] - unknown or missing parameter on spell with name: $spellName"
+                }
+            }
+        }
+
+        if (spell.shoot != CONST_ANI_NONE) {
+            combat.setParam(MonsterCombatSpellCombat.COMBAT_PARAM_DISTANCEEFFECT, spell.shoot)
+        }
+
+        if (spell.effect != CONST_ME_NONE) {
+            combat.setParam(MonsterCombatSpellCombat.COMBAT_PARAM_EFFECT, spell.effect)
+        }
+
+        // If a spell has a condition, it always applies, no matter what kind of spell it is
+        if (spell.conditionType != CONDITION_NONE) {
+            val minDamage = abs(spell.conditionMinDamage)
+            var maxDamage = abs(spell.conditionMaxDamage)
+            var startDamage = abs(spell.conditionStartDamage)
+            val tickInterval = if (spell.tickInterval > 0) spell.tickInterval else 2000
+
+            if (startDamage > minDamage) {
+                startDamage = 0
+            }
+
+            if (maxDamage == 0) {
+                maxDamage = minDamage
+            }
+
+            val condition = getDamageCondition(
+                conditionType = spell.conditionType,
+                maxDamage = maxDamage,
+                minDamage = minDamage,
+                startDamage = startDamage,
+                tickInterval = tickInterval,
+            ) ?: run {
+                logger.error {
+                    "[Monsters::deserializeSpell] - Invalid damage condition type ${spell.conditionType} for: ${spell.name}"
+                }
+                return null
+            }
+            combat.params.conditionList += condition
+        }
+
+        combat.formulaType = FormulaType.DAMAGE
+        combat.mina = block.minCombatValue.toDouble()
+        combat.minb = 0.0
+        combat.maxa = block.maxCombatValue.toDouble()
+        combat.maxb = 0.0
+
+        val combatSpell = MonsterCombatSpell(combat, spell.needTarget, needDirection)
+        combatSpell.soundCastEffect = block.soundCastEffect
+        combatSpell.soundImpactEffect = block.soundImpactEffect
+
+        block.spell = combatSpell
+        block.combatSpell = true
+
+        return block
+    }
+
+    /** `Monsters::getDamageCondition` (`src/creatures/monsters/monsters.cpp:47-59`). */
+    private fun getDamageCondition(
+        conditionType: Int,
+        maxDamage: Int,
+        minDamage: Int,
+        startDamage: Int,
+        tickInterval: Int,
+    ): ConditionDamage? {
+        val type = ConditionType.entries.firstOrNull { it.value == conditionType } ?: return null
+        val condition = Condition.createDamageCondition(ConditionId.CONDITIONID_COMBAT, type) ?: return null
+
+        condition.setParam(ConditionParam.CONDITION_PARAM_TICKINTERVAL, tickInterval)
+        condition.setParam(ConditionParam.CONDITION_PARAM_MINVALUE, minDamage)
+        condition.setParam(ConditionParam.CONDITION_PARAM_MAXVALUE, maxDamage)
+        condition.setParam(ConditionParam.CONDITION_PARAM_STARTVALUE, startDamage)
+        condition.setParam(ConditionParam.CONDITION_PARAM_DELAYED, 1)
+        return condition
+    }
+
+    private fun soundEffectOf(value: Int): SoundEffect =
+        SoundEffect.entries.firstOrNull { it.value == value } ?: SoundEffect.SILENCE
+
+    private const val COMBAT_PHYSICALDAMAGE = 0
+    private const val COMBAT_HEALING = 7
     private const val COMBAT_UNDEFINEDDAMAGE = 4
     private const val CONDITION_NONE = 254
+
+    /** `CONST_ANI_NONE` (`src/utils/utils_definitions.hpp`). */
+    private const val CONST_ANI_NONE = 0
+
+    /** `CONST_ME_NONE` (`src/utils/utils_definitions.hpp`). */
+    private const val CONST_ME_NONE = 0
+
+    /** `ITEM_FIREFIELD_PVP_FULL` (`src/utils/utils_definitions.hpp:524`). */
+    private const val ITEM_FIREFIELD_PVP_FULL = 2118
+
+    /** `ITEM_POISONFIELD_PVP` (`src/utils/utils_definitions.hpp:518`). */
+    private const val ITEM_POISONFIELD_PVP = 105
+
+    /** `ITEM_ENERGYFIELD_PVP` (`src/utils/utils_definitions.hpp:522`). */
+    private const val ITEM_ENERGYFIELD_PVP = 2122
 }

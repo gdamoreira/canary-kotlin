@@ -97,9 +97,11 @@ data class SummonBlock(
  * monster-type registration record. [MonsterTypeState] copies it into the
  * runtime [MonsterSpellBlock] the combat rules consume.
  *
- * [spell] is the `std::shared_ptr<BaseSpell>` slot; the Lua registration
- * stores the concrete combat spell and the C++ `CombatSpell` actor subclass is
- * not ported yet (PARITY GAP for the sound-effect fields of the spell itself).
+ * [spell] is the `std::shared_ptr<BaseSpell>` slot; `MonsterSpellFunctions`
+ * `deserializeSpell` fills it with the [MonsterCombatSpell] actor it builds
+ * (`Monsters::deserializeSpell`, monsters.cpp:268-280). A compiled
+ * `g_spells()` hit would put the registered spell here instead, but no compiled
+ * spell registry is wired into the boot (PARITY GAP).
  */
 data class SpellBlock(
     var spell: BaseSpell? = null,
@@ -115,6 +117,28 @@ data class SpellBlock(
 )
 
 /**
+ * Port of the `LuaScriptInterface` slice the monster event slots need
+ * (`src/lua/scripts/luascript.hpp`): the id of the currently registered event
+ * and the call entry point the `Monster::on*` methods use (`pushFunction` plus
+ * `callFunction`/`callVoidFunction`).
+ *
+ * The registered function stays Lua (AGENTS.md 1.4): the binding layer owns the
+ * concrete implementation and executes the captured callback in its own state.
+ */
+interface MonsterTypeScriptInterface {
+    /** `LuaScriptInterface::getEvent()`. */
+    fun getEvent(): Int
+
+    /**
+     * `Monster::onSpawn` (monster.cpp:639-646), `Monster::onThink`
+     * (monster.cpp:1595-1609) and the other event call sites: pushes the callback
+     * registered under [eventId] and calls it with [arguments]. Returns the
+     * function result (`callFunction`), false when the event id is unknown.
+     */
+    fun callEvent(eventId: Int, arguments: List<Any?>): Boolean
+}
+
+/**
  * `struct MonsterInfo` (`src/creatures/monsters/monsters.hpp:50-157`).
  *
  * Every field keeps its Canary name and default. `scriptInterface` is the
@@ -125,7 +149,7 @@ data class SpellBlock(
  * `std::bitset<CONDITION_COUNT>`/`std::bitset<COMBAT_COUNT>` as sets.
  */
 class MonsterInfo {
-    var scriptInterface: Any? = null
+    var scriptInterface: MonsterTypeScriptInterface? = null
 
     var elementMap: MutableMap<CombatType, Int> = TreeMap()
     var reflectMap: MutableMap<CombatType, Int> = TreeMap()
@@ -258,6 +282,37 @@ class MonsterType(name: String) {
 
     /** `MonsterType::isBoss` (`src/creatures/monsters/monsters.cpp:344-346`). */
     fun isBoss(): Boolean = info.bosstiaryClass.isNotEmpty()
+
+    /**
+     * `MonsterType::loadCallback` (`src/creatures/monsters/monsters.cpp:285-322`):
+     * stores the script interface and writes the current event id into the slot
+     * selected by `info.eventType`.
+     */
+    fun loadCallback(scriptInterface: MonsterTypeScriptInterface?): Boolean {
+        val id = scriptInterface?.getEvent() ?: -1
+        if (id == -1) {
+            logger.warn { "[MonsterType::loadCallback] - Event not found" }
+            return false
+        }
+
+        info.scriptInterface = scriptInterface
+
+        when (info.eventType) {
+            MonstersEvent.MONSTERS_EVENT_THINK -> info.thinkEvent = id
+            MonstersEvent.MONSTERS_EVENT_APPEAR -> info.creatureAppearEvent = id
+            MonstersEvent.MONSTERS_EVENT_DISAPPEAR -> info.creatureDisappearEvent = id
+            MonstersEvent.MONSTERS_EVENT_MOVE -> info.creatureMoveEvent = id
+            MonstersEvent.MONSTERS_EVENT_SAY -> info.creatureSayEvent = id
+            MonstersEvent.MONSTERS_EVENT_ATTACKED_BY_PLAYER -> info.monsterAttackedByPlayerEvent = id
+            MonstersEvent.MONSTERS_EVENT_ON_SPAWN -> info.spawnEvent = id
+            MonstersEvent.MONSTERS_EVENT_NONE -> {
+                logger.error { "[MonsterType::loadCallback] - Unknown event type" }
+                return false
+            }
+        }
+
+        return true
+    }
 
     /**
      * `MonsterType::canSpawn` (`src/creatures/monsters/monsters.cpp:35-45`): a
