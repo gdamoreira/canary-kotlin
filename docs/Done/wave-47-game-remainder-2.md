@@ -29,3 +29,7 @@
 ## Post-wave (§6)
 
 Update §1–§3, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+
+## Completion
+
+Completed: game remainder 2 (~84 members left), creature hooks, player depth 4 (648/821), imbuement composition, Lua item attributes. Fixed a deterministic test race in ImbuementDecaySchedulerTest. 603 suites / 6666 tests.

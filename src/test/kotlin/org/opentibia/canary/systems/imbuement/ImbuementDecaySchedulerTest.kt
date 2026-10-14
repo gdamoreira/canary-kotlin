@@ -191,10 +191,10 @@ class ImbuementDecaySchedulerTest {
             decay.startImbuementDecay(item)
             val liveGeneration = decay.scheduledGeneration
 
-            now += 5_000
             decay.runScheduledCheck(0L)
             assertThat(durationOf(item)).isEqualTo(100)
 
+            now += 5_000
             decay.runScheduledCheck(liveGeneration)
             assertThat(durationOf(item)).isEqualTo(95)
         } finally {
@@ -215,10 +215,10 @@ class ImbuementDecaySchedulerTest {
             val live = newItem(duration = 100)
             decay.startImbuementDecay(live)
 
-            now += 5_000
             decay.runScheduledCheck(cancelledGeneration)
             assertThat(durationOf(live)).isEqualTo(100)
 
+            now += 5_000
             decay.runScheduledCheck(decay.scheduledGeneration)
             assertThat(durationOf(live)).isEqualTo(95)
         } finally {
