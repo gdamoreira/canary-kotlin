@@ -87,9 +87,9 @@ class TownFunctionsTest {
         val environment = environment(FakeTownOperations(towns()))
 
         environment.loadChunk(
-            "checks = (rawgetmetatable('Town').getId ~= nil) and " +
-                "(rawgetmetatable('Town').getName ~= nil) and " +
-                "(rawgetmetatable('Town').getTemplePosition ~= nil) and " +
+            "checks = (rawgetmetatable('Town').__metatable.getId ~= nil) and " +
+                "(rawgetmetatable('Town').__metatable.getName ~= nil) and " +
+                "(rawgetmetatable('Town').__metatable.getTemplePosition ~= nil) and " +
                 "(rawgetmetatable('Town').__eq ~= nil) and " +
                 "(Town ~= nil)",
         )

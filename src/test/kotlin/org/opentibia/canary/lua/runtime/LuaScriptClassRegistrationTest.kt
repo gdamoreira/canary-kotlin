@@ -146,6 +146,21 @@ class LuaScriptClassRegistrationTest {
     }
 
     @Test
+    fun `registerSharedClass accepts a base class and constructor`() {
+        val fixture = Fixture()
+        fixture.registry.registerClass("Creature")
+        val constructor = fixture.state.load("return function(self, name) return 'created:' .. name end", "=(new)").call()
+
+        fixture.registry.registerSharedClass("Player", "Creature", constructor)
+
+        val metatable = fixture.registry.metatable("Player")!!
+        assertThat(metatable.get("baseclass").tojstring()).isEqualTo("Creature")
+        assertThat(metatable.rawget('p'.code).toint()).isEqualTo(1)
+        assertThat(metatable.get("__gc").isfunction()).isTrue()
+        assertThat(fixture.state.load("return Player('x')", "=(call)").call().tojstring()).isEqualTo("created:x")
+    }
+
+    @Test
     fun `setMetatable attaches the registry metatable and protects the class table`() {
         val fixture = Fixture()
         fixture.registry.registerClass("Foo")

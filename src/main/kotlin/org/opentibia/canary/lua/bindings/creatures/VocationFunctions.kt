@@ -96,7 +96,7 @@ object VocationFunctions {
     fun install(env: LuaEnvironment, operations: VocationOperations = WorldVocationOperations()) {
         val registry = env.userdata
 
-        env.globals.set(VOCATION_TYPE, luaFunction { args ->
+        registry.registerClass(VOCATION_TYPE, "", luaFunction { args ->
             val argument = args.arg(1)
             val vocation = when {
                 argument.isnumber() -> operations.create(argument.toint())

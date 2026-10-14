@@ -67,8 +67,8 @@ class GroupFunctionsBindingsTest {
         val methods = listOf(
             "getId", "getName", "getFlags", "getAccess", "getMaxDepotItems", "getMaxVipEntries", "hasFlag",
         )
-        val checks = methods.joinToString(" and ") { "(rawgetmetatable('Group').$it ~= nil)" }
-        environment.loadChunk("callable = (type(Group) == 'function')\nmethods = $checks")
+        val checks = methods.joinToString(" and ") { "(rawgetmetatable('Group').__metatable.$it ~= nil)" }
+        environment.loadChunk("callable = (type(Group) == 'table') and (getmetatable(Group).__call ~= nil)\nmethods = $checks")
 
         assertThat(environment.getGlobal("callable").toboolean()).isTrue()
         assertThat(environment.getGlobal("methods").toboolean()).isTrue()

@@ -117,10 +117,10 @@ class ContainerBindingsTest {
         ContainerFunctions.install(environment, FakeContainerOps())
 
         environment.loadChunk(
-            "checks = (rawgetmetatable('Container').getSize ~= nil) and " +
-                "(rawgetmetatable('Container').getItems ~= nil) and " +
-                "(rawgetmetatable('Container').getItemCountById ~= nil) and " +
-                "(rawgetmetatable('Container').hasItem ~= nil)",
+            "checks = (rawgetmetatable('Container').__metatable.getSize ~= nil) and " +
+                "(rawgetmetatable('Container').__metatable.getItems ~= nil) and " +
+                "(rawgetmetatable('Container').__metatable.getItemCountById ~= nil) and " +
+                "(rawgetmetatable('Container').__metatable.hasItem ~= nil)",
         )
 
         assertThat(environment.getGlobal("checks").toboolean()).isTrue()

@@ -83,7 +83,7 @@ object MonsterSpellFunctions {
     fun install(env: LuaEnvironment) {
         val registry = env.userdata
 
-        env.globals.set(MONSTER_SPELL_TYPE, luaFunction {
+        registry.registerClass(MONSTER_SPELL_TYPE, "", luaFunction {
             env.userdata.wrap(MONSTER_SPELL_TYPE, MonsterSpellData())
         })
 

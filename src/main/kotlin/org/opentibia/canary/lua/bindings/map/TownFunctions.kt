@@ -36,7 +36,7 @@ object TownFunctions {
     fun install(env: LuaEnvironment, operations: TownOperations = UnwiredTownOperations) {
         val registry = env.userdata
 
-        env.globals.set(TOWN_TYPE, luaFunction { args ->
+        registry.registerClass(TOWN_TYPE, "", luaFunction { args ->
             val first = args.arg(1)
             val town = when {
                 first.isnumber() -> operations.getTown(first.toint())
@@ -46,7 +46,7 @@ object TownFunctions {
             env.userdata.wrap(TOWN_TYPE, town)
         })
 
-        registry.registerMethod(TOWN_TYPE, "__eq", luaFunction { args ->
+        registry.registerMetaMethod(TOWN_TYPE, "__eq", luaFunction { args ->
             val town = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             val other = retrieveUserdata(args, 2) ?: return@luaFunction LuaValue.FALSE
             LuaValue.valueOf(town == other)

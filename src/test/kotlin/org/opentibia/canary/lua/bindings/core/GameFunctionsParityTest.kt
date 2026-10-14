@@ -298,12 +298,12 @@ class GameFunctionsParityTest {
                 "classification = Game.createItemClassification(4)",
         )
         environment.loadChunk(
-            "npcTypeMt = getmetatable(npcType) == rawgetmetatable('NpcType') " +
-                "monsterTypeMt = getmetatable(monsterType) == rawgetmetatable('MonsterType') " +
-                "containerMt = getmetatable(container) == rawgetmetatable('Container') " +
-                "soulPitMt = getmetatable(soulPit) == rawgetmetatable('Monster') " +
-                "generatedMt = getmetatable(generated) == rawgetmetatable('Npc') " +
-                "tileMt = getmetatable(tile) == rawgetmetatable('Tile')",
+            "npcTypeMt = getmetatable(npcType) == rawgetmetatable('NpcType').__metatable " +
+                "monsterTypeMt = getmetatable(monsterType) == rawgetmetatable('MonsterType').__metatable " +
+                "containerMt = getmetatable(container) == rawgetmetatable('Container').__metatable " +
+                "soulPitMt = getmetatable(soulPit) == rawgetmetatable('Monster').__metatable " +
+                "generatedMt = getmetatable(generated) == rawgetmetatable('Npc').__metatable " +
+                "tileMt = getmetatable(tile) == rawgetmetatable('Tile').__metatable",
         )
 
         assertThat(operations.npcTypeName).isEqualTo("5")
@@ -381,10 +381,10 @@ class GameFunctionsParityTest {
         )
         environment.loadChunk(
             "typesOk = (monsterTypeCatalog.Rat ~= nil) and (byName ~= nil) and " +
-                "(getmetatable(byName) == rawgetmetatable('MonsterType')) " +
+                "(getmetatable(byName) == rawgetmetatable('MonsterType').__metatable) " +
                 "bestiaryOk = (full[1] == 1) and (named[1] == 'Rat') " +
                 "collectionsOk = (#townList == 1) and (#houseList == 1) and (ladderIdList[1] == 3031) and (dummyRates[3052] == 15) " +
-                "townOk = getmetatable(townList[1]) == rawgetmetatable('Town') " +
+                "townOk = getmetatable(townList[1]) == rawgetmetatable('Town').__metatable " +
                 "talkOk = (talk['/save'] ~= nil) and (callbacks.onStartup ~= nil) " +
                 "achievementsOk = (#secretAchievementList == 1) and " +
                 "(achievementList[1].id == 3 and achievementList[1].name == 'e' and achievementList[1].points == 6) and " +

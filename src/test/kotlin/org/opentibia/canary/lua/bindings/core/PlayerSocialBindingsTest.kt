@@ -804,7 +804,7 @@ class PlayerSocialBindingsTest {
     }
 
     @Test
-    fun `PlayerSocial bindings register on the Player Monster and Npc metatables`() {
+    fun `PlayerSocial bindings register on the Player class table`() {
         val environment = env()
         PlayerSocialFunctions.install(environment)
         val names = listOf(
@@ -822,9 +822,7 @@ class PlayerSocialBindingsTest {
             "learnSpell", "forgetSpell", "hasLearnedSpell", "getInstantSpells", "canCast",
         )
         val checks = names.joinToString(" and ") { name ->
-            listOf("Player", "Monster", "Npc").joinToString(" and ") { type ->
-                "(rawgetmetatable('$type').$name ~= nil)"
-            }
+            "(rawgetmetatable('Player').__metatable.$name ~= nil)"
         }
         environment.loadChunk("checks = $checks")
         assertThat(environment.getGlobal("checks").toboolean()).isTrue()
@@ -835,7 +833,7 @@ class PlayerSocialBindingsTest {
         val environment = env()
         val fake = FakePlayerSocialOps()
         PlayerSocialFunctions.install(environment, fake)
-        environment.globals.set("m", environment.userdata.wrap("Monster", Any()))
+        environment.globals.set("m", environment.userdata.wrap("Player", Any()))
         environment.loadChunk(
             """
             guild = m:getGuild()
@@ -868,7 +866,7 @@ class PlayerSocialBindingsTest {
             "getDeaths",
         )
         val checks = absent.joinToString(" and ") { name ->
-            "(rawgetmetatable('Player').$name == nil)"
+            "(rawgetmetatable('Player').__metatable.$name == nil)"
         }
         environment.loadChunk("checks = $checks")
         assertThat(environment.getGlobal("checks").toboolean()).isTrue()

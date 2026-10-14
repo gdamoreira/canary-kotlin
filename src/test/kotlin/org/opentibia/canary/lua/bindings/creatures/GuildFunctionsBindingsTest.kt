@@ -75,8 +75,8 @@ class GuildFunctionsBindingsTest {
             "getId", "getName", "getMembersOnline", "getBankBalance", "setBankBalance",
             "addRank", "getRankById", "getRankByLevel", "getMotd", "setMotd",
         )
-        val checks = methods.joinToString(" and ") { "(rawgetmetatable('Guild').$it ~= nil)" }
-        environment.loadChunk("callable = (type(Guild) == 'function')\nmethods = $checks")
+        val checks = methods.joinToString(" and ") { "(rawgetmetatable('Guild').__metatable.$it ~= nil)" }
+        environment.loadChunk("callable = (type(Guild) == 'table') and (getmetatable(Guild).__call ~= nil)\nmethods = $checks")
 
         assertThat(environment.getGlobal("callable").toboolean()).isTrue()
         assertThat(environment.getGlobal("methods").toboolean()).isTrue()

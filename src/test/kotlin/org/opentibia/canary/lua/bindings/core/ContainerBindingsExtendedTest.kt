@@ -68,13 +68,13 @@ class ContainerBindingsExtendedTest {
         ContainerFunctions.install(environment, FakeContainerOperations())
 
         environment.loadChunk(
-            "checks = (rawgetmetatable('Container').getContentDescription ~= nil) and " +
-                "(rawgetmetatable('Container').addItem ~= nil) and " +
-                "(rawgetmetatable('Container').addItemEx ~= nil) and " +
-                "(rawgetmetatable('Container').getCorpseOwner ~= nil) and " +
-                "(rawgetmetatable('Container').registerReward ~= nil) and " +
-                "(rawgetmetatable('Container').removeAllItems ~= nil) and " +
-                "(rawgetmetatable('Container').removeItemById ~= nil) and " +
+            "checks = (rawgetmetatable('Container').__metatable.getContentDescription ~= nil) and " +
+                "(rawgetmetatable('Container').__metatable.addItem ~= nil) and " +
+                "(rawgetmetatable('Container').__metatable.addItemEx ~= nil) and " +
+                "(rawgetmetatable('Container').__metatable.getCorpseOwner ~= nil) and " +
+                "(rawgetmetatable('Container').__metatable.registerReward ~= nil) and " +
+                "(rawgetmetatable('Container').__metatable.removeAllItems ~= nil) and " +
+                "(rawgetmetatable('Container').__metatable.removeItemById ~= nil) and " +
                 "(rawgetmetatable('Container').__eq ~= nil)",
         )
 

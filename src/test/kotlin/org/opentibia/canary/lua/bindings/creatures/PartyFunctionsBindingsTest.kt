@@ -124,8 +124,8 @@ class PartyFunctionsBindingsTest {
             "removeInvite", "addMember", "removeMember", "isSharedExperienceActive",
             "isSharedExperienceEnabled", "shareExperience", "setSharedExperience",
         )
-        val checks = methods.joinToString(" and ") { "(rawgetmetatable('Party').$it ~= nil)" }
-        environment.loadChunk("callable = (type(Party) == 'function')\nmethods = $checks")
+        val checks = methods.joinToString(" and ") { "(rawgetmetatable('Party').__metatable.$it ~= nil)" }
+        environment.loadChunk("callable = (type(Party) == 'table') and (getmetatable(Party).__call ~= nil)\nmethods = $checks")
 
         assertThat(environment.getGlobal("callable").toboolean()).isTrue()
         assertThat(environment.getGlobal("methods").toboolean()).isTrue()

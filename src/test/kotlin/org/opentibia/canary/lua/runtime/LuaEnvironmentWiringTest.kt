@@ -56,10 +56,10 @@ class LuaEnvironmentWiringTest {
         val environment = env()
         environment.loadChunk(
             "checks = (Game ~= nil) and (Game.createItem ~= nil) and " +
-                "(rawgetmetatable('Player').addItem ~= nil) and " +
-                "(rawgetmetatable('Monster').getHealth ~= nil) and " +
-                "(rawgetmetatable('Item').transform ~= nil) and " +
-                "(rawgetmetatable('Position').sendMagicEffect ~= nil)"
+                "(rawgetmetatable('Player').__metatable.addItem ~= nil) and " +
+                "(rawgetmetatable('Monster').__metatable.getHealth ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.transform ~= nil) and " +
+                "(rawgetmetatable('Position').__metatable.sendMagicEffect ~= nil)"
         )
         assertThat(environment.getGlobal("checks").toboolean()).isTrue()
     }

@@ -25,7 +25,9 @@ import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.ItemTypes_t
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.network.protocol.MessageClass
+import org.opentibia.canary.spells.SoundAmbientEffect
 import org.opentibia.canary.spells.SoundEffect
+import org.opentibia.canary.spells.SoundMusicEffect
 import org.opentibia.canary.spells.SpellType
 import org.opentibia.canary.spells.WorldType
 import org.opentibia.canary.systems.rewardchest.ReturnValue
@@ -894,7 +896,8 @@ private val WHEEL_ENUM_NAMES = listOf(
  * `ITEM_ATTRIBUTE_*`, `ITEM_TYPE_*`, `FLUID_*`, `TILESTATE_*`, `RETURNVALUE_*`,
  * `RELOAD_TYPE_*`, `MONSTERS_EVENT_*`, `MESSAGE_*`, `PlayerFlags_t` names,
  * `RARITY_*`/`BOSS_INVALID`, `CreatureIconCategory_*`/`CreatureIconModifications_*`/
- * `CreatureIconQuests_*` and the complete `SOUND_EFFECT_TYPE_*` namespace, plus the
+ * `CreatureIconQuests_*` and the complete `SOUND_EFFECT_TYPE_*` namespace
+ * (`SoundEffect_t`, `SoundAmbientEffect_t`, `SoundMusicEffect_t`), plus the
  * remaining Canary groups: `ACCOUNT_TYPE_*`/`GROUP_TYPE_*`, `DAILY_REWARD_*`,
  * `BUG_CATEGORY_*`, `REPORT_TYPE_*`, `CALLBACK_PARAM_*`, `COMBAT_PARAM_*`,
  * `COMBAT_FORMULA_*`, `Virtue_*`/`MonkSpell_*`, `FACTION_*`, `CONST_ME_*`,
@@ -903,10 +906,6 @@ private val WHEEL_ENUM_NAMES = listOf(
  * `LIGHT_STATE_*`, `SCREENSHOT_TYPE_*`, `TEXTCOLOR_*`, `SPEECHBUBBLE_*`, `MAPMARK_*`,
  * `ITEM_*` ids, `NPCS_EVENT_*`, `FORGE_*`, `AttrSubId_*`, `Concoction_*` and the
  * `WHEEL_*` namespaces.
- *
- * PARITY GAPS (documented): the `SOUND_EFFECT_TYPE_*` names backed by
- * `SoundAmbientEffect_t`/`SoundMusicEffect_t` are not registered yet; the port's
- * `SoundEffect` mirror covers only `SoundEffect_t`.
  */
 object LuaEnums {
     fun install(env: LuaEnvironment) {
@@ -949,6 +948,8 @@ object LuaEnums {
         }
         CreatureIconQuests_t.entries.forEach { env.registerEnum("CreatureIconQuests_${it.name}", it.value) }
         SoundEffect.entries.forEach { env.registerEnum("SOUND_EFFECT_TYPE_${it.name}", it.value) }
+        SoundAmbientEffect.entries.forEach { env.registerEnum("SOUND_EFFECT_TYPE_${it.name}", it.value) }
+        SoundMusicEffect.entries.forEach { env.registerEnum("SOUND_EFFECT_TYPE_${it.name}", it.value) }
         ACCOUNT_GROUP_ENUM_NAMES.forEach { (name, value) -> env.registerEnum(name, value.toDouble()) }
         DAILY_REWARD_ENUM_NAMES.forEach { (name, value) -> env.registerEnum(name, value.toDouble()) }
         BUG_CATEGORY_ENUM_NAMES.forEach { (name, value) -> env.registerEnum(name, value.toDouble()) }

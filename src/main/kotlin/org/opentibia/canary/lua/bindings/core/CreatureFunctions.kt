@@ -34,65 +34,70 @@ interface CreatureOperations {
  *   creature:setDirection(direction)
  *
  * Canary shares the `Creature` class with `Player`, `Monster` and `Npc` through
- * `Lua::registerSharedClass`. The Kotlin [org.opentibia.canary.lua.userdata.UserdataRegistry]
- * has no class-inheritance chain, so the methods are registered on every creature
- * metatable to preserve the same Lua-visible API.
+ * `Lua::registerSharedClass(..., "Creature", ...)`; the derived classes inherit these
+ * methods through the class-table `__index` chain, so they are registered on
+ * `Creature` only.
  */
 object CreatureFunctions {
-    val CREATURE_TYPES = listOf("Creature", "Player", "Monster", "Npc")
+    const val CREATURE_TYPE = "Creature"
+
+    /** Classes sharing `Lua::luaUserdataCompare` (`creature_functions.cpp:23-26`). */
+    val CREATURE_TYPES = listOf(CREATURE_TYPE, "Player", "Monster", "Npc")
 
     fun install(env: LuaEnvironment, operations: CreatureOperations = UnwiredCreatureOperations) {
         val registry = env.userdata
-        for (type in CREATURE_TYPES) {
-            registry.registerMethod(type, "getId", luaFunction { args ->
-                val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.getId(creature).toDouble())
-            })
+        registry.registerClass(CREATURE_TYPE)
 
-            registry.registerMethod(type, "getName", luaFunction { args ->
-                val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.getName(creature))
-            })
+        CREATURE_TYPES.forEach { registry.registerMetaMethod(it, "__eq", luaUserdataCompare) }
 
-            registry.registerMethod(type, "getHealth", luaFunction { args ->
-                val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.getHealth(creature))
-            })
+        registry.registerMethod(CREATURE_TYPE, "getId", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.getId(creature).toDouble())
+        })
 
-            registry.registerMethod(type, "getMaxHealth", luaFunction { args ->
-                val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.getMaxHealth(creature))
-            })
+        registry.registerMethod(CREATURE_TYPE, "getName", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.getName(creature))
+        })
 
-            registry.registerMethod(type, "setHealth", luaFunction { args ->
-                val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val health = args.arg(2).toint()
-                LuaValue.valueOf(operations.setHealth(creature, health))
-            })
+        registry.registerMethod(CREATURE_TYPE, "getHealth", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.getHealth(creature))
+        })
 
-            registry.registerMethod(type, "addHealth", luaFunction { args ->
-                val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val healthChange = args.arg(2).toint()
-                val combatType = args.arg(3).optint(0)
-                LuaValue.valueOf(operations.addHealth(creature, healthChange, combatType))
-            })
+        registry.registerMethod(CREATURE_TYPE, "getMaxHealth", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.getMaxHealth(creature))
+        })
 
-            registry.registerMethod(type, "getPosition", luaFunction { args ->
-                val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                env.userdata.wrap("Position", operations.getPosition(creature))
-            })
+        registry.registerMethod(CREATURE_TYPE, "setHealth", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val health = args.arg(2).toint()
+            LuaValue.valueOf(operations.setHealth(creature, health))
+        })
 
-            registry.registerMethod(type, "getDirection", luaFunction { args ->
-                val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                LuaValue.valueOf(operations.getDirection(creature))
-            })
+        registry.registerMethod(CREATURE_TYPE, "addHealth", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val healthChange = args.arg(2).toint()
+            val combatType = args.arg(3).optint(0)
+            LuaValue.valueOf(operations.addHealth(creature, healthChange, combatType))
+        })
 
-            registry.registerMethod(type, "setDirection", luaFunction { args ->
-                val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-                val direction = args.arg(2).toint()
-                LuaValue.valueOf(operations.setDirection(creature, direction))
-            })
-        }
+        registry.registerMethod(CREATURE_TYPE, "getPosition", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            env.userdata.wrap("Position", operations.getPosition(creature))
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "getDirection", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.getDirection(creature))
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "setDirection", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val direction = args.arg(2).toint()
+            LuaValue.valueOf(operations.setDirection(creature, direction))
+        })
     }
 }
 

@@ -29,8 +29,8 @@ class ItemFunctionsParityTest {
         val environment = env()
         ItemFunctions.install(environment)
 
-        val itemChecks = CANARY_ITEM_METHODS.joinToString(" and ") { "(rawgetmetatable('Item').$it ~= nil)" }
-        val containerChecks = CANARY_ITEM_METHODS.joinToString(" and ") { "(rawgetmetatable('Container').$it ~= nil)" }
+        val itemChecks = CANARY_ITEM_METHODS.joinToString(" and ") { "(rawgetmetatable('Item').__metatable.$it ~= nil)" }
+        val containerChecks = CANARY_ITEM_METHODS.joinToString(" and ") { "(rawgetmetatable('Container').__metatable.$it ~= nil)" }
         environment.loadChunk("checks = ($itemChecks) and ($containerChecks)")
 
         assertThat(environment.getGlobal("checks").toboolean()).isTrue()
@@ -147,26 +147,26 @@ class ItemFunctionsParityTest {
         ItemFunctions.install(environment)
 
         environment.loadChunk(
-            "noOwnerId = select('#', rawgetmetatable('Item').getOwnerId(5)) " +
-                "noOwnerName = select('#', rawgetmetatable('Item').getOwnerName(5)) " +
-                "noSetOwner = select('#', rawgetmetatable('Item').setOwner(5, 1)) " +
-                "noIsOwner = select('#', rawgetmetatable('Item').isOwner(5, 1)) " +
-                "noHasOwner = rawgetmetatable('Item').hasOwner(5) " +
-                "noActor = rawgetmetatable('Item').actor(5) " +
-                "noHasShader = rawgetmetatable('Item').hasShader(5) " +
-                "noGetShader = rawgetmetatable('Item').getShader(5) " +
-                "noSetShader = rawgetmetatable('Item').setShader(5, 'x') " +
-                "noSlots = rawgetmetatable('Item').getImbuementSlot(5) " +
-                "noImbuement = rawgetmetatable('Item').getImbuement(5) " +
-                "noDuration = rawgetmetatable('Item').setDuration(5, 1) " +
-                "noDepot = rawgetmetatable('Item').isInsideDepot(5) " +
-                "noTier = rawgetmetatable('Item').getTier(5) " +
-                "noSetTier = rawgetmetatable('Item').setTier(5, 1) " +
-                "noClassification = rawgetmetatable('Item').getClassification(5) " +
-                "noCarpet = rawgetmetatable('Item').canReceiveAutoCarpet(5) " +
-                "noProperty = rawgetmetatable('Item').hasProperty(5, 0) " +
-                "noMoveSlot = rawgetmetatable('Item').moveToSlot(5, 1, 2) " +
-                "noSerialize = rawgetmetatable('Item').serializeAttributes(5)",
+            "noOwnerId = select('#', rawgetmetatable('Item').__metatable.getOwnerId(5)) " +
+                "noOwnerName = select('#', rawgetmetatable('Item').__metatable.getOwnerName(5)) " +
+                "noSetOwner = select('#', rawgetmetatable('Item').__metatable.setOwner(5, 1)) " +
+                "noIsOwner = select('#', rawgetmetatable('Item').__metatable.isOwner(5, 1)) " +
+                "noHasOwner = rawgetmetatable('Item').__metatable.hasOwner(5) " +
+                "noActor = rawgetmetatable('Item').__metatable.actor(5) " +
+                "noHasShader = rawgetmetatable('Item').__metatable.hasShader(5) " +
+                "noGetShader = rawgetmetatable('Item').__metatable.getShader(5) " +
+                "noSetShader = rawgetmetatable('Item').__metatable.setShader(5, 'x') " +
+                "noSlots = rawgetmetatable('Item').__metatable.getImbuementSlot(5) " +
+                "noImbuement = rawgetmetatable('Item').__metatable.getImbuement(5) " +
+                "noDuration = rawgetmetatable('Item').__metatable.setDuration(5, 1) " +
+                "noDepot = rawgetmetatable('Item').__metatable.isInsideDepot(5) " +
+                "noTier = rawgetmetatable('Item').__metatable.getTier(5) " +
+                "noSetTier = rawgetmetatable('Item').__metatable.setTier(5, 1) " +
+                "noClassification = rawgetmetatable('Item').__metatable.getClassification(5) " +
+                "noCarpet = rawgetmetatable('Item').__metatable.canReceiveAutoCarpet(5) " +
+                "noProperty = rawgetmetatable('Item').__metatable.hasProperty(5, 0) " +
+                "noMoveSlot = rawgetmetatable('Item').__metatable.moveToSlot(5, 1, 2) " +
+                "noSerialize = rawgetmetatable('Item').__metatable.serializeAttributes(5)",
         )
 
         assertThat(environment.getGlobal("noOwnerId").toint()).isEqualTo(0)

@@ -22,31 +22,31 @@ class ItemBindingsExtendedTest {
         ItemFunctions.install(environment)
 
         environment.loadChunk(
-            "checks = (rawgetmetatable('Item').isItem ~= nil) and " +
-                "(rawgetmetatable('Container').isItem ~= nil) and " +
-                "(rawgetmetatable('Item').getContainer ~= nil) and " +
-                "(rawgetmetatable('Container').getContainer ~= nil) and " +
-                "(rawgetmetatable('Item').getParent ~= nil) and " +
-                "(rawgetmetatable('Item').getTopParent ~= nil) and " +
-                "(rawgetmetatable('Item').clone ~= nil) and " +
-                "(rawgetmetatable('Item').split ~= nil) and " +
-                "(rawgetmetatable('Item').remove ~= nil) and " +
-                "(rawgetmetatable('Item').getCharges ~= nil) and " +
-                "(rawgetmetatable('Item').getFluidType ~= nil) and " +
-                "(rawgetmetatable('Item').getWeight ~= nil) and " +
-                "(rawgetmetatable('Item').getPluralName ~= nil) and " +
-                "(rawgetmetatable('Item').getArticle ~= nil) and " +
-                "(rawgetmetatable('Item').getPosition ~= nil) and " +
-                "(rawgetmetatable('Item').getTile ~= nil) and " +
-                "(rawgetmetatable('Item').hasAttribute ~= nil) and " +
-                "(rawgetmetatable('Item').removeAttribute ~= nil) and " +
-                "(rawgetmetatable('Item').getCustomAttribute ~= nil) and " +
-                "(rawgetmetatable('Item').setCustomAttribute ~= nil) and " +
-                "(rawgetmetatable('Item').removeCustomAttribute ~= nil) and " +
-                "(rawgetmetatable('Item').canBeMoved ~= nil) and " +
-                "(rawgetmetatable('Item').moveTo ~= nil) and " +
-                "(rawgetmetatable('Item').getDescription ~= nil) and " +
-                "(rawgetmetatable('Item').isContainer ~= nil)",
+            "checks = (rawgetmetatable('Item').__metatable.isItem ~= nil) and " +
+                "(rawgetmetatable('Container').__metatable.isItem ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.getContainer ~= nil) and " +
+                "(rawgetmetatable('Container').__metatable.getContainer ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.getParent ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.getTopParent ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.clone ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.split ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.remove ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.getCharges ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.getFluidType ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.getWeight ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.getPluralName ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.getArticle ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.getPosition ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.getTile ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.hasAttribute ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.removeAttribute ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.getCustomAttribute ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.setCustomAttribute ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.removeCustomAttribute ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.canBeMoved ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.moveTo ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.getDescription ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.isContainer ~= nil)",
         )
 
         assertThat(environment.getGlobal("checks").toboolean()).isTrue()

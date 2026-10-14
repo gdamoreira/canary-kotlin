@@ -427,7 +427,7 @@ class PlayerBatch1BindingsTest {
         val (environment, _) = installed()
         environment.loadChunk(
             """
-            local m = rawgetmetatable('Player')
+            local m = rawgetmetatable('Player').__metatable
             nilChecks =
                 (m.getBaseMagicLevel(nil) == nil) and
                 (m.getManaSpent(nil) == nil) and
@@ -448,7 +448,7 @@ class PlayerBatch1BindingsTest {
     }
 
     @Test
-    fun `batch 1 Player methods register on the Player Monster and Npc metatables`() {
+    fun `batch 1 Player methods register on the Player class table`() {
         val (environment, _) = installed()
         val names = listOf(
             "getBaseMagicLevel", "getManaSpent", "addManaSpent", "getBaseMaxHealth", "getBaseMaxMana",
@@ -458,9 +458,7 @@ class PlayerBatch1BindingsTest {
             "removeCondition", "hasCondition", "getStamina", "setStamina", "getSoul", "addSoul", "getMaxSoul",
         )
         val checks = names.joinToString(" and ") { name ->
-            listOf("Player", "Monster", "Npc").joinToString(" and ") { type ->
-                "(rawgetmetatable('$type').$name ~= nil)"
-            }
+            "(rawgetmetatable('Player').__metatable.$name ~= nil)"
         }
         environment.loadChunk("checks = $checks")
         assertThat(environment.getGlobal("checks").toboolean()).isTrue()

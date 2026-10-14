@@ -114,7 +114,7 @@ object CombatFunctions {
         ConditionFunctions.install(env)
         VariantFunctions.install(env, variantOperations)
 
-        env.globals.set(COMBAT_CLASS, luaFunction { args ->
+        env.userdata.registerClass(COMBAT_CLASS, "", luaFunction {
             env.userdata.wrap(COMBAT_CLASS, LuaCombat())
         })
 
@@ -320,7 +320,7 @@ object ConditionFunctions {
     const val CONDITION_CLASS = "Condition"
 
     fun install(env: LuaEnvironment) {
-        env.globals.set(CONDITION_CLASS, luaFunction { args -> createCondition(env, args) })
+        env.userdata.registerClass(CONDITION_CLASS, "", luaFunction { args -> createCondition(env, args) })
 
         val registry = env.userdata
         registry.registerMethod(CONDITION_CLASS, "delete", luaFunction { LuaValue.NIL })
@@ -502,7 +502,7 @@ object VariantFunctions {
     const val VARIANT_CLASS = "Variant"
 
     fun install(env: LuaEnvironment, operations: VariantOperations = UnwiredVariantOperations) {
-        env.globals.set(VARIANT_CLASS, luaFunction { args -> createVariant(env, args.arg(1), operations) })
+        env.userdata.registerClass(VARIANT_CLASS, "", luaFunction { args -> createVariant(env, args.arg(1), operations) })
 
         val registry = env.userdata
         registry.registerMethod(VARIANT_CLASS, "getNumber", luaFunction { args ->

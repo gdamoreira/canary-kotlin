@@ -89,7 +89,7 @@ object PositionFunctions {
     fun install(env: LuaEnvironment, operations: PositionOperations = UnwiredPositionOperations) {
         val registry = env.userdata
 
-        env.globals.set(POSITION_TYPE, luaFunction { args ->
+        env.userdata.registerClass(POSITION_TYPE, "", luaFunction { args ->
             if (args.narg() == 0) {
                 return@luaFunction env.userdata.wrap(POSITION_TYPE, Position(0, 0, 0))
             }
@@ -103,7 +103,7 @@ object PositionFunctions {
             env.userdata.wrap(POSITION_TYPE, position)
         })
 
-        registry.registerMethod(POSITION_TYPE, "__add", luaFunction { args ->
+        registry.registerMetaMethod(POSITION_TYPE, "__add", luaFunction { args ->
             val position = retrieveUserdata(args, 1) as? Position ?: return@luaFunction LuaValue.NIL
             val other = retrieveUserdata(args, 2) as? Position ?: return@luaFunction LuaValue.NIL
             env.userdata.wrap(
@@ -112,7 +112,7 @@ object PositionFunctions {
             )
         })
 
-        registry.registerMethod(POSITION_TYPE, "__sub", luaFunction { args ->
+        registry.registerMetaMethod(POSITION_TYPE, "__sub", luaFunction { args ->
             val position = retrieveUserdata(args, 1) as? Position ?: return@luaFunction LuaValue.NIL
             val other = retrieveUserdata(args, 2) as? Position ?: return@luaFunction LuaValue.NIL
             env.userdata.wrap(
@@ -121,7 +121,7 @@ object PositionFunctions {
             )
         })
 
-        registry.registerMethod(POSITION_TYPE, "__eq", luaFunction { args ->
+        registry.registerMetaMethod(POSITION_TYPE, "__eq", luaFunction { args ->
             val position = retrieveUserdata(args, 1) as? Position ?: return@luaFunction LuaValue.NIL
             val other = retrieveUserdata(args, 2) as? Position ?: return@luaFunction LuaValue.FALSE
             LuaValue.valueOf(position == other)

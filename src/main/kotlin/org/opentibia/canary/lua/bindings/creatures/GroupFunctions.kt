@@ -56,7 +56,7 @@ object GroupFunctions {
     fun install(env: LuaEnvironment, operations: GroupOperations = WorldGroupOperations()) {
         val registry = env.userdata
 
-        env.globals.set(GROUP_TYPE, luaFunction { args ->
+        registry.registerClass(GROUP_TYPE, "", luaFunction { args ->
             operations.create(args.arg(1).toint())?.let { registry.wrap(GROUP_TYPE, it) } ?: LuaValue.NIL
         })
 

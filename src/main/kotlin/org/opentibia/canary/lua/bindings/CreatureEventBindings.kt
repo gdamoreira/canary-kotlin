@@ -41,7 +41,7 @@ object CreatureEventBindings {
     fun install(env: LuaEnvironment): CreatureEvents {
         val events = CreatureEvents()
 
-        env.globals.set("CreatureEvent", object : VarArgFunction() {
+        env.userdata.registerClass("CreatureEvent", "", object : VarArgFunction() {
             override fun invoke(args: Varargs): Varargs {
                 val name = if (args.arg(1).isstring()) args.arg(1).tojstring() else ""
                 val self = LuaTable()

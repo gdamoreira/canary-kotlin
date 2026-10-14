@@ -116,8 +116,8 @@ class VocationFunctionsBindingsTest {
             "getBaseAttackSpeed", "getAttackSpeed", "getBaseSpeed",
             "getDemotion", "getPromotion",
         )
-        val checks = methods.joinToString(" and ") { "(rawgetmetatable('Vocation').$it ~= nil)" }
-        environment.loadChunk("callable = (type(Vocation) == 'function')\nmethods = $checks")
+        val checks = methods.joinToString(" and ") { "(rawgetmetatable('Vocation').__metatable.$it ~= nil)" }
+        environment.loadChunk("callable = (type(Vocation) == 'table') and (getmetatable(Vocation).__call ~= nil)\nmethods = $checks")
 
         assertThat(environment.getGlobal("callable").toboolean()).isTrue()
         assertThat(environment.getGlobal("methods").toboolean()).isTrue()

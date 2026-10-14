@@ -225,15 +225,11 @@ object NetworkMessageFunctions {
     const val NETWORK_MESSAGE_TYPE = "NetworkMessage"
 
     fun install(env: LuaEnvironment, operations: NetworkMessageOperations = UnwiredNetworkMessageOperations) {
-        env.globals.set(NETWORK_MESSAGE_TYPE, libraryFunction {
+        env.userdata.registerClass(NETWORK_MESSAGE_TYPE, "", libraryFunction {
             env.userdata.wrap(NETWORK_MESSAGE_TYPE, NetworkMessage())
         })
 
-        val metatable = env.userdata.metatable(NETWORK_MESSAGE_TYPE)
-        if (metatable.get("__index").isnil()) {
-            metatable.set("__index", metatable)
-        }
-        metatable.set("__eq", libraryFunction { args ->
+        env.userdata.registerMetaMethod(NETWORK_MESSAGE_TYPE, "__eq", libraryFunction { args ->
             LuaValue.valueOf(args.arg(1) == args.arg(2))
         })
 

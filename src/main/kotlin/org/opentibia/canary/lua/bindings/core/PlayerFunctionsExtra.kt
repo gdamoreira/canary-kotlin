@@ -417,7 +417,7 @@ object PlayerFunctionsExtra {
     fun install(env: LuaEnvironment, operations: PlayerExtraOperations = UnwiredPlayerExtraOperations) {
         val registry = env.userdata
         val register: (String, LuaValue) -> Unit = { name, fn ->
-            PlayerFunctions.PLAYER_TYPES.forEach { registry.registerMethod(it, name, fn) }
+            registry.registerMethod(PlayerFunctions.PLAYER_TYPE, name, fn)
         }
 
         register("openMarket", luaFunction { args ->

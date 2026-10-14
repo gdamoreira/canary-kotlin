@@ -25,6 +25,18 @@ internal fun luaFunction(fn: (Varargs) -> Varargs): VarArgFunction = object : Va
 internal fun retrieveUserdata(args: Varargs, index: Int): Any? = args.arg(index).touserdata()
 
 /**
+ * `Lua::luaUserdataCompare` (`lua_functions_loader.cpp:910-913`): equal only when both
+ * operands wrap the same engine instance, exactly like the C++ raw-pointer comparison.
+ * Shared by every class that registers the metamethod so LuaJ's "same `__eq`
+ * function" rule accepts cross-class comparisons like Canary's single C function.
+ */
+internal val luaUserdataCompare: LuaValue = luaFunction { args ->
+    val left = args.arg(1).touserdata()
+    val right = args.arg(2).touserdata()
+    LuaValue.valueOf(left != null && right != null && left === right)
+}
+
+/**
  * Reads a Lua argument into a raw attribute value, mirroring Canary's
  * `ItemFunctions::luaItemSetAttribute` value handling (boolean, integer, float, string).
  */

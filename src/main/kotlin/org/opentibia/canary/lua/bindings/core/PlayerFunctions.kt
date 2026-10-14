@@ -477,16 +477,12 @@ interface PlayerOperations {
  *   player:getStaminaXpBoost() / setStaminaXpBoost(value)
  *
  * Canary registers Player methods on the `Player` shared class, which inherits
- * `Creature` through metatables. The Kotlin [org.opentibia.canary.lua.userdata.UserdataRegistry]
- * has no class-inheritance chain, so the methods are registered on the `Player`,
- * `Monster` and `Npc` metatables to keep the same names reachable from any
- * creature-typed userdata, mirroring how the shipped Lua scripts call them
- * (e.g. `data-canary/scripts/movements/citizen.lua` calls `creature:setTown`).
+ * `Creature` through the class-table `__index` chain (`Lua::registerSharedClass`,
+ * `player_functions.cpp:118-119`); the port registers them on `Player` only and the
+ * `Player` class inherits the `Creature` methods.
  */
 object PlayerFunctions {
     const val PLAYER_TYPE = "Player"
-
-    val PLAYER_TYPES = listOf(PLAYER_TYPE, "Monster", "Npc")
 
     fun install(
         env: LuaEnvironment,
@@ -495,8 +491,9 @@ object PlayerFunctions {
         remainder: PlayerRemainderOperations = WorldPlayerRemainderOperations(),
     ) {
         val registry = env.userdata
+        registry.registerClass(PLAYER_TYPE, CreatureFunctions.CREATURE_TYPE)
         val register: (String, LuaValue) -> Unit = { name, fn ->
-            PLAYER_TYPES.forEach { registry.registerMethod(it, name, fn) }
+            registry.registerMethod(PLAYER_TYPE, name, fn)
         }
 
         register("addItem", luaFunction { args ->

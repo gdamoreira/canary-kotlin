@@ -8,6 +8,7 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.npcs.NpcInfo
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.items.ItemTypeRegistry
+import org.opentibia.canary.lua.bindings.core.CreatureFunctions
 import org.opentibia.canary.lua.bindings.core.luaFunction
 import org.opentibia.canary.lua.bindings.core.luaToPosition
 import org.opentibia.canary.lua.bindings.core.retrieveUserdata
@@ -115,7 +116,7 @@ object NpcFunctions {
     fun install(env: LuaEnvironment, operations: NpcOperations = WorldNpcOperations()) {
         val registry = env.userdata
 
-        env.globals.set(NPC_TYPE, luaFunction { args ->
+        registry.registerClass(NPC_TYPE, CreatureFunctions.CREATURE_TYPE, luaFunction { args ->
             val argument = args.arg(1)
             val npc = when {
                 argument.isnumber() -> operations.createById(argument.tolong())

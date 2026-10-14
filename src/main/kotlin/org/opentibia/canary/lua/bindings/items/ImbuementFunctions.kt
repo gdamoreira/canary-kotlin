@@ -51,12 +51,12 @@ object ImbuementFunctions {
     fun install(env: LuaEnvironment, operations: ImbuementOperations = UnwiredImbuementOperations) {
         val registry = env.userdata
 
-        env.globals.set(IMBUEMENT_TYPE, luaFunction { args ->
+        env.userdata.registerClass(IMBUEMENT_TYPE, "", luaFunction { args ->
             val imbuement = operations.getImbuement(args.arg(1).optint(0)) ?: return@luaFunction LuaValue.NIL
             env.userdata.wrap(IMBUEMENT_TYPE, imbuement)
         })
 
-        registry.registerMethod(IMBUEMENT_TYPE, "__eq", luaFunction { args ->
+        registry.registerMetaMethod(IMBUEMENT_TYPE, "__eq", luaFunction { args ->
             val imbuement = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             val other = retrieveUserdata(args, 2) ?: return@luaFunction LuaValue.FALSE
             LuaValue.valueOf(imbuement == other)

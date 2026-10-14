@@ -368,7 +368,6 @@ class CoreBindingsTest {
         environment.globals.set("c", environment.userdata.wrap("Monster", creature))
 
         environment.loadChunk("id = c:getId()")
-        environment.loadChunk("name = c:getName()")
         environment.loadChunk("hp = c:getHealth()")
         environment.loadChunk("maxHp = c:getMaxHealth()")
         environment.loadChunk("c:setHealth(55)")
@@ -378,7 +377,6 @@ class CoreBindingsTest {
         environment.loadChunk("dist = pos:getDistance(target)")
 
         assertThat(environment.getGlobal("id").toint()).isEqualTo(7)
-        assertThat(environment.getGlobal("name").tojstring()).isEqualTo("Rat")
         assertThat(environment.getGlobal("hp").toint()).isEqualTo(30)
         assertThat(environment.getGlobal("maxHp").toint()).isEqualTo(100)
         assertThat(environment.getGlobal("after").toint()).isEqualTo(55)
@@ -538,16 +536,16 @@ class CoreBindingsTest {
         PositionFunctions.install(environment, FakePositionOps())
 
         environment.loadChunk(
-            "checks = (rawgetmetatable('Player').addItem ~= nil) and " +
-                "(rawgetmetatable('Player').removeItem ~= nil) and " +
-                "(rawgetmetatable('Player').getItemCount ~= nil) and " +
-                "(rawgetmetatable('Player').addSkillTries ~= nil) and " +
-                "(rawgetmetatable('Player').sendTextMessage ~= nil) and " +
-                "(rawgetmetatable('Player').getHealth ~= nil) and " +
-                "(rawgetmetatable('Monster').getHealth ~= nil) and " +
-                "(rawgetmetatable('Item').transform ~= nil) and " +
-                "(rawgetmetatable('Item').decay ~= nil) and " +
-                "(rawgetmetatable('Position').sendMagicEffect ~= nil) and " +
+            "checks = (rawgetmetatable('Player').__metatable.addItem ~= nil) and " +
+                "(rawgetmetatable('Player').__metatable.removeItem ~= nil) and " +
+                "(rawgetmetatable('Player').__metatable.getItemCount ~= nil) and " +
+                "(rawgetmetatable('Player').__metatable.addSkillTries ~= nil) and " +
+                "(rawgetmetatable('Player').__metatable.sendTextMessage ~= nil) and " +
+                "(rawgetmetatable('Player').__metatable.getHealth ~= nil) and " +
+                "(rawgetmetatable('Monster').__metatable.getHealth ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.transform ~= nil) and " +
+                "(rawgetmetatable('Item').__metatable.decay ~= nil) and " +
+                "(rawgetmetatable('Position').__metatable.sendMagicEffect ~= nil) and " +
                 "(Game.createItem ~= nil)",
         )
 

@@ -149,7 +149,7 @@ class ItemBindingsDelegationTest {
 
         operations.container = Container(id = 1987, capacity = 3, type = ItemType(1987, "backpack", isContainer = true))
         environment.loadChunk("bag = item:getContainer()")
-        environment.loadChunk("bagMt = getmetatable(bag) == rawgetmetatable('Container')")
+        environment.loadChunk("bagMt = getmetatable(bag) == rawgetmetatable('Container').__metatable")
         assertThat(environment.getGlobal("bag").isuserdata()).isTrue()
         assertThat(environment.getGlobal("bagMt").toboolean()).isTrue()
     }
@@ -164,9 +164,9 @@ class ItemBindingsDelegationTest {
         environment.globals.set("item", environment.userdata.wrap("Item", operations.item))
 
         environment.loadChunk("parent = item:getParent()")
-        environment.loadChunk("parentMt = getmetatable(parent) == rawgetmetatable('Player')")
+        environment.loadChunk("parentMt = getmetatable(parent) == rawgetmetatable('Player').__metatable")
         environment.loadChunk("top = item:getTopParent()")
-        environment.loadChunk("topMt = getmetatable(top) == rawgetmetatable('Container')")
+        environment.loadChunk("topMt = getmetatable(top) == rawgetmetatable('Container').__metatable")
 
         assertThat(environment.getGlobal("parentMt").toboolean()).isTrue()
         assertThat(environment.getGlobal("topMt").toboolean()).isTrue()

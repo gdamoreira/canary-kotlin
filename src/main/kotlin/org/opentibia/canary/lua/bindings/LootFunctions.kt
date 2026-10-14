@@ -96,7 +96,7 @@ object LootFunctions {
     fun install(env: LuaEnvironment, operations: LootOperations = UnwiredLootOperations) {
         val registry = env.userdata
 
-        env.globals.set(LOOT_TYPE, luaFunction { args ->
+        registry.registerClass(LOOT_TYPE, "", luaFunction { args ->
             val monsterName = when {
                 args.arg(1).isnil() -> null
                 args.arg(1).isstring() -> args.arg(1).tojstring()

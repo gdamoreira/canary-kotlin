@@ -767,7 +767,7 @@ class PlayerBatch3BindingsTest {
         val (environment, _) = installed()
         environment.loadChunk(
             """
-            local m = rawgetmetatable('Player')
+            local m = rawgetmetatable('Player').__metatable
             nilChecks =
                 (m.sendSpellCooldown(nil, 7, 3000) == nil) and
                 (m.avatarTimer(nil) == nil) and
@@ -819,7 +819,7 @@ class PlayerBatch3BindingsTest {
     }
 
     @Test
-    fun `batch 3 Player methods register on the Player Monster and Npc metatables`() {
+    fun `batch 3 Player methods register on the Player class table`() {
         val (environment, _) = installed()
         val names = listOf(
             "sendSpellCooldown", "sendSpellGroupCooldown", "clearSpellCooldowns", "applyImbuementScroll",
@@ -846,9 +846,7 @@ class PlayerBatch3BindingsTest {
             "removeAchievement", "kv", "save",
         )
         val checks = names.joinToString(" and ") { name ->
-            listOf("Player", "Monster", "Npc").joinToString(" and ") { type ->
-                "(rawgetmetatable('$type').$name ~= nil)"
-            }
+            "(rawgetmetatable('Player').__metatable.$name ~= nil)"
         }
         environment.loadChunk("checks = $checks")
         assertThat(environment.getGlobal("checks").toboolean()).isTrue()

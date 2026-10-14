@@ -32,10 +32,6 @@ interface TeleportOperations {
  * PARITY GAPS (documented, no invented state):
  * - `Teleport(uid)` resolves through [TeleportOperations.getItemByUid]; the port does not
  *   model Canary's script environment UID registry, so the default seam returns null.
- * - Canary registers `Teleport` with the `Item` base class, so Lua sees every `Item`
- *   method through the metatable chain. The Kotlin userdata registry has no class
- *   inheritance, so only the Teleport-specific methods are visible (the shared `Item`
- *   methods are not registered on the `Teleport` metatable).
  */
 object TeleportFunctions {
     const val TELEPORT_TYPE = "Teleport"
@@ -43,12 +39,12 @@ object TeleportFunctions {
     fun install(env: LuaEnvironment, operations: TeleportOperations = UnwiredTeleportOperations) {
         val registry = env.userdata
 
-        env.globals.set(TELEPORT_TYPE, luaFunction { args ->
+        env.userdata.registerClass(TELEPORT_TYPE, "Item", luaFunction { args ->
             val teleport = operations.getItemByUid(args.arg(1).optint(0)) ?: return@luaFunction LuaValue.NIL
             env.userdata.wrap(TELEPORT_TYPE, teleport)
         })
 
-        registry.registerMethod(TELEPORT_TYPE, "__eq", luaFunction { args ->
+        registry.registerMetaMethod(TELEPORT_TYPE, "__eq", luaFunction { args ->
             val teleport = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             val other = retrieveUserdata(args, 2) ?: return@luaFunction LuaValue.FALSE
             LuaValue.valueOf(teleport == other)

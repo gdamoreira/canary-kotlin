@@ -157,4 +157,37 @@ class LuaEnumsLibraryTest {
         assertThat(environment.getGlobal("flagCombat").toint()).isEqualTo(0)
         assertThat(environment.getGlobal("flagLast").toint()).isEqualTo(40)
     }
+
+    @Test
+    fun `sound ambient and music enums match the C++ registrations`() {
+        val environment = environment()
+
+        environment.loadChunk(
+            """
+            ambientSilence = SOUND_EFFECT_TYPE_AMBIENT_SILENCE
+            ambientCreatures = SOUND_EFFECT_TYPE_AMBIENT_INSECTS_CREATURES
+            ambientStorm = SOUND_EFFECT_TYPE_AMBIENT_WIND_NOISES_STORM
+            ambientBubbling = SOUND_EFFECT_TYPE_AMBIENT_BUBBLING_NOISES
+            musicSilence = SOUND_EFFECT_TYPE_MUSIC_SILENCE
+            musicTitle = SOUND_EFFECT_TYPE_MUSIC_TYPE_MUSIC_TITLE
+            musicOne = SOUND_EFFECT_TYPE_MUSIC_TYPE_MUSIC_1
+            musicTwo = SOUND_EFFECT_TYPE_MUSIC_TYPE_MUSIC_2
+            musicImmediate = SOUND_EFFECT_TYPE_MUSIC_TYPE_MUSIC_IMMEDIATE
+            musicImmediateTwo = SOUND_EFFECT_TYPE_MUSIC_TYPE_MUSIC_IMMEDIATE_2
+            musicNineteen = SOUND_EFFECT_TYPE_MUSIC_TYPE_MUSIC_19
+            """.trimIndent(),
+        )
+
+        assertThat(environment.getGlobal("ambientSilence").toint()).isEqualTo(0)
+        assertThat(environment.getGlobal("ambientCreatures").toint()).isEqualTo(3)
+        assertThat(environment.getGlobal("ambientStorm").toint()).isEqualTo(4)
+        assertThat(environment.getGlobal("ambientBubbling").toint()).isEqualTo(89)
+        assertThat(environment.getGlobal("musicSilence").toint()).isEqualTo(0)
+        assertThat(environment.getGlobal("musicTitle").toint()).isEqualTo(7)
+        assertThat(environment.getGlobal("musicOne").toint()).isEqualTo(8)
+        assertThat(environment.getGlobal("musicTwo").toint()).isEqualTo(10)
+        assertThat(environment.getGlobal("musicImmediate").toint()).isEqualTo(22)
+        assertThat(environment.getGlobal("musicImmediateTwo").toint()).isEqualTo(25)
+        assertThat(environment.getGlobal("musicNineteen").toint()).isEqualTo(29)
+    }
 }

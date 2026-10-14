@@ -45,7 +45,7 @@ object MountFunctions {
     fun install(env: LuaEnvironment, operations: MountOperations = WorldMountOperations()) {
         val registry = env.userdata
 
-        env.globals.set(MOUNT_TYPE, luaFunction { args ->
+        registry.registerClass(MOUNT_TYPE, "", luaFunction { args ->
             val argument = args.arg(1)
             val mount = when {
                 argument.isnumber() -> operations.create(argument.toint())
