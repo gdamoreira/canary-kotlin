@@ -4,6 +4,7 @@ import org.opentibia.canary.account.Account
 import org.opentibia.canary.account.AccountType
 import org.opentibia.canary.account.getTimeNow
 import org.opentibia.canary.chat.SpeakClasses
+import org.opentibia.canary.combat.CombatType
 import org.opentibia.canary.combat.condition.Buff
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionId
@@ -13,6 +14,7 @@ import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.LightInfo
 import org.opentibia.canary.combat.condition.MonkData
 import org.opentibia.canary.combat.condition.Outfit
+import org.opentibia.canary.combat.condition.Skill
 import org.opentibia.canary.combat.condition.SpellGroup
 import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.grouping.Group
@@ -35,6 +37,7 @@ import org.opentibia.canary.creatures.players.components.PlayerCyclopedia
 import org.opentibia.canary.creatures.players.components.PlayerSex_t
 import org.opentibia.canary.creatures.players.components.RecentDeathEntry
 import org.opentibia.canary.creatures.players.components.RecentPvPKillEntry
+import org.opentibia.canary.creatures.players.getCapacity
 import org.opentibia.canary.creatures.players.pvp.PlayerPvp
 import org.opentibia.canary.creatures.players.storages.Stash
 import org.opentibia.canary.game.QuickLootFilter_t
@@ -1626,6 +1629,14 @@ class Player(
     /** `std::shared_ptr<Group> group` (player.hpp:1759); `Player::isAccessPlayer()` reads `group->access`. */
     var group: Group? = null
 
+    /**
+     * `g_configManager().getNumber(MAX_MESSAGEBUFFER)` (configmanager.cpp:315)
+     * host value read by `Player::removeMessageBuffer` (player.cpp:3514-3543)
+     * through [features]. The composition root sets it from the config; `0`
+     * keeps the mute pipeline inert.
+     */
+    var maxMessageBuffer: Int = 0
+
     val features: PlayerFeatures = PlayerFeatures(
         playerId = id,
         levelProvider = { level },
@@ -1639,6 +1650,8 @@ class Player(
                 ?: UnwiredVocationRequirements
         },
         cyclopediaPlayer = PlayerCyclopediaAdapter(this),
+        cyclopediaTrackerClient = { cyclopediaMonsterTrackerClient },
+        maxMessageBuffer = { maxMessageBuffer },
     )
 
     /**
@@ -1850,6 +1863,15 @@ class Player(
             }
         }
         return (muteTicks / 1000).toLong()
+    }
+
+    /**
+     * `Player::removeMessageBuffer` (player.cpp:3514-3543) over the composed
+     * [PlayerFeatures.messageBuffer] state; `Game::playerSay` calls it for
+     * every accepted say except `TALKTYPE_PRIVATE_PN` (game.cpp:7436-7438).
+     */
+    fun removeMessageBuffer() {
+        features.messageBuffer.removeMessageBuffer()
     }
 
     // --- condition integration (player.cpp:356-394, 6291-6436) -------------------
@@ -3181,6 +3203,17 @@ class Player(
         varStats[stat.value] += modifier
     }
 
+    /** `Player::varSkills[SKILL_LAST + 1]` (player.hpp:1801). */
+    val varSkills = IntArray(Skill.LAST + 1)
+
+    /** `Player::setVarSkill` (player.cpp:352-354) — accumulates the modifier. */
+    fun setVarSkill(skill: Skill, modifier: Int) {
+        varSkills[skill.value] += modifier
+    }
+
+    /** `Player::bonusCapacity` (player.hpp:1780), `uint32_t`; set from `%` imbuements (player.cpp:3319). */
+    var bonusCapacity: Int = 0
+
     /** `Player::getBaseMagicLevel` (player.hpp:585-587). */
     fun getBaseMagicLevel(): Int = magLevel
 
@@ -3315,15 +3348,28 @@ class Player(
         return count
     }
 
-    /** `Player::getFreeCapacity` (player.cpp:5468-5476). */
-    fun getFreeCapacity(): Double = max(0.0, capacity - inventoryWeight)
+    /**
+     * `Player::getFreeCapacity` (player.cpp:5468-5476): the `CannotPickupItem` /
+     * `HasInfiniteCapacity` gates and `getCapacity() - inventoryWeight`, over the
+     * [bonusCapacity] field and `varStats[STAT_CAPACITY]`. The wheel capacity
+     * stat is unported (PARITY GAP).
+     */
+    fun getFreeCapacity(): Double = max(0.0, getCapacity(bonusCapacity.toDouble()) - inventoryWeight)
 
-    /** `Player::getSkillLevel` (player.cpp:7468). */
+    /**
+     * `Player::getSkillLevel` (player.cpp:7468-7520): `SKILL_MAGLEVEL` reads
+     * [getMagicLevel]; every other skill is `max(0, getLoyaltySkill(skill) +
+     * varSkills[skill])`. The `getMaxValuePerSkill` cap, the Wheel of Destiny
+     * and the weapon-proficiency terms are unported (PARITY GAP).
+     */
     fun getSkillLevel(skill: skills_t): Int {
+        if (skill == skills_t.SKILL_MAGLEVEL) {
+            return minOf(getMagicLevel(), 65535)
+        }
         if (skill.value < skills_t.FIRST || skill.value > skills_t.LAST) {
             return 0
         }
-        return skills[skill.value].level
+        return maxOf(0, getLoyaltySkill(skill) + varSkills[skill.value])
     }
 
     /** `Player::getBaseSkill` (player.cpp:1127). */
@@ -4104,62 +4150,49 @@ class Player(
 
     // cyclopedia monster tracker (player.cpp:941-996) and async ongoing tasks (8510-8520)
 
-    /** `Player::m_bestiaryMonsterTracker` (player.hpp:1700). */
-    private val bestiaryMonsterTracker = linkedSetOf<MonsterType>()
-
-    /** `Player::m_bosstiaryMonsterTracker` (player.hpp:1701). */
-    private val bosstiaryMonsterTracker = linkedSetOf<MonsterType>()
-
     /**
      * `Player::client` view used by the tracker updates (player.cpp:951-990); a
      * null client mirrors Canary's `if (!client) return;` guard.
      */
     var cyclopediaMonsterTrackerClient: CyclopediaMonsterTrackerClient? = null
 
-    /** `Player::getCyclopediaMonsterTrackerSet` (player.cpp:941-943). */
+    /**
+     * `Player::getCyclopediaMonsterTrackerSet` (player.cpp:941-943) over the
+     * composed [PlayerFeatures.cyclopediaTracker]. The C++ set may hold a null
+     * `shared_ptr`; the host projection drops it because the host entry points
+     * only insert live [MonsterType]s.
+     */
     fun getCyclopediaMonsterTrackerSet(isBoss: Boolean): Set<MonsterType> =
-        if (isBoss) bosstiaryMonsterTracker else bestiaryMonsterTracker
+        features.cyclopediaTracker.getCyclopediaMonsterTrackerSet(isBoss).filterNotNull().toSet()
 
     /**
      * `Player::addMonsterToCyclopediaTrackerList` (player.cpp:946-964). The
-     * C++ `shared_ptr` parameter (which may be null) is narrowed to a non-null
-     * [MonsterType] because the tracker set cannot hold a null; Canary callers
-     * always pass a live monster type.
+     * `if (!client) return;` gate lives on the host entry point because the
+     * composed holder resolves the host client per call; without a live client
+     * the tracker set stays untouched exactly like Canary.
      */
     fun addMonsterToCyclopediaTrackerList(mtype: MonsterType, isBoss: Boolean, reloadClient: Boolean = false) {
-        val client = cyclopediaMonsterTrackerClient ?: return
-        val raceId = mtype.info.raceid
-        val tracker = if (isBoss) bosstiaryMonsterTracker else bestiaryMonsterTracker
-        if (tracker.size < UINT8_MAX && tracker.add(mtype)) {
-            if (reloadClient && raceId != 0) {
-                if (isBoss) {
-                    client.parseSendBosstiary()
-                } else {
-                    client.sendBestiaryEntryChanged(raceId)
-                }
-            }
-
-            client.refreshCyclopediaMonsterTracker(tracker, isBoss)
+        if (cyclopediaMonsterTrackerClient == null) {
+            return
         }
+        features.cyclopediaTracker.addMonsterToCyclopediaTrackerList(mtype, isBoss, reloadClient)
     }
 
     /** `Player::removeMonsterFromCyclopediaTrackerList` (player.cpp:966-990). */
     fun removeMonsterFromCyclopediaTrackerList(mtype: MonsterType, isBoss: Boolean, reloadClient: Boolean = false) {
-        val client = cyclopediaMonsterTrackerClient ?: return
-        val raceId = mtype.info.raceid
-        val tracker = if (isBoss) bosstiaryMonsterTracker else bestiaryMonsterTracker
-        if (tracker.remove(mtype)) {
-            if (reloadClient && raceId != 0) {
-                if (isBoss) {
-                    client.parseSendBosstiary()
-                } else {
-                    client.sendBestiaryEntryChanged(raceId)
-                }
-            }
-
-            client.refreshCyclopediaMonsterTracker(tracker, isBoss)
+        if (cyclopediaMonsterTrackerClient == null) {
+            return
         }
+        features.cyclopediaTracker.removeMonsterFromCyclopediaTrackerList(mtype, isBoss, reloadClient)
     }
+
+    /** `Player::isBossOnBosstiaryTracker` (player.cpp:998-1000). */
+    fun isBossOnBosstiaryTracker(monsterType: MonsterType?): Boolean =
+        features.cyclopediaTracker.isBossOnBosstiaryTracker(monsterType)
+
+    /** `Player::isMonsterOnBestiaryTracker` (player.cpp:1002-1004). */
+    fun isMonsterOnBestiaryTracker(monsterType: MonsterType?): Boolean =
+        features.cyclopediaTracker.isMonsterOnBestiaryTracker(monsterType)
 
     /** `Player::refreshCyclopediaMonsterTracker` (player.hpp:390-392). */
     fun refreshCyclopediaMonsterTracker(isBoss: Boolean = false) {
@@ -4194,6 +4227,90 @@ class Player(
     /** `Player::resetAsyncOngoingTask` (player.cpp:8518-8520). */
     fun resetAsyncOngoingTask(task: PlayerAsyncTask) {
         asyncOngoingTasks = asyncOngoingTasks and task.value.toLong().inv()
+    }
+
+    // --- wave-51 host state bindings (player.cpp:344-350, 7606-7687, 12673-12724, 13361-13371) ---
+
+    /** `Player::isItemAbilityEnabled` (player.cpp:344-346) over [PlayerFeatures.itemAbilities]. */
+    fun isItemAbilityEnabled(slot: Slots_t): Boolean = features.itemAbilities.isItemAbilityEnabled(slot)
+
+    /** `Player::setItemAbility` (player.cpp:348-350). */
+    fun setItemAbility(slot: Slots_t, enabled: Boolean) {
+        features.itemAbilities.setItemAbility(slot, enabled)
+    }
+
+    /** `Player::setBossPoints` (player.cpp:12673-12675). */
+    fun setBossPoints(amount: Long) {
+        features.bossPoints.setBossPoints(amount)
+    }
+
+    /** `Player::addBossPoints` (player.cpp:12677-12679). */
+    fun addBossPoints(amount: Long) {
+        features.bossPoints.addBossPoints(amount)
+    }
+
+    /** `Player::removeBossPoints` (player.cpp:12681-12683). */
+    fun removeBossPoints(amount: Long) {
+        features.bossPoints.removeBossPoints(amount)
+    }
+
+    /** `Player::getBossPoints` (player.cpp:12685-12687). */
+    fun getBossPoints(): Long = features.bossPoints.getBossPoints()
+
+    /** `Player::setSlotBossId` (player.cpp:12695-12704); `parseSendBosstiarySlots` is the client send. */
+    fun setSlotBossId(slotId: Int, bossId: Long, parseSendBosstiarySlots: () -> Unit = {}) {
+        features.bossPoints.setSlotBossId(slotId, bossId, parseSendBosstiarySlots)
+    }
+
+    /** `Player::getSlotBossId` (player.cpp:12706-12712). */
+    fun getSlotBossId(slotId: Int): Long = features.bossPoints.getSlotBossId(slotId)
+
+    /** `Player::addRemoveTime` (player.cpp:12714-12716). */
+    fun addRemoveTime() {
+        features.bossPoints.addRemoveTime()
+    }
+
+    /** `Player::setRemoveBossTime` (player.cpp:12718-12720). */
+    fun setRemoveBossTime(newRemoveTimes: Int) {
+        features.bossPoints.setRemoveBossTime(newRemoveTimes)
+    }
+
+    /** `Player::getRemoveTimes` (player.cpp:12722-12724). */
+    fun getRemoveTimes(): Int = features.bossPoints.getRemoveTimes()
+
+    /** `Player::updateAimAtTargetSpells` (player.cpp:13361-13367) over [PlayerFeatures.aimAtTarget]. */
+    fun updateAimAtTargetSpells(spellId: Int, state: Int) {
+        features.aimAtTarget.updateAimAtTargetSpells(spellId, state)
+    }
+
+    /** `Player::getAimAtTargetSpells` (player.cpp:13369-13371). */
+    fun getAimAtTargetSpells(): Set<Int> = features.aimAtTarget.getAimAtTargetSpells()
+
+    /** `Player::getSpecializedMagicLevel` (player.cpp:7606-7629) over [PlayerFeatures.magicAffinity]. */
+    fun getSpecializedMagicLevel(combat: CombatType, useCharges: Boolean): Int =
+        features.magicAffinity.getSpecializedMagicLevel(combat, useCharges)
+
+    /** `Player::setSpecializedMagicLevel` (player.cpp:7631-7633). */
+    fun setSpecializedMagicLevel(combat: CombatType, value: Int) {
+        features.magicAffinity.setSpecializedMagicLevel(combat, value)
+    }
+
+    /** `Player::getMagicShieldCapacityFlat` (player.cpp:7635-7656). */
+    fun getMagicShieldCapacityFlat(useCharges: Boolean): Int =
+        features.magicAffinity.getMagicShieldCapacityFlat(useCharges)
+
+    /** `Player::setMagicShieldCapacityFlat` (player.cpp:7658-7660). */
+    fun setMagicShieldCapacityFlat(value: Int) {
+        features.magicAffinity.setMagicShieldCapacityFlat(value)
+    }
+
+    /** `Player::getMagicShieldCapacityPercent` (player.cpp:7662-7683). */
+    fun getMagicShieldCapacityPercent(useCharges: Boolean): Int =
+        features.magicAffinity.getMagicShieldCapacityPercent(useCharges)
+
+    /** `Player::setMagicShieldCapacityPercent` (player.cpp:7685-7687). */
+    fun setMagicShieldCapacityPercent(value: Int) {
+        features.magicAffinity.setMagicShieldCapacityPercent(value)
     }
 
     // --- death/walk state wiring (player.cpp:2942-3070, 4035-4284, 6161-6171) -----

@@ -1,8 +1,16 @@
 package org.opentibia.canary.creatures
 
+import org.opentibia.canary.combat.CombatType
 import org.opentibia.canary.combat.condition.Condition
+import org.opentibia.canary.creatures.monsters.MonsterType
+import org.opentibia.canary.creatures.players.CyclopediaTrackerClient
 import org.opentibia.canary.creatures.players.PlayerActiveFoods
+import org.opentibia.canary.creatures.players.PlayerAimAtTargetState
+import org.opentibia.canary.creatures.players.PlayerBossPointsState
 import org.opentibia.canary.creatures.players.PlayerCombatBonusState
+import org.opentibia.canary.creatures.players.PlayerCyclopediaTrackerState
+import org.opentibia.canary.creatures.players.PlayerItemAbilityState
+import org.opentibia.canary.creatures.players.PlayerMagicAffinityState
 import org.opentibia.canary.creatures.players.PlayerMessageBuffer
 import org.opentibia.canary.creatures.players.components.CyclopediaPlayer
 import org.opentibia.canary.creatures.players.components.InMemoryKV
@@ -63,18 +71,23 @@ import org.opentibia.canary.creatures.vocations.Vocations
  * The remaining standalone `Player` state holders are composed here so routed
  * opcodes/Lua bindings share the same instance as the `Player`:
  * [combatBonuses] (`Player::cleavePercent`/`perfectShot` and the reflect
- * queries), [activeFoods] (`Player::m_activeFoods`) and [messageBuffer]
- * (`Player::MessageBufferCount`). Their `Player`-backed seams
- * ([getEquippedItems], [cannotBeMuted], [addCondition], [sendTextMessage])
- * default to the injected [wheelPlayer] view, which the `Player` always
- * supplies as itself.
+ * queries), [activeFoods] (`Player::m_activeFoods`), [messageBuffer]
+ * (`Player::MessageBufferCount`), [itemAbilities]
+ * (`Player::inventoryAbilities`), [bossPoints] (`Player::bossPoints`),
+ * [cyclopediaTracker] (`Player::m_bestiaryMonsterTracker`/
+ * `m_bosstiaryMonsterTracker`), [aimAtTarget]
+ * (`Player::aimAtTargetSpellIds`) and [magicAffinity]
+ * (`Player::specializedMagicLevel`/`magicShieldCapacity*`). Their
+ * `Player`-backed seams ([getEquippedItems], [cannotBeMuted], [addCondition],
+ * [sendTextMessage]) default to the injected [wheelPlayer] view, which the
+ * `Player` always supplies as itself.
  *
- * CALL-SITE NEEDS (`Creature.kt:1629` constructs this holder per `Player` but
- * has no config/game access; the production composition root does not exist
- * yet):
- *  - `Creature.kt`/the composition root must inject [maxMessageBuffer] from
- *    `g_configManager().getNumber(MAX_MESSAGEBUFFER)` (configmanager.cpp:315);
- *    the `{ 0 }` default keeps the mute pipeline inert.
+ * CALL-SITE NEEDS (`Creature.kt` constructs this holder per `Player` but has no
+ * config/game access; the production composition root does not exist yet):
+ *  - the `Player` feeds [maxMessageBuffer] from its own `maxMessageBuffer`
+ *    property; the composition root must set it from
+ *    `g_configManager().getNumber(MAX_MESSAGEBUFFER)` (configmanager.cpp:315),
+ *    the `0` default keeps the mute pipeline inert.
  *  - the composition root must share one [muteCountMap] per world, exactly like
  *    Canary's `Player::muteCountMap` static (player.hpp:281), so the escalation
  *    survives player relogs; the per-holder default resets it per `Player`.
@@ -83,7 +96,12 @@ import org.opentibia.canary.creatures.vocations.Vocations
  *    7588, 7697, 7718) and the weapon-proficiency engine must bind
  *    [perfectShotBonus] to `WeaponProficiency::getPerfectShotBonus`
  *    (weapon_proficiency.cpp:1201); the base reflect arrays stay `{ 0 }` until
- *    the unported `Creature` arrays exist.
+ *    the unported `Creature` arrays exist. [transformItemCharges] also backs
+ *    [magicAffinity]'s charged-item reads.
+ *  - [wheelSpecializedMagic] and [proficiencySpecializedMagic] stay `{ 0 }`
+ *    until `PlayerWheel::getSpecializedMagic` (player_wheel.cpp:405) and
+ *    `WeaponProficiency::getSpecializedMagic` (weapon_proficiency.hpp:65) are
+ *    ported.
  */
 class PlayerFeatures(
     /** `Player::getGUID()`, used to scope forge-history persistence. */
@@ -130,6 +148,15 @@ class PlayerFeatures(
      */
     private val cyclopediaPlayer: CyclopediaPlayer? = null,
     /**
+     * `Player::client` cyclopedia tracker sink (`ProtocolGame::parseSendBosstiary`/
+     * `sendBestiaryEntryChanged`/`refreshCyclopediaMonsterTracker`,
+     * player.cpp:951-990) resolved per call by [cyclopediaTracker]; a `null`
+     * result mirrors `Player::client == nullptr`. The `Player` supplies its own
+     * [CyclopediaMonsterTrackerClient] property and keeps the `if (!client)
+     * return;` gate on the host entry points (player.cpp:947, 967).
+     */
+    private val cyclopediaTrackerClient: () -> CyclopediaMonsterTrackerClient? = { null },
+    /**
      * `Player::getEquippedItems()` (player.cpp:5949) seam of [combatBonuses];
      * defaults to the injected [wheelPlayer] inventory.
      */
@@ -141,8 +168,12 @@ class PlayerFeatures(
     private val getCharges: (Item) -> Int = { item ->
         (item.getAttribute(ItemAttribute.CHARGES) as? Number)?.toInt() ?: 0
     },
-    /** `g_game().transformItem(item, item->getID(), charges - 1)` seam of [combatBonuses]. */
+    /** `g_game().transformItem(item, item->getID(), charges - 1)` seam of [combatBonuses] and [magicAffinity]. */
     private val transformItemCharges: (Item) -> Unit = {},
+    /** `PlayerWheel::getSpecializedMagic(combat)` (player_wheel.cpp:405) seam of [magicAffinity]. */
+    private val wheelSpecializedMagic: (CombatType) -> Int = { 0 },
+    /** `WeaponProficiency::getSpecializedMagic(combat)` (weapon_proficiency.hpp:65) seam of [magicAffinity]. */
+    private val proficiencySpecializedMagic: (CombatType) -> Int = { 0 },
     /** `WeaponProficiency::getPerfectShotBonus()` (weapon_proficiency.cpp:1201) seam of [combatBonuses]. */
     private val perfectShotBonus: () -> WeaponProficiencyPerfectShotBonus? = { null },
     /** `Creature::reflectPercent[combatTypeToIndex(combat)]` (creature.hpp:911) seam of [combatBonuses]. */
@@ -236,6 +267,42 @@ class PlayerFeatures(
         PlayerCyclopedia(cyclopediaPlayer ?: NullCyclopediaPlayer)
     }
 
+    /** `Player::inventoryAbilities[CONST_SLOT_LAST + 1]` (player.hpp:1874). */
+    val itemAbilities: PlayerItemAbilityState = PlayerItemAbilityState()
+
+    /**
+     * `Player::bossPoints`/`bossIdSlotOne`/`bossIdSlotTwo`/`bossRemoveTimes`
+     * (player.hpp:1731) over the bosstiary counters of player.cpp:12673-12724.
+     */
+    val bossPoints: PlayerBossPointsState = PlayerBossPointsState()
+
+    /**
+     * `Player::m_bestiaryMonsterTracker`/`m_bosstiaryMonsterTracker`
+     * (player.hpp:1700-1701) over the client-resolving
+     * [cyclopediaTrackerClient] seam.
+     */
+    val cyclopediaTracker: PlayerCyclopediaTrackerState =
+        PlayerCyclopediaTrackerState(HostCyclopediaTrackerClient(cyclopediaTrackerClient))
+
+    /**
+     * `Player::aimAtTargetSpellIds` (player.hpp:1705) over the aim-at-target
+     * update hooks of player.cpp:13361-13371.
+     */
+    val aimAtTarget: PlayerAimAtTargetState = PlayerAimAtTargetState()
+
+    /**
+     * `Player::specializedMagicLevel`/`magicShieldCapacityFlat`/
+     * `magicShieldCapacityPercent` (player.hpp:1821-1824) over the equipped
+     * item seams (player.cpp:7606-7687).
+     */
+    val magicAffinity: PlayerMagicAffinityState = PlayerMagicAffinityState(
+        getEquippedItems = getEquippedItems,
+        wheelSpecializedMagic = wheelSpecializedMagic,
+        proficiencySpecializedMagic = proficiencySpecializedMagic,
+        getCharges = getCharges,
+        transformItemCharges = transformItemCharges,
+    )
+
     /**
      * Per-weapon proficiency state (`WeaponProficiency proficiency`,
      * weapon_proficiency.hpp:135; `Player::m_weaponProficiency`, player.hpp:1970),
@@ -310,4 +377,29 @@ internal object NullCyclopediaPlayer : CyclopediaPlayer {
     override fun sendCyclopediaCharacterRecentDeaths(page: Int, pages: Int, entries: List<RecentDeathEntry>) = Unit
 
     override fun sendCyclopediaCharacterRecentPvPKills(page: Int, pages: Int, entries: List<RecentPvPKillEntry>) = Unit
+}
+
+/**
+ * [CyclopediaTrackerClient] adapter of [PlayerFeatures.cyclopediaTracker] over
+ * the host [CyclopediaMonsterTrackerClient] seam. The state holder keeps
+ * Canary's null-tolerant `shared_ptr` set (`player.hpp:1700-1701`); the host
+ * client takes the non-null projection because the host entry points only
+ * insert live [MonsterType]s. The client is resolved per call, so rebinding
+ * `Player::cyclopediaMonsterTrackerClient` is observed immediately.
+ */
+private class HostCyclopediaTrackerClient(
+    private val client: () -> CyclopediaMonsterTrackerClient?,
+) : CyclopediaTrackerClient {
+
+    override fun parseSendBosstiary() {
+        client()?.parseSendBosstiary()
+    }
+
+    override fun sendBestiaryEntryChanged(raceId: Int) {
+        client()?.sendBestiaryEntryChanged(raceId)
+    }
+
+    override fun refreshCyclopediaMonsterTracker(trackerList: Set<MonsterType?>, isBoss: Boolean) {
+        client()?.refreshCyclopediaMonsterTracker(trackerList.filterNotNull().toSet(), isBoss)
+    }
 }

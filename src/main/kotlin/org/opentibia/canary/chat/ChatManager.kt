@@ -679,9 +679,15 @@ class ChatManager(
 
     /**
      * `Game::playerSay()` (game.cpp:7411-7475), minus the Lua talkaction/spell
-     * pipeline, private/NPC/broadcast speech and `removeMessageBuffer`
-     * (PARITY GAPS). [potentialListeners] replaces the map spectator query.
-     * Returns whether the say was accepted and dispatched.
+     * pipeline, private/NPC/broadcast speech (PARITY GAPS). The anti-spam
+     * `Player::removeMessageBuffer` feed (game.cpp:7437) runs for every type
+     * except `TALKTYPE_PRIVATE_PN`. [potentialListeners] replaces the map
+     * spectator query. Returns whether the say was accepted and dispatched.
+     *
+     * PARITY GAP: `Game::playerSay` (Game.kt:3013) still lacks the guarded
+     * `player.removeMessageBuffer()` call after its access check (game.cpp:7437);
+     * adding it there is the same one-liner and that file is outside this
+     * change's ownership.
      */
     fun playerSay(
         player: Player,
@@ -698,6 +704,10 @@ class ChatManager(
 
         if (text.isNotEmpty() && text.first() == '/' && player.isAccessPlayer()) {
             return false
+        }
+
+        if (type != SpeakClasses.TALKTYPE_PRIVATE_PN) {
+            player.removeMessageBuffer()
         }
 
         return when (type) {

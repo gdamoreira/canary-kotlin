@@ -183,6 +183,40 @@ class ChatManagerTest {
         )
     }
 
+    @Test
+    fun `playerSay feeds the message buffer anti-spam on the say path`() {
+        // Game::playerSay -> Player::removeMessageBuffer (game.cpp:7437,
+        // player.cpp:3514-3543) with MAX_MESSAGEBUFFER = 4.
+        val fixture = Fixture()
+        val speaker = fixture.player(1, "Alice")
+        speaker.maxMessageBuffer = 4
+        val listener = fixture.player(2, "Bob", x = 101)
+
+        repeat(4) {
+            fixture.chat.playerSay(speaker, 0, SpeakClasses.TALKTYPE_SAY, "spam", listOf(listener))
+        }
+
+        assertThat(speaker.features.messageBuffer.messageBufferCount).isEqualTo(4)
+
+        fixture.chat.playerSay(speaker, 0, SpeakClasses.TALKTYPE_SAY, "spam", listOf(listener))
+
+        assertThat(speaker.features.messageBuffer.messageBufferCount).isEqualTo(5)
+        assertThat(speaker.hasCondition(ConditionType.CONDITION_MUTED)).isTrue()
+    }
+
+    @Test
+    fun `playerSay leaves the message buffer untouched for private npc messages`() {
+        // Game::playerSay skips removeMessageBuffer for TALKTYPE_PRIVATE_PN
+        // (game.cpp:7436-7438).
+        val fixture = Fixture()
+        val speaker = fixture.player(1, "Alice")
+        speaker.maxMessageBuffer = 4
+
+        fixture.chat.playerSay(speaker, 0, SpeakClasses.TALKTYPE_PRIVATE_PN, "hi", emptyList())
+
+        assertThat(speaker.features.messageBuffer.messageBufferCount).isZero()
+    }
+
     // -- yell rules (Game::playerYell, game.cpp:7517-7535) --
 
     @Test
