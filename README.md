@@ -108,11 +108,11 @@ canary-kotlin/
 │   ├── building/          # JDK 25 + Gradle build guides (Linux, Windows, WSL)
 │   ├── docker/            # Docker quickstart guide
 │   ├── systems/           # Engine subsystem contracts (upstream-adapted)
-│   ├── Done/              # 64 completed specifications (networking, parsers, DB, systems 001-064)
-│   ├── Implementing/      # Features actively in progress
-│   ├── Plan/              # Architectural guidelines & wave plans (000-*, wave-*)
-│   ├── game-play-features.md   # Master 56-feature matrix (all implemented) & residual gaps
-│   └── superpowers/       # Design specs & implementation plans
+│   ├── development/       # Development lifecycle docs
+│   │   ├── plan/          # Architectural guidelines & wave plans (000-*, wave-*)
+│   │   ├── implementing/  # Features actively in progress
+│   │   ├── done/          # 64 completed specifications + wave plans
+│   │   └── game-play-features.md  # Master 56-feature matrix (all implemented) & residual gaps
 ├── src/
 │   ├── main/
 │   │   ├── kotlin/org/opentibia/canary/
@@ -166,17 +166,17 @@ The port follows two binding rules (see `AGENTS.md` §1.1 and §1.4):
 1. **Strict Canary parity** — no invented methods, classes, or values. Every Kotlin name mirrors its Canary C++ or Lua counterpart.
 2. **Lua stays Lua** — gameplay authored in `data/**/*.lua` (NPC dialogue, quests, spells, actions, systems) is executed *as Lua* through `LuaEnvironment` (LuaJ) and the Canary-named binding libraries; it is never re-implemented as Kotlin. Kotlin provides only the C++ engine primitives and the bindings those scripts call.
 
-Consequently, each of the 15 advanced features (`docs/Plan/050–064`) is delivered as its **C++ engine core** in `systems/<feature>/`, with the Lua-authored portions left as Lua.
+Consequently, each of the 15 advanced features (`docs/development/plan/050–064`) is delivered as its **C++ engine core** in `systems/<feature>/`, with the Lua-authored portions left as Lua.
 
 ---
 
 ## 🧩 Feature Coverage
 
-**All 56 Canary gameplay systems are implemented** (`docs/game-play-features.md`). The 15 advanced systems (`docs/Done/050–064`) are delivered as faithful C++ engine cores in `systems/<feature>/` with application services and protocol parsers/serializers, wired where applicable:
+**All 56 Canary gameplay systems are implemented** (`docs/development/game-play-features.md`). The 15 advanced systems (`docs/development/done/050–064`) are delivered as faithful C++ engine cores in `systems/<feature>/` with application services and protocol parsers/serializers, wired where applicable:
 
 `wheel` · `forge` · `bestiary` · `gamestore` · `hazard` · `dailyreward` · `rewardchest` · `familiar` · `hireling` · `mount` · `proficiency` · `soulwar` · `raid` · `offlinetraining` · `concoction`
 
-Protocol parsers/serializers for wheel (`0x61`/`0x62`/`0xE7`), offline training (`0x74`), reward chest (`0xFF`), bestiary (`0xE1`–`0xE4`), forge (`0xBF`) and weapon proficiencies are routed through `GamePacketRouter` on the WorldCommit lane. Residual per-feature parity gaps (protocol sends, deeper persistence, Lua-driven side effects) are tracked in `docs/game-play-features.md`.
+Protocol parsers/serializers for wheel (`0x61`/`0x62`/`0xE7`), offline training (`0x74`), reward chest (`0xFF`), bestiary (`0xE1`–`0xE4`), forge (`0xBF`) and weapon proficiencies are routed through `GamePacketRouter` on the WorldCommit lane. Residual per-feature parity gaps (protocol sends, deeper persistence, Lua-driven side effects) are tracked in `docs/development/game-play-features.md`.
 
 ---
 
@@ -186,7 +186,7 @@ The port is a faithful, incremental transcription of Canary's C++ engine. Two vi
 
 | View | Progress |
 |---|---|
-| **Tracked gameplay features** (`docs/game-play-features.md`) | **56 / 56 (100%)** — engine scope, tested |
+| **Tracked gameplay features** (`docs/development/game-play-features.md`) | **56 / 56 (100%)** — engine scope, tested |
 | **Inbound `ProtocolGame` opcodes** | **141 / 141 decoded (100%)**; ~46 fully applied (~33%) |
 | **Outbound `ProtocolGame` senders** | 187 / 187 (**100%**) |
 | **Lua bindings** | 1,246 / 1,246 method registrations (**100%**) |
@@ -196,7 +196,7 @@ The port is a faithful, incremental transcription of Canary's C++ engine. Two vi
 | **Persistence** | **~80%** |
 | **Estimated full-parity completion** | **~99.5%** |
 
-The 56 tracked gameplay features are engine-complete, but Canary's full surface (`player.cpp` ~765 methods, `game.cpp` ~352 methods, ~1,310 Lua registrations, ~105 opcodes) is far larger. The complete per-subsystem inventory and ranked remaining work lives in **[`docs/missing-features.md`](docs/missing-features.md)**.
+The 56 tracked gameplay features are engine-complete, but Canary's full surface (`player.cpp` ~765 methods, `game.cpp` ~352 methods, ~1,310 Lua registrations, ~105 opcodes) is far larger. The complete per-subsystem inventory and ranked remaining work lives in **[`docs/development/missing-features.md`](docs/development/missing-features.md)**.
 
 ---
 
@@ -231,9 +231,9 @@ The documentation hub is [`docs/README.md`](docs/README.md). Highlights:
 | [`docs/development.md`](docs/development.md) | Gradle workflow and coding standards |
 | [`docs/operations.md`](docs/operations.md) | Deployment, monitoring, backups |
 | [`docs/docker/quickstart-for-beginners.md`](docs/docker/quickstart-for-beginners.md) | Docker quickstart |
-| [`docs/missing-features.md`](docs/missing-features.md) | Parity inventory and ranked remaining work |
-| [`docs/game-play-features.md`](docs/game-play-features.md) | 56-feature gameplay matrix |
-| [`docs/improvements.md`](docs/improvements.md) | Repository improvement tracker |
+| [`docs/development/missing-features.md`](docs/development/missing-features.md) | Parity inventory and ranked remaining work |
+| [`docs/development/game-play-features.md`](docs/development/game-play-features.md) | 56-feature gameplay matrix |
+| [`docs/development/improvements.md`](docs/development/improvements.md) | Repository improvement tracker |
 
 ---
 
@@ -284,7 +284,7 @@ change seeded accounts.
 - **Verification**: live differential harness (packet-capture A/B replay against
   a running Canary instance) — the strongest remaining parity proof.
 - **Depth closure**: work through the ranked gaps in
-  [`docs/missing-features.md`](docs/missing-features.md) §3 (event fanout,
+  [`docs/development/missing-features.md`](docs/development/missing-features.md) §3 (event fanout,
   spell-actor execution, condition payload, visibility overrides).
 - **Operations**: expanded CI (matrix JDK builds, Docker smoke), metrics
   exporter parity.
@@ -304,7 +304,7 @@ change seeded accounts.
 ## 🐞 Known Issues
 
 - No live differential verification against Canary yet (unit/integration tests
-  only) — see [`docs/missing-features.md`](docs/missing-features.md) §3.
+  only) — see [`docs/development/missing-features.md`](docs/development/missing-features.md) §3.
 - Legacy protocol profiles (CipSoft860/old-protocol branches) are partially
   unmodeled; the current profile is fully wired.
 - Some monster event fanout call sites (normal say/yell spectators, spell-damage

@@ -7,7 +7,7 @@ package org.opentibia.canary.systems.wheel
  *
  * The spell-registration and gem sub-systems (io_wheel spell tables,
  * wheel_gems.cpp) and the protocol handlers are not ported here; see
- * docs/Plan/050-wheel-of-destiny-engine.md.
+ * docs/development/plan/050-wheel-of-destiny-engine.md.
  */
 class IOWheel {
     fun getRevelationStatByStage(stageType: WheelStageEnum): Pair<Int, Int> =

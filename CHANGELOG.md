@@ -13,7 +13,7 @@ All notable technical milestones, architectural transformations, feature impleme
   - Built `TibiaFrameDecoder` and `TibiaMessageEncoder`.
   - Implemented `LoginHandler` parsing client OS, protocol version, RSA credentials, and delivering character list opcode `0x64`.
 - **`07e4b2f` - Documentation Structure**:
-  - Created `docs/Plan/`, `docs/Implementing/`, and `docs/Done/` lifecycle structure.
+  - Created `docs/development/plan/`, `docs/development/implementing/`, and `docs/development/done/` lifecycle structure.
 - **`fa0f889` - Architectural Adaptation & Parity Strategy**:
   - Documented `000-kotlin-architectural-design.md`, replacing C++ singletons (`g_game`, `g_dispatcher`) and raw mutexes with dependency injection and single-threaded Coroutine Actor confinement.
   - Established `000-parity-validation-strategy.md` and sequential execution roadmap.
@@ -136,13 +136,13 @@ All notable technical milestones, architectural transformations, feature impleme
 - **`7d17b03` - Magic Spells & Player QuestLog**:
   - Implemented `SpellRegistry` (instant spells, mana/level checks) and `PlayerStorageManager` (`getStorage`/`setStorage`).
 - **`1a14b87` / `20cc0ea` - Gameplay Feature Matrix**:
-  - Created `docs/game-play-features.md` inventorying all 56 Canary gameplay systems.
+  - Created `docs/development/game-play-features.md` inventorying all 56 Canary gameplay systems.
 - **`5b83cd4` - Advanced Feature Specifications**:
-  - Created implementation plans in `docs/Plan/` for features `050` through `064` (Skill Wheel, Forge, Bestiary, Store, Hazard, etc.).
+  - Created implementation plans in `docs/development/plan/` for features `050` through `064` (Skill Wheel, Forge, Bestiary, Store, Hazard, etc.).
 - **`95bcad5` / `03fa14c` - Canary C++ File References**:
   - Annotated all 64 feature documents with file paths and line numbers from the original Canary repository.
 - **`4918a4c` - Codebase Audit & Feature Template**:
-  - Created `docs/canary-codebase-implementation-audit.md` and `docs/TEMPLATE_FEATURE.md`.
+  - Created `docs/development/canary-codebase-implementation-audit.md` and `docs/development/TEMPLATE_FEATURE.md`.
 - **`da45490` - Wheel of Destiny Engine**:
   - Implemented `WheelOfDestinyEngine` promotion point budgets ($\max(0, \text{level} - 50)$), perk allocations, and passive stat bonuses.
 
@@ -153,7 +153,7 @@ All notable technical milestones, architectural transformations, feature impleme
   - Added `AGENTS.md` §1.1 (strict Canary parity — no invented methods/APIs) and §1.4 (Lua stays Lua — never port Lua logic to Kotlin).
   - Enforced immediately: renamed fabricated `Npc.onHear` → Canary `Npc::onCreatureSay`, `MagicField.onStepIn` → `onStepInField`.
 - **`87a83ad` / `d6f79d3` - Lua Parity Remediation Spec & Plan**:
-  - Approved design superseding `Done/012` and `Done/028`; foundation implementation plan created.
+  - Approved design superseding `development/done/012` and `development/done/028`; foundation implementation plan created.
 - **`24e04fb`…`92aed2d` - Lua Scripting Engine Foundation**:
   - Implemented `org.opentibia.canary.lua`: `LuaEnvironment` + `ScriptError` + LuaJ compat shim, `UserdataRegistry` (Canary-named metatables), `Actions`/`TalkActions` registries with `Action()`/`TalkAction()` constructors, and a boot-time `Scripts` loader.
   - Removed the Kotlin `ScriptRegistry`; item-use now dispatches Lua actions on the `GameDispatcher` WorldCommit lane.
@@ -200,8 +200,8 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Login flow** — `GameHandler` loads feature state via `PlayerPersistenceService` and dispatches the Lua `creatureEvent` `onLogin` on the WorldCommit lane.
 
 ### Phase 13: Documentation Finalization (03:45 – 04:00)
-- Moved feature specs `050–064` from `docs/Plan/` to `docs/Done/` (engine scope implemented + tested); `docs/Plan/` now holds only the architectural `000-*` docs.
-- Updated `docs/game-play-features.md` to **56 / 56 implemented** with per-feature residual gaps; refreshed README/CHANGELOG metrics.
+- Moved feature specs `050–064` from `docs/development/plan/` to `docs/development/done/` (engine scope implemented + tested); `docs/development/plan/` now holds only the architectural `000-*` docs.
+- Updated `docs/development/game-play-features.md` to **56 / 56 implemented** with per-feature residual gaps; refreshed README/CHANGELOG metrics.
 
 ### Phase 14: Protocol Sends & Item Classification (04:00 – 04:30)
 - **Bestiary outbound** — `BestiaryWindowSerializer` for `0xD5`–`0xD9` (races/creatures/monster-data/charms/entry-changed), byte-exact.
@@ -213,7 +213,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Forge registry wiring** — `GamePacketContext.itemTypes` threaded into `PlayerForgeAdapter` so live forge packets resolve real item classifications.
 - **Wheel gem economy** — `WheelEconomy`/`WheelPlayer` seam + atelier costs (reveal/rotate/improve/destroy, fragment refunds) in `WheelApplication`.
 - **Deeper persistence** — Flyway `V4__feature_state_details.sql`: bestiary charm assignments, weapon-proficiency perks, wheel gems/active-gems/grades.
-- **Missing-features tracker** — new `docs/missing-features.md` (full C++ → Kotlin inventory + ranked gaps + opcode/binding coverage) and a README implementation-coverage section.
+- **Missing-features tracker** — new `docs/development/missing-features.md` (full C++ → Kotlin inventory + ranked gaps + opcode/binding coverage) and a README implementation-coverage section.
 
 ### Phase 16: Pathfinding, Spawns, Core Senders, Lua Bindings (05:00 – 05:30)
 - **A\* pathfinding** — `AStarNodes` (512-slot heap, walk costs) + `MonsterPathfinder` (`find`, `canEnter`, sight-line) ported.
@@ -233,7 +233,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **VIP system** — `PlayerVip` (entries/groups CRUD, status/icon, caps).
 - **Inbound opcodes** — trade `0x7D–0x80`, follow `0xA2`, containers `0x75/0x87/0x88/0x95`, outfit/mount `0xD3/0xD4`, use-item-ex `0x83` decoded and routed.
 - **Inventory persistence** — Flyway `V5__player_items.sql` + `JdbcPlayerItemsRepository` with Canary attribute serialization.
-- **Process** — `AGENTS.md` §6 now mandates a pre-wave plan doc in `docs/Plan/` (moved to `Done/` after the wave).
+- **Process** — `AGENTS.md` §6 now mandates a pre-wave plan doc in `docs/development/plan/` (moved to `docs/development/done/` after the wave).
 
 ### Phase 19: Player Components, Imbuements, Prey/Task Hunting, Opcode Batch 2 (06:30 – 07:00)
 - **Player components** — `PlayerTitles`, `PlayerBadges`, `PlayerAchievements` (+ scoped `KV`), 82 tests.
@@ -258,24 +258,24 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Service bootstrap** — `bootstrap/ServerBootstrap`/`ServerLaunch`/`Signals`/`CrashHandler`/`ShutdownDrain`; CLI (`ServerCli`: `--config`/`--data-dir`/DB flags) with CLI > file > env > defaults; idempotent ordered shutdown drain (listeners → dispatcher → SaveManager → DB).
 - **Appearances protobuf** — `io/appearances/Appearances` + dependency-free `ProtobufWireReader` parsing the real `data/items/appearances.dat` (42,107 objects / 1,443 outfits / 242 effects / 62 missiles).
 - **Database tasks** — `database/DatabaseTasks` (FIFO async queue, flush, idempotent shutdown).
-- `docs/missing-features.md`: `src/` bootstrap + `appearances.proto` rows flipped to **IMPLEMENTED**.
+- `docs/development/missing-features.md`: `src/` bootstrap + `appearances.proto` rows flipped to **IMPLEMENTED**.
 
 ### Phase 23: `src/account/` Section Complete (08:30 – 09:00)
 - **Account core** — `Account` auth (`authenticate`/`authenticatePassword`/`authenticateSession`), `load`/`reload`/`save`, account type, house bid, premium days, coin ledger; `AccountInfo`/`AccountType`/`AccountErrors`. 67 tests.
 - **Account repository** — `JdbcAccountRepository` create/save, coin ledger + `coins_transactions`, ban/session tables, `loadBySession`; Flyway `V7__account_details.sql`. 14 tests.
-- `docs/missing-features.md`: `src/account/` rows flipped to **IMPLEMENTED**.
+- `docs/development/missing-features.md`: `src/account/` rows flipped to **IMPLEMENTED**.
 
 ### Phase 24: `src/config/` Section Complete (09:00 – 09:30)
 - **Config keys** — `config/ConfigKeys.kt`: 360 Canary keys with exact names, types, and defaults (double-entry verified against `configmanager.cpp`). 8 tests.
 - **Typed ConfigManager** — `getBoolean`/`getNumber`/`getFloat`/`getString`, `reload`, OTC feature lists, injected source + precedence. 14 tests.
-- `docs/missing-features.md`: `src/config/` rows flipped to **IMPLEMENTED**.
+- `docs/development/missing-features.md`: `src/config/` rows flipped to **IMPLEMENTED**.
 
 ### Phase 25: `src/creatures/` Part 1 — Creature Core, Outfits, Attached Effects, Chat (09:30 – 10:00)
 - **Creature core** — outfit/light/speed, `onAttacked`/`onTarget`/`onDeath` hooks, master/summon, spectator `canSee`, creature icons. 29 tests.
 - **Outfit registry** — `Outfits`/`Outfit`/`PlayerOutfits` from `outfits.xml` (addons, look-type lookup). 23 tests.
 - **Attached effects** — `AttachedEffects` (aura/wing/shader/effect XML registry). 8 tests.
 - **Chat channels** — `ChatChannel`/`PrivateChatChannel` registry, invites/users, muted checks, yell rules. 40 tests.
-- `docs/missing-features.md`: the four rows flipped to **IMPLEMENTED**.
+- `docs/development/missing-features.md`: the four rows flipped to **IMPLEMENTED**.
 
 ### Phase 26: `src/creatures/` Part 2 — Conditions, Monster Runtime, MonsterType (10:00 – 10:30)
 - **Conditions** — full condition family, attribute params, `ConditionFeared`, Player suppression. 42 tests.
@@ -308,17 +308,17 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ### Phase 30: `src/creatures/` Section Complete (12:00 – 12:15)
 - **Player feature hooks** — `Player` now exposes wheel/forge/prey/task-hunting/cyclopedia hooks delegating to `PlayerFeatures`; prey/task state + engines, cyclopedia adapter, tracker seams. 16 tests.
-- `docs/missing-features.md`: `player.cpp` flipped to **IMPLEMENTED** — the entire **`src/creatures/` section is now IMPLEMENTED** (0 PARTIAL/MISSING).
+- `docs/development/missing-features.md`: `player.cpp` flipped to **IMPLEMENTED** — the entire **`src/creatures/` section is now IMPLEMENTED** (0 PARTIAL/MISSING).
 
 ### Phase 31: `src/database/` Section Complete (12:15 – 12:45)
 - **Database core** — `Database` (transactions, escaping, retry, recoverable errors, `MAX_QUERY_SIZE`, `DBInsert`). 27 tests.
 - **Database manager** — pool lifecycle/reconnect + `executeQuery`/`storeQuery` parity + `DBResult`. 17 tests.
 - **Definitions** — `TransactionStates_t`. 2 tests.
-- `docs/missing-features.md`: `src/database/` section added and flipped to **IMPLEMENTED**.
+- `docs/development/missing-features.md`: `src/database/` section added and flipped to **IMPLEMENTED**.
 
 ### Phase 32: `src/enums/` Section Complete (12:45 – 13:00)
 - **Container/object categories** — `ContainerSpecial_t` + `ObjectCategory_t` with exact values. 3 tests.
-- `docs/missing-features.md`: `src/enums/` section added; all rows **IMPLEMENTED**.
+- `docs/development/missing-features.md`: `src/enums/` section added; all rows **IMPLEMENTED**.
 
 ---
 
@@ -329,7 +329,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Game reload** — `GameReload` generation-checked runtime reload. 20 tests.
 - **Inbound opcodes complete** — all **141/141 active** opcodes now decode; wave 35 added the final 64 across 4 batches (party analyzer/team finder, client options, extended opcode, channels, item interaction, text/house windows, bosstiary, highscores, weapon proficiency, task hunting, forge history, container browse/seek, inspection, VIP, cyclopedia, prey, hireling, resource balance, greet, object info). ~180 new tests.
 - **Outbound senders** — trade/channel/house/VIP/store/inspection/blessing/stash/cyclopedia writers added. 63 tests.
-- Verified per-module coverage percentages added to `docs/missing-features.md` §1.
+- Verified per-module coverage percentages added to `docs/development/missing-features.md` §1.
 - **689 suites / 7620 tests, all green.**
 
 ---
@@ -586,8 +586,15 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 59: CI Heap Fix & Documentation Reorganization (13:00 – 14:00)
+- **CI heap fix** — `gradle.properties` pins `org.gradle.jvmargs=-Xmx2g` and `kotlin.daemon.jvmargs=-Xmx3g`, fixing the `:compileKotlin` OutOfMemoryError on GitHub Actions (`d64d4b8a`).
+- **Docs reorganization** — `docs/Plan`, `docs/Done`, `docs/Implementing` moved to lowercase `docs/development/{plan,implementing,done}`; the pre-port top-level docs (missing-features, game-play-features, improvements, TEMPLATE_FEATURE, canary-codebase-implementation-audit) moved into `docs/development/`; `docs/superpowers/` removed; all references (66 files) swept.
+- **690 suites / 7627 tests, all green.**
+
+---
+
 ### Current Status
 - **Automated Tests**: **690 test suites / 7627 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
-- **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/Done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
+- **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
-- **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/game-play-features.md`.
+- **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/game-play-features.md`.

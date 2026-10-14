@@ -27,13 +27,13 @@ This directory is the main documentation hub for **Canary Kotlin Edition**.
 | [`lua-api/lua_api.md`](lua-api/lua_api.md) | Lua API reference (the API surface is unchanged because Lua stays Lua) |
 | [`maps/startup-loading-performance.md`](maps/startup-loading-performance.md) | Kotlin map loader pipeline (OTBM, appearance protobuf, MapDownload) and startup notes |
 | [`systems/README.md`](systems/README.md) | Cross-cutting system contracts |
-| [`canary-codebase-implementation-audit.md`](canary-codebase-implementation-audit.md) | Per-subsystem audit of the C++ to Kotlin port |
-| [`missing-features.md`](missing-features.md) | Complete per-subsystem inventory and ranked remaining work |
-| [`game-play-features.md`](game-play-features.md) | 56-feature gameplay matrix and residual parity gaps |
-| [`improvements.md`](improvements.md) | Repository improvement backlog |
-| [`Plan/`](Plan/) | Architecture guidelines and wave plans |
-| [`Done/`](Done/) | Completed specifications (001–064 and waves 20–59) |
-| [`superpowers/`](superpowers/) | Design specs and implementation plans |
+| [`development/canary-codebase-implementation-audit.md`](development/canary-codebase-implementation-audit.md) | Per-subsystem audit of the C++ to Kotlin port |
+| [`development/missing-features.md`](development/missing-features.md) | Complete per-subsystem inventory and ranked remaining work |
+| [`development/game-play-features.md`](development/game-play-features.md) | 56-feature gameplay matrix and residual parity gaps |
+| [`development/improvements.md`](development/improvements.md) | Repository improvement backlog |
+| [`development/plan/`](development/plan/) | Architecture guidelines and wave plans |
+| [`development/done/`](development/done/) | Completed specifications (001–064 and waves 20–60) |
+| [`development/implementing/`](development/implementing/) | Features actively in progress |
 
 ---
 
@@ -77,12 +77,16 @@ docs/
 ├── python-scripts/                 # Upstream C++ maintenance scripts (parity only)
 ├── reference/                      # Upstream C++ Doxygen/LuaLS tooling
 ├── systems/                        # Cross-cutting system contracts
-├── Plan/, Done/, superpowers/      # Kotlin planning and completed specs
-├── missing-features.md
-├── game-play-features.md
-├── improvements.md
-├── TEMPLATE_FEATURE.md
-└── canary-codebase-implementation-audit.md
+└── development/                    # Kotlin-specific development docs
+    ├── plan/                       # Architecture guidelines and wave plans
+    ├── implementing/               # Features actively in progress
+    ├── done/                       # Completed specifications and wave plans
+    ├── missing-features.md
+    ├── game-play-features.md
+    ├── improvements.md
+    ├── TEMPLATE_FEATURE.md
+    ├── canary-codebase-implementation-audit.md
+    └── shared-build-cache.md
 ```
 
 ---
@@ -132,7 +136,7 @@ was ported and adapted. The mapping below records every source and target file.
 | `performance-lifetime/evidence.md` | `performance-lifetime/evidence.md` | Upstream engine reference |
 | `performance-lifetime/parallel-monster-ai-roadmap.md` | `performance-lifetime/parallel-monster-ai-roadmap.md` | Upstream engine reference |
 | `taskboard-module.md` | `taskboard-module.md` | Lua module (Lua stays Lua) |
-| `weapon-proficiency.md` | `weapon-proficiency.md` | Implemented by the Kotlin port (Done/060) |
+| `weapon-proficiency.md` | `weapon-proficiency.md` | Implemented by the Kotlin port (development/done/060) |
 
 ## Assets, Lua API and upstream tooling
 
@@ -144,10 +148,11 @@ was ported and adapted. The mapping below records every source and target file.
 | `canary-logo.png`, `canary-logo-transparent.png` | `canary-logo.png`, `canary-logo-transparent.png` | Branding assets copied byte-for-byte (binary files carry no in-file provenance line). |
 
 Nothing existing in `canary-kotlin/docs` was removed or replaced by this port:
-`missing-features.md`, `game-play-features.md`, `improvements.md`,
-`TEMPLATE_FEATURE.md`, `canary-codebase-implementation-audit.md`, `Plan/`,
-`Done/`, `Implementing/` and `superpowers/` remain the authoritative
-Kotlin-specific documents.
+`development/missing-features.md`, `development/game-play-features.md`,
+`development/improvements.md`, `development/TEMPLATE_FEATURE.md`,
+`development/canary-codebase-implementation-audit.md` and the
+`development/plan/`, `development/done/`, `development/implementing/`
+folders remain the authoritative Kotlin-specific documents.
 
 ---
 

@@ -7,7 +7,7 @@ package org.opentibia.canary.systems.proficiency
  *
  * Combat-application methods (applyAutoAttackCritical, applySpellAugment, ...)
  * depend on Canary's CombatDamage and are not ported here; the JSON loader and
- * the remaining gaps are noted in docs/Plan/060-weapon-proficiencies-system.md.
+ * the remaining gaps are noted in docs/development/plan/060-weapon-proficiencies-system.md.
  */
 
 enum class WeaponProficiencyBonus(val value: Int) {
