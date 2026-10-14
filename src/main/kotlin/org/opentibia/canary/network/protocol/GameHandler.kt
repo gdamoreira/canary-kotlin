@@ -19,6 +19,7 @@ import org.opentibia.canary.io.IOMarket
 import org.opentibia.canary.io.MarketEscrow
 import org.opentibia.canary.io.MarketEscrowItemType
 import org.opentibia.canary.io.MarketEscrowPlayer
+import org.opentibia.canary.io.iologindata.IOLoginData
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.Items
 import org.opentibia.canary.lua.runtime.LuaEnvironment
@@ -94,6 +95,15 @@ class GameHandler(
      * `Game`; inert when the handler is constructed directly.
      */
     private val transformItemCharges: (Item) -> Unit = {},
+    /**
+     * `IOLoginData::loadPlayerById` login-load seam (src/io/iologindata.cpp:81-86):
+     * `ProtocolGame::login` resolves the character id and materializes the
+     * persisted player (vitals, skills, inventory, depot, inbox, stash, kills,
+     * spells, feature state) before `Game::placeCreature`
+     * (protocolgame.cpp:1023). When `null` the handler keeps the stub player
+     * shell so directly constructed handlers (and tests) still serve a session.
+     */
+    private val ioLoginData: IOLoginData? = null,
 ) : SimpleChannelInboundHandler<ByteBuf>() {
 
     private var player: Player? = null
@@ -251,22 +261,16 @@ class GameHandler(
             return
         }
 
-        // Initialize player entity
-        val spawnPos = Position(1000, 1000, 7)
-        val activePlayer = Player(
-            id = 1L,
-            name = characterMatch.name,
-            maxHealth = 150,
-            health = 150,
-            maxMana = 50,
-            mana = 50,
-            speed = 220,
-            position = spawnPos,
-            // `Player::muteCountMap` (player.hpp:281) and the world
-            // `g_game().transformItem` binding are shared across sessions.
-            muteCountMap = muteCountMap,
-            transformItemCharges = transformItemCharges,
-        )
+        // Canary resolves the character id (`IOLoginDataLoad::preLoadPlayer`)
+        // and materializes the persisted systems through
+        // `IOLoginData::loadPlayerById(..., false)` before the creature is
+        // placed (protocolgame.cpp:1023). The injected loader drives the same
+        // load; without one the handler keeps the stub shell.
+        val activePlayer = loadSessionPlayer(characterMatch.name)
+        if (activePlayer == null) {
+            sendDisconnect(ctx, "Your character could not be loaded, please contact an administrator.")
+            return
+        }
         this.player = activePlayer
 
         // `Creature::enqueueAsyncTask` admits async batches through
@@ -302,6 +306,61 @@ class GameHandler(
 
         logger.info { "Player '${activePlayer.name}' logged into game world" }
         sendLoginSuccess(ctx, activePlayer)
+    }
+
+    /**
+     * Resolves the session [Player] for [characterName].
+     *
+     * With an injected [ioLoginData] the character id comes from
+     * `IOLoginData::getGuidByName` (src/io/iologindata.cpp:310-320, the port's
+     * row-level `IOLoginDataLoad::preLoadPlayer` equivalent) and the persisted
+     * state is materialized through [IOLoginData.loadPlayerById] with
+     * `disableIrrelevantInfo = false`, exactly like `ProtocolGame::login`
+     * (protocolgame.cpp:1023). Returns `null` when the character row is missing
+     * or the load fails, mirroring the C++ `disconnectClient("Your character
+     * could not be loaded...")` path.
+     *
+     * Without a loader the stub shell preserves the pre-wiring behavior of a
+     * directly constructed handler.
+     */
+    private fun loadSessionPlayer(characterName: String): Player? {
+        val loader = ioLoginData ?: return Player(
+            id = 1L,
+            name = characterName,
+            maxHealth = 150,
+            health = 150,
+            maxMana = 50,
+            mana = 50,
+            speed = 220,
+            position = Position(1000, 1000, 7),
+            // `Player::muteCountMap` (player.hpp:281) and the world
+            // `g_game().transformItem` binding are shared across sessions.
+            muteCountMap = muteCountMap,
+            transformItemCharges = transformItemCharges,
+        )
+
+        val guid = loader.getGuidByName(characterName)
+        if (guid == 0L) {
+            return null
+        }
+
+        val loaded = Player(
+            id = guid,
+            name = characterName,
+            maxHealth = 150,
+            health = 150,
+            maxMana = 50,
+            mana = 50,
+            speed = 220,
+            position = Position(1000, 1000, 7),
+            muteCountMap = muteCountMap,
+            transformItemCharges = transformItemCharges,
+        )
+
+        if (!loader.loadPlayerById(loaded, guid, disableIrrelevantInfo = false)) {
+            return null
+        }
+        return loaded
     }
 
     override fun channelInactive(ctx: ChannelHandlerContext) {
