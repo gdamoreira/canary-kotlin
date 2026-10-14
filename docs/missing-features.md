@@ -24,7 +24,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | Monster engine (`monster.cpp`, 4,014 lines) | 198 unique `Monster::` methods | 89 name-matched + async pipelines + host + type state + barrier buckets | **~85%** | wave 51: barrier-parallel creature async buckets, budget/requeue/promotion/rollback |
 | Map engine (`map.cpp`) | — | — | **~85%** | sight/`canWalkTo`/pathing/caches/spectators/houses/towns (wave 38) |
 | Persistence (`iologindata*`, `iomapserialize`) | — | — | **~80%** | 24/24 iologindata, 10/10 iomapserialize, market/prey/bestiary/bosstiary/guild/storage (V10–V14) |
-| **Estimated full-parity completion** | — | — | **~99%** | tracked inventory complete; remaining work is documented seam bindings (38 `send*` seams with writers, composition details) |
+| **Estimated full-parity completion** | — | — | **~99%** | tracked inventory complete; live transport + login load + monster registration wired; remaining = production registry injections (Vocations/Monsters/ioLoginData) and persistence sub-loads |
 
 ### 1.2 Module completion (by inventory rows in §2)
 
@@ -242,12 +242,12 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 ## 3. Highest-Impact Gaps (ranked, verified)
 
-**The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Remaining work is transport/composition wiring:
+**The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Remaining work is production registry injection and persistence sub-loads:
 
-1. **Live transport** — install `PlayerSendSink` in `GameHandler` (the base `NettyProtocolSink` lacks the 38 player senders).
-2. **Monster registration** — `Game.internalPlaceCreature`/`removeCreature` must call `monsterHost.register/unregister` (+`monsterTypeProvider`) so production pipelines activate.
-3. **Login load** — `GameHandler` still creates a stub `Player`; wire `IOLoginData.loadPlayerById` into login.
-4. **Lua delegation** — Lua bindings keep duplicate per-player achievement/animus state instead of the composed components.
+1. **Production registry injection** — `CanaryServer`/`ServerBootstrap` must pass `ioLoginData`, a `Monsters`-backed `monsterTypeProvider`, and a `Vocations` registry into the composed `Game`/`GameHandler`.
+2. **Monster spawn path** — no production `MonsterFactory`/spawn caller composed yet (registration is ready).
+3. **Persistence sub-loads** — conditions, skull, guild, bestiary charms, store inbox, reward chest, storage map, VIP, prey/task hunting, exiva restrictions in `loadPlayer`.
+4. **Lua remainder** — extra-ops badges/titles/concoction/OTCR state still per-ops in-memory.
 
 ---
 

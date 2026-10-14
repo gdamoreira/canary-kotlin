@@ -29,3 +29,7 @@ Note A1/A4 share `GameHandler.kt`; A1 does the sink install, A4 the login load. 
 ## Post-wave (§6)
 
 Update §1–§3, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+
+## Completion
+
+Completed: live sink transport, monster registration wiring, Lua delegation, login load (V18). 669 suites / 7442 tests.
