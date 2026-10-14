@@ -616,18 +616,47 @@ object GamePacketRouter {
                                 // transaction engine, item escrow and bank balance
                                 // through the handler-layer MarketOfferApplication.
                                 is MarketCreateOfferCommand ->
-                                    marketOfferContext(context, player)?.let {
-                                        MarketOfferApplication.applyCreateOffer(command, it)
+                                    if (context.game != null) {
+                                        context.game.playerCreateMarketOffer(
+                                            player.id,
+                                            command.action,
+                                            command.itemId,
+                                            command.amount,
+                                            command.price,
+                                            command.tier,
+                                            command.anonymous,
+                                        )
+                                    } else {
+                                        marketOfferContext(context, player)?.let {
+                                            MarketOfferApplication.applyCreateOffer(command, it)
+                                        }
                                     }
 
                                 is MarketCancelOfferCommand ->
-                                    marketOfferContext(context, player)?.let {
-                                        MarketOfferApplication.applyCancelOffer(command, it)
+                                    if (context.game != null) {
+                                        context.game.playerCancelMarketOffer(
+                                            player.id,
+                                            command.timestamp,
+                                            command.counter,
+                                        )
+                                    } else {
+                                        marketOfferContext(context, player)?.let {
+                                            MarketOfferApplication.applyCancelOffer(command, it)
+                                        }
                                     }
 
                                 is MarketAcceptOfferCommand ->
-                                    marketOfferContext(context, player)?.let {
-                                        MarketOfferApplication.applyAcceptOffer(command, it)
+                                    if (context.game != null) {
+                                        context.game.playerAcceptMarketOffer(
+                                            player.id,
+                                            command.timestamp,
+                                            command.counter,
+                                            command.amount,
+                                        )
+                                    } else {
+                                        marketOfferContext(context, player)?.let {
+                                            MarketOfferApplication.applyAcceptOffer(command, it)
+                                        }
                                     }
                             }
                         }
