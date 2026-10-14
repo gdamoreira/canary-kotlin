@@ -75,17 +75,23 @@ import org.opentibia.canary.network.protocol.MessageClass
 import org.opentibia.canary.network.protocol.SourceEffect
 import org.opentibia.canary.network.protocol.StoreWindowWriter
 import org.opentibia.canary.network.protocol.TransferErrorMessage
+import org.opentibia.canary.network.protocol.wheel.SaveWheelCommand
+import org.opentibia.canary.network.protocol.wheel.WheelGemActionCommand
 import org.opentibia.canary.persistence.PlayerStorage
 import org.opentibia.canary.social.guild.Guild
 import org.opentibia.canary.social.guild.GuildRepository
 import org.opentibia.canary.spells.SoundEffect
+import org.opentibia.canary.systems.forge.Forge
 import org.opentibia.canary.systems.forge.ForgeAction_t
+import org.opentibia.canary.systems.forge.ForgeRandom
 import org.opentibia.canary.systems.imbuement.Imbuement
 import org.opentibia.canary.systems.imbuement.Imbuements
 import org.opentibia.canary.systems.prey.PreyAction
 import org.opentibia.canary.systems.prey.PreyOption
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import org.opentibia.canary.systems.taskhunting.PreyTaskAction
+import org.opentibia.canary.systems.wheel.WheelApplication
+import org.opentibia.canary.systems.wheel.WheelPlayer
 import org.opentibia.canary.utils.Tools
 import java.lang.ref.WeakReference
 import java.util.IdentityHashMap
@@ -298,6 +304,16 @@ class Game(
     private val ioBosstiary: IOBosstiary? = null,
     /** `g_imbuements()` (game.cpp:7124) seam for the imbuement handlers. */
     private val imbuements: Imbuements? = null,
+    /**
+     * `g_configManager()` `FORGE_*` values behind the `Game::playerForgeFuseItems`
+     * success and bonus rolls (game.cpp:11193-11208); the engine is stateless
+     * for this handler.
+     */
+    private val forge: Forge = Forge(),
+    /** `uniform_random` (src/utils/tools.hpp:90) seam for the forge rolls. */
+    private val forgeRandom: ForgeRandom = ForgeRandom { minNumber, _ -> minNumber },
+    /** `Player::wheel()` command engine (player_wheel.cpp) for the wheel handlers. */
+    private val wheelApplication: WheelApplication = WheelApplication(),
 ) {
     private val players = mutableMapOf<Long, Player>()
 
@@ -699,6 +715,26 @@ class Game(
 
     /** `Player::forgeHistory(page)` (player.cpp:12794) seam. */
     var forgeHistory: (Player, Int) -> Unit = { _, _ -> }
+
+    /**
+     * `g_kv().scoped("eventscheduler")->get("forge-chance")` (game.cpp:11194)
+     * seam: the event-scheduler success-rate modifier, `null` when unset.
+     */
+    var getForgeChance: () -> Int? = { null }
+
+    /** `Player::forgeFuseItems(actionType, firstItemId, tier, secondItemId, success, reduceTierLoss, convergence, bonus, coreCount)` (player.cpp:11246) seam. */
+    var forgeFuseItems: (Player, ForgeAction_t, Int, Int, Int, Boolean, Boolean, Boolean, Int, Int) -> Unit =
+        { _, _, _, _, _, _, _, _, _, _ -> }
+
+    /** `PlayerWheel::sendOpenWheelWindow(ownerId)` protocol seam (game.cpp:11533). */
+    var sendOpenWheelWindow: (Player, Long) -> Unit = { _, _ -> }
+
+    /**
+     * `Player` view backing the ported [WheelApplication] economy mutations
+     * (`WheelPlayer` in `WheelEconomy.kt`). Unwired hosts keep the null-object
+     * behavior, matching the packet router's current wiring (PARITY GAP).
+     */
+    var wheelPlayer: (Player) -> WheelPlayer = { WheelPlayer.UNWIRED }
 
     // --- remaining player handler seams (game.cpp:4310-11487) -----------------
 
@@ -5521,6 +5557,112 @@ class Game(
 
         updateUIExhausted(player)
         forgeTransferItemTier(player, actionType, donorItemId, tier, receiveItemId, convergence)
+    }
+
+    /**
+     * `Game::playerForgeFuseItems` (src/game/game.cpp:11178): the exhaustion
+     * gate runs first, then the success roll (base rate adjusted by the
+     * eventscheduler `forge-chance` KV and the used-core bonus) and the bonus
+     * roll are consumed before `Player::forgeFuseItems` runs. Metrics latency
+     * measurement is not ported.
+     */
+    fun playerForgeFuseItems(
+        playerId: Long,
+        actionType: ForgeAction_t,
+        firstItemId: Int,
+        tier: Int,
+        secondItemId: Int,
+        usedCore: Boolean,
+        reduceTierLoss: Boolean,
+        convergence: Boolean,
+    ) {
+        val player = getPlayerByID(playerId) ?: return
+
+        if (isUIExhausted(player)) {
+            sendCancelMessage(player, ReturnValue.YOUAREEXHAUSTED)
+            return
+        }
+
+        updateUIExhausted(player)
+
+        val coreCount = (if (usedCore) 1 else 0) + (if (reduceTierLoss) 1 else 0)
+        val finalRate = forge.finalSuccessRate(usedCore, getForgeChance())
+        val success = forge.rollSuccess(forgeRandom.uniformRandom(1, 100), finalRate)
+
+        val chance = forgeRandom.uniformRandom(0, 10000)
+        val bonus = if (convergence) 0 else forge.forgeBonus(chance)
+
+        forgeFuseItems(
+            player,
+            actionType,
+            firstItemId,
+            tier,
+            secondItemId,
+            success,
+            reduceTierLoss,
+            convergence,
+            bonus,
+            coreCount,
+        )
+    }
+
+    /**
+     * `Game::playerOpenWheel` (src/game/game.cpp:11525): a player may only open
+     * their own wheel, the exhaustion gate runs before the window is sent, and
+     * the marker is refreshed afterwards.
+     */
+    fun playerOpenWheel(playerId: Long, ownerId: Long) {
+        val player = getPlayerByID(playerId) ?: return
+
+        if (playerId != ownerId) {
+            logger.error { "[playerOpenWheel] player ${player.name} is trying to open wheel of another player" }
+            return
+        }
+
+        if (isUIExhausted(player)) {
+            sendCancelMessage(player, ReturnValue.YOUAREEXHAUSTED)
+            return
+        }
+
+        sendOpenWheelWindow(player, ownerId)
+        updateUIExhausted(player)
+    }
+
+    /**
+     * `Game::playerSaveWheel` (src/game/game.cpp:11538): the exhaustion gate
+     * runs before `PlayerWheel::saveSlotPointsOnPressSaveButton`, which is the
+     * ported [WheelApplication.applySave]. The window reply packets are not
+     * ported (PARITY GAP), so the command mutates the wheel state only.
+     */
+    fun playerSaveWheel(playerId: Long, command: SaveWheelCommand) {
+        val player = getPlayerByID(playerId) ?: return
+
+        if (isUIExhausted(player)) {
+            sendCancelMessage(player, ReturnValue.YOUAREEXHAUSTED)
+            return
+        }
+
+        updateUIExhausted(player)
+        wheelApplication.applySave(player.features.wheel, command)
+    }
+
+    /**
+     * `Game::playerWheelGemAction` (src/game/game.cpp:11554): the parsed gem
+     * command is dispatched to the ported `PlayerWheel` handlers through
+     * [WheelApplication.applyGemAction]; the exhaustion gate wraps the dispatch
+     * and the marker is refreshed afterwards. The reply packets are not ported
+     * (PARITY GAP), so the command mutates the wheel state only.
+     */
+    fun playerWheelGemAction(playerId: Long, command: WheelGemActionCommand) {
+        val player = getPlayerByID(playerId) ?: return
+
+        if (isUIExhausted(player)) {
+            sendCancelMessage(player, ReturnValue.YOUAREEXHAUSTED)
+            return
+        }
+
+        wheelApplication.applyGemAction(player.features.wheel, command, wheelPlayer(player))
+        updateUIExhausted(player)
     }
 
     /**
