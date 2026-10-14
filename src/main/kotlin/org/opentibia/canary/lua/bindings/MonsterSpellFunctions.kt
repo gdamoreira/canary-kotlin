@@ -15,11 +15,14 @@ import org.opentibia.canary.combat.condition.ConditionSpeed
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.Outfit
 import org.opentibia.canary.creatures.Creature
+import org.opentibia.canary.creatures.Monster
+import org.opentibia.canary.creatures.monsters.BaseSpell
 import org.opentibia.canary.creatures.monsters.MonsterCombatSpell
 import org.opentibia.canary.creatures.monsters.MonsterCombatSpellCombat
 import org.opentibia.canary.creatures.monsters.SpellBlock
 import org.opentibia.canary.lua.bindings.core.luaFunction
 import org.opentibia.canary.lua.bindings.core.retrieveUserdata
+import org.opentibia.canary.lua.registry.LuaSpell
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.spells.SoundEffect
 import kotlin.math.abs
@@ -65,6 +68,28 @@ class MonsterSpellData {
     var outfitItem: Int = 0
     var soundImpactEffect: Int = 0
     var soundCastEffect: Int = 0
+}
+
+/**
+ * Monster-side actor for a block resolved through the canonical spell registry
+ * (`sb.spell = g_spells().getSpellByName(spell->name)`, monsters.cpp:77-80).
+ *
+ * Canary stores the registered `InstantSpell`/`RuneSpell` (a `BaseSpell`)
+ * directly in `spellBlock_t::spell` and casts it through the spell's Lua script
+ * interface. The Kotlin port keeps the registered script state in the [LuaSpell]
+ * mirror, so this actor carries the same registered object into the block the
+ * attack/defense rules cast.
+ *
+ * PARITY GAP: the `onCastSpell` execution of a registry-backed spell is driven
+ * by the Lua bridge (`LuaEventDispatcher`/`ScriptingDispatch`), which the actor
+ * does not hold, so [castSpell] is inert — like a Canary spell whose
+ * `m_spellScriptId` was never loaded.
+ */
+class MonsterRegisteredSpell(
+    /** `spellBlock_t::spell` target: the registered Lua `Spell` state. */
+    val spell: LuaSpell,
+) : BaseSpell {
+    override fun castSpell(caster: Monster, target: Creature) = Unit
 }
 
 /**
@@ -273,10 +298,16 @@ object MonsterSpellFunctions {
      * and the [MonsterCombatSpell] actor that carries the combat type, impact
      * effect and shoot the scalar-only deserializer dropped.
      *
-     * PARITY GAP: `sb.spell = g_spells().getSpellByName(spell->name)` is not
-     * modelled because no compiled `Spells` registry is wired into the boot; the
-     * combat-spell branch below always builds the actor, exactly like Canary does
-     * when the name resolves to no registered spell.
+     * The `sb.spell = g_spells().getSpellByName(spell->name)` look-up
+     * (monsters.cpp:77-80) resolves against the canonical registry
+     * ([SpellBindings], the same instance behind `LuaEnvironment.spells`): a
+     * registered name yields the [MonsterRegisteredSpell] carrying the
+     * registered `Spell` state, a miss keeps the build-from-descriptor
+     * `CombatSpell` branch.
+     *
+     * PARITY GAP: Canary's registry values are the compiled
+     * `InstantSpell`/`RuneSpell` actors; the port's Lua registry stores the
+     * mutable [LuaSpell] mirror, which is what the actor carries.
      */
     fun deserializeSpell(spell: MonsterSpellData): SpellBlock? {
         if (spell.scriptName.isEmpty() && spell.name.isEmpty()) {
@@ -292,6 +323,14 @@ object MonsterSpellFunctions {
             soundCastEffect = soundEffectOf(spell.soundCastEffect),
             soundImpactEffect = soundEffectOf(spell.soundImpactEffect),
         )
+
+        // `sb.spell = g_spells().getSpellByName(spell->name); if (sb.spell) return true;`
+        // (monsters.cpp:77-80): a registered name returns the block untouched by
+        // the descriptor combat build (`combatSpell`/`isMelee` stay false).
+        SpellBindings.getSpellByName(spell.name)?.let { registered ->
+            block.spell = MonsterRegisteredSpell(registered)
+            return block
+        }
 
         val combat = MonsterCombatSpellCombat()
         block.combatSpell = true

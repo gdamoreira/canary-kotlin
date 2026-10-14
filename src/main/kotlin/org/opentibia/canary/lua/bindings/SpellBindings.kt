@@ -2,6 +2,7 @@ package org.opentibia.canary.lua.bindings
 
 import org.opentibia.canary.creatures.vocations.Vocation
 import org.opentibia.canary.items.ItemType
+import org.opentibia.canary.lua.registry.LuaSpell
 import org.opentibia.canary.lua.registry.Spells
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 
@@ -12,13 +13,31 @@ import org.opentibia.canary.lua.runtime.LuaEnvironment
  * the registry identity contract used by `LuaEnvironment.spells` and the
  * `LuaEventDispatcher` (both need the same [Spells] instance the constructor
  * registers into).
+ *
+ * It also holds the registry reference the `g_spells()` look-ups of the engine
+ * resolve through, e.g. `Monsters::deserializeSpell` (monsters.cpp:77); Canary
+ * reaches the process-wide singleton, the port keeps the [install]-created
+ * instance.
  */
 object SpellBindings {
+    @Volatile
+    private var registry: Spells? = null
+
     fun install(env: LuaEnvironment, operations: SpellOperations = StandaloneSpellOperations): Spells {
         val spells = Spells()
         SpellFunctions.install(env, spells, operations)
+        registry = spells
         return spells
     }
+
+    /**
+     * `Spells::getSpellByName` (`src/creatures/combat/spells.cpp:255-261`): the
+     * rune spell wins over an instant spell registered with the same name.
+     * Returns `null` before [install] has run or when the name is not
+     * registered.
+     */
+    fun getSpellByName(name: String): LuaSpell? =
+        registry?.let { it.getRuneByName(name) ?: it.getInstantByName(name) }
 }
 
 /**

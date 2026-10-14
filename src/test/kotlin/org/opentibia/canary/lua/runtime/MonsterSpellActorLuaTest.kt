@@ -8,6 +8,7 @@ import org.opentibia.canary.combat.condition.ConditionDamage
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.creatures.monsters.MonsterCombatSpell
 import org.opentibia.canary.creatures.monsters.Monsters
+import org.opentibia.canary.lua.bindings.MonsterRegisteredSpell
 
 /**
  * Transcript tests for the monster spell actor built by
@@ -63,6 +64,62 @@ class MonsterSpellActorLuaTest {
         val spellField = fixture.env.getGlobal("list").get(1).get("spell")
         assertThat(spellField.isnil()).isFalse()
         assertThat(spellField.touserdata()).isSameAs(actor)
+    }
+
+    @Test
+    fun `registered spell name resolves the registry actor instead of building one`() {
+        val fixture = Fixture()
+
+        fixture.env.loadChunk(
+            """
+            local registered = Spell("instant")
+            registered:name("Light Healing")
+            registered:id(1)
+            registered:words("exura")
+            function registered.onCastSpell(creature, variant) return true end
+            registered:register()
+
+            local mType = Game.createMonsterType("Rat")
+            local heal = MonsterSpell()
+            heal:setType("Light Healing")
+            heal:setInterval(1500)
+            heal:setChance(140)
+            heal:setRange(200)
+            mType:addAttack(heal)
+            """.trimIndent(),
+        )
+
+        val block = fixture.registry.getMonsterType("rat")!!.info.attackSpells.single()
+        val actor = block.spell as? MonsterRegisteredSpell
+        assertThat(actor).isNotNull()
+        assertThat(actor!!.spell).isSameAs(fixture.env.spells.getInstantByName("Light Healing"))
+        assertThat(actor.spell).isSameAs(fixture.env.spells.getInstant("exura"))
+        assertThat(block.combatSpell).isFalse()
+        assertThat(block.isMelee).isFalse()
+        assertThat(block.chance).isEqualTo(100)
+        assertThat(block.speed).isEqualTo(1500)
+        assertThat(block.range).isEqualTo(22)
+        assertThat(block.minCombatValue).isZero()
+        assertThat(block.maxCombatValue).isZero()
+    }
+
+    @Test
+    fun `unregistered spell name keeps building the combat actor`() {
+        val fixture = Fixture()
+
+        fixture.env.loadChunk(
+            """
+            local mType = Game.createMonsterType("Rat")
+            local combat = MonsterSpell()
+            combat:setType("combat")
+            combat:setCombatType(COMBAT_FIREDAMAGE)
+            mType:addAttack(combat)
+            """.trimIndent(),
+        )
+
+        val block = fixture.registry.getMonsterType("rat")!!.info.attackSpells.single()
+        assertThat(block.spell).isInstanceOf(MonsterCombatSpell::class.java)
+        assertThat(block.combatSpell).isTrue()
     }
 
     @Test
