@@ -244,10 +244,11 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 **The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Remaining work is depth polish:
 
-1. **Monster event dispatch** — `registerEvent` doesn't push to already-spawned monsters; `onAppear`/`onDisappear`/`onMove`/`onSay`/`onPlayerAttack` captured but not dispatched; `revscriptsys.lua` not loaded at boot; `MONSTERS_EVENT_*` enums unregistered.
-2. **Compiled spell registry** — `sb.spell = g_spells().getSpellByName` hit not wired (deserializer always builds the actor).
-3. **Condition save path** — no Kotlin condition save (load half only); animus single-column Canary schema vs interim table; storage persistence call sites unbound.
-4. **Visibility/ghost** — `Player::canSeeCreature` override absent; `sendCreatureSquare` canSee gate; `sendCreatureAppear` stackpos→`sendUpdateTile` fallback.
+1. **Event fanout call sites** — normal say/yell `Game::internalCreatureSay` spectator fanout isn't bound to `onCreatureSayEvent`; `onPlayerAttack` doesn't fire from spell damage (`Combat.doCombatHealth`/`CombatTarget` carry no Monster identity); named `CreatureEvent`s dispatch globally rather than per-creature filtered.
+2. **Spell actor execution** — registry-hit `MonsterRegisteredSpell` resolves but doesn't run the spell's Lua `onCastSpell` (no runner bound); compiled-spell boot population.
+3. **Condition flat payload** — `ConditionAttributes` skills/stats/buffs/absorbs/increases/charm arrays not encoded on save (private arrays; reload zeroes); tick/add sounds written as SILENCE.
+4. **Visibility overrides** — `Player::canSee(pos)` client-viewport override (11 vs 8) unmodeled; `sendCreatureTurn` canSee gate + stackpos fallback; CipSoft860 square branch.
+5. **Composition leftovers** — `ServerBootstrap` doesn't pass `subloadRepository`/`subloads`; `Player::isOffline` gate; V13 interim animus table retained.
 
 ---
 

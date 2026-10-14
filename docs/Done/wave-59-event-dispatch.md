@@ -27,3 +27,7 @@
 ## Post-wave (§6)
 
 Update §1–§3, `docs/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+
+## Completion
+
+Completed: monster event dispatch (14), spell registry hit, condition save + V21 animus column, visibility/ghost parity. 689 suites / 7620 tests.
