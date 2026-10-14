@@ -9,6 +9,7 @@ import org.opentibia.canary.game.Game
 import org.opentibia.canary.game.QuickLootFilter_t
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.items.Container
+import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.ItemType
 import org.opentibia.canary.items.ObjectCategory_t
@@ -22,10 +23,11 @@ import java.util.concurrent.TimeUnit
  * Router application tests for the quick-loot state opcodes: `0x90` action `3`
  * (`Game::playerSetQuickLootFallback`, game.cpp:6898), `0x90` actions
  * `0`/`1`/`2` (`Game::playerSetManagedContainer`/`playerClearManagedContainer`/
- * `playerOpenManagedContainer`, game.cpp:6822-6894) and `0x91`
- * (`Game::playerQuickLootBlackWhitelist`, game.cpp:6907). The corpse/nearby
- * loot paths (`0x8F`, game.cpp:6428/6766) stay decode-only until the corpse
- * loot engine is ported.
+ * `playerOpenManagedContainer`, game.cpp:6822-6894), `0x91`
+ * (`Game::playerQuickLootBlackWhitelist`, game.cpp:6907) and the corpse/nearby
+ * loot paths of `0x8F` (`Game::playerQuickLoot`/`playerLootNearby`,
+ * game.cpp:6428/6766) through the managed-container loot engine
+ * (`Game::internalCollectManagedItems`/`processLootItems`, game.cpp:3850/3820).
  */
 class OpcodeApplicationQuickLootRouterTest {
 
@@ -223,6 +225,127 @@ class OpcodeApplicationQuickLootRouterTest {
 
             assertThat(route(frame, player)).isEqualTo(1)
             assertThat(sent).containsExactly(Triple(managed.id and 0xFF, managed, false))
+        } finally {
+            stop()
+        }
+    }
+
+    private fun corpse(id: Int, contents: List<Item>): Container =
+        Container(
+            id = id,
+            capacity = 10,
+            type = ItemType(id = id, name = "corpse", isContainer = true, isCorpse = true),
+        ).also { container -> contents.forEach { container.addItem(it) } }
+
+    private fun writeQuickLootCorpse(frame: ByteBuf, variant: Int, position: Position, itemId: Int) {
+        frame.writeByte(QuickLootPacketHandler.OPCODE_QUICK_LOOT)
+        frame.writeByte(variant)
+        frame.writeShortLE(position.x)
+        frame.writeShortLE(position.y)
+        frame.writeByte(position.z)
+        frame.writeShortLE(itemId)
+        frame.writeByte(0)
+    }
+
+    private fun writeQuickLootNearby(frame: ByteBuf) {
+        frame.writeByte(QuickLootPacketHandler.OPCODE_QUICK_LOOT)
+        frame.writeByte(2)
+    }
+
+    @Test
+    fun `quick loot corpse opcode 0x8F moves the corpse items into the managed loot container`() {
+        start()
+        try {
+            val player = hero()
+            val managed = backpack(2001, capacity = 10)
+            player.refreshManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, managed, true)
+            val position = Position(1000, 1000, 7)
+            val loot = Item(id = 2160, count = 1, type = ItemType(id = 2160, name = "loot"))
+            val corpse = corpse(3058, listOf(loot))
+            map.getOrCreateTile(position).internalAddThing(corpse)
+
+            val frame = Unpooled.buffer()
+            writeQuickLootCorpse(frame, variant = 0, position = position, itemId = 3058)
+
+            assertThat(route(frame, player)).isEqualTo(1)
+            assertThat(corpse.items).isEmpty()
+            assertThat(managed.items).containsExactly(loot)
+        } finally {
+            stop()
+        }
+    }
+
+    @Test
+    fun `quick loot corpse opcode 0x8F leaves the corpse untouched without a managed container`() {
+        start()
+        try {
+            val player = hero()
+            val position = Position(1000, 1000, 7)
+            val loot = Item(id = 2160, count = 1, type = ItemType(id = 2160, name = "loot"))
+            val corpse = corpse(3058, listOf(loot))
+            map.getOrCreateTile(position).internalAddThing(corpse)
+
+            val frame = Unpooled.buffer()
+            writeQuickLootCorpse(frame, variant = 0, position = position, itemId = 3058)
+
+            assertThat(route(frame, player)).isEqualTo(1)
+            assertThat(corpse.items).containsExactly(loot)
+        } finally {
+            stop()
+        }
+    }
+
+    @Test
+    fun `quick loot corpse opcode 0x8F sends gold to the gold managed container`() {
+        start()
+        try {
+            val player = hero()
+            player.premium = true
+            val goldContainer = backpack(2002, capacity = 10)
+            player.refreshManagedContainer(ObjectCategory_t.OBJECTCATEGORY_GOLD, goldContainer, true)
+            val position = Position(1000, 1000, 7)
+            val coins = Item(
+                id = org.opentibia.canary.items.ITEM_GOLD_COIN,
+                count = 75,
+                type = ItemType(id = org.opentibia.canary.items.ITEM_GOLD_COIN, name = "gold coin", isStackable = true),
+            )
+            val corpse = corpse(3058, listOf(coins))
+            map.getOrCreateTile(position).internalAddThing(corpse)
+
+            val frame = Unpooled.buffer()
+            writeQuickLootCorpse(frame, variant = 0, position = position, itemId = 3058)
+
+            assertThat(route(frame, player)).isEqualTo(1)
+            assertThat(corpse.items).isEmpty()
+            assertThat(goldContainer.items).containsExactly(coins)
+        } finally {
+            stop()
+        }
+    }
+
+    @Test
+    fun `loot nearby opcode 0x8F loots the adjacent corpses`() {
+        start()
+        try {
+            val player = hero()
+            val managed = backpack(2001, capacity = 10)
+            player.refreshManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, managed, true)
+            val westPosition = Position(999, 1000, 7)
+            val eastPosition = Position(1001, 1000, 7)
+            val westLoot = Item(id = 2160, count = 1, type = ItemType(id = 2160, name = "loot"))
+            val eastLoot = Item(id = 2161, count = 1, type = ItemType(id = 2161, name = "loot"))
+            val westCorpse = corpse(3058, listOf(westLoot))
+            val eastCorpse = corpse(3058, listOf(eastLoot))
+            map.getOrCreateTile(westPosition).internalAddThing(westCorpse)
+            map.getOrCreateTile(eastPosition).internalAddThing(eastCorpse)
+
+            val frame = Unpooled.buffer()
+            writeQuickLootNearby(frame)
+
+            assertThat(route(frame, player)).isEqualTo(1)
+            assertThat(westCorpse.items).isEmpty()
+            assertThat(eastCorpse.items).isEmpty()
+            assertThat(managed.items).containsExactlyInAnyOrder(westLoot, eastLoot)
         } finally {
             stop()
         }

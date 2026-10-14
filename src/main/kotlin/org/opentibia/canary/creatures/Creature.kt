@@ -27,6 +27,7 @@ import org.opentibia.canary.creatures.players.components.PlayerSex_t
 import org.opentibia.canary.creatures.players.components.RecentDeathEntry
 import org.opentibia.canary.creatures.players.components.RecentPvPKillEntry
 import org.opentibia.canary.creatures.players.pvp.PlayerPvp
+import org.opentibia.canary.creatures.players.storages.Stash
 import org.opentibia.canary.game.QuickLootFilter_t
 import org.opentibia.canary.social.guild.Guild
 import org.opentibia.canary.social.guild.GuildRank
@@ -1453,6 +1454,19 @@ class Player(
     /** `Player::depotSearch` (player.hpp:1830), set by `setSpecialMenuAvailable`. */
     var depotSearch: Boolean = false
 
+    /** `Player::stashMenu` (player.hpp:1829); `Player::isStashMenuAvailable` reads it. */
+    var stashMenu: Boolean = false
+
+    /** `Player::isStashMenuAvailable` (player.hpp:533-535). */
+    fun isStashMenuAvailable(): Boolean = stashMenu
+
+    /**
+     * `Player::stashItems` supply stash (player.hpp:1826). Canary stores the
+     * `std::map<uint16_t, uint32_t>` directly on the player; the port keeps the
+     * [Stash] state holder as an injected dependency (AGENTS.md 1.1).
+     */
+    val stash: Stash = Stash()
+
     /** `Player::depotSearchOnItem` (player.hpp:1831). */
     private var depotSearchItemId: Int = 0
     private var depotSearchItemTier: Int = 0
@@ -1462,6 +1476,12 @@ class Player(
 
     /** `Player::isDepotSearchOpenOnItem` (player.hpp:536-538). */
     fun isDepotSearchOpenOnItem(itemId: Int): Boolean = depotSearchItemId == itemId
+
+    /** `Player::depotSearchOnItem.second` (player.hpp:1831), the tier of the open search. */
+    fun getDepotSearchItemTier(): Int = depotSearchItemTier
+
+    /** `Player::depotSearchOnItem.first` (player.hpp:1831), the item of the open search. */
+    fun getDepotSearchItemId(): Int = depotSearchItemId
 
     /** `Player::setDepotSearchIsOpen` (player.hpp:539-541). */
     fun setDepotSearchIsOpen(itemId: Int, tier: Int) {

@@ -1,6 +1,10 @@
 package org.opentibia.canary.network.protocol
 
 import io.netty.buffer.ByteBuf
+import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.items.Item
+import org.opentibia.canary.lua.runtime.LuaEnvironment
+import org.opentibia.canary.lua.runtime.LuaEventDispatcher
 import org.opentibia.canary.map.Position
 
 /**
@@ -225,6 +229,92 @@ object TradeAndContainerPacketHandler {
     fun parseOpenParentContainer(buffer: ByteBuf): OpenParentContainerCommand? {
         val position = readPosition(buffer) ?: return null
         return OpenParentContainerCommand(position = position)
+    }
+
+    /**
+     * `Game::playerRequestOpenContainerFromDepotSearch` (game.cpp:6975-6987):
+     * the open-search and `isUIExhausted(500)` gates, then
+     * `Player::openContainerFromDepotSearch` (player.cpp:10901) and
+     * `Player::updateUIExhausted`.
+     *
+     * `Player::openContainerFromDepotSearch` resolves the searched item's
+     * parent container and dispatches the container use through the Lua action
+     * layer (`g_actions().useItem`, actions.cpp), matching
+     * [ItemPacketHandler.handleUse]. PARITY GAPS: the `sendCancelMessage`
+     * replies have no protocol sink in this context.
+     */
+    fun applyOpenParentContainer(
+        player: Player,
+        command: OpenParentContainerCommand,
+        luaEnvironment: LuaEnvironment,
+    ) {
+        if (!player.isDepotSearchOpen()) {
+            return
+        }
+        if (player.isUIExhausted(500)) {
+            return
+        }
+
+        openContainerFromDepotSearch(player, command.position, luaEnvironment)
+        player.updateUIExhausted()
+    }
+
+    /**
+     * `Player::openContainerFromDepotSearch` (player.cpp:10901-10918).
+     */
+    private fun openContainerFromDepotSearch(player: Player, position: Position, luaEnvironment: LuaEnvironment) {
+        val item = getItemFromDepotSearch(player, position) ?: return
+        val container = item.getParent()?.getContainer() ?: return
+        LuaEventDispatcher.actionOnUse(
+            luaEnvironment,
+            container.id,
+            player,
+            container,
+            position,
+            null,
+            position,
+            false,
+        )
+    }
+
+    /**
+     * `Player::getItemFromDepotSearch` (player.cpp:10920-10950): the locker
+     * scan over the inbox (`pos.y == 0x21`) or depot (`pos.y == 0x20`)
+     * containers, indexed by the matching items of the open search item and
+     * tier.
+     */
+    fun getItemFromDepotSearch(player: Player, position: Position): Item? {
+        val depotLocker = player.getDepotLocker(player.getLastDepotId())
+        val itemId = player.getDepotSearchItemId()
+        val tier = player.getDepotSearchItemTier()
+
+        var index = 0
+        for (locker in depotLocker.getItemList()) {
+            val container = locker.getContainer() ?: continue
+            if (container.empty() ||
+                (container.isInbox() && position.y != 0x21) ||
+                (!container.isInbox() && position.y != 0x20)
+            ) {
+                continue
+            }
+
+            val iterator = container.iterator()
+            while (iterator.hasNext()) {
+                val item = iterator.current()
+                iterator.advance()
+                if (item == null) {
+                    continue
+                }
+                if (item.id != itemId || item.getTier() != tier) {
+                    continue
+                }
+                if (position.z == index) {
+                    return item
+                }
+                index++
+            }
+        }
+        return null
     }
 
     private fun readByte(buffer: ByteBuf): Int? =

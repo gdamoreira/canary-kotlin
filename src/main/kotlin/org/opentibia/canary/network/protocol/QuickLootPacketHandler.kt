@@ -3,10 +3,30 @@ package org.opentibia.canary.network.protocol
 import io.netty.buffer.ByteBuf
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.Slots_t
+import org.opentibia.canary.creatures.WeaponType_t
+import org.opentibia.canary.game.QuickLootFilter_t
+import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.items.Container
+import org.opentibia.canary.items.ITEM_CRYSTAL_COIN
+import org.opentibia.canary.items.ITEM_GOLD_COIN
+import org.opentibia.canary.items.ITEM_PLATINUM_COIN
 import org.opentibia.canary.items.Item
+import org.opentibia.canary.items.ItemAttribute
+import org.opentibia.canary.items.ItemProperty
+import org.opentibia.canary.items.ItemType
+import org.opentibia.canary.items.ItemTypes_t
 import org.opentibia.canary.items.ObjectCategory_t
+import org.opentibia.canary.items.SLOTP_ARMOR
+import org.opentibia.canary.items.SLOTP_BACKPACK
+import org.opentibia.canary.items.SLOTP_FEET
+import org.opentibia.canary.items.SLOTP_HAND
+import org.opentibia.canary.items.SLOTP_HEAD
+import org.opentibia.canary.items.SLOTP_LEGS
+import org.opentibia.canary.items.SLOTP_NECKLACE
+import org.opentibia.canary.items.SLOTP_RING
+import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.systems.rewardchest.ReturnValue
 
 /**
  * Self-contained commands produced by the quick-loot client opcodes
@@ -313,6 +333,396 @@ object QuickLootPacketHandler {
         val container = player.getManagedContainer(category, command.isLootContainer) ?: return
         player.sendContainer(container.id and 0xFF, container, container.hasParent(), 0)
     }
+
+    /** `QUICK_LOOT_MAX_CORPSES` config default (configmanager.cpp:301). */
+    const val QUICK_LOOT_MAX_CORPSES_DEFAULT: Int = 30
+
+    /** `AUTOBANK` config default (configmanager.cpp:85). */
+    const val AUTOBANK_DEFAULT: Boolean = false
+
+    /**
+     * Applies the quick-loot loot paths of `0x8F` on the WorldCommit lane:
+     *
+     *  - [QuickLootCorpseCommand] `Game::playerQuickLoot` (game.cpp:6428): the
+     *    range/premium gates, the `STACKPOS_FIND_THING` item resolution, the
+     *    corpse resolution and either the managed-container collection
+     *    (`pos.x == 0xFFFF`, `Game::internalCollectManagedItems`, game.cpp:3850)
+     *    or `Game::playerQuickLootCorpse` (game.cpp:3596).
+     *  - [QuickLootNearbyCommand] `Game::playerLootNearby` (game.cpp:6766): the
+     *    3x3 neighbor corpse scan.
+     *
+     * PARITY GAPS: the C++ walk-to-corpse path, `Player::canDoAction`
+     * (`PlayerActionTimers` is not composed into the port's `Player`),
+     * reward corpses (`Player::getReward`), the
+     * `Player::canOpenCorpse` party/guild check, `processLootItems`' nested
+     * container/fallback search, every loot summary `sendTextMessage`,
+     * `Player::sendLootStats` and `Container::clearLootHighlight`/
+     * `sendUpdateToClient` have no ported equivalent.
+     */
+    fun applyQuickLoot(
+        player: Player,
+        command: QuickLootCommand,
+        map: GameMap,
+        autobank: Boolean = AUTOBANK_DEFAULT,
+        maxCorpses: Int = QUICK_LOOT_MAX_CORPSES_DEFAULT,
+        addBankBalance: (Player, Long) -> Unit = { _, _ -> },
+    ) {
+        when (command) {
+            is QuickLootCorpseCommand -> applyQuickLootCorpse(player, command, map, autobank, maxCorpses, addBankBalance)
+            QuickLootNearbyCommand -> applyLootNearby(player, map, autobank, maxCorpses, addBankBalance)
+            else -> Unit
+        }
+    }
+
+    /**
+     * `Game::playerQuickLoot` (game.cpp:6428-6570) for the decoded
+     * [QuickLootCorpseCommand]: the position gates, the corpse resolution and
+     * the loot dispatch.
+     */
+    fun applyQuickLootCorpse(
+        player: Player,
+        command: QuickLootCorpseCommand,
+        map: GameMap,
+        autobank: Boolean = AUTOBANK_DEFAULT,
+        maxCorpses: Int = QUICK_LOOT_MAX_CORPSES_DEFAULT,
+        addBankBalance: (Player, Long) -> Unit = { _, _ -> },
+    ) {
+        if (command.position.x != 0xFFFF) {
+            if (!areInRange1x1(command.position, player.position)) {
+                return
+            }
+        } else if (!player.isPremium()) {
+            return
+        }
+
+        val item = if (command.position.x == 0xFFFF) {
+            resolveUseItem(player, command.position) ?: return
+        } else {
+            findThing(player, map, command.position, command.stackPosition) ?: return
+        }
+
+        if (item.getParent() == null) {
+            return
+        }
+
+        var browseField = false
+        val corpse = if (command.position.x == 0xFFFF) {
+            val parentContainer = item.getParent()?.getContainer() ?: return
+            if (parentContainer.id == Container.ITEM_BROWSEFIELD) {
+                browseField = true
+                item.getContainer() ?: return
+            } else {
+                parentContainer
+            }
+        } else {
+            item.getContainer() ?: return
+        }
+
+        if (corpse.hasAttribute(ItemAttribute.UNIQUEID) || corpse.hasAttribute(ItemAttribute.ACTIONID)) {
+            return
+        }
+
+        if (!isLootableCorpseOwner(player, corpse)) {
+            return
+        }
+
+        if (command.position.x == 0xFFFF && !browseField) {
+            internalCollectManagedItems(player, item, getObjectCategory(item), autobank, addBankBalance)
+        } else if (!command.lootAllCorpses) {
+            playerQuickLootCorpse(player, corpse, autobank, addBankBalance)
+        } else {
+            playerLootAllCorpses(player, map, command.position, maxCorpses, autobank, addBankBalance)
+        }
+    }
+
+    /**
+     * `Game::playerLootAllCorpses` (game.cpp:6572-6620): every lootable corpse
+     * on the target tile, capped by `QUICK_LOOT_MAX_CORPSES`.
+     */
+    fun playerLootAllCorpses(
+        player: Player,
+        map: GameMap,
+        position: Position,
+        maxCorpses: Int = QUICK_LOOT_MAX_CORPSES_DEFAULT,
+        autobank: Boolean = AUTOBANK_DEFAULT,
+        addBankBalance: (Player, Long) -> Unit = { _, _ -> },
+    ) {
+        val tile = map.getTile(position) ?: return
+        var corpses = 0
+        for (tileItem in tile.items) {
+            val tileCorpse = tileItem.getContainer() ?: continue
+            if (!tileCorpse.isCorpse() ||
+                tileCorpse.hasAttribute(ItemAttribute.UNIQUEID) ||
+                tileCorpse.hasAttribute(ItemAttribute.ACTIONID)
+            ) {
+                continue
+            }
+            if (!isLootableCorpseOwner(player, tileCorpse)) {
+                continue
+            }
+
+            corpses++
+            playerQuickLootCorpse(player, tileCorpse, autobank, addBankBalance)
+            if (corpses >= maxCorpses) {
+                break
+            }
+        }
+    }
+
+    /**
+     * `Game::playerLootNearby` (game.cpp:6766-6820): the 3x3 tile scan around
+     * the player, looting each lootable corpse up to the
+     * `QUICK_LOOT_MAX_CORPSES` cap.
+     *
+     * PARITY GAP: the C++ loot snapshot comparison that distinguishes a corpse
+     * that was found from one that was looted is approximated by counting every
+     * corpse the collection moved items out of.
+     */
+    fun applyLootNearby(
+        player: Player,
+        map: GameMap,
+        autobank: Boolean = AUTOBANK_DEFAULT,
+        maxCorpses: Int = QUICK_LOOT_MAX_CORPSES_DEFAULT,
+        addBankBalance: (Player, Long) -> Unit = { _, _ -> },
+    ) {
+        val playerPosition = player.position
+        var looted = 0
+        for (x in -1..1) {
+            for (y in -1..1) {
+                val position = Position(playerPosition.x + x, playerPosition.y + y, playerPosition.z)
+                val tile = map.getTile(position) ?: continue
+                for (tileItem in tile.items) {
+                    val corpse = tileItem.getContainer() ?: continue
+                    if (!corpse.isCorpse() ||
+                        corpse.hasAttribute(ItemAttribute.UNIQUEID) ||
+                        corpse.hasAttribute(ItemAttribute.ACTIONID)
+                    ) {
+                        continue
+                    }
+                    if (!isLootableCorpseOwner(player, corpse)) {
+                        continue
+                    }
+
+                    if (playerQuickLootCorpse(player, corpse, autobank, addBankBalance) > 0) {
+                        looted++
+                    }
+                    if (looted >= maxCorpses) {
+                        return
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * `Game::playerQuickLootCorpse` (game.cpp:3596-3755): the quick-loot list
+     * filter, the per-item managed-container collection and the corpse loot
+     * highlight reset.
+     *
+     * @return the number of items the collection moved.
+     */
+    fun playerQuickLootCorpse(
+        player: Player,
+        corpse: Container,
+        autobank: Boolean = AUTOBANK_DEFAULT,
+        addBankBalance: (Player, Long) -> Unit = { _, _ -> },
+    ): Int {
+        val itemList = mutableListOf<Item>()
+        val ignoreListItems = player.quickLootFilter == QuickLootFilter_t.QUICKLOOTFILTER_SKIPPEDLOOT
+        val iterator = corpse.iterator()
+        while (iterator.hasNext()) {
+            val item = iterator.current()
+            iterator.advance()
+            if (item == null) {
+                continue
+            }
+            val listed = player.quickLootListItemIds.contains(item.id)
+            if ((listed && ignoreListItems) || (!listed && !ignoreListItems)) {
+                continue
+            }
+            itemList.add(item)
+        }
+
+        var moved = 0
+        for (item in itemList) {
+            if (internalCollectManagedItems(player, item, getObjectCategory(item), autobank, addBankBalance) == ReturnValue.NOERROR) {
+                moved++
+            }
+        }
+
+        // Container::clearLootHighlight (container.cpp) has no ported client sink.
+        return moved
+    }
+
+    /**
+     * `Game::internalCollectManagedItems` (game.cpp:3850-3893): the AUTOBANK
+     * coin deposit, the quick-loot list filter, the managed loot container
+     * resolution and the item move.
+     */
+    fun internalCollectManagedItems(
+        player: Player,
+        item: Item,
+        category: ObjectCategory_t,
+        autobank: Boolean = AUTOBANK_DEFAULT,
+        addBankBalance: (Player, Long) -> Unit = { _, _ -> },
+    ): ReturnValue {
+        if (autobank &&
+            (item.id == ITEM_GOLD_COIN || item.id == ITEM_PLATINUM_COIN || item.id == ITEM_CRYSTAL_COIN)
+        ) {
+            val money = when (item.id) {
+                ITEM_PLATINUM_COIN -> item.getItemCount().toLong() * 100
+                ITEM_CRYSTAL_COIN -> item.getItemCount().toLong() * 10000
+                else -> item.getItemCount().toLong()
+            }
+            val parent = item.getParent() ?: return ReturnValue.NOTPOSSIBLE
+            parent.removeThing(item, item.getItemCount())
+            addBankBalance(player, money)
+            return ReturnValue.NOERROR
+        }
+
+        if (player.quickLootListItemIds.isNotEmpty()) {
+            val isInList = player.quickLootListItemIds.contains(item.id)
+            if (player.quickLootFilter == QuickLootFilter_t.QUICKLOOTFILTER_ACCEPTEDLOOT && !isInList) {
+                return ReturnValue.NOTPOSSIBLE
+            }
+            if (player.quickLootFilter == QuickLootFilter_t.QUICKLOOTFILTER_SKIPPEDLOOT && isInList) {
+                return ReturnValue.NOTPOSSIBLE
+            }
+        }
+
+        val lootContainer = findManagedContainer(player, category, true) ?: return ReturnValue.NOTPOSSIBLE
+        return processLootItems(player, lootContainer, item)
+    }
+
+    /**
+     * `Game::findManagedContainer` (game.cpp:3757-3774): the category's managed
+     * container, falling back to the main backpack when the quick-loot fallback
+     * is enabled. The `sendInventoryItem` refresh has no protocol sink here.
+     */
+    private fun findManagedContainer(
+        player: Player,
+        category: ObjectCategory_t,
+        isLootContainer: Boolean,
+    ): Container? {
+        player.getManagedContainer(category, isLootContainer)?.let { return it }
+        if (!player.quickLootFallbackToMainContainer) {
+            return null
+        }
+
+        val mainBackpack = player.getBackpack() ?: return null
+        player.refreshManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, mainBackpack, isLootContainer)
+        return mainBackpack
+    }
+
+    /**
+     * `Game::processLootItems` (game.cpp:3820-3848) reduced to the target
+     * container move; the C++ `findNextAvailableContainer` nested-container
+     * search and `handleFallbackLogic` stay unported (PARITY GAP).
+     */
+    private fun processLootItems(player: Player, lootContainer: Container, item: Item): ReturnValue {
+        if (lootContainer.capacity <= lootContainer.size()) {
+            return ReturnValue.CONTAINERNOTENOUGHROOM
+        }
+
+        val parent = item.getParent() ?: return ReturnValue.NOTPOSSIBLE
+        parent.removeThing(item, item.getItemCount())
+        lootContainer.addItem(item)
+        return ReturnValue.NOERROR
+    }
+
+    /**
+     * `Game::getObjectCategory` (game.cpp:3946-4025): a coin's worth makes the
+     * item gold; every other item maps through `ItemType::weaponType`,
+     * `ItemType::slotPosition` and `ItemType::type`.
+     */
+    fun getObjectCategory(item: Item): ObjectCategory_t {
+        if (item.getWorth() != 0L) {
+            return ObjectCategory_t.OBJECTCATEGORY_GOLD
+        }
+        val itemType = item.type ?: return ObjectCategory_t.OBJECTCATEGORY_OTHERS
+        return getObjectCategory(itemType)
+    }
+
+    /** `Game::getObjectCategory(const ItemType &)` (game.cpp:3962-4025). */
+    fun getObjectCategory(itemType: ItemType): ObjectCategory_t {
+        if (itemType.weaponType != WeaponType_t.WEAPON_NONE) {
+            return when (itemType.weaponType) {
+                WeaponType_t.WEAPON_FIST -> ObjectCategory_t.OBJECTCATEGORY_FISTWEAPONS
+                WeaponType_t.WEAPON_SWORD -> ObjectCategory_t.OBJECTCATEGORY_SWORDS
+                WeaponType_t.WEAPON_CLUB -> ObjectCategory_t.OBJECTCATEGORY_CLUBS
+                WeaponType_t.WEAPON_AXE -> ObjectCategory_t.OBJECTCATEGORY_AXES
+                WeaponType_t.WEAPON_SHIELD -> ObjectCategory_t.OBJECTCATEGORY_SHIELDS
+                WeaponType_t.WEAPON_MISSILE, WeaponType_t.WEAPON_DISTANCE -> ObjectCategory_t.OBJECTCATEGORY_DISTANCEWEAPONS
+                WeaponType_t.WEAPON_WAND -> ObjectCategory_t.OBJECTCATEGORY_WANDS
+                WeaponType_t.WEAPON_AMMO -> ObjectCategory_t.OBJECTCATEGORY_AMMO
+                else -> ObjectCategory_t.OBJECTCATEGORY_DEFAULT
+            }
+        }
+
+        if (itemType.slotPosition != SLOTP_HAND) {
+            return when {
+                itemType.slotPosition and SLOTP_HEAD != 0 -> ObjectCategory_t.OBJECTCATEGORY_HELMETS
+                itemType.slotPosition and SLOTP_NECKLACE != 0 -> ObjectCategory_t.OBJECTCATEGORY_NECKLACES
+                itemType.slotPosition and SLOTP_BACKPACK != 0 -> ObjectCategory_t.OBJECTCATEGORY_CONTAINERS
+                itemType.slotPosition and SLOTP_ARMOR != 0 -> ObjectCategory_t.OBJECTCATEGORY_ARMORS
+                itemType.slotPosition and SLOTP_LEGS != 0 -> ObjectCategory_t.OBJECTCATEGORY_LEGS
+                itemType.slotPosition and SLOTP_FEET != 0 -> ObjectCategory_t.OBJECTCATEGORY_BOOTS
+                itemType.slotPosition and SLOTP_RING != 0 -> ObjectCategory_t.OBJECTCATEGORY_RINGS
+                else -> ObjectCategory_t.OBJECTCATEGORY_OTHERS
+            }
+        }
+
+        return when (itemType.type) {
+            ItemTypes_t.ITEM_TYPE_RUNE -> ObjectCategory_t.OBJECTCATEGORY_RUNES
+            ItemTypes_t.ITEM_TYPE_CREATUREPRODUCT -> ObjectCategory_t.OBJECTCATEGORY_CREATUREPRODUCTS
+            ItemTypes_t.ITEM_TYPE_FOOD -> ObjectCategory_t.OBJECTCATEGORY_FOOD
+            ItemTypes_t.ITEM_TYPE_VALUABLE -> ObjectCategory_t.OBJECTCATEGORY_VALUABLES
+            ItemTypes_t.ITEM_TYPE_POTION -> ObjectCategory_t.OBJECTCATEGORY_POTIONS
+            else -> ObjectCategory_t.OBJECTCATEGORY_OTHERS
+        }
+    }
+
+    /**
+     * The `Player::canOpenCorpse(corpseOwner)` gate of `playerQuickLootCorpse`
+     * (player.cpp) reduced to the owner identity check; the C++ party/guild
+     * access (`Player::isPartner`) is not reachable from this context
+     * (PARITY GAP).
+     */
+    private fun isLootableCorpseOwner(player: Player, corpse: Container): Boolean {
+        val owner = (corpse.getAttribute(ItemAttribute.CORPSEOWNER) as? Number)?.toLong() ?: 0L
+        return owner == 0L || owner == player.id
+    }
+
+    /**
+     * `Game::internalGetThing` `STACKPOS_FIND_THING` branch (game.cpp:1170-1184)
+     * plus the support-hangable veto (game.cpp:1191-1203): the use item first,
+     * then the door item, then the top-down item.
+     */
+    private fun findThing(player: Player, map: GameMap, position: Position, index: Int): Item? {
+        val tile = map.getTile(position) ?: return null
+        var item = tile.getUseItem(index)?.getItem()
+        if (item == null) {
+            item = tile.getDoorItem()
+        }
+        if (item == null) {
+            item = tile.getTopDownItem()
+        }
+
+        if (item != null && tile.hasFlag(TileFlags.TILESTATE_SUPPORTS_HANGABLE.value)) {
+            if (tile.hasProperty(ItemProperty.CONST_PROP_ISVERTICAL)) {
+                if (player.position.x + 1 == position.x && item.isHangable()) {
+                    return null
+                }
+            } else if (player.position.y + 1 == position.y && item.isHangable()) {
+                return null
+            }
+        }
+        return item
+    }
+
+    /** `Position::areInRange<1, 1, 0>` (src/game/movement/position.hpp). */
+    private fun areInRange1x1(a: Position, b: Position): Boolean =
+        kotlin.math.abs(a.x - b.x) <= 1 && kotlin.math.abs(a.y - b.y) <= 1 && a.z == b.z
 
     /**
      * `Game::internalGetThing` `STACKPOS_USEITEM` branch for `pos.x == 0xFFFF`

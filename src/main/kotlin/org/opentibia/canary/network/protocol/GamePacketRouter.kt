@@ -7,6 +7,7 @@ import org.opentibia.canary.game.Game
 import org.opentibia.canary.game.QuickLootFilter_t
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.io.IOMarket
 import org.opentibia.canary.items.ItemTypeRegistry
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.LuaEventDispatcher
@@ -16,7 +17,14 @@ import org.opentibia.canary.network.protocol.rewardchest.RewardChestCollectPacke
 import org.opentibia.canary.network.protocol.bestiary.BestiaryPacketParser
 import org.opentibia.canary.network.protocol.forge.ForgePacketParser
 import org.opentibia.canary.network.protocol.guild.GuildPacketParser
+import org.opentibia.canary.network.protocol.market.MarketAcceptOfferCommand
+import org.opentibia.canary.network.protocol.market.MarketBrowseCommand
+import org.opentibia.canary.network.protocol.market.MarketBrowseRequest
+import org.opentibia.canary.network.protocol.market.MarketCancelOfferCommand
+import org.opentibia.canary.network.protocol.market.MarketCreateOfferCommand
 import org.opentibia.canary.network.protocol.market.MarketLeaveCommand
+import org.opentibia.canary.network.protocol.market.MarketOfferApplication
+import org.opentibia.canary.network.protocol.market.MarketOfferContext
 import org.opentibia.canary.network.protocol.market.MarketPacketParser
 import org.opentibia.canary.network.protocol.npcshop.NpcShopPacketHandler
 import org.opentibia.canary.network.protocol.wheel.OpenWheelCommand
@@ -51,7 +59,14 @@ data class GamePacketContext(
      * search, market, imbuements). Optional so callers without a composed
      * world keep the decode-only confinement boundary.
      */
-    val game: Game? = null
+    val game: Game? = null,
+    /**
+     * `IOMarket::getInstance()` (game.cpp:10297, 4078) seam for the market
+     * offer application (`Game::playerCreateMarketOffer` etc., game.cpp:10717).
+     * Optional so callers without the market persistence keep the decode-only
+     * boundary.
+     */
+    val ioMarket: IOMarket? = null
 )
 
 object GamePacketRouter {
@@ -120,10 +135,17 @@ object GamePacketRouter {
                                 )
 
                                 // Game::playerRequestOpenContainerFromDepotSearch
-                                // (game.cpp:6975) needs Player::openContainerFromDepotSearch
-                                // and the depot-locker tree, which are not ported
-                                // (PARITY GAP).
-                                is OpenParentContainerCommand -> Unit
+                                // (game.cpp:6975) gates on the open depot search
+                                // and resolves the searched item's parent
+                                // container, then dispatches the container action
+                                // through the Lua action layer (Player::openContainerFromDepotSearch,
+                                // player.cpp:10901).
+                                is OpenParentContainerCommand ->
+                                    TradeAndContainerPacketHandler.applyOpenParentContainer(
+                                        player,
+                                        command,
+                                        context.luaEnvironment,
+                                    )
 
                                 else -> Unit
                             }
@@ -214,10 +236,27 @@ object GamePacketRouter {
                                 OpenDepotSearchCommand,
                                 is DepotSearchItemRequestCommand -> DepotAndStashPacketHandler.apply(player, command)
 
-                                // Game::playerStowItem / playerStashWithdraw /
-                                // playerRequestDepotSearchRetrieve (game.cpp:5665-6975)
-                                // need the stash item delivery and depot-search item
-                                // transfer engines, which are not ported (PARITY GAP).
+                                // ProtocolGame::parseStashWithdraw stash actions
+                                // (protocolgame.cpp:10874) with the
+                                // Game::playerStowItem / playerStashWithdraw state
+                                // transitions (game.cpp:5665, 5706).
+                                is StowItemCommand,
+                                is StashWithdrawCommand -> DepotAndStashPacketHandler.applyStashAction(
+                                    player,
+                                    command,
+                                    context.map,
+                                    context.itemTypes,
+                                )
+
+                                // Game::playerRequestDepotSearchRetrieve
+                                // (game.cpp:6960) moves the searched depot/inbox
+                                // items to the player and refreshes the search.
+                                is RetrieveDepotSearchCommand -> DepotAndStashPacketHandler.applyRetrieveDepotSearch(
+                                    player,
+                                    command,
+                                    context.itemTypes,
+                                )
+
                                 else -> Unit
                             }
                         }
@@ -249,13 +288,13 @@ object GamePacketRouter {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
                             when (command) {
                                 // Game::playerQuickLoot / playerLootNearby
-                                // (game.cpp:6428, 6766) need the corpse-loot engine,
-                                // capacity checks and the managed containers, which
-                                // are not ported (PARITY GAP).
+                                // (game.cpp:6428, 6766): the corpse resolution
+                                // and the managed-container loot collection.
                                 is QuickLootCorpseCommand,
                                 QuickLootNearbyCommand,
-                                is QuickLootUnsupportedVariantCommand,
-                                -> Unit
+                                -> QuickLootPacketHandler.applyQuickLoot(player, command, context.map)
+
+                                is QuickLootUnsupportedVariantCommand -> Unit
 
                                 // Game::playerSetManagedContainer /
                                 // playerClearManagedContainer / playerOpenManagedContainer
@@ -438,12 +477,23 @@ object GamePacketRouter {
 
                                 // Game::playerApplyImbuement / playerClearImbuement
                                 // (game.cpp:7116, 7153) drive ImbuementEngine over the
-                                // `ImbuementItem` seam; the real Item custom-attribute
-                                // store does not model the per-slot imbuement keys
-                                // (`ITEM_IMBUEMENT_SLOT + slot`) and `Player` exposes no
-                                // `imbuingItem` accessor, so 0xD5/0xD6 stay decode-only
-                                // (PARITY GAP).
-                                else -> Unit
+                                // `ImbuementItem` seam. ProtocolGame::parseApplyImbuement
+                                // drops an id above uint16 max before the Game call
+                                // (protocolgame.cpp:2543).
+                                is ApplyImbuementCommand -> {
+                                    if (command.imbuementId <= 0xFFFF) {
+                                        context.game?.playerApplyImbuement(
+                                            player.id,
+                                            command.imbuementId.toInt(),
+                                            command.slot,
+                                        )
+                                    }
+                                }
+
+                                is ClearImbuementCommand -> context.game?.playerClearImbuement(
+                                    player.id,
+                                    command.slot,
+                                )
                             }
                         }
                         true
@@ -546,12 +596,39 @@ object GamePacketRouter {
                                 // Player::inMarket.
                                 MarketLeaveCommand -> context.game?.playerLeaveMarket(player.id)
 
-                                // Game::playerBrowseMarket/playerCreateMarketOffer/
-                                // playerCancelMarketOffer/playerAcceptMarketOffer
-                                // (game.cpp:10282-10884) run the IOMarket transaction
-                                // engine, item escrow and market senders, which are not
-                                // composed in this context (PARITY GAP).
-                                else -> Unit
+                                // Game::playerBrowseMarket /
+                                // playerBrowseMarketOwnOffers / playerBrowseMarketOwnHistory
+                                // (game.cpp:10282-10337) read the IOMarket offers.
+                                is MarketBrowseCommand -> when (val request = command.request) {
+                                    MarketBrowseRequest.OwnOffers ->
+                                        context.game?.playerBrowseMarketOwnOffers(player.id)
+
+                                    MarketBrowseRequest.OwnHistory ->
+                                        context.game?.playerBrowseMarketOwnHistory(player.id)
+
+                                    is MarketBrowseRequest.Item ->
+                                        context.game?.playerBrowseMarket(player.id, request.itemId, request.tier)
+                                }
+
+                                // Game::playerCreateMarketOffer /
+                                // playerCancelMarketOffer / playerAcceptMarketOffer
+                                // (game.cpp:10717, 10819, 10884) run the IOMarket
+                                // transaction engine, item escrow and bank balance
+                                // through the handler-layer MarketOfferApplication.
+                                is MarketCreateOfferCommand ->
+                                    marketOfferContext(context, player)?.let {
+                                        MarketOfferApplication.applyCreateOffer(command, it)
+                                    }
+
+                                is MarketCancelOfferCommand ->
+                                    marketOfferContext(context, player)?.let {
+                                        MarketOfferApplication.applyCancelOffer(command, it)
+                                    }
+
+                                is MarketAcceptOfferCommand ->
+                                    marketOfferContext(context, player)?.let {
+                                        MarketOfferApplication.applyAcceptOffer(command, it)
+                                    }
                             }
                         }
                         true
@@ -1283,6 +1360,27 @@ object GamePacketRouter {
         }
 
         return packetsHandled
+    }
+
+    /**
+     * Builds the [MarketOfferContext] over the `Game` seams the market offer
+     * handlers (`Game::playerCreateMarketOffer` etc., game.cpp:10717-11096)
+     * read; `null` when the context carries no [IOMarket] or [Game].
+     */
+    private fun marketOfferContext(context: GamePacketContext, player: Player): MarketOfferContext? {
+        val game = context.game ?: return null
+        val ioMarket = context.ioMarket ?: return null
+        return MarketOfferContext(
+            player = player,
+            ioMarket = ioMarket,
+            itemTypes = context.itemTypes,
+            resolvePlayer = { playerId -> game.getPlayerByGUID(playerId, true) },
+            getBankBalance = { target -> game.getBankBalance(target) },
+            setBankBalance = { target, value -> game.setBankBalance(target, value) },
+            removeMoney = { target, amount -> game.removeMoney(target, amount, 0, true) },
+            isUIExhausted = { target -> game.isUIExhausted(target) },
+            updateUIExhausted = { target -> game.updateUIExhausted(target) },
+        )
     }
 }
 
