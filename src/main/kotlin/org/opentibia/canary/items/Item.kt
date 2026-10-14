@@ -23,6 +23,9 @@ const val DIRECTION_NONE = 8
 /** `IMBUEMENT_MAX_TIER` (`src/utils/const.hpp:27`). */
 const val IMBUEMENT_MAX_TIER = 3
 
+/** `#define ITEM_IMBUEMENT_SLOT 500` (`src/items/item.cpp:33`). */
+const val ITEM_IMBUEMENT_SLOT = 500
+
 /** `PLAYERSEX_FEMALE` (`src/creatures/creatures_definitions.hpp:448`). */
 const val PLAYERSEX_FEMALE = 0
 
@@ -666,6 +669,7 @@ internal const val ATTR_SHOOTRANGE = 33
 internal const val ATTR_SPECIAL = 34
 internal const val ATTR_IMBUEMENT_SLOT = 35
 internal const val ATTR_OPENCONTAINER = 36
+internal const val ATTR_CUSTOM_ATTRIBUTES = 37
 internal const val ATTR_QUICKLOOTCONTAINER = 38
 internal const val ATTR_AMOUNT = 39
 internal const val ATTR_TIER = 40
@@ -674,6 +678,162 @@ internal const val ATTR_STORE_INBOX_CATEGORY = 42
 internal const val ATTR_OWNER = 43
 internal const val ATTR_OBTAINCONTAINER = 44
 internal const val ATTR_MANTRA = 45
+
+/**
+ * Mirror of Canary's `CustomAttribute` (`src/items/functions/item/custom_attribute.hpp:14-84`):
+ * a string key plus an `int64_t`/`std::string`/`double`/`bool` variant. The wire
+ * type codes come from `CustomAttribute::serialize`/`unserialize`
+ * (custom_attribute.cpp:88-153).
+ */
+class CustomAttribute {
+    private val stringKey: String
+
+    /** `@PublishedApi` so [hasValue] can reify the C++ `std::variant` check. */
+    @PublishedApi
+    internal var value: Any?
+        private set
+
+    /** `CustomAttribute()` default constructor: the variant holds `int64_t` 0. */
+    constructor() {
+        stringKey = ""
+        value = 0L
+    }
+
+    constructor(stringKey: String, value: Long) {
+        this.stringKey = stringKey
+        this.value = value
+    }
+
+    constructor(stringKey: String, value: String) {
+        this.stringKey = stringKey
+        this.value = value
+    }
+
+    constructor(stringKey: String, value: Double) {
+        this.stringKey = stringKey
+        this.value = value
+    }
+
+    constructor(stringKey: String, value: Boolean) {
+        this.stringKey = stringKey
+        this.value = value
+    }
+
+    /** C++ implicit copy constructor. */
+    constructor(other: CustomAttribute) {
+        stringKey = other.stringKey
+        value = other.value
+    }
+
+    /** `CustomAttribute::getStringKey` (custom_attribute.cpp:34). */
+    fun getStringKey(): String = stringKey
+
+    /** `CustomAttribute::getInteger` (custom_attribute.cpp:38): 0 for another variant. */
+    fun getInteger(): Long = value as? Long ?: 0L
+
+    /** `CustomAttribute::getString` (custom_attribute.cpp:47): "" for another variant. */
+    fun getString(): String = value as? String ?: ""
+
+    /** `CustomAttribute::getDouble` (custom_attribute.cpp:56): 0.0 for another variant. */
+    fun getDouble(): Double = value as? Double ?: 0.0
+
+    /** `CustomAttribute::getBool` (custom_attribute.cpp:65): false for another variant. */
+    fun getBool(): Boolean = value as? Boolean ?: false
+
+    /** `CustomAttribute::setValue(int64_t)` (custom_attribute.hpp:49): keeps the variant type. */
+    fun setValue(newValue: Long) {
+        if (value is Long) {
+            value = newValue
+        }
+    }
+
+    /** `CustomAttribute::setValue(const std::string &)` (custom_attribute.hpp:54). */
+    fun setValue(newValue: String) {
+        if (value is String) {
+            value = newValue
+        }
+    }
+
+    /** `CustomAttribute::setValue(double)` (custom_attribute.hpp:59). */
+    fun setValue(newValue: Double) {
+        if (value is Double) {
+            value = newValue
+        }
+    }
+
+    /** `CustomAttribute::setValue(bool)` (custom_attribute.hpp:64). */
+    fun setValue(newValue: Boolean) {
+        if (value is Boolean) {
+            value = newValue
+        }
+    }
+
+    /** `CustomAttribute::hasValue<T>` (custom_attribute.hpp:70). */
+    inline fun <reified T> hasValue(): Boolean = value is T
+
+    /** `CustomAttribute::serialize` (custom_attribute.cpp:88). */
+    fun serialize(propWriteStream: PropWriteStream) {
+        when (val current = value) {
+            is String -> {
+                propWriteStream.writeU8(CUSTOM_ATTRIBUTE_STRING)
+                propWriteStream.writeString(current)
+            }
+
+            is Long -> {
+                propWriteStream.writeU8(CUSTOM_ATTRIBUTE_INTEGER)
+                propWriteStream.writeI64(current)
+            }
+
+            is Double -> {
+                propWriteStream.writeU8(CUSTOM_ATTRIBUTE_DOUBLE)
+                propWriteStream.writeU64(java.lang.Double.doubleToRawLongBits(current))
+            }
+
+            is Boolean -> {
+                propWriteStream.writeU8(CUSTOM_ATTRIBUTE_BOOLEAN)
+                propWriteStream.writeU8(if (current) 1 else 0)
+            }
+        }
+    }
+
+    /** `CustomAttribute::unserialize` (custom_attribute.cpp:105). */
+    fun unserialize(propStream: PropStream): Boolean {
+        val type = propStream.readU8() ?: return false
+        return when (type) {
+            CUSTOM_ATTRIBUTE_STRING -> {
+                value = propStream.readString() ?: return false
+                true
+            }
+
+            CUSTOM_ATTRIBUTE_INTEGER -> {
+                value = propStream.readI64() ?: return false
+                true
+            }
+
+            CUSTOM_ATTRIBUTE_DOUBLE -> {
+                val bits = propStream.readU64() ?: return false
+                value = java.lang.Double.longBitsToDouble(bits)
+                true
+            }
+
+            CUSTOM_ATTRIBUTE_BOOLEAN -> {
+                val bool = propStream.readU8() ?: return false
+                value = bool != 0
+                true
+            }
+
+            else -> false
+        }
+    }
+
+    private companion object {
+        /** CustomAttribute wire variants (custom_attribute.cpp:112-148). */
+        const val CUSTOM_ATTRIBUTE_STRING = 1
+        const val CUSTOM_ATTRIBUTE_INTEGER = 2
+        const val CUSTOM_ATTRIBUTE_DOUBLE = 3
+        const val CUSTOM_ATTRIBUTE_BOOLEAN = 4
+    }
+}
 
 open class Item(
     var id: Int,
@@ -684,6 +844,13 @@ open class Item(
     var count: Int = count
 
     private val attributes = mutableMapOf<ItemAttribute, Any>()
+
+    /**
+     * `ItemAttribute::customAttributeMap` (src/items/functions/item/attribute.hpp:166):
+     * a `std::map<std::string, CustomAttribute>` keyed case-insensitively, so the
+     * ascending key iteration order is mirrored by `sortedMapOf`.
+     */
+    private val customAttributes = sortedMapOf<String, CustomAttribute>()
 
     /** `Item::m_parent` (src/items/item.hpp:772); weak like the C++ `std::weak_ptr`. */
     private var parent: WeakReference<Cylinder>? = null
@@ -1167,6 +1334,9 @@ open class Item(
     open fun clone(): Item {
         val copy = createLike(type, id, count)
         copy.attributes.putAll(attributes)
+        for ((key, customAttribute) in customAttributes) {
+            copy.customAttributes[key] = CustomAttribute(customAttribute)
+        }
         return copy
     }
 
@@ -1213,13 +1383,9 @@ open class Item(
         return true
     }
 
-    /**
-     * `Item::hasMarketAttributes` (src/items/item.cpp:3539). `hasImbuements`
-     * needs the custom attribute store owned by the imbuement engine and is not
-     * modeled on [Item] yet (PARITY GAP); every other clause is exact.
-     */
+    /** `Item::hasMarketAttributes` (src/items/item.cpp:3539). */
     fun hasMarketAttributes(): Boolean {
-        if (attributes.isEmpty()) {
+        if (attributes.isEmpty() && customAttributes.isEmpty()) {
             return true
         }
 
@@ -1247,7 +1413,7 @@ open class Item(
             }
         }
 
-        return !isStoreItem() && !hasOwner()
+        return !hasImbuements() && !isStoreItem() && !hasOwner()
     }
 
     /** `Item::isStowable` (src/items/item.hpp:491). */
@@ -1304,6 +1470,91 @@ open class Item(
     }
 
     fun removeAttribute(attribute: ItemAttribute): Boolean = attributes.remove(attribute) != null
+
+    // --- Custom attributes (src/items/functions/item/attribute.cpp:102-153) ----
+
+    /** `ItemProperties::getCustomAttributeMap` (attribute.cpp:105). */
+    fun getCustomAttributeMap(): Map<String, CustomAttribute> = customAttributes
+
+    /**
+     * `ItemProperties::getCustomAttribute` (item.hpp:78, attribute.cpp:114):
+     * the lookup is case-insensitive (`asLowerCaseString`).
+     */
+    fun getCustomAttribute(attributeName: String): CustomAttribute? =
+        customAttributes[attributeName.lowercase()]
+
+    /** `ItemProperties::setCustomAttribute(key, int64_t)` (attribute.cpp:121). */
+    fun setCustomAttribute(key: String, value: Long) {
+        customAttributes[key.lowercase()] = CustomAttribute(key, value)
+    }
+
+    /** `ItemProperties::setCustomAttribute(key, const std::string &)` (attribute.cpp:126). */
+    fun setCustomAttribute(key: String, value: String) {
+        customAttributes[key.lowercase()] = CustomAttribute(key, value)
+    }
+
+    /** `ItemProperties::setCustomAttribute(key, double)` (attribute.cpp:131). */
+    fun setCustomAttribute(key: String, value: Double) {
+        customAttributes[key.lowercase()] = CustomAttribute(key, value)
+    }
+
+    /** `ItemProperties::setCustomAttribute(key, bool)` (attribute.cpp:136). */
+    fun setCustomAttribute(key: String, value: Boolean) {
+        customAttributes[key.lowercase()] = CustomAttribute(key, value)
+    }
+
+    /** `ItemProperties::addCustomAttribute` (attribute.cpp:141). */
+    fun addCustomAttribute(key: String, customAttribute: CustomAttribute) {
+        customAttributes[key.lowercase()] = customAttribute
+    }
+
+    /** `ItemProperties::hasCustomAttribute` (item.hpp:95). */
+    fun hasCustomAttribute(): Boolean = customAttributes.isNotEmpty()
+
+    /** `ItemProperties::removeCustomAttribute` (attribute.cpp:145). */
+    fun removeCustomAttribute(attributeName: String): Boolean =
+        customAttributes.remove(attributeName.lowercase()) != null
+
+    // --- Imbuement custom attributes (src/items/item.cpp:453-488, item.hpp:713-735) ----
+
+    /** `Item::hasImbuementAttribute` (src/items/item.cpp:453). */
+    fun hasImbuementAttribute(attributeSlot: String): Boolean = getCustomAttribute(attributeSlot) != null
+
+    /**
+     * `Item::getImbuementInfo`'s `attribute->getAttribute<uint32_t>()` read
+     * (src/items/item.cpp:478): null when the slot has no attribute, otherwise
+     * the packed `(duration << 8) | imbuementId` clamped to `uint32_t`.
+     */
+    fun getImbuementAttribute(slot: Int): Long? =
+        getCustomAttribute("${ITEM_IMBUEMENT_SLOT + slot}")?.getInteger()?.and(0xFFFFFFFFL)
+
+    /** `Item::setImbuement` (src/items/item.cpp:485): `(duration << 8) | imbuementId`, 0 for an empty slot. */
+    fun setImbuement(slot: Int, imbuementId: Int, duration: Int) {
+        val packed = if (duration > 0) (duration.toLong() shl 8) or imbuementId.toLong() else 0L
+        setCustomAttribute("${ITEM_IMBUEMENT_SLOT + slot}", packed)
+    }
+
+    /** `Item::decayImbuementTime` (src/items/item.hpp:713). */
+    fun decayImbuementTime(slot: Int, imbuementId: Int, duration: Int) = setImbuement(slot, imbuementId, duration)
+
+    /** `Item::clearImbuement` (src/items/item.hpp:716). */
+    fun clearImbuement(slot: Int, imbuementId: Int) = setImbuement(slot, imbuementId, 0)
+
+    /**
+     * `Item::hasImbuements` (src/items/item.hpp:728-737) reduced to the custom
+     * attribute store: the C++ `getImbuementInfo` also validates the imbuement
+     * id against `g_imbuements()`, which has no registry seam on [Item]
+     * (PARITY GAP); a zeroed slot attribute is treated as empty, matching the
+     * packed encoding.
+     */
+    fun hasImbuements(): Boolean {
+        for (slot in 0 until getImbuementSlot()) {
+            if ((getImbuementAttribute(slot) ?: 0L) != 0L) {
+                return true
+            }
+        }
+        return false
+    }
 
     /** Mirrors `item:getActionId()` / `item:setActionId()` (src/lua/functions/items/item_functions.cpp:291). */
     fun getActionId(): Int = ((attributes[ItemAttribute.ACTIONID] as? Long ?: 0L) and 0xFFFFL).toInt()
@@ -1556,7 +1807,14 @@ open class Item(
             propWriteStream.writeU32(intAttribute(ItemAttribute.OWNER) and 0xFFFFFFFFL)
         }
 
-        // ATTR_CUSTOM custom attributes have no Kotlin store yet (PARITY GAP).
+        if (hasCustomAttribute()) {
+            propWriteStream.writeU8(ATTR_CUSTOM)
+            propWriteStream.writeU64(customAttributes.size.toLong())
+            for ((attributeKey, customAttribute) in customAttributes) {
+                propWriteStream.writeString(attributeKey)
+                customAttribute.serialize(propWriteStream)
+            }
+        }
 
         if (attributes.containsKey(ItemAttribute.OBTAINCONTAINER)) {
             propWriteStream.writeU8(ATTR_OBTAINCONTAINER)
@@ -1747,12 +2005,38 @@ open class Item(
                 setAttribute(ItemAttribute.OBTAINCONTAINER, flags)
             }
 
-            // ATTR_CUSTOM / ATTR_CUSTOM_ATTRIBUTES have no Kotlin store (PARITY GAP).
+            // Deprecated, all items that still exist with this attribute will
+            // work normally, but new items will be created with the new system,
+            // using ATTR_CUSTOM (src/items/item.cpp:1240-1268).
+            ATTR_CUSTOM_ATTRIBUTES -> {
+                val size = propStream.readU64() ?: return AttrReadValue.ATTR_READ_ERROR
+                for (index in 0 until size) {
+                    val key = propStream.readString() ?: return AttrReadValue.ATTR_READ_ERROR
+
+                    val customAttribute = CustomAttribute()
+                    if (!customAttribute.unserialize(propStream)) {
+                        return AttrReadValue.ATTR_READ_ERROR
+                    }
+                    addCustomAttribute(key, customAttribute)
+                    removeAttribute(ItemAttribute.CUSTOM)
+
+                    // Migrate wrapable items to the new store attribute.
+                    if (getCustomAttribute("unWrapId") != null && intAttribute(ItemAttribute.STORE) == 0L) {
+                        setAttribute(ItemAttribute.STORE, System.currentTimeMillis() / 1000)
+                    }
+                }
+            }
+
             ATTR_CUSTOM -> {
                 val size = propStream.readU64() ?: return AttrReadValue.ATTR_READ_ERROR
                 for (index in 0 until size) {
-                    if (propStream.readString() == null) return AttrReadValue.ATTR_READ_ERROR
-                    if (!skipCustomAttribute(propStream)) return AttrReadValue.ATTR_READ_ERROR
+                    val key = propStream.readString() ?: return AttrReadValue.ATTR_READ_ERROR
+
+                    val customAttribute = CustomAttribute()
+                    if (!customAttribute.unserialize(propStream)) {
+                        return AttrReadValue.ATTR_READ_ERROR
+                    }
+                    addCustomAttribute(key, customAttribute)
                 }
             }
 
@@ -1784,22 +2068,6 @@ open class Item(
 
     private fun stringAttribute(attribute: ItemAttribute): String =
         attributes[attribute] as? String ?: ""
-
-    /**
-     * Consumes one `CustomAttribute` payload (src/items/functions/item/custom_attribute.cpp:105-153).
-     * Custom attributes are not stored by the Kotlin item yet; the payload
-     * walk only keeps the stream readable (PARITY GAP).
-     */
-    private fun skipCustomAttribute(propStream: PropStream): Boolean {
-        val type = propStream.readU8() ?: return false
-        return when (type) {
-            1 -> propStream.readString() != null
-            2 -> propStream.skip(8)
-            3 -> propStream.skip(8)
-            4 -> propStream.skip(1)
-            else -> false
-        }
-    }
 
     private fun otsysTime(): Long = System.currentTimeMillis()
 

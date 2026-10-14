@@ -3,6 +3,7 @@ package org.opentibia.canary.systems.imbuement
 import io.github.oshai.kotlinlogging.KotlinLogging
 import org.opentibia.canary.combat.condition.Skill
 import org.opentibia.canary.combat.condition.Stat
+import org.opentibia.canary.items.Item
 import java.lang.ref.WeakReference
 import java.util.IdentityHashMap
 
@@ -174,12 +175,33 @@ interface ImbuementPlayer : ImbuementStatsTarget {
  *  - [parent]/[parentIsContainer]/[holdingPlayer]: `Item::getParent()->getContainer()`
  *    and `Item::getHoldingPlayer` (imbuements.cpp:474,488).
  */
-class ImbuementItem(
-    val id: Int,
-    private val imbuementSlot: Int = 0,
-    private val imbuementTypes: Map<ImbuementTypes_t, Int> = emptyMap()
+class ImbuementItem private constructor(
+    private val rawId: Int,
+    private val rawImbuementSlot: Int,
+    private val rawImbuementTypes: Map<ImbuementTypes_t, Int>,
+    private val customAttributes: MutableMap<Int, Long>,
+    /**
+     * The real `Item` this seam is composed over; null for the standalone
+     * in-memory item used by callers that have no world item yet.
+     */
+    val sourceItem: Item?,
 ) {
-    private val customAttributes = mutableMapOf<Int, Long>()
+    constructor(
+        id: Int,
+        imbuementSlot: Int = 0,
+        imbuementTypes: Map<ImbuementTypes_t, Int> = emptyMap(),
+    ) : this(id, imbuementSlot, imbuementTypes, mutableMapOf(), null)
+
+    /**
+     * Composes the seam over a real [Item]: the slot count and `imbuementTypes`
+     * come from the item and its type, and every imbuement custom attribute is
+     * read/written through `Item::getCustomAttribute`/`setCustomAttribute`
+     * (`#define ITEM_IMBUEMENT_SLOT 500`, src/items/item.cpp:33).
+     */
+    constructor(item: Item) : this(item.id, 0, emptyMap(), mutableMapOf(), item)
+
+    /** `Item::getID()`; the backing item's live id when composed over an item. */
+    val id: Int get() = sourceItem?.id ?: rawId
 
     /** `Item::getParent()` (item.hpp:681); `=== player` means the item is carried directly. */
     var parent: Any? = null
@@ -190,18 +212,34 @@ class ImbuementItem(
     /** `Item::getHoldingPlayer` used by the decay tracker (`imbuements.cpp:474`). */
     var holdingPlayer: ImbuementPlayer? = null
 
-    fun getImbuementSlot(): Int = imbuementSlot
+    fun getImbuementSlot(): Int = sourceItem?.getImbuementSlot() ?: rawImbuementSlot
 
     fun hasImbuementType(imbuementType: ImbuementTypes_t, imbuementTier: Int): Boolean {
-        val maxTier = imbuementTypes[imbuementType] ?: return false
+        val realType = sourceItem?.type
+        if (realType != null) {
+            return realType.hasImbuementType(imbuementType, imbuementTier)
+        }
+        val maxTier = rawImbuementTypes[imbuementType] ?: return false
         return maxTier >= imbuementTier
     }
 
-    fun hasImbuementAttribute(slot: Int): Boolean = customAttributes.containsKey(ITEM_IMBUEMENT_SLOT + slot)
+    fun hasImbuementAttribute(slot: Int): Boolean {
+        val item = sourceItem
+        if (item != null) {
+            return item.hasImbuementAttribute("${ITEM_IMBUEMENT_SLOT + slot}")
+        }
+        return customAttributes.containsKey(ITEM_IMBUEMENT_SLOT + slot)
+    }
 
-    fun getImbuementAttribute(slot: Int): Long? = customAttributes[ITEM_IMBUEMENT_SLOT + slot]
+    fun getImbuementAttribute(slot: Int): Long? =
+        sourceItem?.getImbuementAttribute(slot) ?: customAttributes[ITEM_IMBUEMENT_SLOT + slot]
 
     fun setImbuement(slot: Int, imbuementId: Int, duration: Int) {
+        val item = sourceItem
+        if (item != null) {
+            item.setImbuement(slot, imbuementId, duration)
+            return
+        }
         val packed = if (duration > 0) (duration shl 8) or imbuementId else 0
         customAttributes[ITEM_IMBUEMENT_SLOT + slot] = packed.toLong() and 0xFFFFFFFFL
     }
