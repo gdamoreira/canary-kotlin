@@ -47,6 +47,17 @@ class Reward() : Item(ITEM_REWARD_CONTAINER) {
         return true
     }
 
+    /**
+     * Mirrors `Container::internalAddThing` (container.cpp:1072-1087) for the
+     * load path: loaded children arrive in descending `sid` order, so they are
+     * prepended, which restores the serialized ascending order. The C++ method
+     * also sets the child's parent; the port's reward proxy is not a
+     * [org.opentibia.canary.items.Cylinder] yet (Reward.kt parity gap).
+     */
+    fun internalAddThing(item: Item) {
+        itemlist.addFirst(item)
+    }
+
     /** Mirrors removing an item from `Container::itemlist` and resetting its parent. */
     fun removeItem(item: Item?) {
         if (item == null) {

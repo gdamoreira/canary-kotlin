@@ -9,6 +9,7 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerPronoun_t
 import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.skills_t
+import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.players.components.PlayerSex_t
 import org.opentibia.canary.creatures.players.components.PlayerStorage
 import org.opentibia.canary.creatures.players.pvp.Kill
@@ -81,9 +82,10 @@ typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
  * and imbuement decay through the injected seams. [loadPlayer] drives the
  * whole login load: the persisted row (vitals/experience/blessings), skills,
  * kills, stash, inventory, depot chests, inbox, instant spell list and, when
- * `disableIrrelevantInfo` is unset, the advanced feature state. The remaining
- * Canary sub-loads (guild, outfit, skull, conditions, store inbox, reward
- * chest, storage map, VIP, prey/task hunting) are not ported yet (PARITY
+ * `disableIrrelevantInfo` is unset, the advanced feature state. The bestiary
+ * charms, store inbox, reward chest and prey/task hunting sub-loads are driven
+ * through [IOLoginDataSubloads2]. The remaining Canary sub-loads (guild,
+ * outfit, skull, conditions, storage map, VIP) are not ported yet (PARITY
  * GAPS).
  *
  * The live item walks are ported as [saveItems] plus [savePlayerItem(player)]
@@ -192,10 +194,36 @@ class IOLoginData(
      * return, leaving the persisted skills unapplied.
      */
     private val vocations: Vocations? = null,
+    /**
+     * `g_monsters().getMonsterTypeByRaceId` (monsters.cpp:375-388) resolution of
+     * the persisted bestiary tracker race ids that
+     * `IOLoginDataLoad::loadPlayerBestiaryCharms`
+     * (iologindata_load_player.cpp:508-519) re-adds through
+     * `Player::addMonsterToCyclopediaTrackerList`; an unresolved id is dropped
+     * like the C++ `if (monsterType)` guard. `null` keeps the tracker
+     * resolution inert.
+     */
+    private val monsterTypeByRaceId: (raceId: Int, isBoss: Boolean) -> MonsterType? = { _, _ -> null },
 ) {
 
     private val featureLoader: PlayerFeatureStateLoader? by lazy(LazyThreadSafetyMode.NONE) {
         features?.let { PlayerFeatureStateLoader(it) }
+    }
+
+    /**
+     * Wave-56 part 2 of the login sub-loads (bestiary charms, store inbox,
+     * reward chest, prey/task hunting), separated into
+     * [IOLoginDataSubloads2] so the part-1 sub-loads stay in this file.
+     */
+    private val subloads2: IOLoginDataSubloads2 by lazy(LazyThreadSafetyMode.NONE) {
+        IOLoginDataSubloads2(
+            loginData = this,
+            bestiaryPersistence = bestiaryPersistence,
+            preyPersistence = preyPersistence,
+            itemTypes = itemTypes,
+            imbuements = imbuements,
+            monsterTypeByRaceId = monsterTypeByRaceId,
+        )
     }
 
     /** Resolved `gameWorldAuthentication` result: account id plus canonical character name. */
@@ -274,12 +302,11 @@ class IOLoginData(
      * mirrors the missing-result guard.
      *
      * The ported sub-loads keep Canary's order for the systems the Kotlin state
-     * models: basic info, experience, blessings, skills, kills, stash,
-     * inventory tree, depot chests, inbox, instant spell list and (when the
-     * login is not a preload) the advanced feature state. The guild, outfit,
-     * skull, conditions, store inbox, reward chest, storage map, VIP, prey and
-     * task-hunting loads are not ported yet (PARITY GAPS): each has no Kotlin
-     * state holder or composition seam.
+     * models: basic info, experience, blessings, skills, kills, stash, bestiary
+     * charms, inventory tree, store inbox, depot chests, reward chest, inbox,
+     * prey/task hunting, instant spell list and (when the login is not a
+     * preload) the advanced feature state. The guild, outfit, skull, conditions,
+     * storage map and VIP loads are not ported yet (PARITY GAPS).
      */
     fun loadPlayer(player: Player, record: PlayerRecord?, disableIrrelevantInfo: Boolean = false): Boolean {
         if (record == null) {
@@ -293,9 +320,14 @@ class IOLoginData(
         loadPlayerSkill(player, record)
         loadPlayerKills(player)
         loadPlayerStashItems(player)
+        subloads2.loadPlayerBestiaryCharms(player)
         loadPlayerInventoryItems(player)
+        subloads2.loadPlayerStoreInbox(player)
         loadPlayerDepotItems(player)
+        subloads2.loadRewardItems(player)
         loadPlayerInboxItems(player)
+        subloads2.loadPlayerPreyClass(player)
+        subloads2.loadPlayerTaskHuntingClass(player)
         loadPlayerInstantSpellList(player)
 
         if (!disableIrrelevantInfo) {
