@@ -13,6 +13,31 @@ It translates 15+ years of C++20 engine evolution into idiomatic, testable, and 
 
 ---
 
+## 📖 Table of Contents
+
+- [Key Architectural Adaptations](#-key-architectural-adaptations)
+- [Architecture](#-architecture)
+- [Installation](#-installation)
+- [Docker Infrastructure](#-docker-infrastructure)
+- [Project Structure](#-project-structure)
+- [Documentation](#-documentation)
+- [Parity & Functional Verification](#-parity--functional-verification)
+- [Lua Scripting & Parity Policy](#-lua-scripting--parity-policy)
+- [Feature Coverage](#-feature-coverage)
+- [Implementation Coverage](#-implementation-coverage)
+- [Contributing](#-contributing)
+- [Troubleshooting](#-troubleshooting)
+- [Code of Conduct](#-code-of-conduct)
+- [Security Policy](#-security-policy)
+- [Roadmap](#-roadmap)
+- [Future Improvements](#-future-improvements)
+- [Known Issues](#-known-issues)
+- [Frequently Asked Questions](#-frequently-asked-questions)
+- [Acknowledgments](#-acknowledgments)
+- [License](#-license)
+
+---
+
 ## 🚀 Key Architectural Adaptations
 
 | Canary C++20 Architecture | Canary Kotlin Architecture | Benefit on JVM Stack |
@@ -26,11 +51,12 @@ It translates 15+ years of C++20 engine evolution into idiomatic, testable, and 
 
 ---
 
-## 🛠️ Getting Started
+## 📦 Installation
 
 ### Prerequisites
 - **JDK 25 LTS** installed and configured (`JAVA_HOME` pointing to Java 25).
 - No external database required for local testing! The server automatically initializes an in-memory database with test accounts.
+- Optional for production-like runs: **PostgreSQL 16** (or the bundled Docker stack below).
 
 ### Building & Running Tests
 
@@ -50,7 +76,7 @@ It translates 15+ years of C++20 engine evolution into idiomatic, testable, and 
 ```
 
 When running in local mode:
-- **Database**: H2 In-Memory in PostgreSQL mode with automatic Flyway migrations (`V1__initial_schema.sql`, `V2__seed_test_accounts.sql`).
+- **Database**: H2 In-Memory in PostgreSQL mode with automatic Flyway migrations (`V1__initial_schema.sql` through `V21__player_animus_mastery_column.sql`).
 - **Test Credentials**: Account `1` / Password `1` with pre-seeded characters `Knight Hero` and `Sorcerer Master`.
 
 ---
@@ -76,9 +102,14 @@ Default container ports:
 ```
 canary-kotlin/
 ├── docs/
+│   ├── README.md          # Documentation hub (adapted from upstream canary/docs)
+│   ├── architecture.md    # Kotlin engine architecture
+│   ├── building/          # JDK 25 + Gradle build guides (Linux, Windows, WSL)
+│   ├── docker/            # Docker quickstart guide
+│   ├── systems/           # Engine subsystem contracts (upstream-adapted)
 │   ├── Done/              # 64 completed specifications (networking, parsers, DB, systems 001-064)
 │   ├── Implementing/      # Features actively in progress
-│   ├── Plan/              # Architectural guidelines & roadmap (000-*)
+│   ├── Plan/              # Architectural guidelines & wave plans (000-*, wave-*)
 │   ├── game-play-features.md   # Master 56-feature matrix (all implemented) & residual gaps
 │   └── superpowers/       # Design specs & implementation plans
 ├── src/
@@ -102,9 +133,9 @@ canary-kotlin/
 │   │   │                      #   familiars, proficiency, gamestore, hireling, soulwar, raid,
 │   │   │                      #   offlinetraining, dailyreward, rewardchest, concoction
 │   │   └── resources/
-│   │       ├── db/migration/  # Flyway schema migrations (V1, V2)
+│   │       ├── db/migration/  # Flyway schema migrations (V1–V21)
 │   │       └── lua/           # LuaJ compatibility shim
-│   └── test/                  # JUnit 5 + AssertJ test suite (689 suites / 7620 tests, all green)
+│   └── test/                  # JUnit 5 + AssertJ test suite (690 suites / 7627 tests, all green)
 ├── docker-compose.yml         # Containerized PostgreSQL 16 + Server stack
 ├── Dockerfile                 # Multi-stage alpine build
 └── build.gradle.kts           # Kotlin 2.4 / Java 25 Gradle build file
@@ -165,3 +196,162 @@ The port is a faithful, incremental transcription of Canary's C++ engine. Two vi
 | **Estimated full-parity completion** | **~99.5%** |
 
 The 56 tracked gameplay features are engine-complete, but Canary's full surface (`player.cpp` ~765 methods, `game.cpp` ~352 methods, ~1,310 Lua registrations, ~105 opcodes) is far larger. The complete per-subsystem inventory and ranked remaining work lives in **[`docs/missing-features.md`](docs/missing-features.md)**.
+
+---
+
+## 🏛️ Architecture
+
+The engine keeps Canary's semantics while using JVM-native building blocks:
+
+- **Single-threaded world mutation** — all spatial/entity changes run on the
+  `GameDispatcher` coroutine (`Dispatchers.Default.limitedParallelism(1)`);
+  Netty I/O threads never touch world state directly.
+- **Dependency injection** — no `g_game()`/`g_configManager()` singletons; the
+  `bootstrap/ServerBootstrap` composition root wires every service explicitly.
+- **Wire parity** — Little-Endian `ByteBuf` framing, XTEA (64 rounds), 1024-bit
+  raw RSA and Adler-32 exactly as Canary implements them.
+- **Lua stays Lua** — datapack scripts execute unchanged through LuaJ; Kotlin
+  provides the C++-parity engine primitives and bindings only.
+- **Persistence** — Flyway migrations (V1–V21) on PostgreSQL 16, H2 in
+  PostgreSQL mode for tests.
+
+Full details: [`docs/architecture.md`](docs/architecture.md).
+
+---
+
+## 📚 Documentation
+
+The documentation hub is [`docs/README.md`](docs/README.md). Highlights:
+
+| Document | Contents |
+|---|---|
+| [`docs/architecture.md`](docs/architecture.md) | Engine architecture and invariants |
+| [`docs/building/kotlin-local-validation.md`](docs/building/kotlin-local-validation.md) | Authorized local build/test entry point |
+| [`docs/development.md`](docs/development.md) | Gradle workflow and coding standards |
+| [`docs/operations.md`](docs/operations.md) | Deployment, monitoring, backups |
+| [`docs/docker/quickstart-for-beginners.md`](docs/docker/quickstart-for-beginners.md) | Docker quickstart |
+| [`docs/missing-features.md`](docs/missing-features.md) | Parity inventory and ranked remaining work |
+| [`docs/game-play-features.md`](docs/game-play-features.md) | 56-feature gameplay matrix |
+| [`docs/improvements.md`](docs/improvements.md) | Repository improvement tracker |
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome. Read [`CONTRIBUTING.md`](CONTRIBUTING.md) and
+[`AGENTS.md`](AGENTS.md) first. The short version:
+
+1. Write a failing test first (RED), then the minimal implementation (GREEN).
+2. Run `./gradlew clean test` — zero failures and **zero Kotlin warnings**.
+3. Never invent Canary APIs and never re-implement Lua gameplay in Kotlin.
+4. Schema changes go through Flyway migrations only.
+
+---
+
+## 🩺 Troubleshooting
+
+| Symptom | Likely cause / fix |
+|---|---|
+| `Unsupported class file major version` or build failures | `JAVA_HOME` is not JDK 25. Run `export JAVA_HOME=$(/usr/libexec/java_home -v 25)` (macOS) or see [`docs/building/`](docs/building). |
+| `Address already in use` on startup | Ports `7171`/`7172` are taken. Stop the other instance or override `CANARY_LOGIN_PORT` / `CANARY_GAME_PORT`. |
+| Database connection errors | Only set `CANARY_DB_HOST` when you want PostgreSQL; unset it for the zero-config H2 mode. |
+| Gradle daemon killed / OOM | Cap memory: `./gradlew test -Dorg.gradle.jvmargs=-Xmx2g -Dkotlin.daemon.jvmargs=-Xmx2g`. |
+| Map download fails at boot | `MapDownload` fetches the map/config from the upstream Canary release; check network access or provide a local map file. |
+| Client cannot connect | Use login/status `7171` and game `7172`; test account `1` / password `1`. |
+
+---
+
+## 🤗 Code of Conduct
+
+This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md) (v2.1).
+Report unacceptable behavior to the maintainers through the repository's issue
+tracker.
+
+---
+
+## 🔐 Security Policy
+
+See [`SECURITY.md`](SECURITY.md). Report vulnerabilities privately — never in a
+public issue. Test credentials and default key material are for local
+development only; deployments should set `CANARY_RSA_P`/`CANARY_RSA_Q` and
+change seeded accounts.
+
+---
+
+## 🗺️ Roadmap
+
+- **Verification**: live differential harness (packet-capture A/B replay against
+  a running Canary instance) — the strongest remaining parity proof.
+- **Depth closure**: work through the ranked gaps in
+  [`docs/missing-features.md`](docs/missing-features.md) §3 (event fanout,
+  spell-actor execution, condition payload, visibility overrides).
+- **Operations**: expanded CI (matrix JDK builds, Docker smoke), metrics
+  exporter parity.
+- **Content**: multi-datapack boot selection and map distribution.
+
+---
+
+## 🔮 Future Improvements
+
+- Automated Lua API documentation generated from the Kotlin binding registry.
+- Container image publication pipeline (GHCR) with versioned tags.
+- Performance benchmarks for the dispatcher, monster AI pipelines and map load.
+- Extended fuzz/property tests for protocol parsers.
+
+---
+
+## 🐞 Known Issues
+
+- No live differential verification against Canary yet (unit/integration tests
+  only) — see [`docs/missing-features.md`](docs/missing-features.md) §3.
+- Legacy protocol profiles (CipSoft860/old-protocol branches) are partially
+  unmodeled; the current profile is fully wired.
+- Some monster event fanout call sites (normal say/yell spectators, spell-damage
+  `onPlayerAttack`) remain unbound.
+- Condition flat stat/buff payloads are not encoded on save (reload zeroes them).
+- Performance numbers in `docs/hardware-sizing.md` are upstream C++ measurements,
+  labeled as such.
+
+---
+
+## ❓ Frequently Asked Questions
+
+**Is this the same server as Canary?**
+It is a Kotlin/JVM rewrite targeting byte-level and algorithmic parity with the
+upstream C++ engine. Gameplay content (Lua datapacks) is shared, not rewritten.
+
+**Can I use my existing Canary database?**
+Not directly. This port targets PostgreSQL 16 with its own Flyway schema
+(V1–V21); the upstream MySQL/MariaDB schema is not supported.
+
+**Can I use my own datapack and Lua scripts?**
+Yes — Lua stays Lua. Point the server at your `data/` tree and the scripts run
+unchanged through the LuaJ bridge.
+
+**Do I need Docker?**
+No. `./gradlew run` starts a zero-configuration in-memory server on ports
+7171/7172 with test account `1` / `1`.
+
+**Why Kotlin?**
+Memory safety, structured concurrency and testability, while keeping the wire
+protocol and formulas identical to Canary.
+
+---
+
+## 🙏 Acknowledgments
+
+- The **Canary / OpenTibiaBR** team and contributors, whose GPL-2.0 C++ engine
+  this port transcribes (`../.projects/canary`).
+- The **OTServBR-Global** lineage and the wider **OpenTibia** community.
+- The JVM ecosystem this port builds on: Kotlin, Netty, Kotlin Coroutines,
+  LuaJ, HikariCP, Flyway, BouncyCastle, JUnit 5 and AssertJ.
+
+---
+
+## 📜 License
+
+Canary Kotlin Edition is distributed under the **MIT License** — see
+[`LICENSE`](LICENSE). It is a re-implementation derived from the
+[Canary project](https://github.com/opentibiabr/canary) (GPL-2.0); upstream
+names, data files and Lua scripts remain subject to their original licenses.
+
