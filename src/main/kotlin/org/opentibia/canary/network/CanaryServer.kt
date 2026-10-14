@@ -17,13 +17,16 @@ import org.opentibia.canary.account.AccountRepository
 import org.opentibia.canary.account.InMemoryAccountRepository
 import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
+import org.opentibia.canary.creatures.monsters.Monsters
 import org.opentibia.canary.creatures.monsters.MonsterPipelinesHost
+import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.game.Game
 import org.opentibia.canary.game.scheduling.CreatureAsyncTaskBuckets
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.scheduling.MonsterComputeService
 import org.opentibia.canary.io.IOMarket
+import org.opentibia.canary.io.iologindata.IOLoginData
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.Items
@@ -104,6 +107,27 @@ class CanaryServer(
      * monster pipeline host uncomposed (embedded/test use).
      */
     private val monsterComputeService: MonsterComputeService? = null,
+    /**
+     * `g_monsters()` registry (src/creatures/monsters/monsters.hpp:242) loaded
+     * by the bootstrap. Backs the world's `monsterTypeProvider`
+     * (`Monsters::getMonsterType`) so `Game::internalPlaceCreature`
+     * (game.cpp:1495) registers the placed monster with its
+     * `Monster::m_monsterType`; `null` keeps the pipeline type seams inert.
+     */
+    internal val monsters: Monsters? = null,
+    /**
+     * `g_vocations()` registry (src/creatures/players/vocations/vocation.hpp:122)
+     * loaded by the bootstrap; consumed by the world [Game] highscore queries
+     * (game.cpp:9968) and player vocation accessors.
+     */
+    internal val vocations: Vocations? = null,
+    /**
+     * `IOLoginData::loadPlayerById` login-load seam (src/io/iologindata.cpp:81-86)
+     * handed to every game session ([createGameHandler]) so `ProtocolGame::login`
+     * materializes the persisted player before `Game::placeCreature`
+     * (protocolgame.cpp:1023). `null` keeps the stub player shell.
+     */
+    internal val ioLoginData: IOLoginData? = null,
 ) : ListenerBoot {
     /**
      * `g_dispatcher()` (`CanaryServer::run`, src/canary_server.cpp:132): the
@@ -174,8 +198,10 @@ class CanaryServer(
 
     /**
      * `g_game()` equivalent shared by every game connection served by this listener,
-     * composed with the booted item/imbuement registries, market, config,
-     * world-shared async buckets and the production [monsterPipelinesHost].
+     * composed with the booted item/imbuement/vocation registries, market, config,
+     * world-shared async buckets and the production [monsterPipelinesHost]. The
+     * booted [monsters] registry backs the `g_monsters().getMonsterType` provider
+     * (`Monster::m_monsterType`, monster.hpp:363).
      */
     val game: Game = suppliedGame ?: Game(
         gameMap,
@@ -183,9 +209,11 @@ class CanaryServer(
         itemTypes = itemTypes,
         ioMarket = ioMarket,
         imbuements = imbuements,
+        vocations = vocations,
         configManager = configManager,
         creatureAsyncTaskBuckets = creatureAsyncTaskBuckets,
         monsterHost = monsterPipelinesHost,
+        monsterTypeProvider = { name -> monsters?.getMonsterType(name) },
     )
 
     init {
@@ -318,6 +346,7 @@ class CanaryServer(
         game = game,
         muteCountMap = muteCountMap,
         transformItemCharges = transformItemCharges,
+        ioLoginData = ioLoginData,
     )
 
     /**

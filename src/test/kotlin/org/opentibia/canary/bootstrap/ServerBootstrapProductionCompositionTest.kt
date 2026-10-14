@@ -10,6 +10,8 @@ import org.opentibia.canary.config.ConfigSource
 import org.opentibia.canary.config.ServerConfig
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.monsters.Monsters
+import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.database.DatabaseConfig
 import org.opentibia.canary.database.DatabaseConnectionFactory
 import org.opentibia.canary.database.JdbcAccountRepository
@@ -215,6 +217,8 @@ class ServerBootstrapProductionCompositionTest {
             dataSource = databaseBoot.dataSource,
             itemTypes = Items(),
             imbuements = Imbuements(),
+            monsters = Monsters(),
+            vocations = Vocations(),
             configManager = config,
             creatureAsyncTaskBuckets = buckets,
             monsterComputeService = service,

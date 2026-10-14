@@ -7,6 +7,11 @@ import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
 import org.opentibia.canary.config.ConfigSource
 import org.opentibia.canary.config.ServerConfig
+import org.opentibia.canary.creatures.monsters.LootBlock
+import org.opentibia.canary.creatures.monsters.MonsterType
+import org.opentibia.canary.creatures.monsters.Monsters
+import org.opentibia.canary.creatures.vocations.VocationRates
+import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.database.DatabaseConfig
 import org.opentibia.canary.database.DatabaseConnectionFactory
 import org.opentibia.canary.database.JdbcAccountRepository
@@ -30,6 +35,8 @@ import org.opentibia.canary.io.appearances.Appearances
 import org.opentibia.canary.io.iologindata.IOLoginData
 import org.opentibia.canary.io.iologindata.PlayerSavePath
 import org.opentibia.canary.io.iologindata.PlayerSaveTransaction
+import org.opentibia.canary.io.pipeline.MonsterPipelineService
+import org.opentibia.canary.io.pipeline.MonsterTypeDefinition
 import org.opentibia.canary.items.ItemAttributeParse
 import org.opentibia.canary.items.ItemType
 import org.opentibia.canary.items.Items
@@ -142,11 +149,32 @@ fun interface ImbuementBoot {
 }
 
 /**
+ * Loads `g_monsters()` (`Monsters`, src/creatures/monsters/monsters.hpp:242):
+ * the monster-type registry injected into the world as the
+ * `Monsters::getMonsterType` `monsterTypeProvider` seam
+ * (`Game.internalPlaceCreature`, game.cpp:1495).
+ */
+fun interface MonsterBoot {
+    fun load(config: ServerConfig): Monsters
+}
+
+/**
+ * Loads `g_vocations()` (`Vocations::loadFromXml`, src/creatures/players/vocations/vocation.cpp:28)
+ * over the booted [Items] (wheel gem name resolution, vocation.cpp:405-411) and
+ * the `g_configManager()` `RATE_*` values backing the vocation regen getters
+ * (vocation.cpp:337-367).
+ */
+fun interface VocationsBoot {
+    fun load(itemTypes: Items, configManager: ConfigManager): Vocations
+}
+
+/**
  * Booted services shared by every game connection (`g_game()`, `Item::items`,
- * `g_imbuements()`, `IOMarket::getInstance()`, `g_configManager()`,
- * `g_monsterComputeService()`): created by [ServerBootstrap] from the connected
- * [DataSource] and the registries loaded by [ItemBoot]/[ImbuementBoot], then
- * injected into the [ListenerFactory].
+ * `g_imbuements()`, `g_monsters()`, `g_vocations()`, `IOMarket::getInstance()`,
+ * `g_configManager()`, `g_monsterComputeService()`): created by [ServerBootstrap]
+ * from the connected [DataSource] and the registries loaded by
+ * [ItemBoot]/[ImbuementBoot]/[MonsterBoot]/[VocationsBoot], then injected into
+ * the [ListenerFactory].
  */
 class GameComposition(
     /** `g_database()` source backing `IOMarket::getInstance()` (src/io/iomarket.cpp). */
@@ -155,6 +183,18 @@ class GameComposition(
     val itemTypes: Items,
     /** `g_imbuements()` registry (`src/creatures/players/imbuements/imbuements.hpp:44`). */
     val imbuements: Imbuements,
+    /**
+     * `g_monsters()` registry (`src/creatures/monsters/monsters.hpp:242`), injected
+     * into the world `Game` as the `Monsters::getMonsterType` provider so
+     * `Game::internalPlaceCreature` (game.cpp:1495) resolves `Monster::m_monsterType`.
+     */
+    val monsters: Monsters,
+    /**
+     * `g_vocations()` registry (`src/creatures/players/vocations/vocation.hpp:122`),
+     * consumed by the world `Game` (highscore queries, game.cpp:9968) and the
+     * session player data.
+     */
+    val vocations: Vocations,
     /** `g_configManager()` typed lookup surface (configmanager.hpp). */
     val configManager: ConfigManager,
     /**
@@ -192,8 +232,9 @@ fun interface ListenerFactory {
 /**
  * Production [ListenerFactory]: builds the `CanaryServer` over the booted
  * services, passing the shared config manager, async buckets, monster compute
- * service and save path so the listener composes the `MonsterPipelinesHost`
- * over the same world instances.
+ * service, `g_monsters()`/`g_vocations()` registries and the `IOLoginData`
+ * login-load seam so the listener composes the `MonsterPipelinesHost` and the
+ * game sessions over the same world instances.
  */
 internal fun defaultListenerFactory(): ListenerFactory =
     ListenerFactory { config, accountRepository, gameMap, dispatcher, luaEnvironment, composition ->
@@ -210,6 +251,9 @@ internal fun defaultListenerFactory(): ListenerFactory =
             configManager = composition.configManager,
             suppliedCreatureAsyncTaskBuckets = composition.creatureAsyncTaskBuckets,
             monsterComputeService = composition.monsterComputeService,
+            monsters = composition.monsters,
+            vocations = composition.vocations,
+            ioLoginData = composition.playerSavePath.loginData,
         )
     }
 
@@ -262,6 +306,10 @@ class ServerBootstrap(
             }
         }
     },
+    /** `g_monsters()` loader (defaults to the XML/model definition path). */
+    private val monsterBoot: MonsterBoot = MonsterBoot(::defaultMonsterBoot),
+    /** `g_vocations()` loader (defaults to `{CORE_DIRECTORY}/XML/vocations.xml`). */
+    private val vocationsBoot: VocationsBoot = VocationsBoot(::defaultVocationsBoot),
     private val listenerFactory: ListenerFactory = defaultListenerFactory(),
     /**
      * `g_dispatcher()` (`Dispatcher::init`, dispatcher.cpp:114-131): the booted
@@ -313,6 +361,8 @@ class ServerBootstrap(
         val appearances = appearanceBoot.load(config)
         val imbuements = imbuementBoot.load(config)
         val itemTypes = itemBoot.load(config, appearances)
+        val monsters = monsterBoot.load(config)
+        val vocations = vocationsBoot.load(itemTypes, configManager)
 
         // `g_monsterComputeService().start(monsterComputeConfig)` after
         // `loadMaps` (src/canary_server.cpp:212-216); the dispatcher is
@@ -368,7 +418,7 @@ class ServerBootstrap(
             gameMap,
             runningDispatcher,
             luaEnvironment,
-            GameComposition(source, itemTypes, imbuements, configManager, buckets, computeService, playerSavePath),
+            GameComposition(source, itemTypes, imbuements, monsters, vocations, configManager, buckets, computeService, playerSavePath),
         )
         listener = server
         server.start()
@@ -429,4 +479,107 @@ private class ItemsParseRegistry(private val items: Items) : ItemParseRegistry {
     override fun addLadderId(newId: Int) = items.addLadderId(newId)
 
     override fun addDummyId(newId: Int, rate: Int) = items.addDummyId(newId, rate)
+}
+
+/**
+ * Production [MonsterBoot]: registers every `*.xml` found recursively under
+ * `{DATA_DIRECTORY}/monster` through the existing XML/model path
+ * (`MonsterPipelineService` definition parsing mapped onto [MonsterType],
+ * `Monsters::tryAddMonsterType`, monsters.cpp:390-399).
+ *
+ * Canary populates `g_monsters()` from the datapack Lua scripts under
+ * `{DATA_DIRECTORY}/monster` (`Game.createMonsterType`; `GameReload::reloadMonsters`,
+ * game_reload.cpp:211-226). That Lua registration path is not composed yet
+ * (PARITY GAP), so the XML definitions are the only source this boot consumes:
+ * a datapack without XML definitions leaves the registry empty and the world
+ * pipeline type seams inert.
+ */
+internal fun defaultMonsterBoot(config: ServerConfig): Monsters {
+    val registry = Monsters()
+    val directory = Path.of(config.dataDir, "monster")
+    if (!Files.isDirectory(directory)) {
+        logger.info { "No XML monster definitions under $directory; g_monsters() stays empty" }
+        return registry
+    }
+
+    val pipeline = MonsterPipelineService()
+    var loaded = 0
+    Files.walk(directory).use { files ->
+        files
+            .filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".xml") }
+            .sorted()
+            .forEach { file ->
+                val definition = try {
+                    pipeline.parse(Files.readString(file))
+                } catch (exception: Exception) {
+                    logger.warn(exception) { "[defaultMonsterBoot] - Failed to parse $file" }
+                    null
+                }
+                if (definition == null || definition.name.isEmpty()) {
+                    return@forEach
+                }
+                if (registry.tryAddMonsterType(definition.name, monsterTypeOf(definition))) {
+                    loaded++
+                } else {
+                    logger.warn { "[defaultMonsterBoot] - Monster type '${definition.name}' already registered; skipping $file" }
+                }
+            }
+    }
+    logger.info { "Loaded $loaded monster types from $directory" }
+    return registry
+}
+
+/** Maps a `MonsterPipelineService` XML definition onto the [MonsterType] model. */
+private fun monsterTypeOf(definition: MonsterTypeDefinition): MonsterType =
+    MonsterType(definition.name).apply {
+        info.experience = definition.experience
+        info.baseSpeed = definition.speed
+        info.health = definition.maxHealth
+        info.healthMax = definition.maxHealth
+        info.lootItems = definition.lootTable.map { entry ->
+            LootBlock(
+                id = entry.itemId,
+                countMin = 1,
+                countMax = entry.countMax,
+                chance = entry.chanceBasisPoints,
+            )
+        }.toMutableList()
+    }
+
+/**
+ * Production [VocationsBoot]: `Vocations::loadFromXml` (vocation.cpp:28) over
+ * `{CORE_DIRECTORY}/XML/vocations.xml`, with the `g_configManager()` `RATE_*`
+ * values behind the `Vocation` regen getters (vocation.cpp:337-367) and
+ * `Item::items.getItemIdByName` for the wheel gem ids (vocation.cpp:405-411).
+ */
+internal fun defaultVocationsBoot(itemTypes: Items, configManager: ConfigManager): Vocations {
+    val registry = Vocations(rates = vocationRates(configManager), itemIdByName = itemTypes::getItemIdByName)
+    val path = Path.of(DEFAULT_CORE_DIRECTORY, "XML", "vocations.xml")
+    val xml = try {
+        Files.readString(path)
+    } catch (exception: Exception) {
+        logger.warn(exception) { "[defaultVocationsBoot] - Failed to read $path; g_vocations() stays empty" }
+        return registry
+    }
+    if (!registry.loadFromXml(xml)) {
+        logger.warn { "[defaultVocationsBoot] - Failed to load $path" }
+    }
+    return registry
+}
+
+/** `g_configManager()` `RATE_*` reads backing the [VocationRates] seam. */
+private fun vocationRates(configManager: ConfigManager): VocationRates {
+    fun rate(name: String): Float {
+        val key = ConfigKeys.byName(name) ?: return 1.0f
+        return configManager.getFloat(key, key.defaultValue as Float)
+    }
+
+    return VocationRates(
+        rateManaRegenSpeed = rate("RATE_MANA_REGEN_SPEED"),
+        rateManaRegen = rate("RATE_MANA_REGEN"),
+        rateHealthRegenSpeed = rate("RATE_HEALTH_REGEN_SPEED"),
+        rateHealthRegen = rate("RATE_HEALTH_REGEN"),
+        rateSoulRegenSpeed = rate("RATE_SOUL_REGEN_SPEED"),
+        rateAttackSpeed = rate("RATE_ATTACK_SPEED"),
+    )
 }
