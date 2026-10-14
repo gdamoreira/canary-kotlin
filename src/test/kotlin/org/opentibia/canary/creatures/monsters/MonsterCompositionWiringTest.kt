@@ -101,6 +101,7 @@ class MonsterCompositionWiringTest {
         host.register(monster, type)
         entry = host.entryOf(7)!!
         entry.host.castSpell = { _, target -> casts.add(target.id) }
+        monster.scheduleAsyncTaskBatch = { batch -> batches.add(batch) }
         return type
     }
 

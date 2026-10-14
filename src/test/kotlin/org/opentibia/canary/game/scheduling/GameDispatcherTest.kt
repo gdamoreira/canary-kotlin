@@ -1,6 +1,7 @@
 package org.opentibia.canary.game.scheduling
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.assertj.core.api.Assertions.assertThat
@@ -8,6 +9,9 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 class GameDispatcherTest {
@@ -120,24 +124,124 @@ class GameDispatcherTest {
     }
 
     @Test
-    fun `runs barrier lane tasks in queue order`() = runBlocking<Unit> {
-        val order = mutableListOf<Int>()
+    fun `runs every barrier lane task and records the lane barrier telemetry`() = runBlocking<Unit> {
+        val executed = ConcurrentHashMap.newKeySet<Int>()
         val doneSignal = CompletableDeferred<Unit>()
 
         for (i in 1..3) {
             dispatcher.dispatch(DispatcherLane.VisibleMonsterAI) {
-                order.add(i)
-                if (i == 3) {
+                executed.add(i)
+                if (executed.size == 3) {
                     doneSignal.complete(Unit)
                 }
             }
         }
 
         withTimeout(2_000) { doneSignal.await() }
-        assertThat(order).containsExactly(1, 2, 3)
+        assertThat(executed).containsExactlyInAnyOrder(1, 2, 3)
+        assertThat(awaitBarrierUnits(dispatcher, DispatcherLane.VisibleMonsterAI, expected = 3)).isEqualTo(3)
+    }
 
-        val barrier = dispatcher.laneTelemetry[DispatcherLane.VisibleMonsterAI.ordinal].barrierRuntime.snapshotAndReset()
-        assertThat(barrier.workUnits).isEqualTo(3)
+    @Test
+    fun `barrier lane tasks execute in parallel`() = runBlocking<Unit> {
+        val localDispatcher = GameDispatcher(barrierWorkerCount = 2)
+        localDispatcher.start()
+        try {
+            val gate = CountDownLatch(1)
+            val started = CountDownLatch(1)
+            localDispatcher.dispatch(DispatcherLane.Maintenance) {
+                started.countDown()
+                gate.await(2, TimeUnit.SECONDS)
+            }
+            assertThat(started.await(2, TimeUnit.SECONDS)).isTrue()
+
+            val rendezvous = CountDownLatch(2)
+            val timedOut = AtomicBoolean(false)
+            val completed = AtomicInteger(0)
+            val doneSignal = CompletableDeferred<Unit>()
+
+            repeat(2) {
+                assertThat(
+                    localDispatcher.addBarrierEvent(DispatcherLane.VisibleMonsterAI) {
+                        rendezvous.countDown()
+                        if (!rendezvous.await(2, TimeUnit.SECONDS)) {
+                            timedOut.set(true)
+                        }
+                        if (completed.incrementAndGet() == 2) {
+                            doneSignal.complete(Unit)
+                        }
+                    },
+                ).isTrue()
+            }
+
+            gate.countDown()
+            withTimeout(6_000) { doneSignal.await() }
+            assertThat(timedOut.get()).isFalse()
+        } finally {
+            localDispatcher.shutdown()
+        }
+    }
+
+    private suspend fun awaitBarrierUnits(
+        target: GameDispatcher,
+        lane: DispatcherLane,
+        expected: Long,
+    ): Long {
+        var total = 0L
+        withTimeout(2_000) {
+            while (total < expected) {
+                total += target.laneTelemetry[lane.ordinal].barrierRuntime.snapshotAndReset().workUnits
+                if (total >= expected) {
+                    break
+                }
+                delay(5)
+            }
+        }
+        return total
+    }
+
+    @Test
+    fun `barrier admission rejects a saturated lane and frees the reservation on execution`() = runBlocking<Unit> {
+        val localDispatcher = GameDispatcher(barrierWorkerCount = 2)
+        localDispatcher.start()
+        try {
+            val gate = CountDownLatch(1)
+            val started = CountDownLatch(1)
+            localDispatcher.dispatch(DispatcherLane.Maintenance) {
+                started.countDown()
+                gate.await(2, TimeUnit.SECONDS)
+            }
+            assertThat(started.await(2, TimeUnit.SECONDS)).isTrue()
+
+            assertThat(localDispatcher.addBarrierEvent(DispatcherLane.GenericParallel, capacity = 1) {}).isTrue()
+            assertThat(localDispatcher.addBarrierEvent(DispatcherLane.GenericParallel, capacity = 1) {}).isFalse()
+            assertThat(localDispatcher.laneRejectionCount(DispatcherLane.GenericParallel)).isEqualTo(1)
+            assertThat(localDispatcher.laneReservationCount(DispatcherLane.GenericParallel)).isEqualTo(1)
+
+            gate.countDown()
+            withTimeout(2_000) {
+                while (!localDispatcher.addBarrierEvent(DispatcherLane.GenericParallel, capacity = 1) {}) {
+                    delay(10)
+                }
+            }
+            assertThat(localDispatcher.laneRejectionCount(DispatcherLane.GenericParallel)).isEqualTo(1)
+        } finally {
+            localDispatcher.shutdown()
+        }
+    }
+
+    @Test
+    fun `creature async events are admitted only on the creature ai lanes`() = runBlocking<Unit> {
+        assertThat(dispatcher.addCreatureAsyncEvent(DispatcherLane.WorldCommit) {}).isFalse()
+        assertThat(dispatcher.addCreatureAsyncEvent(DispatcherLane.VisibleMonsterAI) {}).isTrue()
+        assertThat(dispatcher.addCreatureAsyncEvent(DispatcherLane.MonsterAI) {}).isTrue()
+    }
+
+    @Test
+    fun `creature async slice limits default to sixteen tasks and two milliseconds`() {
+        val expected = CreatureAsyncSliceLimits(tasksPerBucket = 16, maxRuntimeUs = 2_000)
+        assertThat(dispatcher.getCreatureAsyncSliceLimits(playerVisible = true)).isEqualTo(expected)
+        assertThat(dispatcher.getCreatureAsyncSliceLimits(playerVisible = false)).isEqualTo(expected)
     }
 
     @Test
