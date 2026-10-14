@@ -1,0 +1,17 @@
+# Build context exclusions for the multi-stage Dockerfile.
+# The build stage only needs sources and the Gradle wrapper; game data is
+# mounted into the runtime container by docker-compose.yml instead.
+.git
+.github
+.gradle
+.idea
+.kotlin
+.superpowers
+.worktrees
+build
+docs
+data
+data-canary
+data-otservbr-global
+*.iml
+.DS_Store

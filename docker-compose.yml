@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:16-alpine
@@ -38,11 +36,25 @@ services:
       CANARY_LOGIN_PORT: "${CANARY_LOGIN_PORT:-7171}"
       CANARY_GAME_PORT: "${CANARY_GAME_PORT:-7172}"
       CANARY_STATUS_PORT: "${CANARY_STATUS_PORT:-7171}"
+      # Optional RSA handshake override; omit to use the built-in OpenTibia pair.
+      CANARY_RSA_P: "${CANARY_RSA_P:-}"
+      CANARY_RSA_Q: "${CANARY_RSA_Q:-}"
     ports:
       - "${CANARY_LOGIN_PORT:-7171}:7171"
       - "${CANARY_GAME_PORT:-7172}:7172"
+    volumes:
+      # Game data (Lua datapacks) mounted read-only; see docker/DOCKER.md.
+      - ./data:/app/data:ro
+      - ./data-canary:/app/data-canary:ro
+      - ./data-otservbr-global:/app/data-otservbr-global:ro
     networks:
       - canary-net
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 7171 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
     depends_on:
       db:
         condition: service_healthy
