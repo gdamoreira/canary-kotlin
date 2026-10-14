@@ -21,9 +21,58 @@ class Scripts(private val environment: LuaEnvironment) {
     private var loadedLibs: Path? = null
 
     fun setDirectories(dataDir: Path, coreDir: Path) {
-        environment.globals.set("DATA_DIRECTORY", dataDir.toAbsolutePath().toString())
-        environment.globals.set("CORE_DIRECTORY", coreDir.toAbsolutePath().toString())
+        val resolvedData = dataDir.toAbsolutePath().normalize()
+        val resolvedCore = coreDir.toAbsolutePath().normalize()
+        environment.globals.set("DATA_DIRECTORY", resolvedData.toString())
+        environment.globals.set("CORE_DIRECTORY", resolvedCore.toString())
         coreDirectory = coreDir
+        installDirectoryRequire(resolvedData, resolvedCore)
+    }
+
+    /**
+     * Datapack libs require modules through `DATA_DIRECTORY .. ".lib.core.quests"`
+     * (`data/libs/functions/quests.lua:1`). LuaJ's stock `require` converts every `.` in
+     * the module name to a slash, which mangles the absolute prefix whenever the install
+     * path contains dots; the shim resolves a directory-prefixed name directly against
+     * the file tree and delegates everything else to the stock loader.
+     */
+    private fun installDirectoryRequire(dataDir: Path, coreDir: Path) {
+        val globals = environment.globals
+        val original = globals.get("require")
+        val directories = listOf(dataDir, coreDir)
+        globals.set("require", object : VarArgFunction() {
+            override fun invoke(args: Varargs): Varargs {
+                val name = args.arg1().tojstring()
+                for (directory in directories) {
+                    val prefix = directory.toString()
+                    if (!name.startsWith(prefix)) {
+                        continue
+                    }
+                    val relative = name.substring(prefix.length).removePrefix(".").replace('.', '/')
+                    val file = directory.resolve("$relative.lua")
+                    if (Files.isRegularFile(file)) {
+                        return loadModule(name, file)
+                    }
+                }
+                return original.invoke(args)
+            }
+        })
+    }
+
+    /** Loads and caches a directory-prefixed module under its full module name. */
+    private fun loadModule(name: String, file: Path): LuaValue {
+        val globals = environment.globals
+        val loaded = globals.get("package").get("loaded")
+        val cached = if (loaded.istable()) loaded.get(name) else LuaValue.NIL
+        if (!cached.isnil()) {
+            return cached
+        }
+        val result = globals.load(Files.readString(file), "@$file").call()
+        val value = if (result.isnil()) LuaValue.TRUE else result
+        if (loaded.istable()) {
+            loaded.set(name, value)
+        }
+        return value
     }
 
     fun loadFile(path: Path) {
