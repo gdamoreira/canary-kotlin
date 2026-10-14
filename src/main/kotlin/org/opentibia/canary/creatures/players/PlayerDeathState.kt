@@ -31,7 +31,8 @@ data class CountBlock(
 
 /**
  * Self-contained mirror of `Player::death` (src/creatures/players/player.cpp:
- * 4035-4284) and the state it applies the death penalty to.
+ * 4035-4284) and the death flag it flips (`Player::setDead`/`isDead`,
+ * player.cpp:11081-11093), plus the state the death penalty applies to.
  *
  * The class is intentionally *not* `Player.kt` (per task constraints): the host
  * `Player` lives in `creatures/Creature.kt`, which this wave does not own. Canary
@@ -143,6 +144,36 @@ class PlayerDeathState(
 
     /** `Player::getSpentMana` (player.cpp:7849-7851). */
     fun getSpentMana(): Long = manaSpent
+
+    /**
+     * `Player::m_isDead` (player.hpp:1883); `false` by default. Kept apart from
+     * `Creature::isDead` (health-driven) exactly like the C++ override.
+     */
+    private var mIsDead: Boolean = false
+
+    /**
+     * `Player::setDead(isDead)` (player.cpp:11081-11088): latches the flag and
+     * adds the player to (or removes it from) the game's dead-player registry.
+     * `g_game().addDeadPlayer`/`removeDeadPlayer` are seams per AGENTS.md 1.1.
+     */
+    fun setDead(
+        /** The `isDead` argument (player.cpp:11081). */
+        isDead: Boolean,
+        /** `g_game().addDeadPlayer(this)` (player.cpp:11084). */
+        addDeadPlayer: (Player) -> Unit = {},
+        /** `g_game().removeDeadPlayer(getName())` (player.cpp:11086). */
+        removeDeadPlayer: (String) -> Unit = {},
+    ) {
+        mIsDead = isDead
+        if (isDead) {
+            addDeadPlayer(player)
+        } else {
+            removeDeadPlayer(player.name)
+        }
+    }
+
+    /** `Player::isDead()` (player.cpp:11091-11093). */
+    fun isDead(): Boolean = mIsDead
 
     /**
      * `Player::death` (player.cpp:4035-4284). The two branches mirror the C++

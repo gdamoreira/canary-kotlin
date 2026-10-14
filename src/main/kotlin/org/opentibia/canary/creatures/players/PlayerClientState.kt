@@ -39,6 +39,7 @@ enum class OperatingSystem_t(val value: Int) {
  * - `Player::getOperatingSystem` / `setOperatingSystem` (1010-1016)
  * - `Player::isOldProtocol` (1018-1020)
  * - `Player::getProtocolVersion` (1022-1030)
+ * - `Player::setProtection` / `isProtected` (3479-3484)
  * - `Player::isPlayerGroup` (7528-7530)
  * - `Player::getFirstID` / `getLastID` and the static ranges (216-223)
  *
@@ -85,6 +86,22 @@ class PlayerClientState(
         val group = player.group ?: return false
         return group.id <= GROUP_TYPE_SENIORTUTOR
     }
+
+    /**
+     * `Player::connProtected` (player.hpp:1889, private); `false` by default.
+     * The protocol clears it on the first login packet
+     * (protocolgame.cpp:1131-1132) and `Creature::onAttacking` sets it again
+     * for a disconnected target (creature.cpp:196-197).
+     */
+    private var connProtected: Boolean = false
+
+    /** `Player::setProtection(status)` (player.cpp:3479-3481). */
+    fun setProtection(status: Boolean) {
+        connProtected = status
+    }
+
+    /** `Player::isProtected()` (player.cpp:3482-3484). */
+    fun isProtected(): Boolean = connProtected
 
     companion object {
         /** `GroupType::GROUP_TYPE_SENIORTUTOR` (account_group_type.hpp:20). */

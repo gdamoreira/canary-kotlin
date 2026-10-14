@@ -8,8 +8,9 @@ import org.opentibia.canary.items.ObjectCategory_t
 
 /**
  * The auto-loot and managed-backpack hooks
- * (src/creatures/players/player.cpp:1713-1732, 5692-5708, 12864-12885):
+ * (src/creatures/players/player.cpp:1670-1732, 5692-5708, 12864-12885):
  *
+ * - `Player::checkLootContainers` (player.cpp:1670-1711)
  * - `Player::checkAutoLoot` (player.cpp:5692-5708)
  * - `Player::getLootPouch` (player.cpp:12864-12885)
  * - `Player::setMainBackpackUnassigned` (player.cpp:1713-1732)
@@ -21,6 +22,48 @@ import org.opentibia.canary.items.ObjectCategory_t
  * probe and the `ProtocolGame::send*` calls are call-site seams per
  * AGENTS.md 1.1; unwired defaults keep the features inert.
  */
+
+/**
+ * `Player::checkLootContainers(container)` (player.cpp:1670-1711): every managed
+ * loot/obtain registration whose container is the given container or holds it
+ * is unregistered (the slot is cleared, the category entry erased once both
+ * slots are empty) and `Player::sendLootContainers()` runs at most once.
+ *
+ * The C++ walks its private `m_managedContainers` map directly; the host owns
+ * that map (Creature.kt), so the walk goes through the public
+ * [Player.getManagedContainer] / [Player.refreshManagedContainer] accessors
+ * over the `ObjectCategory_t` domain. Refreshing a category that has no entry
+ * is a no-op, so the fallback resolution of `getManagedContainer` cannot clear
+ * an unrelated registration.
+ */
+fun Player.checkLootContainers(
+    /** The `std::shared_ptr<Container> &container` argument (player.cpp:1670). */
+    container: Container?,
+    /** `Player::sendLootContainers()` (player.cpp:1710). */
+    sendLootContainers: () -> Unit = {},
+) {
+    if (container == null) {
+        return
+    }
+
+    var shouldSend = false
+    for (category in ObjectCategory_t.entries) {
+        for (isLootContainer in LOOT_CONTAINER_SLOTS) {
+            val managedContainer = getManagedContainer(category, isLootContainer) ?: continue
+            if (container === managedContainer || container.isHoldingItem(managedContainer)) {
+                shouldSend = true
+                refreshManagedContainer(category, null, isLootContainer)
+            }
+        }
+    }
+
+    if (shouldSend) {
+        sendLootContainers()
+    }
+}
+
+/** `for (const bool isLootContainer : { true, false })` (player.cpp:1719). */
+private val LOOT_CONTAINER_SLOTS = listOf(true, false)
 
 /**
  * `Player::checkAutoLoot` (player.cpp:5692-5708): the `AUTOLOOT` toggle and

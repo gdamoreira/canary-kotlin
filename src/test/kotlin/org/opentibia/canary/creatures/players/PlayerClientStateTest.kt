@@ -111,4 +111,19 @@ class PlayerClientStateTest {
         assertThat(PlayerClientState.getFirstID()).isEqualTo(0x10000000)
         assertThat(PlayerClientState.getLastID()).isEqualTo(0x50000000)
     }
+
+    @Test
+    fun `connection protection defaults false and round trips`() {
+        // player.hpp:1889 `bool connProtected = false;` and
+        // player.cpp:3479-3484.
+        val state = newState()
+
+        assertThat(state.isProtected()).isFalse()
+
+        state.setProtection(true)
+        assertThat(state.isProtected()).isTrue()
+
+        state.setProtection(false)
+        assertThat(state.isProtected()).isFalse()
+    }
 }

@@ -6,6 +6,7 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
+import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.ItemType
 import org.opentibia.canary.items.ObjectCategory_t
 import org.opentibia.canary.map.Position
@@ -229,5 +230,88 @@ class PlayerQuickLootStateTest {
 
         assertThat(sends).isZero()
         assertThat(player.getManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, true)).isNull()
+    }
+
+    // --- Player::checkLootContainers (player.cpp:1670-1711) ----------------------
+
+    @Test
+    fun `checkLootContainers clears the matching obtain registration`() {
+        // The erased obtain slot and the single send (1690-1710).
+        val player = newPlayer()
+        val unusedLoot = newContainer(5, "Unused Loot")
+        val obtain = newContainer(6, "Obtain")
+        player.refreshManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, unusedLoot, true)
+        player.refreshManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, obtain, false)
+        var lootSends = 0
+
+        player.checkLootContainers(obtain) { lootSends++ }
+
+        assertThat(lootSends).isEqualTo(1)
+        assertThat(player.getManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, true)).isSameAs(unusedLoot)
+        assertThat(player.getManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, false)).isNull()
+        assertThat(obtain.getAttribute(ItemAttribute.OBTAINCONTAINER)).isEqualTo(0L)
+    }
+
+    @Test
+    fun `checkLootContainers erases the entry when both slots matched`() {
+        // `if (!lootContainer && !obtainContainer) erase` (1702-1706).
+        val player = newPlayer()
+        val both = newContainer(7, "Both")
+        player.refreshManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, both, true)
+        player.refreshManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, both, false)
+        var lootSends = 0
+
+        player.checkLootContainers(both) { lootSends++ }
+
+        assertThat(lootSends).isEqualTo(1)
+        assertThat(player.getManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, true)).isNull()
+        assertThat(player.getManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, false)).isNull()
+        assertThat(both.getAttribute(ItemAttribute.QUICKLOOTCONTAINER)).isEqualTo(0L)
+        assertThat(both.getAttribute(ItemAttribute.OBTAINCONTAINER)).isEqualTo(0L)
+    }
+
+    @Test
+    fun `checkLootContainers follows isHoldingItem through nested containers`() {
+        // `container->isHoldingItem(lootContainer)` (1677, 1684).
+        val player = newPlayer()
+        val parent = newContainer(8, "Corpse")
+        val loot = newContainer(9, "Loot Backpack")
+        parent.addItem(loot)
+        player.refreshManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, loot, true)
+        var lootSends = 0
+
+        player.checkLootContainers(parent) { lootSends++ }
+
+        assertThat(lootSends).isEqualTo(1)
+        assertThat(player.getManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, true)).isNull()
+        assertThat(loot.getAttribute(ItemAttribute.QUICKLOOTCONTAINER)).isEqualTo(0L)
+    }
+
+    @Test
+    fun `checkLootContainers ignores unrelated containers`() {
+        // Neither branch matches, so nothing is sent (1690-1710).
+        val player = newPlayer()
+        val loot = newContainer(10, "Loot Backpack")
+        player.refreshManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, loot, true)
+        var lootSends = 0
+
+        player.checkLootContainers(newContainer(11, "Other")) { lootSends++ }
+
+        assertThat(lootSends).isZero()
+        assertThat(player.getManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, true)).isSameAs(loot)
+    }
+
+    @Test
+    fun `checkLootContainers with a null container returns early`() {
+        // `if (!container) return;` (1671-1673).
+        val player = newPlayer()
+        val loot = newContainer(12, "Loot Backpack")
+        player.refreshManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, loot, true)
+        var lootSends = 0
+
+        player.checkLootContainers(null) { lootSends++ }
+
+        assertThat(lootSends).isZero()
+        assertThat(player.getManagedContainer(ObjectCategory_t.OBJECTCATEGORY_DEFAULT, true)).isSameAs(loot)
     }
 }

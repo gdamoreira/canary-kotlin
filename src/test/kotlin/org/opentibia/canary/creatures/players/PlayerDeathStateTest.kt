@@ -590,6 +590,29 @@ class PlayerDeathStateTest {
         assertThat(state.getSpentMana()).isEqualTo(4_242)
     }
 
+    // --- Player::setDead / isDead (player.cpp:11081-11093) --------------------------
+
+    @Test
+    fun `setDead latches the flag and updates the dead-player registry`() {
+        // player.cpp:11081-11088: `m_isDead = isDead` then add/remove.
+        val player = newPlayer()
+        val state = newState(player)
+        val added = mutableListOf<Player>()
+        val removed = mutableListOf<String>()
+
+        assertThat(state.isDead()).isFalse()
+
+        state.setDead(true, addDeadPlayer = { added.add(it) }, removeDeadPlayer = { removed.add(it) })
+        assertThat(state.isDead()).isTrue()
+        assertThat(added).containsExactly(player)
+        assertThat(removed).isEmpty()
+
+        state.setDead(false, addDeadPlayer = { added.add(it) }, removeDeadPlayer = { removed.add(it) })
+        assertThat(state.isDead()).isFalse()
+        assertThat(added).containsExactly(player)
+        assertThat(removed).containsExactly(player.name)
+    }
+
     private fun realXml(): String {
         val candidates = listOf(
             Path.of("data/XML/vocations.xml"),

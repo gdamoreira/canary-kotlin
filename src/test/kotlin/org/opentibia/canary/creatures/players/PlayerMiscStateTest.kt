@@ -433,4 +433,32 @@ class PlayerMiscStateTest {
 
         assertThat(forwarded).isEqualTo(Triple(CombatType.ENERGYDAMAGE, 7, "Rat"))
     }
+
+    // --- client disconnect/forge seams (player.cpp:10581, 11819) -----------------
+
+    @Test
+    fun `disconnect forwards only with a client`() {
+        // player.cpp:10581-10585: `if (client) client->disconnect();`
+        val player = newPlayer()
+        var forwarded = 0
+
+        player.disconnect(hasClient = { false }, clientDisconnect = { forwarded++ })
+        assertThat(forwarded).isZero()
+
+        player.disconnect(hasClient = { true }, clientDisconnect = { forwarded++ })
+        assertThat(forwarded).isEqualTo(1)
+    }
+
+    @Test
+    fun `closeForgeWindow forwards only with a client`() {
+        // player.cpp:11819-11823: `if (client) client->closeForgeWindow();`
+        val player = newPlayer()
+        var forwarded = 0
+
+        player.closeForgeWindow(hasClient = { false }, clientCloseForgeWindow = { forwarded++ })
+        assertThat(forwarded).isZero()
+
+        player.closeForgeWindow(hasClient = { true }, clientCloseForgeWindow = { forwarded++ })
+        assertThat(forwarded).isEqualTo(1)
+    }
 }

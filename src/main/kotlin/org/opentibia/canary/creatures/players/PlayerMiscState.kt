@@ -22,7 +22,8 @@ import java.util.IdentityHashMap
 /**
  * The remaining Player misc accessors
  * (src/creatures/players/player.cpp:1379-1381, 1981-1996, 6056-6064,
- * 6175-6178, 7331-7339, 8335-8358, 12100-12189, 12897-12921, 13020-13028).
+ * 6175-6178, 7331-7339, 8335-8358, 10581-10585, 11819-11823, 12100-12189,
+ * 12897-12921, 13020-13028).
  *
  * The host already owns `Player`'s guild/party/flags/inventory, so the
  * transcriptions are extension functions that keep the exact `Player::` names
@@ -305,6 +306,38 @@ fun Player.updateInputAnalyzer(
 ) {
     if (hasClient()) {
         clientSendUpdateInputAnalyzer(type, amount, target)
+    }
+}
+
+/**
+ * `Player::disconnect()` (player.cpp:10581-10585): forwards the disconnect to
+ * the attached client. `Player::client` is the [hasClient] seam per AGENTS.md
+ * 1.1.
+ */
+fun Player.disconnect(
+    /** `Player::client != nullptr` (player.cpp:10582). */
+    hasClient: () -> Boolean = { false },
+    /** `client->disconnect()` (player.cpp:10583). */
+    clientDisconnect: () -> Unit = {},
+) {
+    if (hasClient()) {
+        clientDisconnect()
+    }
+}
+
+/**
+ * `Player::closeForgeWindow()` (player.cpp:11819-11823): closes the attached
+ * client's forge window. `Player::client` is the [hasClient] seam per AGENTS.md
+ * 1.1.
+ */
+fun Player.closeForgeWindow(
+    /** `Player::client != nullptr` (player.cpp:11820). */
+    hasClient: () -> Boolean = { false },
+    /** `client->closeForgeWindow()` (player.cpp:11821). */
+    clientCloseForgeWindow: () -> Unit = {},
+) {
+    if (hasClient()) {
+        clientCloseForgeWindow()
     }
 }
 
