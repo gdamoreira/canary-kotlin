@@ -15,12 +15,10 @@ class LookPacketHandlerTest {
 
     @Test
     fun `formats item inspection description text`() {
-        val swordType = ItemType(id = 2400, name = "Magic Sword", weight = 42.0)
+        val swordType = ItemType(id = 2400, name = "magic sword", article = "a", weight = 42.0)
         val sword = Item(id = 2400, count = 1, type = swordType)
 
-        val desc = DescriptionFormatter.formatItem(sword)
-        assertThat(desc).contains("You see a Magic Sword")
-        assertThat(desc).contains("It weighs 42.00 oz.")
+        assertThat(DescriptionFormatter.formatItem(sword, 1)).isEqualTo("You see a magic sword.\nIt weighs 42.00 oz.")
     }
 
     @Test
@@ -58,6 +56,54 @@ class LookPacketHandlerTest {
         assertThat(messageClass).isEqualTo(0x13) // MESSAGE_INFO_DESCR
 
         val messageText = textResponse.readTibiaString()
-        assertThat(messageText).contains("You see 10 Crystal Coins")
+        assertThat(messageText).isEqualTo("You see 10 Crystal Coins.\nThey weigh 1.00 oz.")
+    }
+
+    @Test
+    fun `look distance beyond one tile omits the weight line`() {
+        val map = GameMap()
+        val playerPos = Position(100, 100, 7)
+        val itemPos = Position(103, 100, 7)
+        val tile = map.getOrCreateTile(itemPos)
+        tile.addItem(Item(id = 2160, count = 10, type = ItemType(id = 2160, name = "crystal coin", weight = 0.1, isStackable = true)))
+
+        val player = Player(1, "Hero", 100, 100, position = playerPos)
+
+        val payload = Unpooled.buffer()
+        payload.writeShortLE(itemPos.x)
+        payload.writeShortLE(itemPos.y)
+        payload.writeByte(itemPos.z)
+        payload.writeShortLE(2160)
+        payload.writeByte(0)
+
+        val textResponse = LookPacketHandler.handleLook(player, payload, map)
+        assertThat(textResponse).isNotNull
+        textResponse!!.readUnsignedByte()
+        textResponse.readUnsignedByte()
+        assertThat(textResponse.readTibiaString()).isEqualTo("You see 10 crystal coins.")
+    }
+
+    @Test
+    fun `a different z adds the fifteen floor look distance`() {
+        val map = GameMap()
+        val playerPos = Position(100, 100, 7)
+        val itemPos = Position(100, 100, 6)
+        val tile = map.getOrCreateTile(itemPos)
+        tile.addItem(Item(id = 2400, count = 1, type = ItemType(id = 2400, name = "sword", article = "a", weight = 42.0)))
+
+        val player = Player(1, "Hero", 100, 100, position = playerPos)
+
+        val payload = Unpooled.buffer()
+        payload.writeShortLE(itemPos.x)
+        payload.writeShortLE(itemPos.y)
+        payload.writeByte(itemPos.z)
+        payload.writeShortLE(2400)
+        payload.writeByte(0)
+
+        val textResponse = LookPacketHandler.handleLook(player, payload, map)
+        assertThat(textResponse).isNotNull
+        textResponse!!.readUnsignedByte()
+        textResponse.readUnsignedByte()
+        assertThat(textResponse.readTibiaString()).isEqualTo("You see a sword.")
     }
 }

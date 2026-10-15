@@ -4,23 +4,23 @@ import io.netty.buffer.ByteBuf
 import io.netty.buffer.Unpooled
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.game.movement.getDistanceX
+import org.opentibia.canary.game.movement.getDistanceY
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.network.message.writeTibiaString
-import java.util.Locale
 
 object DescriptionFormatter {
 
-    fun formatItem(item: Item): String {
-        val itemName = item.type?.name ?: "an item"
-        val weightStr = String.format(Locale.US, "%.2f", item.weight)
-        return if (item.count > 1) {
-            "You see ${item.count} ${itemName}s. It weighs $weightStr oz."
-        } else {
-            "You see a $itemName. It weighs $weightStr oz."
-        }
-    }
+    /**
+     * `data/scripts/eventcallbacks/player/on_look.lua` `handleItemDescription`
+     * base case: `"You see " .. inspectedThing:getDescription(lookDistance)`.
+     * The magic wall/rush wood overrides and the refilling text are Lua logic
+     * and stay in Lua (AGENTS.md 1.4).
+     */
+    fun formatItem(item: Item, lookDistance: Int): String =
+        "You see " + item.getDescription(lookDistance)
 
     fun formatCreature(creature: Creature): String {
         val healthPercent = if (creature.maxHealth > 0) (creature.health * 100) / creature.maxHealth else 0
@@ -45,7 +45,15 @@ object LookPacketHandler {
         val tile = map.getTile(Position(x, y, z)) ?: return null
         val item = tile.items.find { it.id == itemId } ?: (if (tile.ground?.id == itemId) tile.ground else null) ?: Item(itemId)
 
-        val descriptionText = DescriptionFormatter.formatItem(item)
+        // `Game::playerLookAt` (src/game/game.cpp:6376-6385): the Chebyshev
+        // distance, plus the 15-floor offset for a different z.
+        val playerPos = player.position
+        var lookDistance = maxOf(getDistanceX(playerPos, tile.position), getDistanceY(playerPos, tile.position))
+        if (playerPos.z != tile.position.z) {
+            lookDistance += 15
+        }
+
+        val descriptionText = DescriptionFormatter.formatItem(item, lookDistance)
 
         val out = Unpooled.buffer()
         out.writeByte(PACKET_MESSAGE_TEXT.toInt())
