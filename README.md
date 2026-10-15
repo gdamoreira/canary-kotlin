@@ -46,7 +46,7 @@ It translates 15+ years of C++20 engine evolution into idiomatic, testable, and 
 | Monolithic `switch (recvbyte)` in `ProtocolGame` (12,000+ lines) | **Modular Packet Handlers** (`MovePacketHandler`, `ItemPacketHandler`, `CombatPacketHandler`, `LookPacketHandler`) | High testability, decoupled responsibilities, zero giant god classes. |
 | Asio Event Loops & `std::recursive_mutex` locks | **Kotlin Coroutine Actor (`GameDispatcher`)** | Lock-free sequential world mutation loop, zero lock contention, zero deadlocks. |
 | Raw memory pointers & circular `std::shared_ptr` references | **Thread-confined Domain Entities** & Value Classes (`@JvmInline value class Direction`) | Memory safety, zero memory leaks, idiomatic GC lifecycle management. |
-| Hardcoded MySQL raw string queries | **Flyway Database Migrations + HikariCP Connection Pool** | Automated database migrations, SQL injection prevention, zero-downtime schemas. |
+| Hardcoded MySQL raw string queries | **Flyway Database Migrations + HikariCP Connection Pool** | Automated database migrations, SQL injection prevention, zero-downtime schemas; runs on **PostgreSQL 16** (default) or **MariaDB 11.4** (`CANARY_DB_ENGINE`). |
 | Mandatory external database daemons for tests | **H2 In-Memory (PostgreSQL mode)** | Instant out-of-the-box local testing without running external Docker/MariaDB containers. |
 | C-API Lua userdata bindings | **Embedded LuaJ engine + Canary-named binding libraries** | Lua gameplay scripts run *as Lua* through `LuaEnvironment`/`UserdataRegistry`; no JNI, no memory corruption, and no Lua logic re-authored in Kotlin. |
 

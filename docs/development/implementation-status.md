@@ -43,6 +43,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | Monster engine (`monster.cpp`, 4,014 lines) | 198 unique `Monster::` methods | 89 name-matched + async pipelines + host + type state + barrier buckets | **~85%** | wave 51: barrier-parallel creature async buckets, budget/requeue/promotion/rollback |
 | Map engine (`map.cpp`) | — | — | **~85%** | sight/`canWalkTo`/pathing/caches/spectators/houses/towns (wave 38) |
 | Persistence (`iologindata*`, `iomapserialize`) | — | — | **~80%** | 24/24 iologindata, 10/10 iomapserialize, market/prey/bestiary/bosstiary/guild/storage (V10–V14) |
+| **Database engines** | PostgreSQL 16 / MariaDB 11.4 | **Both supported** | `CANARY_DB_ENGINE` selects the engine; mirrored Flyway trees (`db/migration/postgres|mariadb`) and a `SqlDialect` (H2/PostgreSQL/MariaDB) cover identifiers, upserts and the dialect-specific statements. H2 (PostgreSQL mode) remains the test engine; the MariaDB integration suite runs on CI (Docker). |
 | **Estimated full-parity completion** | — | — | **~99.9%** | tracked inventory complete; wave 72 closed the final reduced-port tails (drain credit, light fold, tile spectators, viewer login, corpse updates, GAME_STATE_INIT). What remains is the structural Player-as-Cylinder refactor, a small reduced-model list and the deferred-by-design program |
 
 #### 1.2 Module completion (by inventory rows in §2)

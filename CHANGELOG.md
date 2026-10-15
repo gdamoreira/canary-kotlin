@@ -739,8 +739,17 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 77: Wave 73 — MariaDB Support (18:00 – 21:00)
+- **Dialect core** — `DatabaseEngine` + `CANARY_DB_ENGINE` (`postgres` default, `maria|mariadb|mysql`), engine-aware JDBC URLs/ports, product-name migration-tree selection; the existing Flyway chain moved to `db/migration/postgres/` (13 tests).
+- **MariaDB migration tree** — `db/migration/mariadb/V1..V22` transcribed 1:1 (`BIGINT AUTO_INCREMENT`, `LONGBLOB`, backticks, `FROM DUAL` seed guards) with a structural parity test (5 tests).
+- **Runtime SQL portability** — `SqlDialect` (H2/PostgreSQL/MariaDB) with quoted-identifier and upsert helpers; repository/upsert fixes across ~14 files (quoted identifiers, MERGE → dialect upserts) and cross-engine game SQL (highscores/cyclopedia/livestream/tableExists) (29+27 tests).
+- **Integration + delivery** — testcontainers MariaDB 11.4 integration suite (migrations, KV, house upsert, account/storage round trips; skips without Docker, runs in CI); compose `CANARY_DB_ENGINE` passthrough + `docker-compose.mariadb.yml` single-database mode; AGENTS.md §2.1 dual-engine policy.
+- **807 suites / 8388 tests, all green** (6 MariaDB tests run on CI).
+
+---
+
 ### Current Status
-- **Automated Tests**: **798 test suites / 8308 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **807 test suites / 8388 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.

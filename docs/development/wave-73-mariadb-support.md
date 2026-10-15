@@ -1,6 +1,6 @@
 # Wave 73 Plan — MariaDB Support for the Kotlin Server
 
-**Status:** In progress — round 1 dispatched
+**Status:** Completed (2026-10-15) — all workstreams merged; 807 suites / 8388 tests green (MariaDB integration suite runs on CI)
 **Baseline:** `main` @ `d8916ec5`; 798 suites / 8308 tests green; zero Kotlin warnings
 **Source of scope:** user directive: "Make it possible to run MariaDB instead of PostgreSQL in the kotlin server." **Scaling proposals excluded.**
 **Convention:** documents live directly in `docs/development/` (AGENTS.md §5/§6).
@@ -117,3 +117,17 @@ this document in place.
 
 Scaling proposals; the deferred list; dropping PostgreSQL support (both engines
 are supported, PostgreSQL remains the default).
+
+---
+
+## Completion (2026-10-15)
+
+dialect-core (`18fc62e8`), mariadb-migrations (`ead7841e`),
+runtime-sql-portability (`6db9ee46`), dialect-identifier-fixes (`469485f6`),
+game-sql-portability (`6c099037`), mariadb-integration (`f3a75623`) and
+mariadb-docs-compose (`ca8954ce`) merged; the dialect seams were wired at the
+composition roots at integration. Integrated suite: **807 suites / 8388 tests,
+0 failures** (6 MariaDB testcontainers tests skip locally without Docker and
+execute on CI). The server now runs on PostgreSQL 16 (default) or MariaDB 11.4
+via `CANARY_DB_ENGINE`, with `docker/docker-compose.mariadb.yml` providing the
+single-database mode for the full stack.
