@@ -28,6 +28,7 @@ import org.opentibia.canary.network.protocol.market.MarketOfferApplication
 import org.opentibia.canary.network.protocol.market.MarketOfferContext
 import org.opentibia.canary.network.protocol.market.MarketPacketParser
 import org.opentibia.canary.network.protocol.npcshop.NpcShopPacketHandler
+import org.opentibia.canary.network.protocol.npcshop.PlayerLookInShopCommand
 import org.opentibia.canary.network.protocol.wheel.OpenWheelCommand
 import org.opentibia.canary.network.protocol.wheel.SaveWheelCommand
 import org.opentibia.canary.network.protocol.wheel.WheelGemActionCommand
@@ -817,9 +818,13 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // Game::playerLookInShop resolves the interacted merchant; the
-                            // shop window and dialogue stay Lua (AGENTS.md 1.4) and the
-                            // merchant interaction is not ported (PARITY GAP).
+                            // Game::playerLookInShop (game.cpp:6328) resolves the
+                            // interacted merchant, renders the look text through
+                            // the Game renderer seams and notifies the merchant;
+                            // the shop window and dialogue stay Lua (AGENTS.md 1.4).
+                            (command as? PlayerLookInShopCommand)?.let { lookCommand ->
+                                context.game?.playerLookInShop(player.id, lookCommand.itemId, lookCommand.count)
+                            }
                         }
                         true
                     }
@@ -1156,10 +1161,27 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // Game::playerInspectItem and Player::sendItemInspection
-                            // (game.cpp:1635,1652) and sendWeaponProficiencyWindow are
-                            // not ported; the decoded command only marks the
-                            // confinement boundary (PARITY GAP).
+                            when (command) {
+                                // Game::playerInspectItem(player, pos) (game.cpp:1635)
+                                // resolves the top-down item and sends its window.
+                                is InspectObjectCommand.NormalObject ->
+                                    context.game?.playerInspectItem(player, command.position)
+
+                                // Game::playerInspectItem(player, itemId, itemCount,
+                                // cyclopedia) (game.cpp:1652) forwards the NPC-trade
+                                // and cyclopedia item windows.
+                                is InspectObjectCommand.NpcTrade ->
+                                    context.game?.playerInspectItem(player, command.itemId, command.itemCount, false)
+
+                                is InspectObjectCommand.Cyclopedia ->
+                                    context.game?.playerInspectItem(player, command.itemId, command.itemCount, true)
+
+                                // ProtocolGame::parseInspectPlayer (protocolgame.cpp:3325)
+                                // reads and discards its payload;
+                                // INSPECT_PROFICIENCY needs sendWeaponProficiencyWindow,
+                                // which is not ported (PARITY GAP).
+                                else -> Unit
+                            }
                         }
                         true
                     }
