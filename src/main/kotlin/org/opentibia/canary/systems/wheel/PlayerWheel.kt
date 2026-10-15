@@ -10,6 +10,7 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.game.zones.ZoneType
 import org.opentibia.canary.items.Ammo_t
 import org.opentibia.canary.items.SLOTP_TWO_HAND
+import org.opentibia.canary.lua.bindings.SpellBindings
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.SpectatorMapAccess
 import org.opentibia.canary.map.SpectatorSector
@@ -81,11 +82,13 @@ class PlayerWheel(
     private val otsysTimeMs: () -> Long = System::currentTimeMillis,
     /**
      * `g_spells()` `isMonkShrineSpell` check of `upgradeSpell`
-     * (player_wheel.cpp:3476). The registry is injected per AGENTS.md 1.1;
-     * `isMonkShrineSpell` is a pure name check (spells.cpp:224-227), so the
-     * default empty registry answers exactly like the process-wide one.
+     * (player_wheel.cpp:3476). The registry is injected per AGENTS.md 1.1; the
+     * default resolves the booted `g_spells()` stand-in
+     * ([SpellBindings.spellRegistry]); `isMonkShrineSpell` is a pure name check
+     * (spells.cpp:224-227), so an injected and the booted registry answer
+     * identically.
      */
-    private val spells: Spells = Spells(),
+    private val spells: Spells = SpellBindings.spellRegistry(),
     /**
      * `Spectators().find<Monster>(m_player.getPosition(), false, 1, 1, 1, 1, false)`
      * of `checkBattleInstinct`/`checkPositionalTactics` (player_wheel.cpp:2945,
@@ -449,6 +452,12 @@ class PlayerWheel(
 
     /** `PlayerWheel::m_unlockedScrolls` (player_wheel.hpp:521). */
     private val unlockedScrolls = mutableListOf<PromotionScroll>()
+
+    /**
+     * The `g_spells()` registry backing the [upgradeSpell] `isMonkShrineSpell`
+     * gate (player_wheel.cpp:3476); read view for the composition wiring.
+     */
+    internal val spellRegistry: Spells get() = spells
 
     /** `PlayerWheel::getSpellUpgrade` (player_wheel.cpp:3863). */
     fun getSpellUpgrade(name: String): WheelSpellGrade = spellsSelected[name] ?: WheelSpellGrade.NONE

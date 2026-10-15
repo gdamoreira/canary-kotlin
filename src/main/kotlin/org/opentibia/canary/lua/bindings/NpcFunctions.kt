@@ -6,6 +6,8 @@ import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Npc
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.npcs.NpcInfo
+import org.opentibia.canary.creatures.players.sendCloseShop
+import org.opentibia.canary.creatures.players.sendShop
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.items.ItemTypeRegistry
 import org.opentibia.canary.lua.bindings.core.CreatureFunctions
@@ -363,8 +365,23 @@ class WorldNpcOperations(
     private val itemTypes: ItemTypeRegistry? = null,
 ) : NpcOperations {
 
-    /** `Player::shopOwner` (player.hpp:739) bookkeeping keyed by player id. */
-    private val shopOwners = mutableMapOf<Long, Any>()
+    /** `Player::shopOwner` (player.hpp:739, player.cpp:6119-6125) keyed by player id. */
+    private val shopOwners = mutableMapOf<Long, Npc>()
+
+    /** `Player::getShopOwner` (player.cpp:6123-6125) read view over the recorded owner. */
+    fun shopOwnerOf(player: Player): Npc? = shopOwners[player.id]
+
+    /**
+     * `Player::closeShopWindow` (player.cpp:2933-2944): the recorded owner (if
+     * any) releases the player's shop entry, the owner is cleared and the
+     * client `sendCloseShop()` frame is emitted.
+     */
+    fun closeShopOwner(player: Player): Boolean {
+        val owner = shopOwners.remove(player.id) ?: return false
+        owner.removeShopPlayer(player.getGUID())
+        player.sendCloseShop()
+        return true
+    }
 
     /** `Npc::setName` bookkeeping; the Kotlin [Creature.name] is immutable. */
     private val nameOverrides = mutableMapOf<Long, String>()
@@ -465,25 +482,33 @@ class WorldNpcOperations(
     override fun openShopWindow(npc: Any, player: Any?): Boolean? {
         val target = npc as? Npc ?: return null
         val customer = player as? Player ?: return false
+        // `luaNpcOpenShopWindow` closes the previous window first (npc_functions.cpp:395).
+        closeShopOwner(customer)
         shopOwners[customer.id] = target
+        // `Player::openShopWindow` sends the shop window (player.cpp:2402-2417).
+        customer.sendShop(target)
         return true
     }
 
     override fun openShopWindowTable(npc: Any, player: Any?, items: List<ShopData>): Boolean? {
         val target = npc as? Npc ?: return null
         val customer = player as? Player ?: return false
+        closeShopOwner(customer)
         target.addShopPlayer(customer.getGUID(), items.map { toShopBlock(it) })
         shopOwners[customer.id] = target
+        customer.sendShop(target)
         return true
     }
 
     override fun closeShopWindow(npc: Any, player: Any?): Boolean? {
         val target = npc as? Npc ?: return null
         val customer = player as? Player ?: return false
+        // `luaNpcCloseShopWindow` only closes when this npc is the owner
+        // (npc_functions.cpp:465-467); `Player::closeShopWindow` then sends the
+        // close frame (player.cpp:2933-2944).
         if (shopOwners[customer.id] === target) {
-            shopOwners.remove(customer.id)
+            closeShopOwner(customer)
         }
-        target.removeShopPlayer(customer.getGUID())
         return true
     }
 

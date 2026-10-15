@@ -10,6 +10,7 @@ import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.io.IOMarket
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemTypeRegistry
+import org.opentibia.canary.lua.bindings.SpellBindings
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.LuaEventDispatcher
 import org.opentibia.canary.map.GameMap
@@ -281,13 +282,15 @@ object GamePacketRouter {
                     // The `Item::getDescription` composition seams: the booted
                     // `Item::items` registry, the `g_spells()`/`g_vocations()`
                     // registries injected onto the player at login and
-                    // `g_game().getObjectCategory`.
+                    // `g_game().getObjectCategory`. `Player::g_spells()` falls
+                    // back to the booted engine registry so rune look texts
+                    // resolve the registered rune spell.
                     LookPacketHandler.handleLook(
                         player,
                         buffer,
                         context.map,
                         items = context.itemTypes,
-                        spells = player.spells,
+                        spells = player.spells ?: SpellBindings.spellRegistry(),
                         vocations = player.vocations,
                         objectCategory = context.game?.let { game -> { item: Item -> game.getObjectCategory(item) } },
                     ) != null
@@ -674,12 +677,27 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            context.modalManager.handleResponse(
-                                player,
-                                command.windowId.toInt(),
-                                command.button,
-                                command.choice,
-                            )
+                            // `ProtocolGame::parseModalWindowAnswer` (protocolgame.cpp:4484-4489)
+                            // hands the answer to `Game::playerAnswerModalWindow`
+                            // (game.cpp:11144-11176). Without a composed world the
+                            // decode-only manager keeps the confinement-boundary
+                            // behavior.
+                            val game = context.game
+                            if (game != null) {
+                                game.playerAnswerModalWindow(
+                                    player.id,
+                                    command.windowId,
+                                    command.button,
+                                    command.choice,
+                                )
+                            } else {
+                                context.modalManager.handleResponse(
+                                    player,
+                                    command.windowId.toInt(),
+                                    command.button,
+                                    command.choice,
+                                )
+                            }
                         }
                         true
                     }

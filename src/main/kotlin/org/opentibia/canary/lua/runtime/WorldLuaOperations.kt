@@ -14,6 +14,7 @@ import org.opentibia.canary.combat.condition.Outfit
 import org.opentibia.canary.creatures.ChaseMode
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Monster
+import org.opentibia.canary.creatures.Npc
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.monsters.BosstiaryRarity_t
@@ -97,6 +98,7 @@ import org.opentibia.canary.lua.bindings.core.PlayerFunctions
 import org.opentibia.canary.lua.bindings.core.PlayerFunctionsExtra
 import org.opentibia.canary.lua.bindings.core.PlayerOperations
 import org.opentibia.canary.lua.bindings.core.PlayerSocialFunctions
+import org.opentibia.canary.lua.bindings.core.WorldPlayerSocialOperations
 import org.opentibia.canary.lua.bindings.core.PositionFunctions
 import org.opentibia.canary.lua.bindings.core.PositionOperations
 import org.opentibia.canary.lua.bindings.core.TileFunctions
@@ -336,9 +338,27 @@ class WorldLuaOperations(
         MonsterSpellFunctions.attachCanThrowSpellWorld(gameMap)
     }
 
+    /**
+     * `Player::getShopOwner` (player.cpp:6123-6125): the merchant the player's
+     * open shop window is bound to, recorded by the `npc:openShopWindow` path
+     * ([WorldNpcOperations]). The composition root binds this to
+     * `Game.getShopOwner` so `Game::playerLookInShop` (game.cpp:6328) and the
+     * buy/sell handlers resolve the interacted merchant in production.
+     */
+    fun shopOwnerOf(player: Player): Npc? = worldNpc.shopOwnerOf(player)
+
+    /**
+     * `Player::closeShopWindow` (player.cpp:2933-2944): drops the recorded
+     * owner and releases its shop entry; the composition root binds this to
+     * `Game.closeShopWindow`.
+     */
+    fun closeShopOwner(player: Player): Boolean = worldNpc.closeShopOwner(player)
+
     val loot: LootOperations = WorldLootOperations(itemIdsByName)
 
-    val npc: NpcOperations = WorldNpcOperations(itemTypes)
+    private val worldNpc: WorldNpcOperations = WorldNpcOperations(itemTypes)
+
+    val npc: NpcOperations = worldNpc
 
     val npcType: NpcTypeOperations = WorldNpcTypeOperations(npcTypesByName, itemTypes)
     val weapon: WeaponOperations = WorldWeaponOperations(itemTypes)
@@ -384,7 +404,19 @@ class WorldLuaOperations(
     fun install(env: LuaEnvironment) {
         GameFunctions.install(env, game)
         PlayerFunctions.install(env, player)
-        PlayerSocialFunctions.install(env) // Wave 39 lua-player-2
+        // SpellBindings is the canonical `Spell` owner: it creates the registry that
+        // `LuaEventDispatcher` reads, and delegates the binding surface to SpellFunctions.
+        // It installs before the spell-registry consumers below so they resolve the
+        // same engine `g_spells()` instance the datapack scripts register into.
+        val registry = SpellBindings.install(env, spell)
+        env.installSpells(registry)
+        // Wave 39 lua-player-2: `canLearnSpell`/`getInstantSpells`/`canCast`
+        // resolve through the booted engine `g_spells()` registry
+        // (`SpellBindings.spellRegistry`) the datapack scripts record into.
+        PlayerSocialFunctions.install(
+            env,
+            WorldPlayerSocialOperations(itemIdsByName, spells = SpellBindings.spellRegistry()),
+        )
         PlayerFunctionsExtra.install(env) // Wave 40 lua-player-4
         // Wave 40 lua-creatures
         GroupFunctions.install(env)
@@ -410,9 +442,6 @@ class WorldLuaOperations(
         CharmFunctions.install(env)
         ShopFunctions.install(env, WorldShopOperations(itemIdsByName))
         // Wave 40 lua-weapon-spell
-        // SpellBindings is the canonical `Spell` owner: it creates the registry that
-        // `LuaEventDispatcher` reads, and delegates the binding surface to SpellFunctions.
-        env.installSpells(SpellBindings.install(env, spell))
         WeaponFunctions.install(env, weapon)
         // `combat:setCallback` scripts stay Lua: the executor resolves them
         // through the bridge of the environment they were registered in
@@ -1169,6 +1198,18 @@ class WorldCreatureOperations : CreatureOperations {
         target.direction = resolved
         return true
     }
+
+    /**
+     * `Creature::registerCreatureEvent` (creature.cpp:1674-1693): the host's
+     * `g_creatureEvents().getEventByName` lookup gate (`creatureEventRegistered`)
+     * and the attached-name set live on the domain [Creature].
+     */
+    override fun registerEvent(creature: Any, name: String): Boolean? =
+        (creature as? Creature)?.registerCreatureEvent(name)
+
+    /** `Creature::unregisterCreatureEvent` (creature.cpp:1695-1724). */
+    override fun unregisterEvent(creature: Any, name: String): Boolean? =
+        (creature as? Creature)?.unregisterCreatureEvent(name)
 }
 
 /**

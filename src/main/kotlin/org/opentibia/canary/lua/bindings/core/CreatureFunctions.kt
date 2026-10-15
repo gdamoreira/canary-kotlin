@@ -18,6 +18,12 @@ interface CreatureOperations {
     fun getPosition(creature: Any): Position
     fun getDirection(creature: Any): Int
     fun setDirection(creature: Any, direction: Int): Boolean
+
+    /** `Creature::registerCreatureEvent` (creature.cpp:1674-1693); null without a receiver. */
+    fun registerEvent(creature: Any, name: String): Boolean?
+
+    /** `Creature::unregisterCreatureEvent` (creature.cpp:1695-1724); null without a receiver. */
+    fun unregisterEvent(creature: Any, name: String): Boolean?
 }
 
 /**
@@ -32,6 +38,8 @@ interface CreatureOperations {
  *   creature:getPosition()
  *   creature:getDirection()
  *   creature:setDirection(direction)
+ *   creature:registerEvent(name)
+ *   creature:unregisterEvent(name)
  *
  * Canary shares the `Creature` class with `Player`, `Monster` and `Npc` through
  * `Lua::registerSharedClass(..., "Creature", ...)`; the derived classes inherit these
@@ -98,6 +106,18 @@ object CreatureFunctions {
             val direction = args.arg(2).toint()
             LuaValue.valueOf(operations.setDirection(creature, direction))
         })
+
+        registry.registerMethod(CREATURE_TYPE, "registerEvent", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            operations.registerEvent(creature, args.arg(2).tojstring())?.let { LuaValue.valueOf(it) }
+                ?: LuaValue.NIL
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "unregisterEvent", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            operations.unregisterEvent(creature, args.arg(2).tojstring())?.let { LuaValue.valueOf(it) }
+                ?: LuaValue.NIL
+        })
     }
 }
 
@@ -128,4 +148,10 @@ internal object UnwiredCreatureOperations : CreatureOperations {
 
     override fun setDirection(creature: Any, direction: Int): Boolean =
         throw NotImplementedError("CreatureFunctions.setDirection seam is not wired")
+
+    override fun registerEvent(creature: Any, name: String): Boolean =
+        throw NotImplementedError("CreatureFunctions.registerEvent seam is not wired")
+
+    override fun unregisterEvent(creature: Any, name: String): Boolean =
+        throw NotImplementedError("CreatureFunctions.unregisterEvent seam is not wired")
 }

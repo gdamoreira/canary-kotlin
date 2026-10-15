@@ -578,6 +578,27 @@ class ServerBootstrap(
             ),
         )
         listener = server
+        // Wave 67 D4: bind the booted world into the Lua seams that only exist
+        // after `listenerFactory.create` (Canary reaches them through
+        // `g_game()`):
+        //  - `WorldLuaOperations.attachCombat` re-binds the Lua combat entry
+        //    points over the booted map and the world creature/player lookups
+        //    (the wave-65 `attachMonsters` pattern);
+        //  - `Player::getShopOwner`/`Player::closeShopWindow`
+        //    (player.cpp:2933-2944, 6123-6125) resolve the merchant recorded by
+        //    the production `npc:openShopWindow` path, which makes
+        //    `Game::playerLookInShop` (game.cpp:6328) and the buy/sell handlers
+        //    work in production.
+        server.game?.let { world ->
+            val worldOperations = luaEnvironment.worldOperations
+            worldOperations?.attachCombat(
+                gameMap,
+                creatureById = { id -> world.getCreatureByID(id) },
+                playerByName = { name -> world.getPlayerByNameWildcard(name).second },
+            )
+            world.getShopOwner = { player -> worldOperations?.shopOwnerOf(player) }
+            world.closeShopWindow = { player -> worldOperations?.closeShopOwner(player) }
+        }
         worldGame.set(server.game)
         server.start()
         logger.info { "${config.serverName} server online!" }
