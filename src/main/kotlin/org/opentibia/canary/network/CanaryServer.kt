@@ -28,6 +28,8 @@ import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.creatures.monsters.Monsters
 import org.opentibia.canary.creatures.spawns.MonsterSpawnPath
 import org.opentibia.canary.creatures.spawns.dispatcherSpawnScheduler
+import org.opentibia.canary.database.Database
+import org.opentibia.canary.database.DatabaseConnectionFactory
 import org.opentibia.canary.game.Game
 import org.opentibia.canary.game.GameState_t
 import org.opentibia.canary.game.modal.ModalWindowManager
@@ -44,6 +46,7 @@ import org.opentibia.canary.io.iologindata.IOLoginData
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.Items
+import org.opentibia.canary.lua.bindings.SpellBindings
 import org.opentibia.canary.lua.bindings.core.GameFunctions
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.ScriptingDispatch
@@ -62,10 +65,15 @@ import org.opentibia.canary.social.guild.GuildRepository
 import org.opentibia.canary.systems.imbuement.ImbuementDecay
 import org.opentibia.canary.systems.imbuement.ImbuementEngine
 import org.opentibia.canary.systems.imbuement.Imbuements
+import org.opentibia.canary.systems.mount.Mounts
 import org.opentibia.canary.systems.raid.GameRaidSpawner
 import org.opentibia.canary.systems.raid.RaidGameOperations
 import org.opentibia.canary.systems.raid.Raids
 import org.opentibia.canary.systems.raid.WorldRaidEnvironment
+import org.opentibia.canary.systems.wheel.WheelSpellRegistration
+import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -110,6 +118,13 @@ class CanaryServer(
      * `null` keeps the raid container uncomposed (embedded/test use).
      */
     private val dataDirectory: String? = null,
+    /**
+     * `g_configManager().getString(CORE_DIRECTORY)` resolved by the composition
+     * root: the core data directory the `GAME_STATE_INIT` loaders read
+     * (`{CORE_DIRECTORY}/XML/mounts.xml`, `{CORE_DIRECTORY}/XML/attachedeffects.xml`,
+     * game.cpp:982-983). `null` keeps those loads inert (embedded/test use).
+     */
+    private val coreDirectory: String? = null,
     /**
      * `g_dispatcher()` shared by the world. When absent the composition root
      * owns one composed with [configManager] (`getConfiguredDispatcherBudgets`,
@@ -223,6 +238,22 @@ class CanaryServer(
      */
     internal val muteCountMap: MutableMap<Long, Int> = mutableMapOf()
 
+    /**
+     * `g_game().mounts` (src/game/game.hpp:628) equivalent: the mount definition
+     * registry `GAME_STATE_INIT` loads (`Mounts::loadFromXml`, game.cpp:982) and
+     * the world `Mounts::getMountByClientID`/`getMountByID` seams resolve
+     * through. The per-player `PlayerFeatures.mountDefinitions` registries stay
+     * separate until the player composition injects this instance (PARITY GAP).
+     */
+    internal val mounts: Mounts = Mounts()
+
+    /**
+     * `g_database()` equivalent over the booted [dataSource] (game.cpp:9592-9656):
+     * the `server_config` MOTD/players-record persistence the `GAME_STATE_INIT`
+     * loads read and their missing-row seeds write.
+     */
+    private val database: Database? = dataSource?.let { source -> Database(source) }
+
     val scriptingEnvironment: LuaEnvironment get() = luaEnvironment
 
     /**
@@ -309,6 +340,7 @@ class CanaryServer(
         ioMarket = ioMarket,
         imbuements = imbuements,
         vocations = vocations,
+        database = database,
         configManager = configManager,
         creatureAsyncTaskBuckets = creatureAsyncTaskBuckets,
         monsterHost = monsterPipelinesHost,
@@ -640,6 +672,115 @@ class CanaryServer(
         }
     }
 
+    init {
+        // --- `GAME_STATE_INIT` bindings (`Game::setGameState`, game.cpp:963-993) ---
+
+        // `map.spawnsMonster.startup()` (game.cpp:970): the XML half of the
+        // spawn path already ran during map boot (`IOMap::loadMonsters`); the
+        // start must place every block through `Game::internalPlaceCreature` on
+        // the world thread (AGENTS.md 1.2), so it is dispatched to the
+        // WorldCommit lane like `Game::addCreatureCheck` (game.cpp:7676-7684);
+        // a listener without a running dispatcher (embedded use) starts inline.
+        game.initSpawns = {
+            monsterSpawnPath?.let { spawns ->
+                if (this.dispatcher.isRunning) {
+                    this.dispatcher.dispatch(DispatcherLane.WorldCommit) { spawns.startup() }
+                } else {
+                    spawns.startup()
+                }
+            }
+        }
+
+        // `raids.loadFromXml(); raids.startup()` (game.cpp:979-980): the check
+        // timer arms on the shared dispatcher for `CHECK_RAIDS_INTERVAL` later
+        // (raids.cpp:98-115).
+        game.initRaids = {
+            raids?.let { container ->
+                container.loadFromXml()
+                container.startup()
+            }
+        }
+
+        // `g_globalEvents().startup()` (game.cpp:988): confined to the
+        // WorldCommit lane by ScriptingDispatch.
+        game.initGlobalEvents = { scriptingDispatch.globalStartup() }
+
+        // `m_IOWheel->initializeGlobalData()` (game.cpp:991): the ported
+        // `IOWheel::initializeGlobalData` body (io_wheel.cpp:123-177) registers
+        // every vocation wheel spell table against the booted engine
+        // `g_spells()` registry the datapack scripts recorded into.
+        game.initWheelGlobalData = {
+            WheelSpellRegistration.initializeGlobalData(
+                SpellBindings.spellRegistry(),
+                logWarn = { message -> logger.warn { message } },
+                logDebug = { message -> logger.debug { message } },
+            )
+        }
+
+        coreDirectory?.let { core ->
+            // `mounts->loadFromXml()` (game.cpp:982) over
+            // `{CORE_DIRECTORY}/XML/mounts.xml`; the same registry answers the
+            // `g_game().mounts` look-ups (mounts.cpp).
+            game.initMounts = {
+                readCoreXml(Path.of(core, "XML", "mounts.xml"))?.let { content ->
+                    mounts.loadFromXml(content)
+                }
+            }
+            game.getMountByClientID = { clientId -> mounts.getMountByClientID(clientId) }
+            game.getMountByID = { mountId -> mounts.getMountByID(mountId) }
+
+            // `m_attachedEffects->loadFromXml()` (game.cpp:983) over
+            // `{CORE_DIRECTORY}/XML/attachedeffects.xml`.
+            game.initAttachedEffects = {
+                readCoreXml(Path.of(core, "XML", "attachedeffects.xml"))?.let { content ->
+                    game.getAttachedEffects().loadFromXml(content)
+                }
+            }
+        }
+
+        // `g_configManager().getString(SERVER_MOTD)` read of `loadMotdNum`
+        // (game.cpp:9604): a supplied/test world keeps its own value when no
+        // config manager is composed.
+        if (configManager != null) {
+            game.serverMotd = worldConfigString("SERVER_MOTD", "")
+        }
+
+        database?.let { db ->
+            // `loadMotdNum`/`loadPlayersRecord` persistence (game.cpp:9592-9656)
+            // over the `server_config` rows of the booted database.
+            game.loadMotdNumValue = { serverConfigValue("motd_num")?.toLongOrNull() }
+            game.loadMotdHashValue = { serverConfigValue("motd_hash") }
+            game.loadPlayersRecordValue = { serverConfigValue("players_record")?.toIntOrNull() }
+            game.createPlayersRecord = {
+                db.executeQuery("INSERT INTO server_config (config, \"value\") VALUES ('players_record', '0')")
+            }
+            game.savePlayersRecord = { value ->
+                db.executeQuery("UPDATE server_config SET \"value\" = '$value' WHERE config = 'players_record'")
+            }
+        }
+    }
+
+    /**
+     * `g_database().storeQuery("SELECT `value` FROM server_config WHERE `config` = ...")`
+     * read (game.cpp:9594, 9602, 9649) over the booted [dataSource].
+     */
+    private fun serverConfigValue(name: String): String? =
+        dataSource?.let { source ->
+            DatabaseConnectionFactory.storeQuery(
+                source,
+                "SELECT \"value\" FROM server_config WHERE config = '$name'",
+            )?.getString("value")
+        }
+
+    /** Reads a `{CORE_DIRECTORY}/XML` document for the `GAME_STATE_INIT` loaders. */
+    private fun readCoreXml(path: Path): String? =
+        try {
+            Files.readString(path)
+        } catch (exception: IOException) {
+            logger.warn(exception) { "Failed to read $path; the GAME_STATE_INIT load is skipped" }
+            null
+        }
+
     /**
      * `g_game().transformItem(item, item->getID(), charges - 1)` binding
      * (player.cpp:1065, 7588, 7697, 7718) shared by every session's
@@ -729,48 +870,40 @@ class CanaryServer(
         // its queue-latency/internal-work telemetry once the server is online.
         dispatcher.setQueueLatencyLoggingEnabled(true)
 
-        // `IOMarket::checkExpiredOffers()` runs during server startup
+        // `Map::loadMap(loadMonsters=true)` -> `IOMap::loadMonsters`
+        // (src/map/map.cpp:199-201): the spawn XML parses during map boot,
+        // before `GAME_STATE_INIT` starts the engine (src/game/game.cpp:970).
+        monsterSpawnPath?.let { spawns -> spawns.load() }
+
+        // `g_game().setGameState(GAME_STATE_INIT)` (src/canary_server.cpp:225):
+        // the state trigger runs every wired INIT piece in the C++ statement
+        // order (src/game/game.cpp:963-993): items price, the spawn/raid
+        // startups, mounts, attached effects, MOTD/players record, the global
+        // `startup` events and the wheel global data.
+        game.setGameState(GameState_t.GAME_STATE_INIT)
+
+        // `Game::playersRecord` (src/game/game.cpp:9646) loaded by the INIT arm
+        // seeds the login-path record tracker, so a fresh boot does not fire
+        // the `record` events for a record the previous run already stored.
+        playersRecord.set(game.playersRecord)
+
+        // `IOMarket::checkExpiredOffers()` runs after `GAME_STATE_INIT`
         // (src/canary_server.cpp:230) and reschedules itself from there.
         ioMarket?.let { market ->
             dispatcher.dispatch(DispatcherLane.WorldCommit) { market.checkExpiredOffers() }
         }
-
-        // `Map::loadMap(loadMonsters=true)` -> `IOMap::loadMonsters`
-        // (src/map/map.cpp:199-201) parses the spawn XML during map boot, then
-        // `Game::setGameState(GAME_STATE_INIT)` starts the engine
-        // (src/game/game.cpp:970). The start is dispatched to the WorldCommit
-        // lane so `SpawnMonster::startup` places every block through
-        // `Game::internalPlaceCreature` on the world thread (AGENTS.md 1.2); a
-        // listener without a running dispatcher (embedded use) starts inline,
-        // mirroring `Game::addCreatureCheck` (game.cpp:7676-7684).
-        monsterSpawnPath?.let { spawns ->
-            spawns.load()
-            if (dispatcher.isRunning) {
-                dispatcher.dispatch(DispatcherLane.WorldCommit) { spawns.startup() }
-            } else {
-                spawns.startup()
-            }
-        }
-
-        // `raids.loadFromXml(); raids.startup()` of
-        // `Game::setGameState(GAME_STATE_INIT)` (src/game/game.cpp:979-980):
-        // the definitions parse here and the check timer arms on the shared
-        // dispatcher for `CHECK_RAIDS_INTERVAL` later (raids.cpp:98-115).
-        raids?.let { container ->
-            container.loadFromXml()
-            container.startup()
-        }
-
-        // Canary fires the `startup` global events during `GAME_STATE_INIT`
-        // (g_globalEvents().startup(), src/game/game.cpp:988) before the world serves
-        // players. Confined to the WorldCommit lane by ScriptingDispatch.
-        scriptingDispatch.globalStartup()
 
         // `g_game().start(&serviceManager)` (src/canary_server.cpp:243): the
         // tibian clock seed and the maintenance/cycle event registrations, run
         // once the listeners are bound. `Game::start` is one-shot, so a
         // repeated boot cannot double-arm the loop.
         game.start()
+
+        // `g_game().setGameState(GAME_STATE_NORMAL)` (src/canary_server.cpp:249):
+        // the world leaves the INIT trigger in the serving state. The
+        // `TOGGLE_MAINTAIN_MODE` `GAME_STATE_CLOSED` branch is not ported
+        // (PARITY GAP).
+        game.setGameState(GameState_t.GAME_STATE_NORMAL)
 
         // `Webhook::run` (webhook.cpp:39-44): the send loop arms on the server
         // lifecycle and reschedules itself on the Maintenance lane; the
@@ -822,6 +955,13 @@ class CanaryServer(
      * the stored record, advances the record and fires each registered `record` event with
      * `(playersRecord, previousRecord)`. The CAS keeps the counters safe for concurrent
      * logins; the Lua callbacks themselves stay confined to the WorldCommit lane.
+     *
+     * The record it compares against is the `Game::playersRecord` value the
+     * `GAME_STATE_INIT` arm loaded from `server_config` ([start] seeds this
+     * tracker from it). PARITY GAP: the C++ `updatePlayersRecord` persistence
+     * (game.cpp:9638-9644) is not called from this login-path tracker, so a new
+     * peak is only persisted by the `Game::checkPlayersRecord` path the port
+     * does not invoke.
      */
     internal fun checkPlayersRecord(): Boolean {
         val current = playersOnline.get()
