@@ -3,6 +3,7 @@ package org.opentibia.canary.creatures.players
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.creatures.Creature
+import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.creatures.grouping.Party
@@ -58,16 +59,34 @@ class PlayerExperienceHooksStateTest {
 
     @Test
     fun `onGainExperience routes monster kills through the active shared party`() {
+        // player.cpp:6713: `target && !target->getPlayer() && ...`; a player
+        // target (target->getPlayer() != null) never routes through the
+        // shared-experience sink.
         val player = newPlayer()
         val leader = newPlayer()
         player.setParty(Party(leader))
-        val monster = newPlayer()
+        val monster = Monster(id = 2, name = "Rat", maxHealth = 20, health = 20, position = Position(101, 100, 7))
 
         player.onGain(500, monster, sharedActive = { true }, sharedEnabled = { true })
 
         assertThat(sharedCalls).containsExactly(500L to monster)
         assertThat(baseCalls).isEmpty()
         assertThat(gainCalls).isEmpty()
+    }
+
+    @Test
+    fun `onGainExperience keeps a player target on the base pipeline`() {
+        // `!target->getPlayer()` (player.cpp:6713) is false for a player.
+        val player = newPlayer()
+        val leader = newPlayer()
+        player.setParty(Party(leader))
+        val playerTarget = newPlayer()
+
+        player.onGain(500, playerTarget, sharedActive = { true }, sharedEnabled = { true })
+
+        assertThat(sharedCalls).isEmpty()
+        assertThat(baseCalls).containsExactly(500L to playerTarget)
+        assertThat(gainCalls).containsExactly(500L to playerTarget)
     }
 
     @Test

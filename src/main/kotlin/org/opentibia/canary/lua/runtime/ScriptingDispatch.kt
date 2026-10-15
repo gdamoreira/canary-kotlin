@@ -5,7 +5,9 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.items.Item
+import org.opentibia.canary.lua.registry.LuaMoveEvent
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.map.Tile
 
 /**
  * Runtime entry point for the Lua event families that are not driven by an inbound packet
@@ -307,6 +309,105 @@ class ScriptingDispatch(
     ): Boolean = submitMove(itemId, REMOVE_ITEM_EVENT_TYPE) {
         LuaEventDispatcher.moveEventOnRemoveItem(environment, itemId, moveItem, tileItem, pos)
     }
+
+    /**
+     * `MoveEvents::onCreatureMove(creature, tile, eventType)`
+     * (src/lua/creature/movement.cpp:290-322): the tile's position-registered
+     * event fires first, then the events registered on the tile's ground and
+     * stacked items, in tile order; a callback returning `false` stops the item
+     * scan exactly like the C++ `step == 0` break. `fromPosition` is
+     * `creature->getLastPosition()` (`MoveEvent::executeStep`,
+     * movement.cpp:738-741). The firings are posted to the WorldCommit lane so
+     * Lua callbacks never run on a Netty I/O thread (AGENTS.md 1.2).
+     */
+    fun moveEventsOnCreatureMove(creature: Creature, tile: Tile, eventType: String): Boolean {
+        val events = environment.moveEvents
+        val firings = mutableListOf<Pair<LuaMoveEvent, Item?>>()
+        events.getEvent(tile, eventType)?.let { firings.add(it to null) }
+        for (tileItem in moveEventTileItems(tile)) {
+            val event = events.getEvent(tileItem, eventType) ?: continue
+            firings.add(event to tileItem)
+        }
+        if (firings.isEmpty()) {
+            return false
+        }
+
+        dispatcher.dispatch(DispatcherLane.WorldCommit) {
+            val fromPosition = creature.getLastPosition()
+            for ((event, item) in firings) {
+                val proceed = LuaEventDispatcher.moveEventExecuteStep(
+                    environment,
+                    event,
+                    creature,
+                    item,
+                    tile.position,
+                    fromPosition,
+                )
+                // movement.cpp:315-317: `if (step == 0) break;`.
+                if (!proceed) {
+                    break
+                }
+            }
+        }
+        return true
+    }
+
+    /**
+     * `MoveEvents::onItemMove(item, tile, isAdd)`
+     * (src/lua/creature/movement.cpp:344-390): for a removal the
+     * `MOVE_EVENT_REMOVE_ITEM` registration of the tile position and of the
+     * moving item fire first; for an addition the `MOVE_EVENT_ADD_ITEM_ITEMTILE`
+     * registrations of the tile's ground and stacked items fire in tile order,
+     * receiving the moving item and the registered flat item like the C++
+     * `fireAddRemItem(item, tileItem, pos)` pair. The C++
+     * `MOVE_EVENT_ADD_ITEM`/`MOVE_EVENT_REMOVE_ITEM_ITEMTILE` lookups are inert:
+     * the Lua `type()` mapping and items.xml both register only
+     * `MOVE_EVENT_ADD_ITEM_ITEMTILE`/`MOVE_EVENT_REMOVE_ITEM`
+     * (move_event_functions.cpp:98-103, item_parse.cpp:1037-1038). A callback
+     * returning `false` stops the item scan like the C++ `step == 0` break.
+     */
+    fun moveEventsOnItemMove(item: Item, tile: Tile, isAdd: Boolean): Boolean {
+        val events = environment.moveEvents
+        val firings = mutableListOf<Triple<LuaMoveEvent, Item, Item?>>()
+        if (!isAdd) {
+            // C++ movement.cpp:355-363: `getEvent(tile, MOVE_EVENT_REMOVE_ITEM)`
+            // then `getEvent(item, MOVE_EVENT_REMOVE_ITEM)`.
+            events.getEvent(tile, REMOVE_ITEM_EVENT_TYPE)?.let { firings.add(Triple(it, item, null)) }
+            events.getEvent(item, REMOVE_ITEM_EVENT_TYPE)?.let { firings.add(Triple(it, item, null)) }
+        } else {
+            for (tileItem in moveEventTileItems(tile)) {
+                // C++ movement.cpp:365-388: the MOVE_EVENT_ADD_ITEM_ITEMTILE scan.
+                val event = events.getEvent(tileItem, ADD_ITEM_EVENT_TYPE) ?: continue
+                firings.add(Triple(event, item, tileItem))
+            }
+        }
+        if (firings.isEmpty()) {
+            return false
+        }
+
+        dispatcher.dispatch(DispatcherLane.WorldCommit) {
+            for ((event, moveItem, tileItem) in firings) {
+                val proceed = LuaEventDispatcher.moveEventExecuteAddRemItem(
+                    environment,
+                    event,
+                    moveItem,
+                    tileItem,
+                    tile.position,
+                )
+                if (!proceed) {
+                    break
+                }
+            }
+        }
+        return true
+    }
+
+    /**
+     * `MoveEvents::onCreatureMove`/`onItemMove`'s
+     * `getFirstIndex()..getLastIndex()` scan (movement.cpp:300-320, 365-388):
+     * the ground and every stacked item can carry a registered move event.
+     */
+    private fun moveEventTileItems(tile: Tile): List<Item> = listOfNotNull(tile.ground) + tile.items
 
     // --- Confinement helpers ---------------------------------------------------------
 

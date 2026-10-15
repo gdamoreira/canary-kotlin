@@ -1874,7 +1874,7 @@ open class Tile(override val position: Position) : Cylinder {
 
     // --- notifications --------------------------------------------------------
 
-    /** `Tile::postAddNotification` (src/items/tile.cpp:1666-1709); spectator sends and movement scripts are PARITY GAPS. */
+    /** `Tile::postAddNotification` (src/items/tile.cpp:1666-1709); spectator sends are a PARITY GAP. */
     override fun postAddNotification(thing: Thing?, oldParent: Cylinder?, index: Int, link: CylinderLink) {
         if (thing == null) {
             return
@@ -1887,19 +1887,27 @@ open class Tile(override val position: Position) : Cylinder {
             } else if (hasFlag(TileFlags.TILESTATE_TRASHHOLDER.value)) {
                 getTrashHolder()?.addThing(thing)
             }
+
+            // calling movement scripts (tile.cpp:1702-1707)
+            val creature = thing.getCreature()
+            if (creature != null) {
+                dispatchCreatureMoveEvent(creature, MOVE_EVENT_STEP_IN)
+            } else {
+                thing.getItem()?.let { item -> dispatchItemMoveEvent(item, isAdd = true) }
+            }
         }
     }
 
     /**
      * `Tile::postRemoveNotification` (src/items/tile.cpp:1711-1736): the
      * multifloor player spectators of the tile are resolved once, a tile left
-     * with more than eight things is refreshed through [onUpdateTile], and
-     * every spectator receives `Player::postRemoveNotification(..., LINK_NEAR)`.
+     * with more than eight things is refreshed through [onUpdateTile],
+     * every spectator receives `Player::postRemoveNotification(..., LINK_NEAR)`,
+     * and the removed thing runs the `g_moveEvents()` step-out/item-remove
+     * scripts (`MoveEvents::onCreatureMove`/`onItemMove`, tile.cpp:1727-1734).
      *
-     * PARITY GAPS: the `g_moveEvents().onCreatureMove(MOVE_EVENT_STEP_OUT)` /
-     * `onItemMove(item, tile, false)` movement scripts are not called (Lua
-     * move-event layer); a standalone tile without a wired map resolves no
-     * spectators because the `Spectators` query runs through `g_game().map`.
+     * A standalone tile without a wired map resolves no spectators and reaches
+     * no move-event host because both run through the map.
      */
     override fun postRemoveNotification(thing: Thing?, newParent: Cylinder?, index: Int, link: CylinderLink) {
         if (thing == null) {
@@ -1916,6 +1924,24 @@ open class Tile(override val position: Position) : Cylinder {
         for (spectator in spectators) {
             (spectator as? Player)?.postRemoveNotification(thing, newParent, index, CylinderLink.LINK_NEAR)
         }
+
+        // calling movement scripts (tile.cpp:1727-1734)
+        val creature = thing.getCreature()
+        if (creature != null) {
+            dispatchCreatureMoveEvent(creature, MOVE_EVENT_STEP_OUT)
+        } else {
+            thing.getItem()?.let { item -> dispatchItemMoveEvent(item, isAdd = false) }
+        }
+    }
+
+    /** `g_moveEvents().onCreatureMove(creature, tile, eventType)` reach (tile.cpp:1704, 1729). */
+    private fun dispatchCreatureMoveEvent(creature: Creature, eventType: String) {
+        map?.moveEventsOnCreatureMove?.invoke(creature, this, eventType)
+    }
+
+    /** `g_moveEvents().onItemMove(item, tile, isAdd)` reach (tile.cpp:1706, 1733). */
+    private fun dispatchItemMoveEvent(item: Item, isAdd: Boolean) {
+        map?.moveEventsOnItemMove?.invoke(item, this, isAdd)
     }
 
     /** `Tile::onUpdateTile` (src/items/tile.cpp:682-689): every player spectator refreshes the tile. */
@@ -1948,6 +1974,14 @@ open class Tile(override val position: Position) : Cylinder {
         /** `ITEM_WALKABLE_SEA_START`/`ITEM_WALKABLE_SEA_END` (src/utils/utils_definitions.hpp:657-658). */
         private const val ITEM_WALKABLE_SEA_START = 629
         private const val ITEM_WALKABLE_SEA_END = 634
+
+        /**
+         * `MOVE_EVENT_STEP_IN`/`MOVE_EVENT_STEP_OUT`
+         * (src/lua/lua_definitions.hpp:81-82) as the port's `MoveEvents` registry
+         * keys; the tile hooks pass them through the `g_moveEvents()` seam.
+         */
+        private const val MOVE_EVENT_STEP_IN = "stepin"
+        private const val MOVE_EVENT_STEP_OUT = "stepout"
 
         /**
          * Expert-field custom attribute names (expert_pvp.cpp:36-43), kept beside

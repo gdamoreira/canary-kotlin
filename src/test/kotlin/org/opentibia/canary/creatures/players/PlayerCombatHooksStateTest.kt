@@ -29,8 +29,10 @@ import org.opentibia.canary.map.Position
  * - `Player::onAttackedCreatureDrainHealth` (player.cpp:6563-6575) is a
  *   `Creature::onAttackedCreatureDrainHealth` override on the [Player] class,
  *   so the credit rides the virtual dispatch.
- * - `Player::onTargetCreatureGainHealth` (player.cpp:6577-6594) stays an
- *   extension seam (its base member is the port's handler list).
+ * - `Player::onTargetCreatureGainHealth` (player.cpp:6577-6594) is the
+ *   `Creature::onTargetCreatureGainHealth` override on the [Player] class, so
+ *   `Creature::gainHealth`'s `healer->onTargetCreatureGainHealth` call
+ *   (creature.cpp:889) reaches the party credit.
  *
  * `g_game().sendSingleSoundEffect` and `Player::sendStats()` are call-site
  * seams; `Monster::isHostile` (monster.cpp:295-297) resolves through the
@@ -86,7 +88,10 @@ class PlayerCombatHooksStateTest {
     @Test
     fun `drainMana triggers the attacked hook, drains mana and records damage points`() {
         // Player::drainMana (player.cpp:3549-3552) over
-        // Creature::drainMana (creature.cpp:901-907).
+        // Creature::drainMana (creature.cpp:901-907). The virtual
+        // `Player::changeMana` (player.cpp:6765-6772) refreshes the stats once
+        // and `Player::drainMana`'s own tail refreshes them again, exactly as
+        // the C++ flow does.
         val player = newPlayer()
         val attacker = newPlayer(id = 9, name = "Enemy")
         var stats = 0
@@ -96,7 +101,7 @@ class PlayerCombatHooksStateTest {
 
         assertThat(player.mana).isEqualTo(30)
         assertThat(player.getDamageMap()[attacker.id]?.total).isEqualTo(20)
-        assertThat(stats).isEqualTo(1)
+        assertThat(stats).isEqualTo(2)
     }
 
     @Test
@@ -217,67 +222,78 @@ class PlayerCombatHooksStateTest {
     // --- Player::onTargetCreatureGainHealth --------------------------------------
 
     @Test
-    fun `onTargetCreatureGainHealth requires a party`() {
-        // `if (target && m_party)` (6577).
-        val player = newPlayer()
-        val monster = Monster(id = 2, name = "Rat", maxHealth = 20, health = 20, position = Position(101, 100, 7))
-        var ticks = 0
-
-        player.onTargetCreatureGainHealth(
-            target = monster,
-            points = 30,
-            getPlayer = { null },
-            updatePlayerTicks = { ticks++ },
-        )
-
-        assertThat(ticks).isZero()
-    }
-
-    @Test
-    fun `onTargetCreatureGainHealth credits a partnered summon master`() {
-        // 6579-6593: the target's master player decides the shared-exp credit.
+    fun `gainHealth rides the virtual dispatch into the Player party credit`() {
+        // Creature::gainHealth (creature.cpp:886-891) calls
+        // `healer->onTargetCreatureGainHealth(target, healthGain)`, so the
+        // Player override (player.cpp:6577-6594) runs through the summon's
+        // master and credits `Party::updatePlayerTicks`.
         val leader = newPlayer()
-        val member = newPlayer()
+        val member = newPlayer(id = 2, name = "Member")
         val party = Party(leader)
         party.invitePlayer(member)
         party.joinParty(member)
+        member.setFlag(PlayerFlags_t.NotGainInFight)
+        assertThat(party.isSharedExperienceEnabled()).isFalse()
 
-        val summon = Monster(id = 2, name = "Summon", maxHealth = 20, health = 20, position = Position(101, 100, 7))
+        val summon = Monster(id = 3, name = "Summon", maxHealth = 100, health = 50, position = Position(101, 100, 7))
         summon.setMaster(member)
-        var ticks = 0
 
-        leader.onTargetCreatureGainHealth(
-            target = summon,
-            points = 30,
-            getPlayer = { creature -> if (creature === member) member else null },
-            updatePlayerTicks = { ticks++ },
-        )
+        summon.gainHealth(leader, 30)
 
-        assertThat(ticks).isEqualTo(1)
+        assertThat(summon.health).isEqualTo(80)
+        assertThat(party.isSharedExperienceEnabled()).isTrue()
     }
 
     @Test
-    fun `onTargetCreatureGainHealth ignores non-partner masters`() {
-        // `if (isPartner(tmpPlayer))` (6592).
+    fun `gainHealth requires a healer party`() {
+        // `if (target && m_party)` (player.cpp:6577).
+        val member = newPlayer(id = 2, name = "Member")
+        val party = Party(member)
+        val healer = newPlayer(id = 9, name = "Healer")
+        val summon = Monster(id = 3, name = "Summon", maxHealth = 100, health = 50, position = Position(101, 100, 7))
+        summon.setMaster(member)
+
+        summon.gainHealth(healer, 30)
+
+        assertThat(summon.health).isEqualTo(80)
+        assertThat(party.isSharedExperienceEnabled()).isFalse()
+    }
+
+    @Test
+    fun `gainHealth ignores non-partner masters`() {
+        // `if (isPartner(tmpPlayer))` (player.cpp:6592).
         val leader = newPlayer()
-        val outsider = newPlayer()
+        val member = newPlayer(id = 2, name = "Member")
         val party = Party(leader)
-        party.invitePlayer(outsider)
-        party.joinParty(outsider)
+        party.invitePlayer(member)
+        party.joinParty(member)
+        member.setFlag(PlayerFlags_t.NotGainInFight)
 
-        val stranger = newPlayer()
-        val summon = Monster(id = 2, name = "Summon", maxHealth = 20, health = 20, position = Position(101, 100, 7))
+        val stranger = newPlayer(id = 9, name = "Stranger")
+        val summon = Monster(id = 3, name = "Summon", maxHealth = 100, health = 50, position = Position(101, 100, 7))
         summon.setMaster(stranger)
-        var ticks = 0
 
-        leader.onTargetCreatureGainHealth(
-            target = summon,
-            points = 30,
-            getPlayer = { creature -> if (creature === stranger) stranger else null },
-            updatePlayerTicks = { ticks++ },
-        )
+        summon.gainHealth(leader, 30)
 
-        assertThat(ticks).isZero()
+        assertThat(party.isSharedExperienceEnabled()).isFalse()
+    }
+
+    @Test
+    fun `gainHealth leaves a direct party-member target to the master path`() {
+        // player.cpp:6579-6581: `isPartner(tmpPlayer)` is evaluated with a null
+        // `tmpPlayer`, so the first branch can never reassign the target
+        // player; only the master branch (6582-6588) credits.
+        val leader = newPlayer()
+        val member = newPlayer(id = 2, name = "Member")
+        val party = Party(leader)
+        party.invitePlayer(member)
+        party.joinParty(member)
+        member.setFlag(PlayerFlags_t.NotGainInFight)
+
+        member.gainHealth(leader, 30)
+
+        assertThat(member.health).isEqualTo(130)
+        assertThat(party.isSharedExperienceEnabled()).isFalse()
     }
 
     // --- Player::isPartner -------------------------------------------------------

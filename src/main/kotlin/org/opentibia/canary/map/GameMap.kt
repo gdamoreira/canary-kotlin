@@ -14,6 +14,7 @@ import org.opentibia.canary.game.movement.getDistanceZ
 import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.game.zones.Zone
 import org.opentibia.canary.game.zones.Zones
+import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemProperty
 import org.opentibia.canary.map.cache.MapCache
 import org.opentibia.canary.map.cache.MapSector as CacheMapSector
@@ -81,6 +82,26 @@ class GameMap(
      * inline, mirroring the non-movement-commit C++ branch.
      */
     var scheduleMoveEvents: ((() -> Unit) -> Unit) = { it() }
+
+    /**
+     * `g_moveEvents().onCreatureMove(creature, tile, MOVE_EVENT_STEP_IN|STEP_OUT)`
+     * seam (src/items/tile.cpp:1704, 1729) read by
+     * [Tile.postAddNotification]/[Tile.postRemoveNotification]. The value is the
+     * port's `stepin`/`stepout` registry key. The composition root binds the
+     * world `ScriptingDispatch`-backed host
+     * (`moveEventsOnCreatureMove`, src/lua/creature/movement.cpp:290-322); an
+     * unbound map keeps the inert default.
+     */
+    var moveEventsOnCreatureMove: ((Creature, Tile, String) -> Boolean)? = null
+
+    /**
+     * `g_moveEvents().onItemMove(item, tile, isAdd)` seam
+     * (src/items/tile.cpp:1706, 1733). The composition root binds the world
+     * `ScriptingDispatch`-backed host (`moveEventsOnItemMove`,
+     * src/lua/creature/movement.cpp:344-390); an unbound map keeps the inert
+     * default.
+     */
+    var moveEventsOnItemMove: ((Item, Tile, Boolean) -> Boolean)? = null
 
     /**
      * `IOMapSerialize::saveHouseInfo` (src/io/iomapserialize.cpp:391-401) seam

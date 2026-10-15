@@ -2,9 +2,11 @@ package org.opentibia.canary.lua.registry
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.items.Item
 import org.opentibia.canary.lua.bindings.MoveEventBindings
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.map.Tile
 
 class MoveEventsTest {
     private fun envWithEvents(): Pair<LuaEnvironment, MoveEvents> {
@@ -118,5 +120,68 @@ class MoveEventsTest {
         )
         assertThat(events.all()).isEmpty()
         assertThat(env.getGlobal("result").toboolean()).isFalse()
+    }
+
+    // --- MoveEvents::getEvent lookups (src/lua/creature/movement.cpp:168-288) ---
+
+    @Test
+    fun `a position-only move event registers and resolves by tile`() {
+        // `MoveEvents::registerLuaPositionEvent` (movement.cpp:84-104) and
+        // `getEvent(tile, eventType)` (movement.cpp:278-288).
+        val (env, events) = envWithEvents()
+        env.globals.set("trapPos", env.userdata.wrap("Position", Position(10, 20, 7)))
+        env.loadChunk(
+            """
+            local trap = MoveEvent()
+            function trap.onStepIn(creature, item, position, fromPosition) return true end
+            trap:type("stepin")
+            trap:position(trapPos)
+            trap:register()
+            """.trimIndent()
+        )
+
+        assertThat(events.getByPosition(Position(10, 20, 7))).hasSize(1)
+        assertThat(events.getEvent(Tile(Position(10, 20, 7)), "stepin")).isNotNull
+        assertThat(events.getEvent(Tile(Position(10, 20, 7)), "stepout")).isNull()
+        assertThat(events.getEvent(Tile(Position(11, 20, 7)), "stepin")).isNull()
+    }
+
+    @Test
+    fun `getEvent resolves unique id before action id before item id`() {
+        // `MoveEvents::getEvent(item, eventType)` (movement.cpp:230-276):
+        // UNIQUEID -> ACTIONID -> item id, first match wins.
+        val (env, events) = envWithEvents()
+        env.loadChunk(
+            """
+            local byItem = MoveEvent()
+            function byItem.onAddItem(moveItem, tileItem, position) return true end
+            byItem:type("additem")
+            byItem:id(4000)
+            byItem:register()
+
+            local byAction = MoveEvent()
+            function byAction.onAddItem(moveItem, tileItem, position) return true end
+            byAction:type("additem")
+            byAction:aid(77)
+            byAction:register()
+
+            local byUnique = MoveEvent()
+            function byUnique.onAddItem(moveItem, tileItem, position) return true end
+            byUnique:type("additem")
+            byUnique:uid(55)
+            byUnique:register()
+            """.trimIndent()
+        )
+
+        val bare = Item(4000)
+        assertThat(events.getEvent(bare, "additem")).isSameAs(events.getByItemId(4000).first())
+
+        val withAction = Item(4000).also { it.setActionId(77) }
+        assertThat(events.getEvent(withAction, "additem")).isSameAs(events.getByActionId(77).first())
+
+        val withUnique = Item(4000).also { it.setActionId(77); it.setUniqueId(55) }
+        assertThat(events.getEvent(withUnique, "additem")).isSameAs(events.getByUniqueId(55).first())
+
+        assertThat(events.getEvent(bare, "stepin")).isNull()
     }
 }

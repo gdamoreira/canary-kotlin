@@ -2853,6 +2853,12 @@ class Game(
         // creature.cpp:1565-1583). Without it condition damage attaches but
         // never drains (condition.cpp:1998-2031 receives a null target).
         creature.conditionTarget = conditionTargetOf(creature)
+        // `g_game().addPlayerMana` reach of `Player::changeMana`
+        // (player.cpp:6769): the placed player's mana changes broadcast the
+        // party mana percent (game.cpp:9326-9331).
+        if (creature is Player) {
+            creature.addPlayerMana = ::addPlayerMana
+        }
 
         // `Creature::enqueueAsyncTask`'s `g_dispatcher()` and the shared
         // `getCreatureAsyncTaskBuckets` state (creature.cpp:34-55,
@@ -3130,12 +3136,31 @@ class Game(
             if (remainder > 0) {
                 if (item.count == remainder) {
                     addThing(toTile, item, index)
+                    val itemIndex = toTile.getThingIndex(item)
+                    if (itemIndex != -1) {
+                        toTile.postAddNotification(item, null, itemIndex)
+                    }
                 } else {
-                    addThing(toTile, cloneItem(item, remainder), index)
+                    val remainderItem = cloneItem(item, remainder)
+                    addThing(toTile, remainderItem, index)
+                    val itemIndex = toTile.getThingIndex(remainderItem)
+                    if (itemIndex != -1) {
+                        toTile.postAddNotification(remainderItem, null, itemIndex)
+                    }
+                }
+            } else {
+                // Fully merged with toItem (game.cpp:2758-2765).
+                val itemIndex = toTile.getThingIndex(toItem)
+                if (itemIndex != -1) {
+                    toTile.postAddNotification(toItem, null, itemIndex)
                 }
             }
         } else {
             addThing(toTile, item, index)
+            val itemIndex = toTile.getThingIndex(item)
+            if (itemIndex != -1) {
+                toTile.postAddNotification(item, null, itemIndex)
+            }
         }
 
         return ReturnValue.NOERROR
@@ -12976,14 +13001,45 @@ class Game(
      * `COMBAT_MANADRAIN` block roll, the creature-event callback and the
      * `game.cpp:9226` `target->drainMana(attacker, manaLoss)` credit
      * (`creature.cpp:901-907` -> `addDamagePoints`), so a mana drain populates
-     * the damage map like the health path. The `CHARM_VOIDINVERSION` inversion,
-     * the defensive bestiary charm run (`game.cpp:9195-9223`) and the
-     * `updateInputAnalyzer` tail are not ported (PARITY GAPs).
+     * the damage map like the health path. The `CHARM_VOIDINVERSION` inversion
+     * (game.cpp:9078-9094) flips a `COMBAT_MANADRAIN` component into a restore
+     * when the target's charm matches the attacking monster and the tier chance
+     * roll passes. The defensive bestiary charm run (`game.cpp:9195-9223`) and
+     * the `updateInputAnalyzer` tail are not ported (PARITY GAPs).
      */
     fun combatChangeMana(attacker: Creature?, target: Creature, damage: CombatDamage): Boolean {
         var manaChange = damage.primaryValue + damage.secondaryValue
         val attackerPlayer = attacker as? Player
         val targetPlayer = target as? Player
+        val attackerMonster = attacker as? Monster
+
+        // Charm rune (target as player) - Void Inversion (game.cpp:9078-9094):
+        // `parseRacebyCharm(CHARM_VOIDINVERSION)` must match the attacking
+        // monster's raceid and the charm's tier chance must beat
+        // `normal_random(0, 100)`; the inversion only applies to a drain.
+        if (targetPlayer != null && attackerMonster != null) {
+            val playerCharmRaceid = targetPlayer.features.bestiary.parseRacebyCharm(CharmRune.CHARM_VOIDINVERSION)
+            if (playerCharmRaceid != 0) {
+                val mType = getMonsterTypeByName(attackerMonster.name)
+                if (mType != null && playerCharmRaceid == mType.info.raceid) {
+                    val charm = getBestiaryCharm(CharmRune.CHARM_VOIDINVERSION)
+                    val charmTier = getCharmTier(targetPlayer, CharmRune.CHARM_VOIDINVERSION)
+                    if (charm != null && charm.getChance(charmTier) > normalRandom(0, 100) && manaChange < 0) {
+                        damage.primaryValue = if (damage.primaryType == CombatType.MANADRAIN) {
+                            -damage.primaryValue
+                        } else {
+                            damage.primaryValue
+                        }
+                        damage.secondaryValue = if (damage.secondaryType == CombatType.MANADRAIN) {
+                            -damage.secondaryValue
+                        } else {
+                            damage.secondaryValue
+                        }
+                        manaChange = damage.primaryValue + damage.secondaryValue
+                    }
+                }
+            }
+        }
 
         if (manaChange > 0) {
             if (isUnmarkedBlackSkull(attackerPlayer, targetPlayer)) {
