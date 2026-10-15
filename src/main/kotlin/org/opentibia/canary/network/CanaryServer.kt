@@ -334,6 +334,11 @@ class CanaryServer(
      * `Game::playerAnswerModalWindow` (game.cpp:11144-11176) reaches the
      * attached `modalwindow` creature events.
      */
+    /** Dialect of the booted [dataSource] (MariaDB/PostgreSQL/H2), resolved once at construction. */
+    private val sqlDialectValue: SqlDialect = dataSource?.let { source ->
+        runCatching { source.connection.use { SqlDialect.from(it) } }.getOrDefault(SqlDialect.POSTGRESQL)
+    } ?: SqlDialect.POSTGRESQL
+
     override val game: Game = suppliedGame ?: Game(
         gameMap,
         this.dispatcher,
@@ -426,6 +431,9 @@ class CanaryServer(
         }
 
     init {
+        // Wave 73: bind the detected SQL dialect on the world seams (the
+        // generated statements are dialect-specific: MariaDB vs PostgreSQL/H2).
+        game.sqlDialect = { sqlDialectValue }
         // `CanaryServer::setWorldType` (src/canary_server.cpp:319-333): the
         // configured WORLD_TYPE maps onto `Game::setWorldType` (game.cpp:926).
         // An unknown value keeps the WORLD_TYPE_PVP default and warns instead of

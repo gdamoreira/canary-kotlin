@@ -658,7 +658,7 @@ class Game(
      * composition root wires the dialect detected from the live connection
      * (`SqlDialect.from`, wave 73 K3).
      */
-    private val sqlDialect: () -> SqlDialect = { SqlDialect.MARIADB },
+    var sqlDialect: () -> SqlDialect = { SqlDialect.MARIADB },
     /** `g_vocations()` (game.cpp:9968, 10021) seam for the highscore queries. */
     private val vocations: Vocations? = null,
     /** `IOLoginData::loadPlayerById` (game.cpp:1436, 12378) seam. */

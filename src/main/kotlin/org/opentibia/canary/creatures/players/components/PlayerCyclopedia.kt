@@ -192,7 +192,7 @@ class PlayerCyclopedia(
      * upstream's MariaDB until the composition root wires the detected dialect
      * (`SqlDialect.from`, wave 73 K3).
      */
-    private val sqlDialect: () -> SqlDialect = { SqlDialect.MARIADB },
+    var sqlDialect: () -> SqlDialect = { SqlDialect.MARIADB },
     /** `g_game().getPlayerByID(playerID)` (`player_cyclopedia.cpp:43, 161`). */
     private val playersByID: (Int) -> CyclopediaPlayer? = { null },
     /** `g_game().getSummaryKeyByType(type)` (`player_cyclopedia.cpp:30, 222, 228, 232, 252`). */

@@ -506,6 +506,8 @@ class GameHandler(
         // placed (protocolgame.cpp:1023). The injected loader drives the same
         // load; without one the handler keeps the stub shell.
         val activePlayer = loadSessionPlayer(characterMatch.name, account)
+        // Wave 73: the cyclopedia's SQL is dialect-specific; bind the world dialect.
+        activePlayer?.let { player -> player.features.cyclopedia.sqlDialect = game.sqlDialect }
         if (activePlayer == null) {
             sendDisconnect(ctx, "Your character could not be loaded, please contact an administrator.")
             return

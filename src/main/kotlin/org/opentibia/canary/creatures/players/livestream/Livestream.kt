@@ -185,7 +185,7 @@ class LivestreamManager(
      * composition root wires the detected dialect (`SqlDialect.from`, wave 73
      * K3).
      */
-    private val sqlDialect: () -> SqlDialect = { SqlDialect.MARIADB },
+    var sqlDialect: () -> SqlDialect = { SqlDialect.MARIADB },
 ) {
 
     /** `LivestreamManager::Session` (livestream.hpp:60-72). */

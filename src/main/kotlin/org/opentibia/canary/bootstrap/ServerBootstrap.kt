@@ -694,7 +694,9 @@ class ServerBootstrap(
             // (protocolgame.cpp:12380). `casterClient` resolves `Player::getClient()`
             // as the session transport (a `LivestreamClient`); a player without a
             // client models `player->client == nullptr`.
-            world.livestream = livestreamManager(configManager)
+            world.livestream = livestreamManager(configManager).also { manager ->
+                manager.sqlDialect = { sqlDialectOf(source) }
+            }
             // Wave 69 F4: `Game::checkGiftOfLife`'s cooldown reduction
             // (player_wheel.cpp:3155-3170, `reduceAllSpellsCooldownTimer(60000)`)
             // drives the owner's wheel, so the world `Game` seam binds to
@@ -1023,6 +1025,11 @@ private fun vocationRates(configManager: ConfigManager): VocationRates {
  * (`Player::setLivestreamViewers`, the throwing `PlayerFunctionsExtra` seam)
  * and the `active_livestream_casters` persistence are not wired yet.
  */
+/** Dialect of the booted [source]; falls back to PostgreSQL when metadata is unavailable. */
+private fun sqlDialectOf(source: DataSource): org.opentibia.canary.database.SqlDialect =
+    runCatching { source.connection.use { org.opentibia.canary.database.SqlDialect.from(it) } }
+        .getOrDefault(org.opentibia.canary.database.SqlDialect.POSTGRESQL)
+
 private fun livestreamManager(configManager: ConfigManager): LivestreamManager {
     fun value(name: String): Int {
         val key = ConfigKeys.byName(name) ?: return 0
