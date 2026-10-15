@@ -35,6 +35,7 @@ import org.opentibia.canary.creatures.players.ITEM_MALE_CORPSE
 import org.opentibia.canary.creatures.players.PlayerActionTimers
 import org.opentibia.canary.creatures.players.PlayerDeathState
 import org.opentibia.canary.creatures.players.PlayerExperienceState
+import org.opentibia.canary.creatures.players.PlayerLightState
 import org.opentibia.canary.creatures.players.PlayerTask
 import org.opentibia.canary.creatures.players.PlayerTownState
 import org.opentibia.canary.creatures.players.PlayerWalkState
@@ -2265,6 +2266,26 @@ class Player(
         val maxStepSpeed =
             if (hasFlag(PlayerFlags_t.SetMaxSpeed)) PLAYER_MAX_STAFF_SPEED else PLAYER_MAX_SPEED
         return maxOf(PLAYER_MIN_SPEED, minOf(maxStepSpeed, getSpeed()))
+    }
+
+    /**
+     * `Player::itemsLight` composition (player.hpp:1712, player.cpp:6284-6305):
+     * the strongest `CONST_SLOT_FIRST..CONST_SLOT_LAST` inventory slot light.
+     * The world's inventory-change producers drive `Player::updateItemsLight`
+     * through their own composed state (`Game.playerUpdateItemsLight`), so this
+     * instance refreshes itself on read like the C++ stored value and only
+     * [getCreatureLight] consumes it.
+     */
+    private val itemsLightState = PlayerLightState(
+        slotItems = { Slots_t.entries.mapNotNull { getInventoryItem(it) } },
+    )
+
+    /** `Player::getCreatureLight` (player.cpp:6277-6282): the stronger of the internal and items light wins. */
+    override fun getCreatureLight(): LightInfo {
+        itemsLightState.updateItemsLight(internal = true)
+        val internal = super.getCreatureLight()
+        val items = itemsLightState.itemsLight
+        return if (internal.level > items.level) internal else items
     }
 
     /** `Player::getAccountType()` (player.cpp:12627-12629): `NORMAL` without an account. */

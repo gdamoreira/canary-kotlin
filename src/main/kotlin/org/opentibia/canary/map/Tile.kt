@@ -15,6 +15,8 @@ import org.opentibia.canary.creatures.players.pvp.ExpertPvp
 import org.opentibia.canary.creatures.players.pvp.ExpertPvpRelationContext
 import org.opentibia.canary.creatures.players.pvp.ExpertPvpRelationResult
 import org.opentibia.canary.creatures.players.pvp.PvpMode_t
+import org.opentibia.canary.creatures.players.postRemoveNotification
+import org.opentibia.canary.creatures.players.sendUpdateTile
 import org.opentibia.canary.game.CylinderFlags
 import org.opentibia.canary.game.movement.Teleport
 import org.opentibia.canary.game.zones.TileFlags
@@ -49,11 +51,13 @@ import kotlin.math.max
  * queries, zone membership.
  *
  * PARITY GAPS (need `g_game()`/spectators/`g_moveEvents()`/dispatcher):
- * `onAddTileItem`/`onUpdateTileItem`/`onRemoveTileItem`/`onUpdateTile` client
- * sends, `browseFields` remaps, automatic carpet propagation, clean-tile
+ * `onAddTileItem`/`onUpdateTileItem`/`onRemoveTileItem` client sends,
+ * `browseFields` remaps, automatic carpet propagation, clean-tile
  * scheduling, movement-script calls, `Zone::itemAdded`/`thingAdded` callbacks,
  * the floor-change `ItemType::floorChange` bit, mailbox/depot tile flags and
- * `safeCall`. The `queryAdd` creature branch is ported with the injected
+ * `safeCall`. The `postRemoveNotification` spectator sends are ported through
+ * the wired map's `Spectators` query; `postAddNotification` spectator sends
+ * remain a gap. The `queryAdd` creature branch is ported with the injected
  * `g_game()`/`g_configManager()`/`ExpertPvp` seams.
  */
 open class Tile(override val position: Position) : Cylinder {
@@ -1886,10 +1890,38 @@ open class Tile(override val position: Position) : Cylinder {
         }
     }
 
-    /** `Tile::postRemoveNotification` (src/items/tile.cpp:1711-1736); spectator sends and movement scripts are PARITY GAPS. */
+    /**
+     * `Tile::postRemoveNotification` (src/items/tile.cpp:1711-1736): the
+     * multifloor player spectators of the tile are resolved once, a tile left
+     * with more than eight things is refreshed through [onUpdateTile], and
+     * every spectator receives `Player::postRemoveNotification(..., LINK_NEAR)`.
+     *
+     * PARITY GAPS: the `g_moveEvents().onCreatureMove(MOVE_EVENT_STEP_OUT)` /
+     * `onItemMove(item, tile, false)` movement scripts are not called (Lua
+     * move-event layer); a standalone tile without a wired map resolves no
+     * spectators because the `Spectators` query runs through `g_game().map`.
+     */
     override fun postRemoveNotification(thing: Thing?, newParent: Cylinder?, index: Int, link: CylinderLink) {
         if (thing == null) {
             return
+        }
+
+        val mapAccess = map ?: return
+        val spectators = Spectators(mapAccess).find<Player>(position, true)
+
+        if (getThingCount() > 8) {
+            onUpdateTile(spectators.data())
+        }
+
+        for (spectator in spectators) {
+            (spectator as? Player)?.postRemoveNotification(thing, newParent, index, CylinderLink.LINK_NEAR)
+        }
+    }
+
+    /** `Tile::onUpdateTile` (src/items/tile.cpp:682-689): every player spectator refreshes the tile. */
+    private fun onUpdateTile(spectators: List<Creature>) {
+        for (spectator in spectators) {
+            (spectator as? Player)?.sendUpdateTile(this, position)
         }
     }
 
