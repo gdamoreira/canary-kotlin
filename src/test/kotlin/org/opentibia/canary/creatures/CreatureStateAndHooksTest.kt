@@ -97,6 +97,60 @@ class CreatureStateAndHooksTest {
     }
 
     @Test
+    fun `player canSee uses the client viewport and requires an attached client`() {
+        // player.cpp:1402-1407: `if (!client) return false;` and then
+        // `client->canSee(pos)` (ProtocolGame::canSee, protocolgame.cpp:2392-2414),
+        // the asymmetric MAP_MAX_CLIENT_VIEW_PORT_X/Y = 8/6 window with the +1
+        // east/south margin — not the creature +/-11 map viewport.
+        val player = Player(
+            id = 1,
+            name = "Client",
+            maxHealth = 150,
+            health = 150,
+            position = Position(100, 100, 7),
+        )
+
+        assertThat(player.canSee(Position(100, 100, 7))).isFalse()
+
+        player.hasClient = { true }
+
+        assertThat(player.canSee(Position(100, 100, 7))).isTrue()
+        assertThat(player.canSee(Position(109, 107, 7))).isTrue()
+        assertThat(player.canSee(Position(92, 94, 7))).isTrue()
+        assertThat(player.canSee(Position(110, 100, 7))).isFalse()
+        assertThat(player.canSee(Position(91, 100, 7))).isFalse()
+        assertThat(player.canSee(Position(100, 108, 7))).isFalse()
+        assertThat(player.canSee(Position(100, 93, 7))).isFalse()
+        assertThat(player.canSee(Position(100, 100, 8))).isFalse()
+
+        // The same offsets sit inside the wider Creature::canSee map viewport
+        // (MAP_MAX_VIEW_PORT_X/Y = 11, creature.cpp:89-91), which is what the
+        // Player client-viewport override tightens.
+        assertThat(Creature.canSee(player.position, Position(110, 100, 7), 11, 11)).isTrue()
+        assertThat(Creature.canSee(player.position, Position(91, 100, 7), 11, 11)).isTrue()
+        assertThat(Creature.canSee(player.position, Position(100, 108, 7), 11, 11)).isTrue()
+        assertThat(Creature.canSee(player.position, Position(100, 93, 7), 11, 11)).isTrue()
+    }
+
+    @Test
+    fun `player canSee keeps the underground floor limit of the client viewport`() {
+        // protocolgame.cpp:2398-2408: surface players never see underground,
+        // underground players see +/- MAP_LAYER_VIEW_LIMIT floors.
+        val underground = Player(
+            id = 1,
+            name = "Dwarf",
+            maxHealth = 150,
+            health = 150,
+            position = Position(100, 100, 8),
+        ).apply { hasClient = { true } }
+
+        assertThat(underground.canSee(Position(100, 100, 6))).isTrue()
+        assertThat(underground.canSee(Position(100, 100, 10))).isTrue()
+        assertThat(underground.canSee(Position(100, 100, 5))).isFalse()
+        assertThat(underground.canSee(Position(100, 100, 11))).isFalse()
+    }
+
+    @Test
     fun `canSeeCreature hides invisible creatures when sight is not granted`() {
         // creature.cpp:93-98: without canSeeInvisibility an invisible creature is hidden.
         val observer = monster(1)

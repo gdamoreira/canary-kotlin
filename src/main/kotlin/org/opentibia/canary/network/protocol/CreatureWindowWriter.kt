@@ -259,7 +259,12 @@ object CreatureWindowWriter {
         out.writeByte(skull)
     }
 
-    /** `sendCreatureSquare` current-profile branch (protocolgame.cpp:4733-4738). */
+    /**
+     * `sendCreatureSquare` current-profile branch (protocolgame.cpp:4733-4738).
+     * The `isCipsoft860Profile` 0x86 branch (protocolgame.cpp:4730-4732) is
+     * intentionally out of scope: the port serializes the current protocol
+     * profile only (wave 63 A4).
+     */
     fun writeCreatureSquare(out: ByteBuf, id: Long, color: Int) {
         out.writeByte(PACKET_CREATURE_SQUARE)
         out.writeIntLE(id.toInt())

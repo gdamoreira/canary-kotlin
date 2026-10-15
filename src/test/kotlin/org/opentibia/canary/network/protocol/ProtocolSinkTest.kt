@@ -265,6 +265,28 @@ class ProtocolSinkTest {
     }
 
     @Test
+    fun `sendCreatureAppear falls back to the tile refresh for an out-of-range stack position`() {
+        // player.cpp:8791-8794: stackpos < 0 || >= 10 -> sendUpdateTile(tile, pos).
+        // The in-memory transport mirrors the Netty PlayerFrameSink transport.
+        val map = GameMap()
+        val tile = map.getOrCreateTile(observerPosition)
+        tile.ground = Item(id = 100)
+        repeat(10) { index ->
+            tile.internalAddThing(
+                Monster(5100L + index, "Crowd $index", maxHealth = 100, health = 80, position = observerPosition),
+            )
+        }
+        val rat = monster()
+        tile.internalAddThing(rat)
+        val sink = InMemoryProtocolSink(observer(), map)
+
+        sink.sendCreatureAppear(rat, rat.position, isLogin = false)
+
+        assertThat(sink.frames).hasSize(1)
+        assertThat(sink.frames[0]).startsWith(*bytes(0x69, 0x64, 0x00, 0xC8, 0x00, 0x07))
+    }
+
+    @Test
     fun `sendCreatureMove writes the 0x6C removal when only the old position is visible`() {
         val sink = InMemoryProtocolSink(observer())
         val oldPos = Position(101, 200, 7)

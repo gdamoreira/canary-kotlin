@@ -309,8 +309,8 @@ open class Tile(override val position: Position) : Cylinder {
             }
         } else {
             for (tileCreature in _creatures) {
-                if (!tileCreature.isInvisible()) {
-                    // Player::isInGhostMode() is not modelled (PARITY GAP).
+                // tile.cpp:362-366: only non-ghost creatures are returned.
+                if (!tileCreature.isInvisible() && !tileCreature.isInGhostMode()) {
                     return tileCreature
                 }
             }
@@ -335,8 +335,8 @@ open class Tile(override val position: Position) : Cylinder {
         } else {
             for (index in _creatures.indices.reversed()) {
                 val tileCreature = _creatures[index]
-                if (!tileCreature.isInvisible()) {
-                    // Player::isInGhostMode() is not modelled (PARITY GAP).
+                // tile.cpp:389-393: only non-ghost creatures are returned.
+                if (!tileCreature.isInvisible() && !tileCreature.isInGhostMode()) {
                     return tileCreature
                 }
             }
@@ -852,8 +852,8 @@ open class Tile(override val position: Position) : Cylinder {
 
             if (_creatures.isNotEmpty() && flags and CylinderFlags.FLAG_IGNOREBLOCKCREATURE == 0) {
                 for (tileCreature in _creatures) {
-                    // Player::isInGhostMode() is not modelled (PARITY GAP).
-                    if (!tileCreature.isInvisible()) {
+                    // tile.cpp:850: only non-ghost creatures occupy the tile.
+                    if (!tileCreature.isInGhostMode()) {
                         return ReturnValue.NOTENOUGHROOM
                     }
                 }
@@ -898,8 +898,8 @@ open class Tile(override val position: Position) : Cylinder {
 
             if (_creatures.isNotEmpty() && item.isBlocking() && flags and CylinderFlags.FLAG_IGNOREBLOCKCREATURE == 0) {
                 for (tileCreature in _creatures) {
-                    // Player::isInGhostMode() is not modelled (PARITY GAP).
-                    if (!tileCreature.isInvisible()) {
+                    // tile.cpp:911: only non-ghost creatures occupy the tile.
+                    if (!tileCreature.isInGhostMode()) {
                         return ReturnValue.NOTENOUGHROOM
                     }
                 }
