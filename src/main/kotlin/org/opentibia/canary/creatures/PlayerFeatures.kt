@@ -255,11 +255,12 @@ class PlayerFeatures(
     val vipRepository: VipRepository = InMemoryVipRepository(),
     /**
      * `m_player.client` (`player_vip.cpp:42, 60, 88, 92`) resolved per call by
-     * [vip]. The Kotlin `ProtocolSink` does not model the VIP senders yet, so
-     * the composition root binds this seam once the protocol layer exposes
-     * them (PARITY GAP); a `null` result keeps every VIP send inert.
+     * [vip]. The sink surface serializes the VIP senders, so the default
+     * resolves the player's attached `protocolSink` (`ProtocolSink : VipClient`);
+     * a detached player (`protocolSink == null`) models `m_player.client ==
+     * nullptr` and keeps every VIP send inert.
      */
-    private val vipClient: () -> VipClient? = { null },
+    private val vipClient: () -> VipClient? = { wheelPlayer?.protocolSink },
     /**
      * `g_ioprey()` prey engine core (`src/io/ioprey.cpp`); Canary reaches it
      * through the global singleton and `Player::initializePrey` uses it, so it

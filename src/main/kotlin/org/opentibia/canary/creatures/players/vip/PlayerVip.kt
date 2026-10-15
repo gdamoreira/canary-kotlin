@@ -144,6 +144,8 @@ class InMemoryVipRepository : VipRepository {
 /**
  * `ProtocolGame` VIP senders used by `PlayerVIP`
  * (protocolgame.hpp:451-453). A `null` client models `m_player.client == nullptr`.
+ * The protocol sink surface implements this interface, so an attached
+ * `Player.protocolSink` is the live client that serializes these frames.
  */
 interface VipClient {
     /** `ProtocolGame::sendVIP` (protocolgame.cpp:9374-9405). */
