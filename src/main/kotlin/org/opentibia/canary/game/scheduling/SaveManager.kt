@@ -24,6 +24,9 @@ private val logger = KotlinLogging.logger {}
  * [guildSaver], [mapSaver], [keyValueSaver]). Player scheduling keeps a
  * [WeakReference] plus the per-GUID generation token, mirroring the C++
  * `std::weak_ptr` + `m_playerMap` validation (save_manager.cpp:118-149).
+ * The online set Canary reads from `g_game().getPlayers()` is fed through
+ * [registerOnlinePlayer]/[unregisterOnlinePlayer], bound by the composition
+ * root to the world session install/removal (`Game::addPlayer`/`removePlayer`).
  *
  * PARITY GAPS: the `Player::PlayerLock` serialization lock and the dead-player
  * `loginPosition` rewrite (`player->isDead()`, save_manager.cpp:41-44) need
@@ -48,12 +51,23 @@ class SaveManager(
 
     val onlinePlayerCount: Int get() = onlinePlayers.size
 
+    /**
+     * `SaveManager` online-set insert for `Game::addPlayer` (game.cpp:11624):
+     * the newest session of a character owns the registration, so a relog
+     * replaces the previous object exactly like `Game::players` does.
+     */
     fun registerOnlinePlayer(player: Player) {
         onlinePlayers[player.id] = player
     }
 
+    /**
+     * `SaveManager` online-set release for `Game::removePlayer`
+     * (game.cpp:11631). Only the exact [player] object is released: a stale
+     * session must not unregister a newer login of the same character
+     * (GUID re-resolution points at a later session, save_manager.cpp:120-149).
+     */
     fun unregisterOnlinePlayer(player: Player) {
-        onlinePlayers.remove(player.id)
+        onlinePlayers.remove(player.id, player)
     }
 
     fun saveAll(): Int {

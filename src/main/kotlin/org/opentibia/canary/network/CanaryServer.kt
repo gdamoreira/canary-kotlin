@@ -28,6 +28,7 @@ import org.opentibia.canary.game.scheduling.CreatureAsyncTaskBuckets
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.scheduling.MonsterComputeService
+import org.opentibia.canary.game.scheduling.SaveManager
 import org.opentibia.canary.io.IOMarket
 import org.opentibia.canary.io.iologindata.IOLoginData
 import org.opentibia.canary.items.Item
@@ -63,6 +64,14 @@ interface ListenerBoot {
      * live client connection before the dispatcher and persistence are drained.
      */
     fun closeConnections() {}
+
+    /**
+     * The world `g_game()` this listener serves; `null` for lifecycle test
+     * doubles that own no world. [ServerBootstrap] resolves the late-bound
+     * world seams (`Game::getGuild`/`addGuild`, game.cpp:11727-11755) through
+     * it once the listener exists.
+     */
+    val game: Game? get() = null
 }
 
 /**
@@ -130,6 +139,14 @@ class CanaryServer(
      * (protocolgame.cpp:1023). `null` keeps the stub player shell.
      */
     internal val ioLoginData: IOLoginData? = null,
+    /**
+     * `g_saveManager()` (src/game/scheduling/save_manager.cpp): the server-owned
+     * save rotation. When injected, the world session install/removal
+     * (`Game::addPlayer`/`removePlayer`, game.cpp:11624/11631) feeds the
+     * online set [SaveManager.saveAll] rotates, exactly like Canary's
+     * `SaveManager::saveAll` reads `g_game().getPlayers()` (:31-52).
+     */
+    private val saveManager: SaveManager? = null,
 ) : ListenerBoot {
     /**
      * `g_dispatcher()` (`CanaryServer::run`, src/canary_server.cpp:132): the
@@ -205,7 +222,7 @@ class CanaryServer(
      * booted [monsters] registry backs the `g_monsters().getMonsterType` provider
      * (`Monster::m_monsterType`, monster.hpp:363).
      */
-    val game: Game = suppliedGame ?: Game(
+    override val game: Game = suppliedGame ?: Game(
         gameMap,
         this.dispatcher,
         itemTypes = itemTypes,
@@ -217,6 +234,16 @@ class CanaryServer(
         monsterHost = monsterPipelinesHost,
         monsterTypeProvider = { name -> monsters?.getMonsterType(name) },
     )
+
+    init {
+        // `SaveManager` session rotation (save_manager.cpp:150-171): the world
+        // session install/removal (`Game::addPlayer`/`removePlayer`,
+        // game.cpp:11624/11631) feeds the online set `saveAll` rotates.
+        saveManager?.let { manager ->
+            game.registerOnlinePlayer = manager::registerOnlinePlayer
+            game.unregisterOnlinePlayer = manager::unregisterOnlinePlayer
+        }
+    }
 
     init {
         // Coordinator call-site bindings of `MonsterPipelinesHost` over the

@@ -28,6 +28,7 @@ import org.opentibia.canary.database.JdbcPlayerSpellsRepository
 import org.opentibia.canary.database.JdbcPlayerStashRepository
 import org.opentibia.canary.database.JdbcPlayerStorageRepository
 import org.opentibia.canary.database.JdbcVipRepository
+import org.opentibia.canary.game.Game
 import org.opentibia.canary.game.scheduling.CreatureAsyncTaskBuckets
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.scheduling.MonsterComputeConfig
@@ -72,6 +73,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import javax.sql.DataSource
 
 private val logger = KotlinLogging.logger {}
@@ -258,6 +260,13 @@ class GameComposition(
      * through it (`SaveManager::doSavePlayer`, save_manager.cpp:150-171).
      */
     val playerSavePath: PlayerSavePath,
+    /**
+     * `g_saveManager()` (src/game/scheduling/save_manager.cpp): the root-owned
+     * save rotation handed to the listener, which binds the world session
+     * install/removal (`Game::addPlayer`/`removePlayer`, game.cpp:11624/11631)
+     * to [SaveManager.registerOnlinePlayer]/[SaveManager.unregisterOnlinePlayer].
+     */
+    val saveManager: SaveManager? = null,
 )
 
 /** Creates the network listener (`CanaryServer`) from the booted services. */
@@ -298,6 +307,7 @@ internal fun defaultListenerFactory(rsaCipher: RsaCipher = RsaCipher.fromEnviron
             monsters = composition.monsters,
             vocations = composition.vocations,
             ioLoginData = composition.playerSavePath.loginData,
+            saveManager = composition.saveManager,
         ).also { server ->
             // `Player::isOffline()` (player.hpp:481): the world seams
             // (`Game.playerAcceptMarketOffer`, game.cpp:10919/10943) read the
@@ -445,12 +455,19 @@ class ServerBootstrap(
         // production.
         val saveTransaction = PlayerSaveTransaction(source)
         val subloadRepository = DbPlayerSubloadRepository(saveTransaction)
+        // The `loadPlayerGuild` registry seams (`g_game().getGuild`/`addGuild`,
+        // iologindata_load_player.cpp:411-412) resolve the world `Game` the
+        // listener owns; it is created after this composition, so the world
+        // reference is late-bound and read only from session loads.
+        val worldGame = AtomicReference<Game?>(null)
         val subloads = IOLoginDataSubloads(
             subloadRepository = subloadRepository,
             storageRepository = DbPlayerStorageRepository(saveTransaction),
             vip = JdbcVipRepository(saveTransaction),
             guildMemberships = DbGuildMembershipRepository(saveTransaction),
             ioGuild = IOGuild(JdbcGuildRepository(saveTransaction)),
+            getGuild = { id -> worldGame.get()?.getGuild(id) },
+            addGuild = { guild -> worldGame.get()?.addGuild(guild) },
             warnUnsafeScripts = warnUnsafeScripts(configManager),
             isLookTypeRegistered = { lookType -> appearances.outfits.containsKey(lookType) },
         )
@@ -491,9 +508,21 @@ class ServerBootstrap(
             gameMap,
             runningDispatcher,
             luaEnvironment,
-            GameComposition(source, itemTypes, imbuements, monsters, vocations, configManager, buckets, computeService, playerSavePath),
+            GameComposition(
+                source,
+                itemTypes,
+                imbuements,
+                monsters,
+                vocations,
+                configManager,
+                buckets,
+                computeService,
+                playerSavePath,
+                saveManager,
+            ),
         )
         listener = server
+        worldGame.set(server.game)
         server.start()
         logger.info { "${config.serverName} server online!" }
     }
