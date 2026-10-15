@@ -32,7 +32,8 @@ import javax.sql.DataSource
  *    src/creatures/players/animus_mastery/animus_mastery.cpp:62-73) as an
  *    insertion-ordered list of lowercased monster names; persisted in the
  *    Canary single column (V21). The wave-36 `player_animus_mastery` relational
- *    table (V13) is superseded and no longer read or written.
+ *    table (V13) is superseded: it is no longer read or written and V22 drops
+ *    it.
  *
  * PARITY GAPS: the C++ load resolves tracker race ids through
  * `g_monsters().getMonsterTypeByRaceId` and drops unknown ids; the port returns
@@ -194,8 +195,8 @@ class IOBestiaryPersistence(
      * `IOLoginDataSave::savePlayerFirst`,
      * iologindata_save_player.cpp:293-299): every mastery is written as one
      * length-prefixed UTF-8 record into the Canary single column. The wave-36
-     * `player_animus_mastery` rows are left untouched, exactly like Canary,
-     * which never had that table.
+     * `player_animus_mastery` table was dropped by V22, so the column is the
+     * only stored representation, exactly like Canary.
      */
     fun saveAnimusMastery(playerId: Long, masteries: List<String>) {
         val stream = PropWriteStream()

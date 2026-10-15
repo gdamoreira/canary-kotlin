@@ -49,11 +49,10 @@ data class PlayerConditionSkullRecord(
  * The `players` look columns `IOLoginDataLoad::loadPlayerDefaultOutfit`
  * (iologindata_load_player.cpp:291-317) reads from the same result row.
  *
- * PARITY GAP (schema): Canary's `players` row also carries `lookmounthead`,
- * `lookmountbody`, `lookmountlegs`, `lookmountfeet` and `lookfamiliarstype`
- * (schema.sql:144-148). Those columns are absent from the port's V1 schema
- * (`lookbody`..`lookaddons` only, V1__initial_schema.sql:48-53), so the record
- * (and the load) only carries the six available columns.
+ * Canary's `players` row also carries `lookmounthead`, `lookmountbody`,
+ * `lookmountlegs`, `lookmountfeet` and `lookfamiliarstype` (schema.sql:144-148);
+ * the port's V20 migration (`V20__player_lookmount_columns.sql`) adds those
+ * columns on top of the V1 core look columns (V1__initial_schema.sql:48-53).
  */
 data class PlayerOutfitRecord(
     val lookType: Int,
@@ -401,11 +400,12 @@ class IOLoginDataSubloads(
      * early return; this reproduces the in-place C++ mutation without a new
      * `Creature.kt` accessor.
      *
-     * PARITY GAP: the `lookmounthead`/`lookmountbody`/`lookmountlegs`/
-     * `lookmountfeet` and `lookfamiliarstype` columns of Canary's `players`
-     * row (schema.sql:144-148) do not exist in the port schema, so those
-     * `Outfit` fields are left at their constructed defaults and the second
-     * C++ unregistered-familiar-type guard is unreachable.
+     * PARITY NOTE (schema): the `lookmounthead`/`lookmountbody`/
+     * `lookmountlegs`/`lookmountfeet` and `lookfamiliarstype` columns of
+     * Canary's `players` row (schema.sql:144-148) are added by V20
+     * (`V20__player_lookmount_columns.sql`); the outfit sub-load applies them
+     * and the second unregistered-familiar-type guard once that half of the
+     * load is bound.
      */
     fun loadPlayerDefaultOutfit(player: Player) {
         val row = subloadRepository?.loadOutfit(player.id) ?: return

@@ -1,0 +1,16 @@
+-- Wave 63, task A5: drop the wave-36 interim animus mastery table.
+--
+-- Canary keeps the learned animus masteries as one insertion-ordered blob in
+-- `players`.`animus_mastery` (schema.sql:156, `mediumblob DEFAULT NULL`),
+-- written by `AnimusMastery::serialize` and read by `AnimusMastery::unserialize`
+-- (src/creatures/players/animus_mastery/animus_mastery.cpp:62-73) inside the
+-- inline `IOLoginDataSave::savePlayerFirst` / `IOLoginDataLoad::loadPlayerAnimusMastery`
+-- blocks (src/io/functions/iologindata_save_player.cpp:293-299,
+-- src/io/functions/iologindata_load_player.cpp:277-289).
+--
+-- V21 added that column and moved `IOBestiaryPersistence.loadAnimusMastery`/
+-- `saveAnimusMastery` onto it; the V13 relational table
+-- (V13__bestiary_bosstiary_persistence.sql:26-34) has not been read or written
+-- since, so it is dead state with no Canary counterpart. Drop it so the schema
+-- has a single authority for the mastery data.
+DROP TABLE IF EXISTS player_animus_mastery;

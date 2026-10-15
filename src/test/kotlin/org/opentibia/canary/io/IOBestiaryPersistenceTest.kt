@@ -13,7 +13,7 @@ import org.opentibia.canary.systems.bestiary.CharmRune
 import org.opentibia.canary.systems.bestiary.PlayerBestiaryState
 
 /**
- * H2 (Flyway V1-V21) round-trip tests for [IOBestiaryPersistence], transcribed
+ * H2 (Flyway V1-V22) round-trip tests for [IOBestiaryPersistence], transcribed
  * from Canary's bestiary persistence:
  *
  *  - `IOLoginDataLoad::loadPlayerBestiaryCharms`
@@ -202,7 +202,11 @@ class IOBestiaryPersistenceTest {
         }.getStream()
 
         assertThat(readAnimusMasteryColumn(1)).isEqualTo(expected)
-        assertThat(countAnimusMasteryInterimRows(1)).isZero()
+    }
+
+    @Test
+    fun `the migration chain drops the interim animus mastery table`() {
+        assertThat(interimAnimusTableExists()).isFalse()
     }
 
     @Test
@@ -240,12 +244,11 @@ class IOBestiaryPersistenceTest {
         }
     }
 
-    private fun countAnimusMasteryInterimRows(playerId: Long): Int = dataSource.connection.use { conn ->
-        conn.prepareStatement("SELECT COUNT(*) FROM player_animus_mastery WHERE player_id = ?").use { stmt ->
-            stmt.setLong(1, playerId)
-            stmt.executeQuery().use { rs ->
-                if (rs.next()) rs.getInt(1) else 0
-            }
+    private fun interimAnimusTableExists(): Boolean = dataSource.connection.use { conn ->
+        conn.prepareStatement(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'PLAYER_ANIMUS_MASTERY'",
+        ).use { stmt ->
+            stmt.executeQuery().use { rs -> rs.next() && rs.getInt(1) > 0 }
         }
     }
 }

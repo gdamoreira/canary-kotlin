@@ -1,9 +1,15 @@
 package org.opentibia.canary.bootstrap
 
 import com.zaxxer.hikari.HikariDataSource
+import io.netty.buffer.ByteBuf
+import io.netty.buffer.ByteBufAllocator
+import io.netty.buffer.UnpooledByteBufAllocator
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.account.InMemoryAccountRepository
+import org.opentibia.canary.combat.condition.Condition
+import org.opentibia.canary.combat.condition.ConditionId
+import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
 import org.opentibia.canary.config.ConfigSource
@@ -11,6 +17,7 @@ import org.opentibia.canary.config.ServerConfig
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.monsters.Monsters
+import org.opentibia.canary.creatures.players.components.PlayerStorageRow
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.database.DatabaseConfig
 import org.opentibia.canary.database.DatabaseConnectionFactory
@@ -28,6 +35,7 @@ import org.opentibia.canary.game.scheduling.CreatureAsyncTaskBuckets
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.scheduling.MonsterComputeConfig
 import org.opentibia.canary.game.scheduling.MonsterComputeService
+import org.opentibia.canary.io.IOBestiaryPersistence
 import org.opentibia.canary.io.appearances.Appearances
 import org.opentibia.canary.io.iologindata.IOLoginData
 import org.opentibia.canary.items.Item
@@ -39,6 +47,8 @@ import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.network.CanaryServer
 import org.opentibia.canary.network.ListenerBoot
+import org.opentibia.canary.network.protocol.ProtocolFrameSink
+import org.opentibia.canary.network.protocol.ProtocolSink
 import org.opentibia.canary.systems.imbuement.Imbuements
 import javax.sql.DataSource
 
@@ -176,6 +186,144 @@ class ServerBootstrapProductionCompositionTest {
     }
 
     @Test
+    fun `the production save path persists and restores conditions storage and animus`() {
+        val databaseBoot = TestDatabaseBoot("bootstrap_prod_persistence_${System.nanoTime()}")
+        var composition: GameComposition? = null
+        val bootstrap = bootstrap(
+            databaseBoot,
+            listenerFactory = ListenerFactory { _, _, _, _, _, booted ->
+                composition = booted
+                RecordingListener(mutableListOf())
+            },
+        )
+
+        bootstrap.run()
+        try {
+            val booted = composition!!
+            insertPlayer(booted.dataSource, 101L, "Root Hero")
+
+            val player = Player(
+                id = 101L,
+                name = "Root Hero",
+                maxHealth = 100,
+                health = 90,
+                capacity = 100_000.0,
+                position = Position(1000, 1000, 7),
+            )
+            newSessionSink(player)
+            player.features.storage.add(4000, 21)
+            player.features.animusMastery.add("Dragon")
+            assertThat(
+                player.addCondition(
+                    Condition.createCondition(
+                        id = ConditionId.CONDITIONID_DEFAULT,
+                        type = ConditionType.CONDITION_INFIGHT,
+                        ticks = 5_000,
+                    )!!,
+                ),
+            ).isTrue()
+
+            booted.playerSavePath.save(player)
+
+            assertThat(readConditionsColumn(booted.dataSource, 101L)).isNotEmpty()
+            assertThat(JdbcPlayerStorageRepository(booted.dataSource).load(101L))
+                .containsExactly(PlayerStorageRow(key = 4000, value = 21))
+            assertThat(IOBestiaryPersistence(booted.dataSource).loadAnimusMastery(101L))
+                .containsExactly("dragon")
+
+            val loaded = Player(
+                id = 101L,
+                name = "Root Hero",
+                maxHealth = 150,
+                health = 150,
+                capacity = 100_000.0,
+                position = Position(1000, 1000, 7),
+            )
+            assertThat(
+                booted.playerSavePath.loginData.loadPlayerById(loaded, 101L, disableIrrelevantInfo = false),
+            ).isTrue()
+            assertThat(loaded.features.storage.get(4000)).isEqualTo(21)
+            assertThat(loaded.storedConditionList.map { it.type }).contains(ConditionType.CONDITION_INFIGHT)
+            assertThat(loaded.features.animusMastery.getAnimusMasteries()).containsExactly("dragon")
+        } finally {
+            bootstrap.shutdown()
+        }
+    }
+
+    @Test
+    fun `the production save path flushes the online-only storage delta only for a session player`() {
+        val databaseBoot = TestDatabaseBoot("bootstrap_prod_offline_${System.nanoTime()}")
+        var composition: GameComposition? = null
+        val bootstrap = bootstrap(
+            databaseBoot,
+            listenerFactory = ListenerFactory { _, _, _, _, _, booted ->
+                composition = booted
+                RecordingListener(mutableListOf())
+            },
+        )
+
+        bootstrap.run()
+        try {
+            val booted = composition!!
+            insertPlayer(booted.dataSource, 101L, "Root Hero")
+
+            val offlinePlayer = offlineHero()
+            offlinePlayer.features.storage.add(1, 1)
+            assertThat(booted.playerSavePath.loginData.saveOnlyDataForOnlinePlayer(offlinePlayer)).isTrue()
+            assertThat(JdbcPlayerStorageRepository(booted.dataSource).load(101L)).isEmpty()
+
+            val onlinePlayer = offlineHero()
+            onlinePlayer.features.storage.add(2, 2)
+            newSessionSink(onlinePlayer)
+            assertThat(booted.playerSavePath.loginData.saveOnlyDataForOnlinePlayer(onlinePlayer)).isTrue()
+            assertThat(JdbcPlayerStorageRepository(booted.dataSource).load(101L))
+                .containsExactly(PlayerStorageRow(key = 2, value = 2))
+        } finally {
+            bootstrap.shutdown()
+        }
+    }
+
+    @Test
+    fun `the listener binds the world offline predicate to the session presence`() {
+        val databaseBoot = TestDatabaseBoot("bootstrap_prod_game_offline_${System.nanoTime()}")
+        databaseBoot.connect(null)
+        databaseBoot.migrate(databaseBoot.dataSource)
+        val service = inlineService()
+        val dispatcher = GameDispatcher(monsterComputeService = service)
+        val composition = GameComposition(
+            dataSource = databaseBoot.dataSource,
+            itemTypes = Items(),
+            imbuements = Imbuements(),
+            monsters = Monsters(),
+            vocations = Vocations(),
+            configManager = configManager(),
+            creatureAsyncTaskBuckets = CreatureAsyncTaskBuckets(dispatcher = { dispatcher }),
+            monsterComputeService = service,
+            playerSavePath = savePath(databaseBoot.dataSource),
+        )
+
+        try {
+            val server = defaultListenerFactory().create(
+                ServerConfig(loginPort = 0, gamePort = 0),
+                InMemoryAccountRepository(),
+                GameMap(),
+                dispatcher,
+                LuaEnvironment(),
+                composition,
+            ) as CanaryServer
+
+            val player = offlineHero()
+            assertThat(server.game.isOffline(player)).isTrue()
+
+            newSessionSink(player)
+            assertThat(server.game.isOffline(player)).isFalse()
+        } finally {
+            service.shutdown()
+            databaseBoot.dataSource.close()
+        }
+    }
+
+    @Test
     fun `the monster compute service starts with the configured queue capacity`() {
         val databaseBoot = TestDatabaseBoot("bootstrap_prod_compute_${System.nanoTime()}")
         var composition: GameComposition? = null
@@ -294,4 +442,37 @@ class ServerBootstrapProductionCompositionTest {
             }
         }
     }
+
+    private fun offlineHero(): Player = Player(
+        id = 101L,
+        name = "Root Hero",
+        maxHealth = 150,
+        health = 150,
+        capacity = 100_000.0,
+        position = Position(1000, 1000, 7),
+    )
+
+    /**
+     * A live session sink attached through `Player.protocolSink`
+     * (`Player::client`, GameHandler.kt:302): the port's session presence that
+     * `Player::isOffline` (player.hpp:481) is wired against.
+     */
+    private fun newSessionSink(player: Player): ProtocolSink =
+        object : ProtocolFrameSink(player, GameMap()) {
+            override fun frameAllocator(): ByteBufAllocator = UnpooledByteBufAllocator.DEFAULT
+
+            override fun writeFrame(frame: ByteBuf) {
+                frame.release()
+            }
+        }.also { player.protocolSink = it }
+
+    private fun readConditionsColumn(dataSource: DataSource, playerId: Long): ByteArray? =
+        dataSource.connection.use { conn ->
+            conn.prepareStatement("SELECT conditions FROM players WHERE id = ?").use { stmt ->
+                stmt.setLong(1, playerId)
+                stmt.executeQuery().use { rs ->
+                    if (rs.next()) rs.getBytes("conditions") else null
+                }
+            }
+        }
 }
