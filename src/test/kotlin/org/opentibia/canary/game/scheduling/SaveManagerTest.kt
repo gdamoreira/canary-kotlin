@@ -129,6 +129,22 @@ class SaveManagerTest {
     }
 
     @Test
+    fun `unregister keeps a newer registration for the same character`() {
+        val storage = CountingPlayerStorage()
+        val saveManager = SaveManager(storage)
+        val staleSession = Player(1, "Alice", 100, 100, position = Position(100, 100, 7))
+        val newSession = Player(1, "Alice", 150, 150, position = Position(200, 200, 7))
+        saveManager.registerOnlinePlayer(staleSession)
+        saveManager.registerOnlinePlayer(newSession)
+
+        saveManager.unregisterOnlinePlayer(staleSession)
+
+        assertThat(saveManager.onlinePlayerCount).isEqualTo(1)
+        assertThat(saveManager.saveAll()).isEqualTo(1)
+        assertThat(storage.saveCount).isEqualTo(1)
+    }
+
+    @Test
     fun `save all runs players in parallel when an executor is configured`() {
         val pool = Executors.newFixedThreadPool(2)
         try {

@@ -1585,6 +1585,23 @@ class Game(
     /** `g_saveManager().savePlayer(player)` seam (game.cpp:10791). */
     var savePlayer: (Player) -> Unit = { _ -> }
 
+    /**
+     * Session-install seam feeding the `SaveManager` online-player rotation:
+     * Canary's `SaveManager::saveAll` saves the players of
+     * `g_game().getPlayers()` (save_manager.cpp:31-52), so the port keeps that
+     * set in `SaveManager` and `Player::addList` -> `Game::addPlayer`
+     * (game.cpp:11624) must register the session. The composition root binds
+     * it to `SaveManager::registerOnlinePlayer`.
+     */
+    var registerOnlinePlayer: (Player) -> Unit = { _ -> }
+
+    /**
+     * Session-removal seam releasing the `SaveManager` registration
+     * (`Game::removePlayer`, game.cpp:11631); the composition root binds it to
+     * `SaveManager::unregisterOnlinePlayer`.
+     */
+    var unregisterOnlinePlayer: (Player) -> Unit = { _ -> }
+
     /** `Player::onReceiveMail()` (player.cpp) seam used by the accepted sell offer (game.cpp:11079). */
     var onReceiveMail: (Player) -> Unit = { _ -> }
 
@@ -1647,6 +1664,7 @@ class Game(
             }
         }
         bindCreatureAsyncTaskHost(player)
+        registerOnlinePlayer(player)
     }
 
     /**
@@ -1687,6 +1705,7 @@ class Game(
         if (player.name.isNotEmpty()) {
             wildcardTree.remove(player.name.lowercase())
         }
+        unregisterOnlinePlayer(player)
     }
 
     /** `Game::getPlayers` (src/game/game.hpp:577): online players keyed by creature id. */
