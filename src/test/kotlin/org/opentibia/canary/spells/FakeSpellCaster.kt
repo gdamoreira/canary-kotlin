@@ -56,6 +56,9 @@ class FakeSpellCaster(
     var attackedTarget: SpellTarget? = null
     var addConditionResult = true
 
+    /** `Player::getAimAtTargetSpells()` (`player.cpp:13369-13371`). */
+    var aimAtTargetSpellsValue: Set<Int> = emptySet()
+
     fun setFlag(flag: PlayerFlags_t) {
         flags.add(flag)
     }
@@ -120,6 +123,8 @@ class FakeSpellCaster(
     override fun getSpellBook(): SpellBook = book
 
     override fun getAttackedCreature(): SpellTarget? = attackedTarget
+
+    override fun getAimAtTargetSpells(): Set<Int> = aimAtTargetSpellsValue
 
     override fun addCondition(condition: Condition): Boolean {
         if (addConditionResult) {

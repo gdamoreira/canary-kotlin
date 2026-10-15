@@ -1,5 +1,6 @@
 package org.opentibia.canary.combat
 
+import org.opentibia.canary.combat.condition.ConditionPlayer
 import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.creatures.Skulls_t
 import org.opentibia.canary.creatures.monsters.Faction
@@ -18,10 +19,17 @@ import org.opentibia.canary.map.Position
  * auditable, mirroring the existing [CombatTarget] pattern.
  */
 
-/** Injected view of `Monster` used by the faction checks (`monster.cpp:267-273`). */
+/** Injected view of `Monster` used by the faction checks and combat events. */
 interface CombatMonster {
     /** `Monster::isEnemyFaction(faction)`. */
     fun isEnemyFaction(faction: Faction): Boolean
+
+    /**
+     * `Monster::onAttackedByPlayer(attackerPlayer)` (monster.cpp:600-625), fired
+     * by `Combat::CombatHealthFunc` when a player damages the monster
+     * (combat.cpp:895-899). No-op for monsters without a registered event.
+     */
+    fun onAttackedByPlayer(attackerPlayer: ConditionPlayer) {}
 }
 
 /**

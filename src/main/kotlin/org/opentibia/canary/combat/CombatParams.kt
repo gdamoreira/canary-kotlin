@@ -4,6 +4,25 @@ import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionType
 
 /**
+ * `ValueCallback` script callback (`src/creatures/combat/combat.hpp:26-40`),
+ * reduced to the resolved output of `ValueCallback::getMinMaxValues`
+ * (combat.cpp:1982-2068): the Lua function registered through
+ * `combat:setCallback` receives the player and the formula operands and
+ * returns the two integers the damage core feeds to `normal_random`.
+ *
+ * The callback scripts stay Lua (AGENTS.md 1.4); the bridge resolves the two
+ * returned numbers.
+ */
+fun interface CombatValueCallback {
+    /**
+     * The two `onGetPlayerMinMaxValues` numbers under the callback's formula
+     * type, or null when the C++ `reserveScriptEnv`/`setCallbackId` early
+     * return (combat.cpp:1983-1993) leaves the damage at 0.
+     */
+    fun getMinMaxValues(useCharges: Boolean): Pair<Int, Int>?
+}
+
+/**
  * Faithful port of Canary `struct CombatParams`
  * (src/creatures/combat/combat.hpp:82-110).
  *
@@ -12,10 +31,10 @@ import org.opentibia.canary.combat.condition.ConditionType
  * (the gates that decide whether `Game::combatBlockHit` calls
  * `Creature::blockHit` with defense/armor checks).
  *
- * PARITY GAP: the five `std::unique_ptr` callbacks (`valueCallback`,
- * `tileCallback`, `targetCallback`, `chainCallback`, `chainPickerCallback`)
- * are dependency-injection seams into the map/spell/chain systems and are not
- * part of this dispatch layer.
+ * PARITY GAP: the `tileCallback`, `targetCallback`, `chainCallback` and
+ * `chainPickerCallback` callbacks are dependency-injection seams into the
+ * map/spell/chain systems and are not part of this dispatch layer;
+ * [valueCallback] carries the resolved min/max values.
  */
 class CombatParams(
     /** `conditionList` (combat.hpp:83). */
@@ -62,4 +81,7 @@ class CombatParams(
 
     /** `chainEffect` (combat.hpp:109), `CONST_ME_NONE` in C++. */
     var chainEffect: Int = 0,
+
+    /** `valueCallback` (combat.hpp:84); null when no callback was registered. */
+    var valueCallback: CombatValueCallback? = null,
 )

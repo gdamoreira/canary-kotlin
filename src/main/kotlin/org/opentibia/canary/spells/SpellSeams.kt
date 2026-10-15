@@ -5,11 +5,13 @@ import org.opentibia.canary.account.AccountType
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.ZoneType
+import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.creatures.Skulls_t
 import org.opentibia.canary.creatures.WeaponType_t
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.game.zones.TileFlags
+import org.opentibia.canary.lua.registry.LuaSpell
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.network.protocol.MessageClass
 import org.opentibia.canary.systems.rewardchest.ReturnValue
@@ -146,6 +148,14 @@ interface SpellCaster {
     /** `Player::getAttackedCreature()` (`spells.cpp:1188`, `1216`). */
     fun getAttackedCreature(): SpellTarget?
 
+    /**
+     * `Player::getAimAtTargetSpells()` (`player.cpp:13369-13371`), read by
+     * `applyInstantSpellDirection` (`spells.cpp:52-54`) to turn a direction
+     * spell toward the primary axis of the attacked creature. Empty when no
+     * spell is marked to aim at the target.
+     */
+    fun getAimAtTargetSpells(): Set<Int> = emptySet()
+
     /** `Creature::addCondition(condition)` (`spells.cpp:858`, `869`, `882`). */
     fun addCondition(condition: Condition): Boolean
 
@@ -216,6 +226,15 @@ interface SpellWorld {
 
     /** `Game::getPlayersByAccount(account)` (`spells.cpp:87`). */
     fun getPlayersByAccount(account: Account?): List<SpellCaster>
+
+    /**
+     * `Combat::canDoCombat(player, tile, aggressive)` (src/creatures/combat/combat.cpp:376-426)
+     * reached from `Spell::playerRuneSpellCheck` (spells.cpp:683-694): resolves
+     * the tile at [position] and returns the combat gate, or
+     * `RETURNVALUE_NOTPOSSIBLE` when the tile is missing (spells.cpp:684-691).
+     */
+    fun canDoCombat(caster: SpellCaster, position: Position, aggressive: Boolean): ReturnValue =
+        ReturnValue.NOERROR
 }
 
 /**
@@ -231,4 +250,23 @@ interface SpellScriptRunner {
 
     /** `RuneSpell::executeCastSpell` (spells.cpp:1587-1611). */
     fun executeCastSpell(caster: SpellCaster, rune: RuneSpell, variant: LuaVariant, isHotkey: Boolean): Boolean
+}
+
+/**
+ * Lua bridge seam for the `onCastSpell` execution of a registry-backed monster
+ * spell block: `spellBlock.spell->castSpell(getMonster(), target)`
+ * (src/creatures/monsters/monster.cpp:1979, 2220) reaches
+ * `InstantSpell::executeCastSpell` (spells.cpp:1351-1373) or
+ * `RuneSpell::executeCastSpell` (spells.cpp:1587-1611), which push the caster
+ * and [LuaVariant] into the registered spell script. The scripts stay Lua
+ * (AGENTS.md 1.4), so the actor hands them to this seam instead.
+ */
+fun interface MonsterRegisteredSpellRunner {
+    /** The Lua callback result; `RuneSpell` receives the `isHotkey` flag (spells.cpp:1608). */
+    fun executeCastSpell(
+        creature: Creature,
+        spell: LuaSpell,
+        variant: LuaVariant,
+        isHotkey: Boolean,
+    ): Boolean
 }

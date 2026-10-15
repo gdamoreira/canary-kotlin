@@ -3,6 +3,7 @@ package org.opentibia.canary.spells
 import org.opentibia.canary.account.Account
 import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.systems.rewardchest.ReturnValue
 
 /** Injected world/config seam replacement for `g_game()`/`g_configManager()`. */
 class FakeSpellWorld(
@@ -20,6 +21,12 @@ class FakeSpellWorld(
         { _, _, _, _ -> true }
     var playerByName: (String) -> SpellTarget? = { null }
     var playersByAccount: (Account?) -> List<SpellCaster> = { emptyList() }
+
+    /** `Combat::canDoCombat(player, tile, aggressive)` return value. */
+    var canDoCombatResult: ReturnValue = ReturnValue.NOERROR
+
+    /** Every `(position, aggressive)` pair passed to [canDoCombat] in order. */
+    val canDoCombatCalls: MutableList<Pair<Position, Boolean>> = mutableListOf()
 
     /** Every sound effect dispatched through `g_game().sendDoubleSoundEffect`. */
     val doubleSounds: MutableList<Triple<Position, SoundEffect, SoundEffect>> = mutableListOf()
@@ -43,6 +50,11 @@ class FakeSpellWorld(
     override fun getPlayerByNameWildcard(name: String): SpellTarget? = playerByName(name)
 
     override fun getPlayersByAccount(account: Account?): List<SpellCaster> = playersByAccount(account)
+
+    override fun canDoCombat(caster: SpellCaster, position: Position, aggressive: Boolean): ReturnValue {
+        canDoCombatCalls.add(position to aggressive)
+        return canDoCombatResult
+    }
 }
 
 /** Test double for `Tile::hasFlag` (`spells.cpp:85`, `93`). */

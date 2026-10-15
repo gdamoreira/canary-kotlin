@@ -1,10 +1,20 @@
 package org.opentibia.canary.lua.bindings
 
+import org.luaj.vm2.LuaTable
+import org.luaj.vm2.LuaValue
+import org.opentibia.canary.creatures.Creature
+import org.opentibia.canary.creatures.Monster
+import org.opentibia.canary.creatures.Npc
+import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.vocations.Vocation
 import org.opentibia.canary.items.ItemType
 import org.opentibia.canary.lua.registry.LuaSpell
+import org.opentibia.canary.lua.registry.SpellType
 import org.opentibia.canary.lua.registry.Spells
 import org.opentibia.canary.lua.runtime.LuaEnvironment
+import org.opentibia.canary.spells.LuaVariant
+import org.opentibia.canary.spells.LuaVariantType
+import org.opentibia.canary.spells.MonsterRegisteredSpellRunner
 
 /**
  * Canonical owner of the `Spell` global and its metatable in the Kotlin port.
@@ -17,16 +27,23 @@ import org.opentibia.canary.lua.runtime.LuaEnvironment
  * It also holds the registry reference the `g_spells()` look-ups of the engine
  * resolve through, e.g. `Monsters::deserializeSpell` (monsters.cpp:77); Canary
  * reaches the process-wide singleton, the port keeps the [install]-created
- * instance.
+ * instance. The same applies to the registry-backed monster spell `onCastSpell`
+ * bridge ([monsterRegisteredSpellRunner]), which needs the environment the
+ * bindings were installed into.
  */
 object SpellBindings {
     @Volatile
     private var registry: Spells? = null
 
+    @Volatile
+    private var monsterSpellRunner: MonsterRegisteredSpellRunner =
+        MonsterRegisteredSpellRunner { _, _, _, _ -> false }
+
     fun install(env: LuaEnvironment, operations: SpellOperations = StandaloneSpellOperations): Spells {
         val spells = Spells()
         SpellFunctions.install(env, spells, operations)
         registry = spells
+        monsterSpellRunner = LuaMonsterRegisteredSpellRunner(env)
         return spells
     }
 
@@ -38,6 +55,89 @@ object SpellBindings {
      */
     fun getSpellByName(name: String): LuaSpell? =
         registry?.let { it.getRuneByName(name) ?: it.getInstantByName(name) }
+
+    /**
+     * The `onCastSpell` bridge for a registry-backed monster spell
+     * (`InstantSpell::executeCastSpell`, spells.cpp:1351-1373;
+     * `RuneSpell::executeCastSpell`, spells.cpp:1587-1611). Before [install] it
+     * is inert, exactly like a Canary spell whose `m_spellScriptId` was never
+     * loaded.
+     */
+    fun monsterRegisteredSpellRunner(): MonsterRegisteredSpellRunner = monsterSpellRunner
+}
+
+/**
+ * `LuaEnvironment`-backed [MonsterRegisteredSpellRunner]: pushes the creature
+ * userdata and the variant table exactly like `InstantSpell::executeCastSpell` /
+ * `RuneSpell::executeCastSpell` (spells.cpp:1351-1373, 1587-1611) and invokes
+ * the registered `onCastSpell` callback with the same argument order.
+ */
+internal class LuaMonsterRegisteredSpellRunner(
+    private val env: LuaEnvironment,
+) : MonsterRegisteredSpellRunner {
+
+    override fun executeCastSpell(
+        creature: Creature,
+        spell: LuaSpell,
+        variant: LuaVariant,
+        isHotkey: Boolean,
+    ): Boolean {
+        val callback = spell.onCastSpell
+        if (!callback.isfunction()) {
+            return false
+        }
+
+        // `RuneSpell::executeCastSpell` pushes `onCastSpell(creature, var, isHotkey)`
+        // (spells.cpp:1606-1610); the instant path pushes two arguments.
+        val args = if (spell.spellType == SpellType.RUNE) {
+            arrayOf(wrapCreature(creature), pushVariant(variant), LuaValue.valueOf(isHotkey))
+        } else {
+            arrayOf(wrapCreature(creature), pushVariant(variant))
+        }
+        // `callFunction(2|3)` returns the Lua boolean (spells.cpp:1372, 1610).
+        return callback.invoke(LuaValue.varargsOf(args)).arg1().toboolean()
+    }
+
+    /**
+     * Mirrors `Lua::setCreatureMetatable`: chooses the `Player`, `Monster` or
+     * `Npc` metatable based on the runtime creature, falling back to the shared
+     * `Creature`.
+     */
+    private fun wrapCreature(creature: Creature): LuaValue =
+        env.userdata.wrap(
+            when (creature) {
+                is Player -> "Player"
+                is Monster -> "Monster"
+                is Npc -> "Npc"
+                else -> "Creature"
+            },
+            creature,
+        )
+
+    /**
+     * Mirrors `Lua::pushVariant` (`src/lua/functions/lua_functions_loader.cpp:162-186`):
+     * a table carrying `type`, the type-specific value and `instantName`/`runeName`,
+     * with the `Variant` metatable.
+     */
+    private fun pushVariant(variant: LuaVariant): LuaValue {
+        val table = LuaTable()
+        table.set("type", LuaValue.valueOf(variant.type.ordinal))
+        when (variant.type) {
+            LuaVariantType.VARIANT_NUMBER -> table.set("number", LuaValue.valueOf(variant.number.toDouble()))
+            LuaVariantType.VARIANT_STRING -> table.set("string", LuaValue.valueOf(variant.text))
+            LuaVariantType.VARIANT_POSITION, LuaVariantType.VARIANT_TARGETPOSITION ->
+                table.set("pos", env.userdata.wrap("Position", variant.pos))
+            LuaVariantType.VARIANT_NONE -> Unit
+        }
+        table.set("instantName", LuaValue.valueOf(variant.instantName))
+        table.set("runeName", LuaValue.valueOf(variant.runeName))
+        table.setmetatable(env.userdata.metatable(VARIANT_TYPE))
+        return table
+    }
+
+    private companion object {
+        const val VARIANT_TYPE = "Variant"
+    }
 }
 
 /**

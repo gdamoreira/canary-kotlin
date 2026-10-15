@@ -4,6 +4,7 @@ import org.opentibia.canary.combat.condition.Buff
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionPlayer
 import org.opentibia.canary.combat.condition.ConditionType
+import org.opentibia.canary.creatures.Skulls_t
 
 /**
  * Test double for the injected [CombatTarget] seam.
@@ -35,6 +36,8 @@ class FakeCombatTarget(
     var canUseDefenseValue: Boolean = true
     var immuneConditionTypes: MutableSet<ConditionType> = mutableSetOf()
     var playerValue: ConditionPlayer? = null
+    var monsterValue: CombatMonster? = null
+    var skullValue: Skulls_t = Skulls_t.SKULL_NONE
 
     /** `Creature::getAbsorbPercent(combat)` (`creature.cpp:1979`). */
     var absorbPercentByType: MutableMap<CombatType, Int> = mutableMapOf()
@@ -109,6 +112,10 @@ class FakeCombatTarget(
     override fun getID(): Int = idValue
 
     override fun getPlayer(): ConditionPlayer? = playerValue
+
+    override fun getMonster(): CombatMonster? = monsterValue
+
+    override fun getSkull(): Skulls_t = skullValue
 
     override fun getAbsorbPercent(combatType: CombatType): Int = absorbPercentByType[combatType] ?: 0
 

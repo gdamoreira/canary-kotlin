@@ -1,5 +1,6 @@
 package org.opentibia.canary.combat
 
+import org.opentibia.canary.combat.condition.ConditionPlayer
 import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.creatures.Skulls_t
 import org.opentibia.canary.creatures.monsters.Faction
@@ -76,6 +77,13 @@ class FakeCombatMonster(
     var enemyFactions: MutableSet<Faction> = mutableSetOf(),
 ) : CombatMonster {
     override fun isEnemyFaction(faction: Faction): Boolean = faction in enemyFactions
+
+    /** Every `Monster::onAttackedByPlayer` argument in order. */
+    val attackedByPlayers: MutableList<ConditionPlayer> = mutableListOf()
+
+    override fun onAttackedByPlayer(attackerPlayer: ConditionPlayer) {
+        attackedByPlayers.add(attackerPlayer)
+    }
 }
 
 class FakeCombatTile(
