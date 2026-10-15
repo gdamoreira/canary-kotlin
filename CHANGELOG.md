@@ -730,8 +730,17 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 76: Wave 72 — Final Reduced-Port Tails (16:00 – 18:00)
+- **Drain credit** — mana drain attribution through `combatChangeMana`, `Player` drain override in virtual dispatch (party tick), condition-damage owner resolution + the field halving, MagicField step-in attribution (14 tests).
+- **Light & spectators** — `Player::getCreatureLight` folds the items light into the wire value; `Tile::postRemoveNotification` spectator sends (6 tests).
+- **Viewer & corpse updates** — `castViewerLogin` (livestream viewer session, 0xCA routing), `sendItemUpdateToClient` binding so corpse container updates emit (9 tests).
+- **GAME_STATE_INIT** — `Game::setGameState(INIT)` runs the wired INIT arm in C++ order (items price, spawns, raids, mounts, attached effects, MOTD, players record, global events, wheel data) (9 tests).
+- **798 suites / 8308 tests, all green**; all commits ancestry-verified.
+
+---
+
 ### Current Status
-- **Automated Tests**: **792 test suites / 8270 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **798 test suites / 8308 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.

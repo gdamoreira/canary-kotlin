@@ -43,7 +43,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | Monster engine (`monster.cpp`, 4,014 lines) | 198 unique `Monster::` methods | 89 name-matched + async pipelines + host + type state + barrier buckets | **~85%** | wave 51: barrier-parallel creature async buckets, budget/requeue/promotion/rollback |
 | Map engine (`map.cpp`) | — | — | **~85%** | sight/`canWalkTo`/pathing/caches/spectators/houses/towns (wave 38) |
 | Persistence (`iologindata*`, `iomapserialize`) | — | — | **~80%** | 24/24 iologindata, 10/10 iomapserialize, market/prey/bestiary/bosstiary/guild/storage (V10–V14) |
-| **Estimated full-parity completion** | — | — | **~99.9%** | tracked inventory complete; wave 71 closed damage attribution, the death tails (onKill, player corpse, dropCorpse protocol, metrics), the producer/transport tails (source cylinders, queryRemove, items light, Lua producers, 0xB3 registry, 0xCA resend) and the raid composition. What remains is the deferred list plus a few reduced-port tails |
+| **Estimated full-parity completion** | — | — | **~99.9%** | tracked inventory complete; wave 72 closed the final reduced-port tails (drain credit, light fold, tile spectators, viewer login, corpse updates, GAME_STATE_INIT). What remains is the structural Player-as-Cylinder refactor, a small reduced-model list and the deferred-by-design program |
 
 #### 1.2 Module completion (by inventory rows in §2)
 
@@ -261,11 +261,12 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 ### 3. Highest-Impact Gaps (ranked, verified)
 
-**The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Waves 63–71 closed
+**The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Waves 63–72 closed
 every planned tail. What remains:
 
-1. **Reduced-port tails** — mana drain attribution (`combatChangeMana`); the `Player::onAttackedCreatureDrainHealth` party-tick override in virtual dispatch; condition-damage/Lua-addHealth/MagicField drain credit; `castViewerLogin` (livestream viewer entry); `Player::getCreatureLight` wire fold (items light is composed but the sent value stays internal-only); `Tile.postRemoveNotification` spectator sends; notification parents (Player not a `Cylinder`); monster corpse container update through the unbound `sendItemUpdateToClient`; `setGameState(GAME_STATE_INIT)` boot trigger; mounts/MOTD/record parts of INIT.
-2. **Deferred by design** — live differential harness (packet-capture A/B vs a running Canary); CipSoft860/old-protocol profile; OpenTelemetry SDK/OStream periodic reader; micro-seams (KV LRU ordering, `DEBUG_LOG`, daemon flags, `TransportCodec` tails).
+1. **Structural (deliberate)** — the Kotlin `Player` is not a `Cylinder`: notification parents (`newParent`/`oldParent`) evaluate as null, so `requireListUpdate` always passes and source-cylinder notifications rely on explicit call sites. A real refactor, not a tail.
+2. **Reduced-model list** — production `ConditionTarget` implementation (`Creature.conditionTarget` unwired); the `MagicField` field model (no production instance creation, `ownerCreatureProvider` therefore inert); livestream broadcaster side (`setLivestreamViewers` inert, so `canWatch` rejects until wired); `map.spawnsNpc.startup()` + custom-map spawn loops; `ChatManager` boot composition (`g_chat().load()`); per-player mount definition copies unloaded (`PlayerFeatures`); players-record peak persistence; `setGameState` SHUTDOWN/CLOSED/maintain arms; `Player::changeMana` broadcast + `CHARM_VOIDINVERSION`; `Player::onTargetCreatureGainHealth` virtual dispatch; movement-script hooks (`onCreatureMove`/`onItemMove`).
+3. **Deferred by design** — live differential harness (packet-capture A/B vs a running Canary); CipSoft860/old-protocol profile; OpenTelemetry SDK/OStream periodic reader; micro-seams (KV LRU ordering, `DEBUG_LOG`, daemon flags, `TransportCodec` tails).
 
 ---
 

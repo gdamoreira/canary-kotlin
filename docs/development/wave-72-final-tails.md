@@ -1,6 +1,6 @@
 # Wave 72 Plan — Final Reduced-Port Tails
 
-**Status:** In progress — dispatched
+**Status:** Completed (2026-10-15) — four workstreams merged; 798 suites / 8308 tests green
 **Baseline:** `main` @ `6d2ccaaa`; 792 suites / 8270 tests green; zero Kotlin warnings
 **Source of scope:** `docs/development/implementation-status.md` §3 item 1. **Scaling proposals excluded.**
 **Convention:** documents live directly in `docs/development` (AGENTS.md §5/§6).
@@ -117,3 +117,14 @@ Update `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`
   characteristic, not rushed in this wave.
 - **Deferred by design**: live differential harness; CipSoft860/old-protocol
   profile; OpenTelemetry SDK/OStream; micro-seams.
+
+---
+
+## Completion (2026-10-15)
+
+drain-credit-tails (`ee0aa7c0`), light-spectators (`42ec0169`),
+viewer-container-updates (`88f16f21`), game-state-init (`01b89e41`) merged with
+zero conflicts. Integrated suite: **798 suites / 8308 tests, 0 failures, zero
+Kotlin warnings**; ancestry verified. What remains is the structural
+Player-as-Cylinder refactor, the documented reduced-model list and the
+deferred-by-design program (differential harness, old-protocol profile, OTel).
