@@ -1,8 +1,8 @@
 package org.opentibia.canary.game
 
+import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.items.Item
-import org.opentibia.canary.lua.runtime.ScriptingDispatch
 import org.opentibia.canary.map.Position
 
 data class DeathResult(
@@ -29,25 +29,36 @@ object DeathPenaltyEngine {
         return (player.experience * lossPercentage).toLong()
     }
 
+    /**
+     * Canary fires the scripting `onDeath` events from `Creature::dropCorpse`
+     * (src/creatures/creature.cpp:819-824) while the creature is still dead and
+     * the corpse exists, before `Player::death` revives the player at the
+     * temple. The engine routes that call through the creature's bound
+     * `onDeathEventsHost` seam — the same seam `CanaryServer`/`GameHandler` bind
+     * to the world `ScriptingDispatch` — with the full
+     * `CreatureEvent::executeOnDeath` argument set
+     * (src/lua/creature/creatureevent.cpp:292-326): corpse, last-hit killer,
+     * most-damage killer, last-hit-unjustified and most-damage-unjustified.
+     */
     fun processDeath(
         player: Player,
         templePosition: Position,
         blessingsCount: Int,
-        scripting: ScriptingDispatch? = null,
+        killer: Creature? = null,
+        mostDamageKiller: Creature? = null,
+        lastHitUnjustified: Boolean = false,
+        mostDamageUnjustified: Boolean = false,
     ): DeathResult {
         val expLost = calculateExperienceLoss(player, blessingsCount)
         player.experience = kotlin.math.max(0L, player.experience - expLost)
 
-        // Canary fires the scripting `onDeath` events from `Creature::dropCorpse`
-        // (src/creatures/creature.cpp:820-824) while the creature is still dead and the
-        // corpse exists, before `Player::death` revives the player at the temple.
-        scripting?.creatureOnDeath(
-            creature = player,
-            corpse = Item(CORPSE_ITEM_ID),
-            killer = null,
-            mostDamageKiller = null,
-            lastHitUnjustified = false,
-            mostDamageUnjustified = false,
+        player.onDeathEventsHost(
+            player,
+            Item(CORPSE_ITEM_ID),
+            killer,
+            mostDamageKiller,
+            lastHitUnjustified,
+            mostDamageUnjustified,
         )
 
         // Revive vitals and teleport to temple

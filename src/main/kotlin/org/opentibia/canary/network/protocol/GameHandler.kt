@@ -407,15 +407,24 @@ class GameHandler(
 
         // `Creature::onThink`/`Creature::dropCorpse` scripting loops
         // (creature.cpp:157-163, 819-824): the session's `ScriptingDispatch`
-        // runs the attached events confined to the WorldCommit lane. The
-        // corpse/killer payload stays with the unported damage bookkeeping, so
-        // the binder owns the null/false payload (Creature.kt PARITY GAP).
+        // runs the attached events confined to the WorldCommit lane, and the
+        // death loop forwards the full `CreatureEvent::executeOnDeath` argument
+        // set (creatureevent.cpp:292-326) the caller resolved; a payload-less
+        // `Creature.onDeath` keeps the inert defaults (Creature.kt PARITY GAP).
         activePlayer.onThinkEventsHost = { creature, interval ->
             scriptingDispatch.creatureOnThink(creature, interval.toLong())
         }
-        activePlayer.onDeathEventsHost = { creature ->
-            scriptingDispatch.creatureOnDeath(creature, null, null, null, false, false)
-        }
+        activePlayer.onDeathEventsHost =
+            { creature, corpse, killer, mostDamageKiller, lastHitUnjustified, mostDamageUnjustified ->
+                scriptingDispatch.creatureOnDeath(
+                    creature,
+                    corpse,
+                    killer,
+                    mostDamageKiller,
+                    lastHitUnjustified,
+                    mostDamageUnjustified,
+                )
+            }
 
         // Canary restores the persisted player systems during login
         // (IOLoginData::loadPlayer) before firing the login creature events
