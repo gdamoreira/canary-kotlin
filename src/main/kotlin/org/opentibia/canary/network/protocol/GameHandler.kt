@@ -46,6 +46,8 @@ import org.opentibia.canary.network.crypto.RsaCipher
 import org.opentibia.canary.network.crypto.XteaCipher
 import org.opentibia.canary.network.message.readTibiaString
 import org.opentibia.canary.network.message.writeTibiaString
+import org.opentibia.canary.network.protocol.livestream.LivestreamViewerLogin
+import org.opentibia.canary.network.protocol.livestream.LivestreamViewerTransport
 import org.opentibia.canary.network.protocol.misc.MiscSessionWriter
 import org.opentibia.canary.persistence.PlayerPersistenceService
 import org.opentibia.canary.spells.WorldType
@@ -165,6 +167,16 @@ class GameHandler(
     private var xteaCipher: XteaCipher? = null
 
     /**
+     * `ProtocolGame::m_isLivestreamViewer` (protocolgame.hpp:646) session state:
+     * the viewer transport `castViewerLogin` installed when the login carried
+     * the `@livestream` descriptor. Non-null marks a viewer session whose
+     * `player` is the watched caster (`player = foundPlayer`,
+     * protocolgame.cpp:12389) and whose routing uses the viewer opcode arm with
+     * [LivestreamViewerTransport] as the session transport.
+     */
+    private var livestreamViewer: LivestreamViewerTransport? = null
+
+    /**
      * `ProtocolGame::clientVersionString` (protocolgame.hpp:627) parsed from the
      * current-profile login layout (`onRecvFirstMessage`, protocolgame.cpp:1228-1231).
      * Feeds the `shouldSendWeaponProficiencyDetailList` build-string gate
@@ -247,6 +259,12 @@ class GameHandler(
             spectator.protocolSink?.sendCreatureHelpers(creatureId, helpers)
         }
         game.getImbuingItem = { player -> player.getImbuingItem() }
+        // `Item::sendUpdateToClient(player)` / `Container::sendUpdateToClient(player)`
+        // (src/items/item.cpp:3648, container.cpp:1201): the corpse item-update
+        // tail of `Creature::dropCorpse` (creature.cpp:815) and the quick-loot
+        // senders (game.cpp:3752, 6572) reach the target session's
+        // `Player::sendUpdateTileItem` (player.cpp:7067) fan-out.
+        game.sendItemUpdateToClient = { player, item -> item.sendUpdateToClient(player) }
         game.setNextWalkTask = { player, task -> player.setNextWalkTask(task as? PlayerTask) }
         game.setNextWalkActionTask = { player, task -> player.setNextWalkActionTask(task as? PlayerTask) }
         // The `Game` seam carries only the `ignoreConditions` flag; the C++
@@ -460,12 +478,22 @@ class GameHandler(
         val accountName = tokens.getOrNull(0) ?: ""
         val password = tokens.getOrNull(1) ?: ""
 
-        val account = accountRepository.authenticate(accountName, password)
-        val characterMatch = account?.characters?.find { it.name.equals(characterName, ignoreCase = true) }
-
         val encoder = ctx.pipeline().get(TibiaMessageEncoder::class.java)
         encoder?.xteaCipher = cipher
         encoder?.checksumEnabled = true
+
+        // `ProtocolGame::onRecvFirstMessage`'s `@livestream` account descriptor
+        // (protocolgame.cpp:1409-1417): the viewer login resolves the caster
+        // through `ProtocolGame::castViewerLogin` instead of authenticating an
+        // account, and the dispatch force-closes the connection when admission
+        // fails (`disconnectClient`, protocolgame.cpp:12399).
+        if (accountName == LivestreamViewerLogin.ACCOUNT_DESCRIPTOR) {
+            loginLivestreamViewer(ctx, characterName, password, version)
+            return
+        }
+
+        val account = accountRepository.authenticate(accountName, password)
+        val characterMatch = account?.characters?.find { it.name.equals(characterName, ignoreCase = true) }
 
         if (characterMatch == null) {
             sendDisconnect(ctx, "Character not found or credentials invalid.")
@@ -606,6 +634,80 @@ class GameHandler(
 
         logger.info { "Player '${activePlayer.name}' logged into game world" }
         sendLoginSuccess(ctx, activePlayer, version)
+    }
+
+    /**
+     * `ProtocolGame::castViewerLogin` dispatch (protocolgame.cpp:1409-1417):
+     * resolves the caster and drives [LivestreamViewerLogin.castViewerLogin] on
+     * the WorldCommit lane (the C++ `dispatchProtocolTask`), then installs the
+     * viewer session state (`player = foundPlayer`, `m_isLivestreamViewer`,
+     * `acceptPackets`). A rejected login sends the folded
+     * `disconnectClient(reason)` frame and closes.
+     */
+    private fun loginLivestreamViewer(
+        ctx: ChannelHandlerContext,
+        characterName: String,
+        password: String,
+        version: Int,
+    ): Boolean {
+        val oldProtocol = sessionProfile.hasFeature(ProtocolFeature.OldProtocolCompat)
+
+        var accepted = false
+        var reason = ""
+        var viewer: LivestreamViewerTransport? = null
+        var casterPlayer: Player? = null
+
+        val done = CountDownLatch(1)
+        val block: () -> Unit = {
+            val caster = game.getPlayerByName(characterName)
+            if (caster == null) {
+                // `canWatchLivestream(foundPlayer = nullptr, ...)` folds to the
+                // manager's "Livestream unavailable." reason.
+                reason = "Livestream unavailable."
+            } else {
+                val transport = LivestreamViewerTransport(
+                    channel = ctx.channel(),
+                    caster = caster,
+                    map = gameMap,
+                    creatureById = { id -> game.getCreatureByID(id) },
+                    selfAppearTail = selfAppearTailFor(version, caster),
+                )
+                val result = LivestreamViewerLogin.castViewerLogin(
+                    playerByName = { name -> game.getPlayerByName(name) },
+                    livestream = game.livestream,
+                    viewerClient = transport,
+                    casterName = characterName,
+                    password = password,
+                    oldProtocol = oldProtocol,
+                    sink = transport,
+                )
+                accepted = result.accepted
+                reason = result.reason
+                if (result.accepted) {
+                    viewer = transport
+                    casterPlayer = caster
+                }
+            }
+            done.countDown()
+        }
+
+        val dispatched = dispatcher.isRunning && dispatcher.dispatch(DispatcherLane.WorldCommit) { block() }
+        if (!dispatched) {
+            block()
+        }
+
+        val completed = done.await(PLACEMENT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        val viewerTransport = viewer
+        val caster = casterPlayer
+        if (!completed || !accepted || viewerTransport == null || caster == null) {
+            sendDisconnect(ctx, reason.ifEmpty { "Livestream unavailable." })
+            return false
+        }
+
+        this.player = caster
+        this.livestreamViewer = viewerTransport
+        logger.info { "Livestream viewer session watching '${caster.name}'" }
+        return true
     }
 
     /**
@@ -842,6 +944,20 @@ class GameHandler(
     }
 
     override fun channelInactive(ctx: ChannelHandlerContext) {
+        val viewer = livestreamViewer
+        if (viewer != null) {
+            // `ProtocolGame::release`'s viewer branch (protocolgame.cpp:922-926):
+            // a viewer session unregisters itself from `g_livestream()` and never
+            // removes the watched caster's creature.
+            dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                game.livestream?.removeViewer(viewer)
+            }
+            livestreamViewer = null
+            player = null
+            super.channelInactive(ctx)
+            return
+        }
+
         val activePlayer = player
         if (activePlayer != null) {
             // `Player::client == nullptr` on disconnect; pending writes against
@@ -902,6 +1018,11 @@ class GameHandler(
                         itemTypes = itemTypes,
                         clientVersionString = clientVersionString,
                         protocolProfile = sessionProfile,
+                        // `ProtocolGame::m_isLivestreamViewer` (protocolgame.hpp:646):
+                        // the viewer arm routes the session's packets through the
+                        // viewer transport instead of the player table.
+                        isLivestreamViewer = livestreamViewer != null,
+                        sessionSink = livestreamViewer,
                         // `WeaponProficiency::proficiencies` (weapon_proficiency.cpp:79):
                         // the boot registry loaded from `proficiencies.json` rides
                         // the item registry (bootstrap `defaultItemBoot`) so the

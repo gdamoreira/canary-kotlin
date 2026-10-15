@@ -81,6 +81,7 @@ import org.opentibia.canary.creatures.players.components.NullCyclopediaDatabaseT
 import org.opentibia.canary.creatures.players.components.PlayerAsyncTask
 import org.opentibia.canary.creatures.players.components.Title
 import org.opentibia.canary.creatures.players.components.TitleRegistry
+import org.opentibia.canary.creatures.players.livestream.LivestreamManager
 import org.opentibia.canary.creatures.players.vip.PlayerVip
 import org.opentibia.canary.creatures.players.vip.VipStatus
 import org.opentibia.canary.creatures.monsters.MonsterTargeting
@@ -870,6 +871,17 @@ class Game(
      * roots) keeps the counter writes inert like a disabled metrics pipeline.
      */
     var metrics: MetricsRegistry? = null
+
+    /**
+     * `g_livestream()` (`src/creatures/players/livestream/livestream.hpp:35-95`)
+     * DI projection: the broadcaster/viewer session registry the
+     * `ProtocolGame::castViewerLogin` viewer entry (protocolgame.cpp:12380)
+     * resolves through. The composition root (`ServerBootstrap`) builds it over
+     * the `LIVESTREAM_*` config values and the session transports; `null`
+     * (embedded/tooling roots) rejects every viewer login with the
+     * `canWatch(nullptr)` "Livestream unavailable." reason.
+     */
+    var livestream: LivestreamManager? = null
 
     /** `getLootRandom()` (`data/libs/functions/functions.lua:68-75`) die-roll seam. */
     var lootRandom: () -> Int = { Random.nextInt(0, MonsterLoot.MAX_LOOT_CHANCE) }

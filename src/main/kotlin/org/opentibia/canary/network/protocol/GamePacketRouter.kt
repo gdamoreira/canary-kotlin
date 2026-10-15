@@ -2,6 +2,7 @@ package org.opentibia.canary.network.protocol
 
 import io.netty.buffer.ByteBuf
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.players.livestream.SessionEndInformation
 import org.opentibia.canary.config.FeatureFlags
 import org.opentibia.canary.game.Game
 import org.opentibia.canary.game.QuickLootFilter_t
@@ -103,6 +104,17 @@ data class GamePacketContext(
      */
     val isLivestreamViewer: Boolean = false,
     /**
+     * The livestream viewer session's own transport (the C++ `this` of the
+     * viewer `ProtocolGame`): after `ProtocolGame::castViewerLogin` sets
+     * `player = foundPlayer` (protocolgame.cpp:12389), the caster's
+     * `Player::client` is the owner's protocol, so the viewer's direct sends
+     * (`resendLivestreamViewerContainer`'s `sendContainer`/`sendCloseContainer`,
+     * protocolgame.cpp:12448-12462) must route through the session transport
+     * the logins installed. `null` keeps the normal `player.protocolSink`
+     * resolution for non-viewer sessions.
+     */
+    val sessionSink: ProtocolSink? = null,
+    /**
      * `WeaponProficiency::proficiencies` registry loaded from
      * `proficiencies.json` (`WeaponProficiency::loadFromJson`,
      * weapon_proficiency.cpp:79): the `0xB3` action `0x03` perk selection
@@ -137,6 +149,16 @@ object GamePacketRouter {
 
         while (buffer.isReadable) {
             val opcode = buffer.readUnsignedByte().toInt()
+
+            // `parsePacketFromDispatcher`'s `m_isLivestreamViewer` arm
+            // (protocolgame.cpp:1647-1666): a viewer session handles its own
+            // opcode subset instead of the player packet table, and the C++
+            // message's unread payload is discarded after the one opcode.
+            if (context.isLivestreamViewer) {
+                routeLivestreamViewerPacket(player, opcode, buffer, context)
+                buffer.skipBytes(buffer.readableBytes())
+                return packetsHandled + 1
+            }
 
             val handled = when (opcode) {
                 // Keepalive
@@ -1230,62 +1252,40 @@ object GamePacketRouter {
 
                 // Exiva restrictions: 0xCA parseExivaRestrictions
                 ExivaRestrictionsPacketHandler.OPCODE_EXIVA_RESTRICTIONS -> {
-                    if (context.isLivestreamViewer) {
-                        // `parsePacketFromDispatcher`'s `m_isLivestreamViewer`
-                        // arm (protocolgame.cpp:1647-1666): a viewer's 0xCA with
-                        // exactly `UPDATE_CONTAINER_PAYLOAD_SIZE` (1) unread
-                        // byte is the container resend; any other payload size
-                        // is dropped like the C++ switch `break`.
-                        val command = if (buffer.readableBytes() == 1) {
-                            ContainerBrowsePacketHandler.parseLivestreamViewerContainer(buffer)
-                        } else {
-                            buffer.skipBytes(buffer.readableBytes())
-                            null
-                        }
+                    // `parsePacketFromDispatcher` gates the parse on
+                    // `!oldProtocol && g_game().getWorldType() == WORLD_TYPE_NO_PVP`
+                    // (protocolgame.cpp:1992-1996) and the function repeats the
+                    // `WORLD_TYPE == "no-pvp"` check (protocolgame.cpp:12210-12212);
+                    // on any other session the payload is not the normal-client
+                    // unrestricted 0xCA and the frame tail is dropped.
+                    val profile = context.protocolProfile
+                    val parsesExiva = profile?.hasFeature(ProtocolFeature.OldProtocolCompat) != true &&
+                        context.game?.getWorldType() == WorldType.NO_PVP
+                    if (!parsesExiva) {
+                        buffer.skipBytes(buffer.readableBytes())
+                        true
+                    } else {
+                        val command = ExivaRestrictionsPacketHandler.parse(buffer)
                         if (command == null) {
-                            true
+                            false
                         } else {
                             context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                                ContainerBrowsePacketHandler.applyLivestreamViewerContainer(player, command)
+                                val echo = ExivaRestrictionsPacketHandler.apply(
+                                    player = player,
+                                    command = command,
+                                    maxWhitelist = context.maxExivaWhitelist,
+                                    playerGuidByName = context.exivaPlayerGuidByName,
+                                    guildIdByName = context.exivaGuildIdByName,
+                                )
+                                player.protocolSink?.sendExivaRestrictions(
+                                    isLogin = false,
+                                    addedPlayerNames = echo.addedPlayerNames,
+                                    removedPlayerNames = echo.removedPlayerNames,
+                                    addedGuildNames = echo.addedGuildNames,
+                                    removedGuildNames = echo.removedGuildNames,
+                                )
                             }
                             true
-                        }
-                    } else {
-                        // `parsePacketFromDispatcher` gates the parse on
-                        // `!oldProtocol && g_game().getWorldType() == WORLD_TYPE_NO_PVP`
-                        // (protocolgame.cpp:1992-1996) and the function repeats the
-                        // `WORLD_TYPE == "no-pvp"` check (protocolgame.cpp:12210-12212);
-                        // on any other session the payload is not the normal-client
-                        // unrestricted 0xCA and the frame tail is dropped.
-                        val profile = context.protocolProfile
-                        val parsesExiva = profile?.hasFeature(ProtocolFeature.OldProtocolCompat) != true &&
-                            context.game?.getWorldType() == WorldType.NO_PVP
-                        if (!parsesExiva) {
-                            buffer.skipBytes(buffer.readableBytes())
-                            true
-                        } else {
-                            val command = ExivaRestrictionsPacketHandler.parse(buffer)
-                            if (command == null) {
-                                false
-                            } else {
-                                context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                                    val echo = ExivaRestrictionsPacketHandler.apply(
-                                        player = player,
-                                        command = command,
-                                        maxWhitelist = context.maxExivaWhitelist,
-                                        playerGuidByName = context.exivaPlayerGuidByName,
-                                        guildIdByName = context.exivaGuildIdByName,
-                                    )
-                                    player.protocolSink?.sendExivaRestrictions(
-                                        isLogin = false,
-                                        addedPlayerNames = echo.addedPlayerNames,
-                                        removedPlayerNames = echo.removedPlayerNames,
-                                        addedGuildNames = echo.addedGuildNames,
-                                        removedGuildNames = echo.removedGuildNames,
-                                    )
-                                }
-                                true
-                            }
                         }
                     }
                 }
@@ -1572,6 +1572,54 @@ object GamePacketRouter {
         }
 
         return packetsHandled
+    }
+
+    /**
+     * `ProtocolGame::parsePacketFromDispatcher`'s `m_isLivestreamViewer` arm
+     * (protocolgame.cpp:1647-1666). The viewer session resolves its own
+     * transport ([GamePacketContext.sessionSink]); the one-byte `0xCA` is the
+     * `resendLivestreamViewerContainer` container resend (protocolgame.cpp:12448),
+     * `0x14` maps `logout(true, false)`'s viewer branch to the
+     * `SESSION_END_LOGOUT` information (protocolgame.cpp:1145-1149), and the
+     * keepalive bytes are dropped like the C++ empty `case 0x1D: break;` and the
+     * unported `sendPingBack`.
+     *
+     * PARITY GAPS: the remaining viewer-arm opcodes (`0x96` `parseSay` ->
+     * `g_livestream().handleChat`, `0xA1` `sendCancelTarget`, the `0xFA`-`0xFE`
+     * module stubs and the default `sendCancelWalk`) have no ported frame and
+     * become no-ops instead of the C++ sends.
+     */
+    private fun routeLivestreamViewerPacket(
+        player: Player,
+        opcode: Int,
+        buffer: ByteBuf,
+        context: GamePacketContext,
+    ): Boolean {
+        val sink = context.sessionSink ?: player.protocolSink ?: return true
+
+        when (opcode) {
+            0x14 -> sink.sendSessionEndInformation(SessionEndInformation.SESSION_END_LOGOUT)
+
+            // `case 0x1D: break;` and the unported `case 0x1E: sendPingBack()`.
+            0x1D, 0x1E -> Unit
+
+            ContainerBrowsePacketHandler.OPCODE_LIVESTREAM_VIEWER_CONTAINER -> {
+                // `if (getUnreadBytes(msg) == UPDATE_CONTAINER_PAYLOAD_SIZE)`:
+                // only the one-byte payload is the resend; any other size is
+                // dropped like the C++ switch `break`.
+                if (buffer.readableBytes() == 1) {
+                    val command = ContainerBrowsePacketHandler.parseLivestreamViewerContainer(buffer)
+                    if (command != null) {
+                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                            ContainerBrowsePacketHandler.applyLivestreamViewerContainer(player, command, sink)
+                        }
+                    }
+                }
+            }
+
+            else -> Unit
+        }
+        return true
     }
 
     /**
