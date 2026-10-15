@@ -1,8 +1,9 @@
 # Docker Deployment Guide — Canary Kotlin Edition
 
 This guide covers the containerized stack for the Kotlin server. It is adapted
-from `canary/docker/DOCKER.md`; the main differences are PostgreSQL 16 instead
-of MariaDB and the native login server instead of `opentibiabr/login-server`.
+from `canary/docker/DOCKER.md`; the main differences are dual database support
+(PostgreSQL 16 by default, MariaDB 11.4 optional) and the native login server
+alongside the upstream `opentibiabr/login-server` webservice.
 
 The canonical compose file lives in this folder (`docker/docker-compose.yml`,
 the upstream Canary layout); the repository-root `docker-compose.yml` includes
@@ -18,6 +19,7 @@ For a beginner walkthrough see
 | Path | Purpose |
 | --- | --- |
 | `docker-compose.yml` | Canonical stack: PostgreSQL 16 + server (built from the root `Dockerfile`). |
+| `docker-compose.mariadb.yml` | Override: run the whole stack on MariaDB (see [Database engines](#database-engines)). |
 | `.env.dist` | Environment template; copy to `.env` at the repository root. |
 | `DOCKER.md` | This guide. |
 | `config.sh` | Substitutes `CANARY_*` values into `config.lua` and `.env`. |
@@ -37,9 +39,9 @@ The server image itself is built from the **repository-root `Dockerfile`**
 
 | Service | Image / build | Purpose | Ports |
 | --- | --- | --- | --- |
-| `db` | `postgres:16-alpine` | Game database (Flyway migrates on boot) | `${CANARY_DB_PORT:-5432}` |
-| `server` | root `Dockerfile` | Login/status + game world | `7171`, `7172`, metrics `9464` |
-| `mariadb` | `mariadb:11.4` | Database for the upstream components below (MySQL-only) | internal |
+| `db` | `postgres:16-alpine` | Game database in the default mode (Flyway migrates on boot) | `${CANARY_DB_PORT:-5432}` |
+| `server` | root `Dockerfile` | Login/status + game world (`CANARY_DB_ENGINE` selects the engine) | `7171`, `7172`, metrics `9464` |
+| `mariadb` | `mariadb:11.4` | Database for MyAAC/login-server; in MariaDB single-DB mode also the game database | internal |
 | `myaac` | `quickstart/myaac/Dockerfile` | Upstream website/admin (MyAAC 2.x, reads `mariadb`) | `${MYAAC_HTTP_PORT:-8080}` |
 | `login-server` | `opentibiabr/login-server` | Upstream client login webservice (reads `mariadb`) | `8088`, `9090` |
 
@@ -52,6 +54,63 @@ Game data is bind-mounted read-only into the server container:
 The main world map (`otservbr.otbm`) is not committed; the server fetches it on
 boot via `mapDownloadUrl` (`MapDownload`). Ensure outbound network access or
 place a local map file where the configuration expects it.
+
+---
+
+## Database engines
+
+The server supports two relational engines, selected with `CANARY_DB_ENGINE`:
+
+| Engine | Value | Server connection | Flyway tree |
+| --- | --- | --- | --- |
+| PostgreSQL 16+ (default) | `postgres` / `postgresql` | `jdbc:postgresql://<host>:5432/<db>` | `db/migration/postgres` |
+| MariaDB 11.4+ | `maria` / `mariadb` / `mysql` | `jdbc:mariadb://<host>:3306/<db>` | `db/migration/mariadb` |
+
+An unknown value fails the boot naming the variable. H2 in PostgreSQL mode
+stays the test engine and is not used by the Docker stack.
+
+### PostgreSQL (default)
+
+`docker compose up -d --build` runs the `db` service; the server reads it
+(`CANARY_DB_HOST=db`, port 5432). MyAAC and login-server read the separate
+`mariadb` service (they only speak MySQL).
+
+### MariaDB single-database mode
+
+`docker/docker-compose.mariadb.yml` is an override that points the server at
+the `mariadb` service, so the game server, MyAAC and login-server share one
+database. Run it from the repository root:
+
+```bash
+docker compose -f docker-compose.yml -f docker/docker-compose.mariadb.yml up -d --build
+```
+
+Equivalent without the root include wrapper:
+
+```bash
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.mariadb.yml up -d --build
+```
+
+What changes in this mode:
+
+- The server runs with `CANARY_DB_ENGINE=mariadb` against `mariadb:3306` and
+  migrates through the MariaDB Flyway tree (`db/migration/mariadb/V1..V22`)
+  with MariaDB-native SQL (`BIGINT AUTO_INCREMENT`,
+  `INSERT ... ON DUPLICATE KEY UPDATE`).
+- MyAAC and login-server keep reading `mariadb` — now the game database
+  itself, so the website and webservice show the real accounts and characters
+  created in-game.
+- The override pins `CANARY_DB_ENGINE`/`CANARY_DB_HOST`/`CANARY_DB_PORT` to
+  the MariaDB literals, so the matching `.env` values do not apply in this
+  mode (database name/user/password still do).
+- The PostgreSQL `db` service stays in the merged model (Compose overrides
+  cannot delete services) and `up` still starts it; the server no longer uses
+  it. Stop it with the same `-f` pair plus `stop db` if you want it down.
+- Data is not migrated between engines: `db-volume` and `mariadb-volume` are
+  separate; each engine keeps its own Flyway history and seed.
+
+Switch back with the plain `docker compose up -d --build` and set
+`CANARY_DB_ENGINE` to `postgres` (or remove it) in `.env`.
 
 ---
 
@@ -93,8 +152,9 @@ for the full list with defaults.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `CANARY_DB_NAME` / `CANARY_DB_USER` / `CANARY_DB_PASSWORD` | `canary` / `canary` / `canary` | Applied to both the Postgres container and the server. |
-| `CANARY_DB_PORT` | `5432` | Host port only. |
+| `CANARY_DB_ENGINE` | `postgres` | `postgres`/`postgresql` or `maria`/`mariadb`/`mysql`; MariaDB also needs the compose override (see [Database engines](#database-engines)). |
+| `CANARY_DB_NAME` / `CANARY_DB_USER` / `CANARY_DB_PASSWORD` | `canary` / `canary` / `canary` | Applied to the Postgres and MariaDB containers and to all services. |
+| `CANARY_DB_PORT` | `5432` | PostgreSQL host port published on the host; the ports inside the network are fixed by the compose files (5432 / 3306). |
 | `CANARY_SERVER_NAME` | `Canary Kotlin Server` | Shown in the status XML. |
 | `CANARY_IP` | `127.0.0.1` | Public IP advertised to clients. |
 | `CANARY_LOGIN_PORT` / `CANARY_GAME_PORT` | `7171` / `7172` | Must match the client. |
@@ -153,6 +213,11 @@ The dumps are idempotent (`ON CONFLICT DO NOTHING`) and keep the BIGSERIAL
 sequences ahead of the seeded ids. Change or remove the accounts before
 exposing the server to any untrusted network.
 
+Both the dumps and `docker/data/start.sh` target the PostgreSQL `db` service,
+so they do not apply to MariaDB single-DB mode: there only the Flyway seed
+(account `1` / password `1`) is created automatically; import upstream MariaDB
+dumps into the `mariadb` service if you want the full test dataset.
+
 ---
 
 ## Image variants
@@ -188,12 +253,15 @@ stack includes them exactly like upstream, backed by its own `mariadb` service:
   modern clients, exposed at `${LOGIN_HTTP_PORT:-8088}` (HTTP) and
   `${LOGIN_GRPC_PORT:-9090}` (gRPC), reading the `mariadb` service.
 
-**Important:** the Kotlin game server keeps its own **PostgreSQL** `db`
-service (Flyway schema V1–V22); MyAAC and login-server cannot read it. They
-serve upstream-C++ deployments and read the `mariadb` service, so seed that
-database with the game data (upstream MariaDB dumps or an upstream C++ server)
-if you want the website and webservice to show real accounts. The Kotlin
-server's native login remains on `CANARY_LOGIN_PORT` (7171).
+**Database scope:** by default the Kotlin game server reads the **PostgreSQL**
+`db` service (Flyway schema V1–V22), while MyAAC and login-server read the
+separate `mariadb` service — seed it with game data (upstream MariaDB dumps or
+an upstream C++ server) if you want the website and webservice to show real
+accounts. In **MariaDB single-DB mode** (see
+[Database engines](#database-engines)) all three read the same `mariadb` game
+database, so in-game accounts and characters appear in MyAAC/login-server
+without extra seeding. The Kotlin server's native login remains on
+`CANARY_LOGIN_PORT` (7171).
 
 ## Troubleshooting
 
@@ -206,5 +274,6 @@ server's native login remains on `CANARY_LOGIN_PORT` (7171).
 | Rebuild after code changes | `docker compose build server && docker compose up -d server`. |
 | Stale database schema | Flyway migrates automatically on boot; never edit applied migrations (see `AGENTS.md` §2.1). |
 | Metrics endpoint unreachable | Set `CANARY_METRICS_ENABLE_PROMETHEUS=true` and restart; the exporter only binds when enabled. |
-| MyAAC/login-server show no accounts | They read the `mariadb` service, not the Kotlin PostgreSQL game DB — seed `mariadb` with your game data (see above). |
+| MyAAC/login-server show no accounts | Default mode: they read the separate `mariadb` service, not the Kotlin PostgreSQL game DB — seed it, or run MariaDB single-DB mode so they read the game database (see above). |
+| `Invalid CANARY_DB_ENGINE value` on boot | Use `postgres`/`postgresql` or `maria`/`mariadb`/`mysql`; for the Docker stack use the MariaDB override file instead of setting only the variable. |
 | MyAAC build takes long the first time | It builds MyAAC 2.x from source (PHP extensions + composer); subsequent builds use the layer cache. |
