@@ -524,6 +524,7 @@ class ServerBootstrap(
         val guildRepository = JdbcGuildRepository(
             saveTransaction,
             removeGuild = { guildId -> worldGame.get()?.removeGuild(guildId) },
+            updatePlayerHelpers = { member -> worldGame.get()?.updatePlayerHelpers(member) },
         )
         val ioGuild = IOGuild(guildRepository)
         val subloads = IOLoginDataSubloads(

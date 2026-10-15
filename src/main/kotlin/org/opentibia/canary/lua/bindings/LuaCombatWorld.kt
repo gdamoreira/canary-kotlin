@@ -18,6 +18,7 @@ import org.opentibia.canary.combat.CombatTargetCallback
 import org.opentibia.canary.combat.CombatTargetState
 import org.opentibia.canary.combat.CombatTile
 import org.opentibia.canary.combat.CombatTileCallback
+import org.opentibia.canary.systems.wheel.WheelBeamCombatPlayer
 import org.opentibia.canary.combat.CombatType
 import org.opentibia.canary.combat.CombatValueCallback
 import org.opentibia.canary.combat.CreatureCombatTarget
@@ -84,7 +85,10 @@ class LuaCombatWorld(
 
     fun actorOf(creature: Creature): LuaCombatActor = actors.getOrPut(creature) { LuaCombatActor(creature, this) }
 
-    fun playerOf(player: Player): LuaCombatPlayer = players.getOrPut(player) { LuaCombatPlayer(player, this) }
+    fun playerOf(player: Player): CombatPlayer = WheelBeamCombatPlayer(
+        players.getOrPut(player) { LuaCombatPlayer(player, this) },
+        { player.wheel() },
+    )
 
     fun monsterOf(monster: Monster): LuaCombatMonster = monsters.getOrPut(monster) { LuaCombatMonster(monster, state) }
 
