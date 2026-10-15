@@ -34,6 +34,7 @@ import org.opentibia.canary.config.FeatureFlags
 import org.opentibia.canary.creatures.ChaseMode
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.FightMode
+import org.opentibia.canary.creatures.FindPathParams
 import org.opentibia.canary.creatures.FlagAsyncClass_t
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Npc
@@ -43,7 +44,9 @@ import org.opentibia.canary.creatures.Skulls_t
 import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.WeaponType_t
 import org.opentibia.canary.creatures.players.WalkStartPolicy
+import org.opentibia.canary.creatures.players.checkAutoLoot
 import org.opentibia.canary.creatures.players.getDodgeChance
+import org.opentibia.canary.creatures.players.isVip
 import org.opentibia.canary.creatures.players.postAddNotification
 import org.opentibia.canary.creatures.players.postRemoveNotification
 import org.opentibia.canary.creatures.skills_t
@@ -152,6 +155,7 @@ import org.opentibia.canary.items.containers.Inbox
 import org.opentibia.canary.items.containers.depot.DepotChest
 import org.opentibia.canary.items.containers.depot.DepotLocker
 import org.opentibia.canary.map.GameMap
+import org.opentibia.canary.map.FrozenPathingConditionCall
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Spectators
 import org.opentibia.canary.map.Tile
@@ -159,6 +163,7 @@ import org.opentibia.canary.map.house.AccessHouseLevel
 import org.opentibia.canary.map.house.CyclopediaHouseState
 import org.opentibia.canary.map.house.House
 import org.opentibia.canary.map.house.TradeEvents_t
+import org.opentibia.canary.monitoring.MetricsRegistry
 import org.opentibia.canary.network.protocol.AcceptTransferErrorMessage
 import org.opentibia.canary.network.protocol.BidErrorMessage
 import org.opentibia.canary.network.protocol.BidSuccessMessage
@@ -838,10 +843,31 @@ class Game(
         removeAttacked = { killer, target ->
             (target as? Player)?.let { victim -> killer.pvpPlayer.removeAttacked(victim.pvpPlayer) }
         },
-        // PARITY GAP: `Creature::deprecatedOnKilledCreature`'s Lua `onKill`
-        // loop (creature.cpp:1290-1303) has no production host in this port.
-        deprecatedOnKilledCreature = { _, _, _ -> false },
+        // `Creature::deprecatedOnKilledCreature` (creature.cpp:1290-1303): the
+        // master forwarding and the kill-event host the scripting composition
+        // binds (`onKillEventsHost`).
+        deprecatedOnKilledCreature = { killer, target, lastHit ->
+            killer.deprecatedOnKilledCreature(target, lastHit)
+        },
+        getProtocolVersion = { player -> player.getProtocolVersion() },
+        isRewardCorpse = ::isRewardCorpse,
+        isCorpseReachable = ::isCorpseReachableForQuickLoot,
+        checkAutoLoot = { player, isBoss -> configuredCheckAutoLoot(player, isBoss) },
+        scheduleQuickLoot = { player, container, position ->
+            scheduleEvent(0L) { playerQuickLootCorpse(player, container, position) }
+        },
+        sendCorpseUpdate = { player, corpse -> sendItemUpdateToClient(player, corpse) },
+        findSpectatorPlayers = { position -> spectatorsOf(position, multifloor = false).filterIsInstance<Player>() },
+        addCounter = { name, value, attrs -> metrics?.addCounter(name, value, attrs) },
     )
+
+    /**
+     * `g_metrics()` (`src/lib/metrics/metrics.hpp:95-154`) seam for the
+     * `player_death`/`monster_death` counters (creature.cpp:688-717). The
+     * composition root injects the shared registry; `null` (embedded/tooling
+     * roots) keeps the counter writes inert like a disabled metrics pipeline.
+     */
+    var metrics: MetricsRegistry? = null
 
     /** `getLootRandom()` (`data/libs/functions/functions.lua:68-75`) die-roll seam. */
     var lootRandom: () -> Int = { Random.nextInt(0, MonsterLoot.MAX_LOOT_CHANCE) }
@@ -863,6 +889,55 @@ class Game(
     private fun configuredPzLocked(): Int = configManager?.let { config ->
         ConfigKeys.byName("PZ_LOCKED")?.let { key -> config.getNumber(key, key.defaultValue as Int) }
     } ?: CreatureDeathPipeline.PZ_LOCKED_DEFAULT
+
+    /**
+     * `g_game().map.getPathMatching(player->getPosition(), dirList,
+     * FrozenPathingConditionCall(corpse->getPosition()), fpp)` with the
+     * auto-loot `FindPathParams` (`minTargetDist = 0`, `maxTargetDist = 1`,
+     * `fullPathSearch`, `clearSight`, `maxSearchDist = 0`,
+     * creature.cpp:798-806).
+     */
+    private fun isCorpseReachableForQuickLoot(player: Player, corpsePosition: Position): Boolean {
+        val fpp = FindPathParams().apply {
+            minTargetDist = 0
+            maxTargetDist = 1
+            fullPathSearch = true
+            clearSight = true
+            maxSearchDist = 0
+        }
+        return map.getPathMatching(
+            player.position,
+            mutableListOf(),
+            FrozenPathingConditionCall(corpsePosition, map),
+            fpp,
+        )
+    }
+
+    /** `Player::checkAutoLoot(isBoss)` (player.cpp:5692-5708) over the config/key-value gates. */
+    private fun configuredCheckAutoLoot(player: Player, isBoss: Boolean): Boolean =
+        player.checkAutoLoot(
+            isBoss = isBoss,
+            autoLootEnabled = configuredAutoLoot(),
+            vipSystemEnabled = configuredVipSystemEnabled(),
+            vipAutoLootVipOnly = configuredVipAutoLootVipOnly(),
+            isVip = { player.isVip(configuredVipSystemEnabled()) },
+            autolootFeature = { player.kv.scoped("features").get("autoloot")?.getNumber()?.toLong() },
+        )
+
+    /** `g_configManager().getBoolean(AUTOLOOT)` (configmanager.cpp:69, default false). */
+    private fun configuredAutoLoot(): Boolean = configManager?.let { config ->
+        ConfigKeys.byName("AUTOLOOT")?.let { key -> config.getBoolean(key, key.defaultValue as Boolean) }
+    } ?: false
+
+    /** `g_configManager().getBoolean(VIP_SYSTEM_ENABLED)` (configmanager.cpp:393, default false). */
+    private fun configuredVipSystemEnabled(): Boolean = configManager?.let { config ->
+        ConfigKeys.byName("VIP_SYSTEM_ENABLED")?.let { key -> config.getBoolean(key, key.defaultValue as Boolean) }
+    } ?: false
+
+    /** `g_configManager().getBoolean(VIP_AUTOLOOT_VIP_ONLY)` (configmanager.cpp:386, default false). */
+    private fun configuredVipAutoLootVipOnly(): Boolean = configManager?.let { config ->
+        ConfigKeys.byName("VIP_AUTOLOOT_VIP_ONLY")?.let { key -> config.getBoolean(key, key.defaultValue as Boolean) }
+    } ?: false
 
     /** `g_configManager().getNumber(RATE_LOOT)` (configmanager.cpp:294, default 1). */
     private fun configuredRateLoot(): Int = configManager?.let { config ->
@@ -910,6 +985,8 @@ class Game(
         monster.monsterDeathHost = MonsterDeathHost(
             lookCorpse = info?.lookcorpse ?: 0,
             race = info?.race ?: RaceType.RACE_NONE,
+            nameDescription = entry.typeState.monsterType?.nameDescription ?: "",
+            isRewardBoss = info?.isRewardBoss ?: false,
             experience = info?.experience ?: 0L,
             forgeStack = { entry.typeState.forgeStack },
             isFamiliar = info?.isFamiliar ?: false,
@@ -1981,6 +2058,11 @@ class Game(
         player.pzLockedProvider = ::configuredPzLocked
         player.experienceFromPlayersProvider = ::configuredExperienceFromPlayers
         player.expFromPlayersLevelRangeProvider = ::configuredExpFromPlayersLevelRange
+        // `Item::CreateItem(getLookCorpse())` (creature.cpp:840) and the
+        // `Player::getCorpse` damage-map walk (`g_game().getCreatureByID`,
+        // player.cpp:4407-4416).
+        player.corpseItemFactory = { id -> Item.create(id, registry = itemTypes) }
+        player.creatureByIdProvider = ::getCreatureByID
 
         registerOnlinePlayer(player)
     }
@@ -2658,10 +2740,14 @@ class Game(
         // `Creature::onDeath` (creature.cpp:577-720): every creature the world
         // accepts carries the world death pipeline, and a monster additionally
         // gets its `m_monsterType` death facts (corpse, loot, experience,
-        // `Monster::death` body) from the registered host entry.
+        // `Monster::death` body) from the registered host entry. The corpse
+        // item factory is the `Item::CreateItem(getLookCorpse())` seam
+        // (creature.cpp:840) over the composed item registry.
         creature.deathPipeline = deathPipeline
         creature.pzLockedProvider = ::configuredPzLocked
+        creature.corpseItemFactory = { id -> Item.create(id, registry = itemTypes) }
         if (creature is Player) {
+            creature.creatureByIdProvider = ::getCreatureByID
             creature.experienceFromPlayersProvider = ::configuredExperienceFromPlayers
             creature.expFromPlayersLevelRangeProvider = ::configuredExpFromPlayersLevelRange
         }

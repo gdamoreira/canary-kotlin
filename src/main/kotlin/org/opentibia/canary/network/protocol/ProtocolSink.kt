@@ -58,6 +58,14 @@ interface ProtocolSink : VipClient {
     /** `ProtocolGame::sendTextMessage(TextMessage)` (0xB4, protocolgame.cpp:6070). */
     fun sendTextMessage(type: MessageClass, text: String)
 
+    /**
+     * `ProtocolGame::sendTextMessage(TextMessage)` (0xB4, protocolgame.cpp:6070)
+     * with the full frame: the position/primary/secondary fields the plain
+     * `(type, text)` variant leaves at their defaults, e.g. the
+     * `MESSAGE_EXPERIENCE_OTHERS` gain notice (creature.cpp:1324-1326).
+     */
+    fun sendTextMessage(frame: TextMessageFrame)
+
     /** `Player::sendCancelMessage(ReturnValue)` (player.cpp:2117). */
     fun sendCancelMessage(returnValue: ReturnValue)
 
@@ -257,6 +265,10 @@ abstract class ProtocolFrameSink(
 
     override fun sendTextMessage(type: MessageClass, text: String) {
         emit { GameWindowWriter.writeTextMessage(this, TextMessageFrame(type, text)) }
+    }
+
+    override fun sendTextMessage(frame: TextMessageFrame) {
+        emit { GameWindowWriter.writeTextMessage(this, frame) }
     }
 
     override fun sendCancelMessage(returnValue: ReturnValue) {

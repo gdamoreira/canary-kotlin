@@ -30,6 +30,8 @@ import org.opentibia.canary.creatures.monsters.RaceType
 import org.opentibia.canary.creatures.monsters.targetCreatureFactsOf
 import org.opentibia.canary.creatures.players.CountBlock
 import org.opentibia.canary.creatures.players.ExivaRestrictions
+import org.opentibia.canary.creatures.players.ITEM_FEMALE_CORPSE
+import org.opentibia.canary.creatures.players.ITEM_MALE_CORPSE
 import org.opentibia.canary.creatures.players.PlayerActionTimers
 import org.opentibia.canary.creatures.players.PlayerDeathState
 import org.opentibia.canary.creatures.players.PlayerExperienceState
@@ -45,6 +47,9 @@ import org.opentibia.canary.creatures.players.components.PlayerStorage
 import org.opentibia.canary.creatures.players.components.RecentDeathEntry
 import org.opentibia.canary.creatures.players.components.RecentPvPKillEntry
 import org.opentibia.canary.creatures.players.getCapacity
+import org.opentibia.canary.creatures.players.getSubjectPronoun
+import org.opentibia.canary.creatures.players.getSubjectVerb
+import org.opentibia.canary.creatures.players.lastHitIsPlayer
 import org.opentibia.canary.creatures.players.pvp.PlayerPvp
 import org.opentibia.canary.creatures.players.storages.Stash
 import org.opentibia.canary.creatures.players.vip.InMemoryVipRepository
@@ -78,6 +83,7 @@ import org.opentibia.canary.map.Town
 import org.opentibia.canary.network.protocol.MessageClass
 import org.opentibia.canary.network.protocol.ProtocolSink
 import org.opentibia.canary.network.protocol.SourceEffect
+import org.opentibia.canary.network.protocol.TextMessageFrame
 import org.opentibia.canary.network.protocol.creature.CreaturePacketWriter
 import org.opentibia.canary.systems.bestiary.Charm
 import org.opentibia.canary.systems.bestiary.CharmRune
@@ -93,6 +99,7 @@ import org.opentibia.canary.spells.SpellBook
 import org.opentibia.canary.spells.Spells
 import org.opentibia.canary.spells.WorldType
 import org.opentibia.canary.utils.BatchUpdateActor
+import org.opentibia.canary.utils.Tools
 import java.lang.ref.WeakReference
 import java.util.Collections
 import java.util.IdentityHashMap
@@ -271,6 +278,15 @@ abstract class Creature(
 
     /** `Creature::getDescription(int32_t)` is implemented by Player/Monster/Npc; the base placeholder is a PARITY GAP. */
     override fun getDescription(lookDistance: Int): String = ""
+
+    /**
+     * `Creature::getNameDescription` (`src/creatures/creature.hpp:147`, pure
+     * virtual). The base returns [name] — the C++ `Player::getNameDescription`
+     * body (`src/creatures/players/player.hpp:292-294`); `Monster` overrides it
+     * with the type `nameDescription` (monster.cpp:167-172) and `Npc` with
+     * [name] like the base.
+     */
+    open fun getNameDescription(): String = name
 
     /** `Creature::creatureCheck` (src/creatures/creature.hpp:927). */
     var creatureCheck: Boolean = false
@@ -1619,6 +1635,33 @@ abstract class Creature(
         pipeline.onDeath(this)
     }
 
+    /**
+     * `CreatureEvent::executeOnKill` argument set
+     * (src/lua/creature/creatureevent.cpp:359-390) carried by the
+     * `Creature::deprecatedOnKilledCreature` kill-event loop
+     * (src/creatures/creature.cpp:1297-1301): `(creature, target, lastHit)`,
+     * exactly the arguments the Lua `onKill` callback receives. The events
+     * attached through [registerCreatureEvent] execute in attachment order
+     * after the master forwarding; the world scripting composition binds the
+     * typed `kill`-event walk (the `getCreatureEvents(CREATURE_EVENT_KILL)`
+     * resolved through the registry), so the unbound default keeps the loop
+     * inert for embedded/test roots without a Lua environment.
+     */
+    var onKillEventsHost: (Creature, Creature, Boolean) -> Unit = { _, _, _ -> }
+
+    /**
+     * `Creature::deprecatedOnKilledCreature` (src/creatures/creature.cpp:
+     * 1290-1303): the master runs its own kill events first, then this
+     * creature's attached events fire with `(creature, target, lastHit)`. The
+     * C++ always returns `false` — the unjustified flag this method once
+     * computed is now reported by `Player::onKilledPlayer`/`onKilledMonster`.
+     */
+    open fun deprecatedOnKilledCreature(target: Creature, lastHit: Boolean): Boolean {
+        getMaster()?.deprecatedOnKilledCreature(target, lastHit)
+        onKillEventsHost(this, target, lastHit)
+        return false
+    }
+
     /** `Creature::death` (creature.hpp:968) — virtual base no-op hook. */
     open fun death(lastHitCreature: Creature? = null) {
         // No behaviour.
@@ -1632,15 +1675,49 @@ abstract class Creature(
     open fun getRace(): RaceType = RaceType.RACE_NONE
 
     /**
-     * `Creature::getCorpse` (creature.cpp:838-843). The C++ base creates
-     * `Item::CreateItem(getLookCorpse())` and returns `null` for the zero id;
-     * the port keeps the base body inert because no ported family relies on it
-     * (`Monster` overrides it with `m_monsterType->info.lookcorpse` and the
-     * owner stamp, monster.cpp:3305-3320; the player corpse
-     * description/container stays with the reduced player-death path,
-     * PARITY GAP).
+     * `Creature::getLookCorpse` (creature.hpp:964-966) — the base returns 0, so
+     * a plain creature drops no corpse. `Monster` overrides it with
+     * `m_monsterType->info.lookcorpse` (monster.cpp:878-881) and `Player` with
+     * the male/female corpse pair (player.cpp:1383-1388).
      */
-    open fun getCorpse(lastHitCreature: Creature?, mostDamageCreature: Creature?): Item? = null
+    open fun getLookCorpse(): Int = 0
+
+    /**
+     * `Item::CreateItem(getLookCorpse())` (creature.cpp:840) seam: the world
+     * composition injects the composed item registry
+     * (`Game.internalPlaceCreature` for placed creatures, `Game.addPlayer` for
+     * session players, AGENTS.md 1.1); the unbound default drops no corpse like
+     * an item registry missing the corpse type.
+     */
+    var corpseItemFactory: (Int) -> Item? = { null }
+
+    /**
+     * `Creature::getCorpse` (creature.cpp:838-843): the base creates the look
+     * corpse and returns `null` for the zero id. `Monster` overrides it with the
+     * owner stamp (monster.cpp:3305-3320); `Player` extends it with the killer
+     * description (player.cpp:4372-4431).
+     */
+    open fun getCorpse(lastHitCreature: Creature?, mostDamageCreature: Creature?): Item? {
+        if (getLookCorpse() != 0) {
+            return corpseItemFactory(getLookCorpse())
+        }
+        return null
+    }
+
+    /**
+     * `Creature::dropCorpse` (creature.cpp:732-828). The base body is the world
+     * [CreatureDeathPipeline] bound by the composition (`Game` places it on
+     * every creature it accepts); `Player::dropCorpse` overrides the PvP
+     * player-kill short-circuit (player.cpp:4364-4370). Without a pipeline
+     * (embedded/tests) the base reports a dropped corpse like a world where the
+     * drop ran.
+     */
+    open fun dropCorpse(
+        lastHitCreature: Creature?,
+        mostDamageCreature: Creature?,
+        lastHitUnjustified: Boolean,
+        mostDamageUnjustified: Boolean,
+    ): Boolean = deathPipeline?.dropCorpse(this, lastHitCreature, mostDamageCreature, lastHitUnjustified, mostDamageUnjustified) ?: true
 
     /** `Creature::dropLoot` (creature.hpp:963) — base no-op; `Monster` drops the loot table. */
     open fun dropLoot(corpse: Container?, lastHitCreature: Creature?) {
@@ -1789,7 +1866,39 @@ class Monster(
     override fun getRace(): RaceType = monsterDeathHost?.race ?: RaceType.RACE_NONE
 
     /** `Monster::getLookCorpse` (monster.cpp:878-881) over `m_monsterType->info.lookcorpse`. */
-    fun getLookCorpse(): Int = monsterDeathHost?.lookCorpse ?: 0
+    override fun getLookCorpse(): Int = monsterDeathHost?.lookCorpse ?: 0
+
+    /**
+     * `Monster::nameDescription` (`src/creatures/monsters/monster.hpp:415`):
+     * `null` means the constructor seed
+     * (`asLowerCaseString(mType->nameDescription)`, monster.cpp:92) is still in
+     * place; [setNameDescription] stores the explicit value.
+     */
+    private var monsterNameDescription: String? = null
+
+    /** `Monster::setNameDescription` (monster.cpp:176-178). */
+    fun setNameDescription(newNameDescription: String) {
+        monsterNameDescription = newNameDescription
+    }
+
+    /**
+     * `Monster::getNameDescription` (monster.cpp:167-172): the per-monster
+     * description when set (an explicit empty value falls back to the type's
+     * raw description), otherwise the constructor-seeded lowercase type
+     * description (`MonsterType::nameDescription`, monster.cpp:92).
+     */
+    override fun getNameDescription(): String {
+        val own = monsterNameDescription
+        if (own != null) {
+            return own.ifEmpty { monsterDeathHost?.nameDescription ?: name }
+        }
+
+        val typeDescription = monsterDeathHost?.nameDescription ?: return name
+        return Tools.asLowerCaseString(typeDescription.ifEmpty { name })
+    }
+
+    /** `Monster::isRewardBoss` (monster.cpp:291-293) over `m_monsterType->info.isRewardBoss`. */
+    fun isRewardBoss(): Boolean = monsterDeathHost?.isRewardBoss ?: false
 
     /**
      * `Monster::getLostExperience` (monster.cpp:873-876): a skill-loss monster
@@ -4863,6 +4972,27 @@ class Player(
     /** `g_game().getPlayerByID(id)` (game.cpp) seam used by [death]. */
     var playerByIdProvider: (Long) -> Player? = { null }
 
+    /** `g_game().getCreatureByID(id)` (game.cpp:1296) seam behind the `Player::getCorpse` damage-map walk (player.cpp:4407-4416). */
+    var creatureByIdProvider: (Long) -> Creature? = { null }
+
+    /**
+     * `Player::client->getVersion()` behind `Player::getProtocolVersion`
+     * (player.cpp:1022-1030) seam: the session handler binds the parsed client
+     * version, the unbound default `0` models `Player::client == nullptr`.
+     */
+    var protocolVersionProvider: () -> Int = { 0 }
+
+    /** `Player::getProtocolVersion` (player.cpp:1022-1030): the attached client version, `0` without one. */
+    fun getProtocolVersion(): Int = protocolVersionProvider()
+
+    /**
+     * `Player::sendTextMessage(TextMessage)` (player.cpp:6350-6407) frame seam:
+     * the full position/primary/secondary payload `sendTextMessageTyped` drops.
+     */
+    var sendTextMessageFrame: (TextMessageFrame) -> Unit = { frame ->
+        protocolSink?.sendTextMessage(frame)
+    }
+
     /** `g_iobestiary().getBestiaryCharm(charm)` (iobestiary.cpp:231-248) seam used by [death]. */
     var bestiaryCharmProvider: (CharmRune) -> Charm? = { null }
 
@@ -5086,6 +5216,118 @@ class Player(
     /** `Player::death` (player.cpp:4035-4284). */
     override fun death(lastHitCreature: Creature?) {
         deathState.death(lastHitCreature)
+    }
+
+    /** `Player::getLookCorpse` (player.cpp:1383-1388): the female or male corpse item id. */
+    override fun getLookCorpse(): Int =
+        if (getSex() == PlayerSex_t.FEMALE) {
+            ITEM_FEMALE_CORPSE
+        } else {
+            ITEM_MALE_CORPSE
+        }
+
+    /**
+     * `Player::getCorpse` (player.cpp:4372-4431): the base look corpse extended
+     * with the `"You recognize ... killed by ..."` `DESCRIPTION` attribute when
+     * the corpse is a container. `Creature::getCorpse` creates the item through
+     * the world [corpseItemFactory]; the damage-map `others` probe and the
+     * responsible-name resolution read the composed creature registry.
+     */
+    override fun getCorpse(lastHitCreature: Creature?, mostDamageCreature: Creature?): Item? {
+        val corpse = super.getCorpse(lastHitCreature, mostDamageCreature) ?: return null
+        if (corpse.getContainer() == null) {
+            return corpse
+        }
+
+        corpse.setAttribute(ItemAttribute.DESCRIPTION, buildCorpseDescription(lastHitCreature, mostDamageCreature))
+        return corpse
+    }
+
+    /** `Player::getCorpse` description body (player.cpp:4376-4430). */
+    private fun buildCorpseDescription(lastHitCreature: Creature?, mostDamageCreature: Creature?): String =
+        buildString {
+            append("You recognize ").append(getNameDescription()).append(". ")
+
+            var responsibleName = ""
+            var secondaryResponsibleName = ""
+
+            if (lastHitCreature != null) {
+                val lastHitPlayer = lastHitCreature as? Player
+                if (lastHitPlayer != null) {
+                    responsibleName = lastHitPlayer.getNameDescription()
+                } else {
+                    val master = lastHitCreature.getMaster()
+                    if (master is Player) {
+                        responsibleName = master.getNameDescription()
+                    }
+                }
+            }
+
+            if (mostDamageCreature != null) {
+                val mostDamagePlayer = mostDamageCreature as? Player
+                if (mostDamagePlayer != null) {
+                    if (responsibleName != mostDamagePlayer.getNameDescription()) {
+                        secondaryResponsibleName = responsibleName
+                        responsibleName = mostDamagePlayer.getNameDescription()
+                    }
+                } else {
+                    val master = mostDamageCreature.getMaster()
+                    if (master is Player && responsibleName != master.getNameDescription()) {
+                        secondaryResponsibleName = responsibleName
+                        responsibleName = master.getNameDescription()
+                    }
+                }
+            }
+
+            var hasOthers = false
+            val inFightTicks = 5L * 60L * 1000L
+            for ((creatureId, damageInfo) in getDamageMap()) {
+                if ((now() - damageInfo.ticks) <= inFightTicks) {
+                    val attacker = creatureByIdProvider(creatureId)
+                    if (attacker != null && attacker !is Player) {
+                        hasOthers = true
+                        break
+                    }
+                }
+            }
+
+            if (responsibleName.isNotEmpty()) {
+                append(getSubjectPronoun()).append(' ').append(getSubjectVerb(true))
+                    .append(" killed by ").append(responsibleName)
+                if (secondaryResponsibleName.isNotEmpty()) {
+                    append(" and ").append(secondaryResponsibleName)
+                } else if (hasOthers) {
+                    append(" and others")
+                }
+                append('.')
+            } else if (lastHitCreature != null) {
+                append(getSubjectPronoun()).append(' ').append(getSubjectVerb(true))
+                    .append(" killed by ").append(lastHitCreature.getNameDescription())
+                if (hasOthers) {
+                    append(" and others")
+                }
+                append('.')
+            } else {
+                append("No attackers were identified.")
+            }
+        }
+
+    /**
+     * `Player::dropCorpse` (player.cpp:4364-4370): a PvP player kill keeps the
+     * loot flag and drops no corpse, every other death runs the base body.
+     */
+    override fun dropCorpse(
+        lastHitCreature: Creature?,
+        mostDamageCreature: Creature?,
+        lastHitUnjustified: Boolean,
+        mostDamageUnjustified: Boolean,
+    ): Boolean {
+        if (getZoneType() != ZoneType.ZONE_PVP || !lastHitIsPlayer(lastHitCreature)) {
+            return super.dropCorpse(lastHitCreature, mostDamageCreature, lastHitUnjustified, mostDamageUnjustified)
+        }
+
+        setDropLoot(true)
+        return false
     }
 
     /** `Player::onWalk` (player.cpp:2942-2961). */

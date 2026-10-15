@@ -2,7 +2,6 @@ package org.opentibia.canary.creatures.players
 
 import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.Player
-import org.opentibia.canary.creatures.players.components.PlayerSex_t
 
 /** `ItemId_t::ITEM_MALE_CORPSE` (src/utils/utils_definitions.hpp:626). */
 const val ITEM_MALE_CORPSE = 4240
@@ -21,7 +20,3 @@ fun Player.getDefaultStats(stat: Stat): Int = when (stat) {
     Stat.STAT_MAGICPOINTS -> getBaseMagicLevel()
     else -> 0
 }
-
-/** `Player::getLookCorpse` (player.cpp:1383-1388). */
-fun Player.getLookCorpse(): Int =
-    if (getSex() == PlayerSex_t.FEMALE) ITEM_FEMALE_CORPSE else ITEM_MALE_CORPSE
