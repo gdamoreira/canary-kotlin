@@ -37,6 +37,25 @@ interface ConditionTarget {
      */
     fun drainHealth(amount: Int): Int
 
+    /**
+     * `g_game().getPlayerByGUID(owner)` / `g_game().getCreatureByID(owner)`
+     * attacker resolution (`condition.cpp:2000-2004`): the injected game
+     * catalog that resolves the condition `owner`
+     * (`CONDITION_PARAM_OWNER`) into the attacking creature view. The default
+     * null keeps embedded views unattributed.
+     */
+    fun getCreatureFromOwner(owner: Int): ConditionTarget? = null
+
+    /**
+     * `g_game().combatChangeHealth(attacker, creature, damage)` negative path
+     * with the resolved attacker (`condition.cpp:2030`): like [drainHealth],
+     * plus the attacker `onAttackedCreatureDrainHealth` credit
+     * (`creature.cpp:893-899`, `1277-1283`) in the target's damage map. The
+     * default keeps the reduced [drainHealth] behavior for seam implementors
+     * without creature attribution.
+     */
+    fun drainHealth(attacker: ConditionTarget?, amount: Int): Int = drainHealth(amount)
+
     /** `Creature::getMaxHealth()` (`condition.cpp:862`). */
     fun getMaxHealth(): Int
 

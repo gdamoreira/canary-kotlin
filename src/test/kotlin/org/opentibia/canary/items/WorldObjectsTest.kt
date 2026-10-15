@@ -17,6 +17,37 @@ class WorldObjectsTest {
     }
 
     @Test
+    fun `stepping on an owned magic field credits the field owner`() {
+        // `MagicField::onStepInField` stamps the owner on the field's damage
+        // (src/creatures/combat/combat.cpp:2590-2641); `Item::getOwnerId` and
+        // the `g_game()` catalog resolution feed the drain credit
+        // (condition.cpp:2000-2004, creature.cpp:893-899).
+        val owner = Player(7, "Owner", 100, 100, position = Position(99, 100, 7))
+        val fireField = MagicField(id = 1487, damage = 20)
+        fireField.setOwner(7)
+        fireField.ownerCreatureProvider = { ownerId: Long -> if (ownerId == 7L) owner else null }
+
+        val player = Player(1, "Adventurer", 100, 100, position = Position(100, 100, 7))
+        fireField.onStepInField(player)
+
+        assertThat(player.health).isEqualTo(80)
+        assertThat(player.getDamageMap()[7L]?.total).isEqualTo(20)
+        assertThat(player.lastHitCreatureId).isEqualTo(7L)
+    }
+
+    @Test
+    fun `stepping on a magic field with an unresolved owner stays unattributed`() {
+        val fireField = MagicField(id = 1487, damage = 20)
+        fireField.setOwner(7)
+
+        val player = Player(1, "Adventurer", 100, 100, position = Position(100, 100, 7))
+        fireField.onStepInField(player)
+
+        assertThat(player.health).isEqualTo(80)
+        assertThat(player.getDamageMap()).isEmpty()
+    }
+
+    @Test
     fun `stepping on teleporter moves player to destination coordinates`() {
         val destination = Position(32000, 32000, 7)
         val teleporter = TeleportItem(id = 1387, destination = destination)

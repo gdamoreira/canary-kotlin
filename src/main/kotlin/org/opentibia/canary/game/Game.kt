@@ -12519,9 +12519,14 @@ class Game(
 
     /**
      * `Game::combatChangeMana` (src/game/game.cpp:9063): the mana state change.
-     * The `CHARM_VOIDINVERSION` inversion and the creature-event callback seam
-     * are reduced to the injected mana-change event dispatch (PARITY GAP for
-     * the charm path).
+     *
+     * The negative branch runs the `isAttackable`/black-skull gates, the
+     * `COMBAT_MANADRAIN` block roll, the creature-event callback and the
+     * `game.cpp:9226` `target->drainMana(attacker, manaLoss)` credit
+     * (`creature.cpp:901-907` -> `addDamagePoints`), so a mana drain populates
+     * the damage map like the health path. The `CHARM_VOIDINVERSION` inversion,
+     * the defensive bestiary charm run (`game.cpp:9195-9223`) and the
+     * `updateInputAnalyzer` tail are not ported (PARITY GAPs).
      */
     fun combatChangeMana(attacker: Creature?, target: Creature, damage: CombatDamage): Boolean {
         var manaChange = damage.primaryValue + damage.secondaryValue
@@ -12539,7 +12544,7 @@ class Game(
             }
 
             val manaBefore = target.mana
-            target.mana = minOf(target.maxMana, target.mana + manaChange)
+            target.changeMana(manaChange)
             val realManaChange = target.mana - manaBefore
             if (realManaChange > 0 && !target.isInGhostMode()) {
                 val damageString = "$realManaChange mana"
@@ -12559,26 +12564,66 @@ class Game(
             return true
         }
 
-        if (manaChange < 0) {
-            val manaBefore = target.mana
-            target.mana = maxOf(0, target.mana + manaChange)
-            val realManaChange = manaBefore - target.mana
-            if (realManaChange > 0 && !target.isInGhostMode()) {
-                val damageString = "$realManaChange mana"
-                for (spectator in spectatorsOf(target.position, multifloor = false)) {
-                    val tmpPlayer = spectator as? Player ?: continue
-                    if (tmpPlayer.position.z != target.position.z) {
-                        continue
-                    }
-                    val messageText = when {
-                        tmpPlayer === attackerPlayer && attackerPlayer !== targetPlayer ->
-                            "${ucfirst(target.name)} loses $damageString due to your attack."
-                        tmpPlayer === targetPlayer -> "You lose $damageString."
-                        else -> "${ucfirst(target.name)} loses $damageString due to an attack by " +
-                            "${attacker?.name ?: "something"}."
-                    }
-                    sendTextMessage(tmpPlayer, MessageClass.MESSAGE_MANA, messageText)
+        // game.cpp:9161 `else {}`: the zero change shares the negative branch.
+        if (!isAttackable(target)) {
+            if (!target.isInGhostMode()) {
+                addMagicEffect(target.position, CONST_ME_POFF)
+            }
+            return false
+        }
+
+        if (isUnmarkedBlackSkull(attackerPlayer, targetPlayer)) {
+            return false
+        }
+
+        var manaLoss = minOf(target.mana, -manaChange)
+        val (blockedManaLoss, blockType) = combatTargetBlockHit(
+            attacker,
+            target,
+            CombatType.MANADRAIN,
+            manaLoss,
+            false,
+            false,
+            false,
+        )
+        manaLoss = blockedManaLoss
+        if (blockType != BlockType.NONE) {
+            addMagicEffect(target.position, CONST_ME_POFF)
+            return false
+        }
+
+        if (manaLoss <= 0) {
+            return true
+        }
+
+        if (damage.origin != CombatOrigin.NONE && executeCreatureManaChangeEvents(target, attacker, damage)) {
+            damage.origin = CombatOrigin.NONE
+            return combatChangeMana(attacker, target, damage)
+        }
+
+        // PARITY GAP: the defensive bestiary charm run of `combatChangeMana`
+        // (game.cpp:9195-9223) belongs to the bestiary subsystem.
+
+        // game.cpp:9226 `target->drainMana(attacker, manaLoss)`:
+        // `Creature::drainMana` (creature.cpp:901-907) runs `onAttacked`, the
+        // virtual mana change and the attacker `addDamagePoints` credit.
+        target.drainMana(attacker, manaLoss)
+
+        if (!target.isInGhostMode()) {
+            val damageString = "$manaLoss mana"
+            for (spectator in spectatorsOf(target.position, multifloor = false)) {
+                val tmpPlayer = spectator as? Player ?: continue
+                if (tmpPlayer.position.z != target.position.z) {
+                    continue
                 }
+                val messageText = when {
+                    tmpPlayer === attackerPlayer && attackerPlayer !== targetPlayer ->
+                        "${ucfirst(target.name)} loses $damageString due to your attack."
+                    tmpPlayer === targetPlayer -> "You lose $damageString."
+                    else -> "${ucfirst(target.name)} loses $damageString due to an attack by " +
+                        "${attacker?.name ?: "something"}."
+                }
+                sendTextMessage(tmpPlayer, MessageClass.MESSAGE_MANA, messageText)
             }
         }
 

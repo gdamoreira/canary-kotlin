@@ -39,6 +39,18 @@ class FakeConditionTarget(
     var suppress: Boolean = false
     var attackable: Boolean = true
 
+    /** Recorded `isSuppress(type, attackerIsPlayer)` call (`condition.cpp:2002`). */
+    var suppressAttackerIsPlayer: Boolean? = null
+
+    /**
+     * `g_game().getPlayerByGUID(owner)` / `getCreatureByID(owner)` resolution
+     * (`condition.cpp:2000-2004`): the attacker view returned for any owner id.
+     */
+    var ownerAttacker: ConditionTarget? = null
+
+    /** Every `drainHealth(attacker, amount)` call in order (`condition.cpp:2030`). */
+    val drainAttacks: MutableList<Pair<ConditionTarget?, Int>> = mutableListOf()
+
     val buffValues: MutableMap<Buff, Int> = mutableMapOf()
     val absorbValues: MutableMap<CombatType, Int> = mutableMapOf()
     val increaseValues: MutableMap<CombatType, Int> = mutableMapOf()
@@ -85,6 +97,13 @@ class FakeConditionTarget(
         return healthValue
     }
 
+    override fun getCreatureFromOwner(owner: Int): ConditionTarget? = ownerAttacker
+
+    override fun drainHealth(attacker: ConditionTarget?, amount: Int): Int {
+        drainAttacks.add(attacker to amount)
+        return drainHealth(amount)
+    }
+
     override fun getMaxHealth(): Int = maxHealthValue
 
     override fun getMana(): Int = manaValue
@@ -115,7 +134,10 @@ class FakeConditionTarget(
         storage[key] = value
     }
 
-    override fun isSuppress(type: ConditionType, attackerIsPlayer: Boolean): Boolean = suppress
+    override fun isSuppress(type: ConditionType, attackerIsPlayer: Boolean): Boolean {
+        suppressAttackerIsPlayer = attackerIsPlayer
+        return suppress
+    }
 
     override fun isAttackable(): Boolean = attackable
 

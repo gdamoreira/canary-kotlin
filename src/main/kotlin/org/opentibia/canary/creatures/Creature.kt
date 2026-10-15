@@ -802,6 +802,36 @@ abstract class Creature(
     }
 
     /**
+     * `Creature::changeMana` (`creature.cpp:869-875`): positive values restore
+     * up to [maxMana], negative values drain down to 0.
+     */
+    open fun changeMana(manaChange: Int) {
+        if (manaChange > 0) {
+            mana += minOf(manaChange, maxMana - mana)
+        } else {
+            mana = maxOf(0, mana + manaChange)
+        }
+    }
+
+    /**
+     * `Creature::drainMana(attacker, manaLoss)` (`creature.cpp:901-907`):
+     * `onAttacked()`, the virtual [changeMana] clamp and the attacker
+     * [addDamagePoints] credit, so the mana drain populates the damage map.
+     *
+     * `Player::changeMana` (player.cpp:6765-6772: the `HasInfiniteMana` gate
+     * and the `g_game().addPlayerMana` broadcast) is not modelled (PARITY GAP);
+     * `Player::drainMana`'s stats refresh is the [Player] override.
+     */
+    open fun drainMana(attacker: Creature?, manaLoss: Int) {
+        onAttacked()
+        changeMana(-manaLoss)
+
+        if (attacker != null) {
+            addDamagePoints(attacker, manaLoss)
+        }
+    }
+
+    /**
      * `ConditionTarget.addHealth` maps to `Creature::changeHealth(positive)`
      * (`condition.cpp:1507-1510`), keeping the broadcast/death sink active.
      */
@@ -3328,6 +3358,61 @@ class Player(
         addInFightTicks()
         pvpPlayer.sendOpenPvpSituations()
     }
+
+    /**
+     * `Player::drainMana(attacker, manaLoss)` (player.cpp:3549-3552) over
+     * `Creature::drainMana` (creature.cpp:901-907): the stats refresh runs
+     * after the base drain/credit.
+     */
+    override fun drainMana(attacker: Creature?, manaLoss: Int) {
+        super.drainMana(attacker, manaLoss)
+        sendStats()
+    }
+
+    /**
+     * `Player::onAttackedCreatureDrainHealth(target, points)`
+     * (player.cpp:6563-6575): the `Creature::` base (the target damage-map
+     * stamp) then, for a partnered attacker draining a hostile monster, the
+     * shared-experience `Party::updatePlayerTicks` credit.
+     *
+     * `Combat::isPlayerCombat(target)` (combat.cpp:309-319) is transcribed
+     * inline because the port's `Combat` layer works over `CombatActor` seams;
+     * `Monster::isHostile()` (monster.cpp:295-297) reads
+     * `m_monsterType->info.isHostile` through the player's [monsterTypeProvider]
+     * (`g_monsters().getMonsterType`), keeping the `MonsterType::info.isHostile`
+     * seed (`true`) when the type is unknown.
+     */
+    override fun onAttackedCreatureDrainHealth(target: Creature?, points: Int) {
+        super.onAttackedCreatureDrainHealth(target, points)
+
+        if (target != null) {
+            val party = getParty()
+            if (party != null && !isPlayerCombatTarget(target)) {
+                val monster = target as? Monster
+                if (monster != null && isHostileMonster(monster)) {
+                    // We have fulfilled a requirement for shared experience
+                    party.updatePlayerTicks(this, points)
+                }
+            }
+        }
+    }
+
+    /** `Combat::isPlayerCombat(target)` (combat.cpp:309-319). */
+    private fun isPlayerCombatTarget(target: Creature): Boolean {
+        if (target is Player) {
+            return true
+        }
+
+        if (target.isSummon() && target.getMaster() is Player) {
+            return true
+        }
+
+        return false
+    }
+
+    /** `Monster::isHostile()` (monster.cpp:295-297) over `m_monsterType->info.isHostile`. */
+    private fun isHostileMonster(monster: Monster): Boolean =
+        monsterTypeProvider(monster.name)?.info?.isHostile ?: true
 
     // --- blessings (player.hpp:1818, player.cpp:2422-2440, 10544-10579, 12993) ----
 

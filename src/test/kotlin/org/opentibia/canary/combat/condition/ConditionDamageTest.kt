@@ -95,6 +95,63 @@ class ConditionDamageTest {
     }
 
     @Test
+    fun `owned condition damage credits the owner-resolved attacker`() {
+        // condition.cpp:2000-2004 resolves the attacker from the condition
+        // `owner`; the drain then runs the `combatChangeHealth` credit
+        // (condition.cpp:2030 -> creature.cpp:893-899).
+        val target = FakeConditionTarget(health = 1000, isPlayer = false)
+        val attacker = FakeConditionTarget(health = 1000, isPlayer = true)
+        target.ownerAttacker = attacker
+
+        val condition = fire()
+        condition.setParam(ConditionParam.CONDITION_PARAM_OWNER, 42)
+        condition.addDamage(1, 1000, -5)
+
+        condition.startCondition(target)
+
+        assertThat(target.healthValue).isEqualTo(995)
+        assertThat(target.drainAttacks).containsExactly(attacker to 5)
+        // `creature->isSuppress(getType(), attackerPlayer != nullptr)` (2002).
+        assertThat(target.suppressAttackerIsPlayer).isTrue()
+    }
+
+    @Test
+    fun `unresolved owners keep the condition drain unattributed`() {
+        // The port's default `getCreatureFromOwner` returns null, so the
+        // suppress check runs as PvE and the drain carries no attacker.
+        val target = FakeConditionTarget(health = 1000, isPlayer = false)
+        val condition = fire()
+        condition.setParam(ConditionParam.CONDITION_PARAM_OWNER, 42)
+        condition.addDamage(1, 1000, -5)
+
+        condition.startCondition(target)
+
+        assertThat(target.healthValue).isEqualTo(995)
+        assertThat(target.drainAttacks).containsExactly(null to 5)
+        assertThat(target.suppressAttackerIsPlayer).isFalse()
+    }
+
+    @Test
+    fun `field condition damage is halved when a player owner hits a player`() {
+        // condition.cpp:2011-2013: `field && creature->getPlayer() &&
+        // attackerPlayer` halves the value with `std::round`
+        // (`round(-2.5) == -3`).
+        val target = FakeConditionTarget(health = 1000, isPlayer = true)
+        val attacker = FakeConditionTarget(health = 1000, isPlayer = true)
+        target.ownerAttacker = attacker
+
+        val condition = fire()
+        condition.setParam(ConditionParam.CONDITION_PARAM_OWNER, 42)
+        condition.setParam(ConditionParam.CONDITION_PARAM_FIELD, 1)
+        condition.addDamage(1, 1000, -5)
+
+        condition.startCondition(target)
+
+        assertThat(target.healthValue).isEqualTo(997)
+        assertThat(target.drainAttacks).containsExactly(attacker to 3)
+    }
+
+    @Test
     fun `getTotalDamage sums list or averages the range`() {
         val listCondition = fire()
         listCondition.addDamage(3, 1000, -5)

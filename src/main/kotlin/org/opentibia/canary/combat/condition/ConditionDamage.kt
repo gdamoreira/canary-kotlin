@@ -263,29 +263,44 @@ class ConditionDamage(
             return true
         }
 
-        // `owner`-based attacker resolution (condition.cpp:2000-2004) requires
-        // the game GUID catalog; without it the suppress check runs as PvE.
-        if (target.isSuppress(type, false)) {
+        // `owner`-based attacker resolution (condition.cpp:2000-2004): the
+        // player GUID catalog first, the creature id catalog second.
+        val attacker = if (owner != 0) target.getCreatureFromOwner(owner) else null
+        val attackerPlayer = attacker?.player
+        if (target.isSuppress(type, attackerPlayer != null)) {
             return true
         }
 
-        // `field && creature->getPlayer() && attackerPlayer` halving
-        // (condition.cpp:2011-2013) needs a resolved attacker and is skipped.
+        var damageValue = healthChange
 
+        // `field && creature->getPlayer() && attackerPlayer` halving
+        // (condition.cpp:2011-2013).
+        if (field && target.player != null && attackerPlayer != null) {
+            damageValue = roundHalfAwayFromZero(damageValue / 2.0)
+        }
+
+        // `Combat::canDoCombat` and the POFF magic effect (condition.cpp:2015-2021)
+        // are reduced to the attackable gate (PARITY GAP).
         if (!target.isAttackable()) {
-            // `g_game().addMagicEffect(..., CONST_ME_POFF)` (condition.cpp:2017)
-            // is presentation-only.
             return false
         }
 
-        if (healthChange < 0) {
-            target.drainHealth(-healthChange)
-        } else if (healthChange > 0) {
-            target.addHealth(healthChange)
+        if (damageValue < 0) {
+            target.drainHealth(attacker, -damageValue)
+        } else if (damageValue > 0) {
+            target.addHealth(damageValue)
         }
 
         return true
     }
+
+    /**
+     * `std::round` (half away from zero) over `damage.primary.value / 2.`
+     * (`condition.cpp:2012`); `Math.round` alone would round negative halves
+     * towards positive infinity.
+     */
+    private fun roundHalfAwayFromZero(value: Double): Int =
+        if (value < 0) -Math.round(-value).toInt() else Math.round(value).toInt()
 
     /** `ConditionDamage::endCondition` (`condition.cpp:2033-2035`) — no-op. */
     override fun endCondition(target: ConditionTarget?) {

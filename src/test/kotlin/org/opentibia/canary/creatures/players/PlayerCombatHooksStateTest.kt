@@ -3,10 +3,11 @@ package org.opentibia.canary.creatures.players
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.combat.condition.ConditionType
-import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.creatures.grouping.Party
+import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.map.Position
 
 /**
@@ -17,28 +18,28 @@ import org.opentibia.canary.map.Position
  * - `Player::drainHealth` (player.cpp:3540-3547) plays the pain sound with the
  *   `PLAYER_SOUND_HEALTH_CHANGE` (player.hpp:128) 10% chance, drains through
  *   `Creature::drainHealth` and refreshes the stats.
- * - `Player::drainMana` (player.cpp:3549-3552) goes through
- *   `Creature::drainMana` (creature.cpp:901-907: `onAttacked`, `changeMana`,
- *   `addDamagePoints`) and refreshes the stats.
+ * - `Player::drainMana` (player.cpp:3549-3552) is the `Creature::drainMana`
+ *   override (creature.cpp:901-907: `onAttacked`, `changeMana`,
+ *   `addDamagePoints`) with the stats refresh.
  * - `Player::onCleanseCondition` (player.cpp:6322-6348) prints the
  *   "(cleanse charm)" party message for the mapped condition types.
  *
  * The party shared-experience hooks are transcribed too:
  *
- * - `Player::onAttackedCreatureDrainHealth` (player.cpp:6563-6575)
- * - `Player::onTargetCreatureGainHealth` (player.cpp:6577-6594)
+ * - `Player::onAttackedCreatureDrainHealth` (player.cpp:6563-6575) is a
+ *   `Creature::onAttackedCreatureDrainHealth` override on the [Player] class,
+ *   so the credit rides the virtual dispatch.
+ * - `Player::onTargetCreatureGainHealth` (player.cpp:6577-6594) stays an
+ *   extension seam (its base member is the port's handler list).
  *
  * `g_game().sendSingleSoundEffect` and `Player::sendStats()` are call-site
- * seams; the port's `Creature::drainMana` is not separately modelled, so the
- * three base steps are transcribed inline. `Creature::onAttackedCreatureDrainHealth`
- * (creature.cpp), `Creature::getMonster`/`Monster::isHostile` (monster.cpp:295)
- * and `Creature::getPlayer` are unported host members, so they are injected
- * seams.
+ * seams; `Monster::isHostile` (monster.cpp:295-297) resolves through the
+ * player's `monsterTypeProvider` (`g_monsters().getMonsterType`).
  */
 class PlayerCombatHooksStateTest {
 
-    private fun newPlayer(): Player =
-        Player(id = 1, name = "Hero", maxHealth = 150, health = 100, maxMana = 200, mana = 50, position = Position(100, 100, 7))
+    private fun newPlayer(id: Long = 1, name: String = "Hero"): Player =
+        Player(id = id, name = name, maxHealth = 150, health = 100, maxMana = 200, mana = 50, position = Position(100, 100, 7))
 
     @Test
     fun `drainHealth plays the sound on a ten percent roll and drains without broadcast`() {
@@ -69,14 +70,29 @@ class PlayerCombatHooksStateTest {
     }
 
     @Test
+    fun `drainHealth credits the attacker on the damage map`() {
+        // Player::drainHealth -> Creature::drainHealth(attacker, damage)
+        // (creature.cpp:893-899) -> onAttackedCreatureDrainHealth.
+        val player = newPlayer()
+        val attacker = newPlayer(id = 9, name = "Enemy")
+
+        player.drainHealth(attacker = attacker, damage = 30)
+
+        assertThat(player.health).isEqualTo(70)
+        assertThat(player.getDamageMap()[9L]?.total).isEqualTo(30)
+        assertThat(player.lastHitCreatureId).isEqualTo(9L)
+    }
+
+    @Test
     fun `drainMana triggers the attacked hook, drains mana and records damage points`() {
         // Player::drainMana (player.cpp:3549-3552) over
         // Creature::drainMana (creature.cpp:901-907).
         val player = newPlayer()
-        val attacker = Player(id = 9, name = "Enemy", maxHealth = 10, health = 10, position = Position(101, 100, 7))
+        val attacker = newPlayer(id = 9, name = "Enemy")
         var stats = 0
+        player.sendStats = { stats++ }
 
-        player.drainMana(attacker = attacker, manaLoss = 20, sendStats = { stats++ })
+        player.drainMana(attacker, 20)
 
         assertThat(player.mana).isEqualTo(30)
         assertThat(player.getDamageMap()[attacker.id]?.total).isEqualTo(20)
@@ -85,12 +101,13 @@ class PlayerCombatHooksStateTest {
 
     @Test
     fun `drainMana clamps at zero without an attacker`() {
-        // Creature::changeMana (creature.cpp:878-891): negative mana is clamped.
+        // Creature::changeMana (creature.cpp:869-875): negative mana is clamped.
         val player = newPlayer()
 
-        player.drainMana(attacker = null, manaLoss = 500)
+        player.drainMana(null, 500)
 
         assertThat(player.mana).isZero()
+        assertThat(player.getDamageMap()).isEmpty()
     }
 
     @Test
@@ -124,77 +141,77 @@ class PlayerCombatHooksStateTest {
     // --- Player::onAttackedCreatureDrainHealth -----------------------------------
 
     @Test
-    fun `onAttackedCreatureDrainHealth runs the base hook without a target`() {
-        // player.cpp:6563-6575.
+    fun `onAttackedCreatureDrainHealth stamps the base damage map without a party`() {
+        // Creature::onAttackedCreatureDrainHealth (creature.cpp:1277-1283)
+        // through the Player override (player.cpp:6563-6565).
         val player = newPlayer()
-        var base = 0
-        var ticks = 0
+        val monster = Monster(id = 2, name = "Rat", maxHealth = 20, health = 20, position = Position(101, 100, 7))
 
-        player.onAttackedCreatureDrainHealth(
-            target = null,
-            points = 25,
-            base = { base++ },
-            updatePlayerTicks = { ticks++ },
-        )
+        player.onAttackedCreatureDrainHealth(monster, 25)
 
-        assertThat(base).isEqualTo(1)
-        assertThat(ticks).isZero()
+        assertThat(monster.getDamageMap()[player.id]?.total).isEqualTo(25)
+        assertThat(monster.lastHitCreatureId).isEqualTo(player.id)
+    }
+
+    @Test
+    fun `onAttackedCreatureDrainHealth ignores a null target`() {
+        // player.cpp:6565 `if (target)`.
+        val player = newPlayer()
+
+        player.onAttackedCreatureDrainHealth(null, 25)
+    }
+
+    @Test
+    fun `onAttackedCreatureDrainHealth credits the party tick for a hostile monster`() {
+        // `tmpMonster->isHostile()` -> Party::updatePlayerTicks (6571-6574).
+        val leader = newPlayer()
+        val member = newPlayer(id = 2, name = "Member")
+        val party = Party(leader)
+        party.invitePlayer(member)
+        party.joinParty(member)
+        member.setFlag(PlayerFlags_t.NotGainInFight)
+        assertThat(party.isSharedExperienceEnabled()).isFalse()
+
+        val monster = Monster(id = 3, name = "Rat", maxHealth = 100, health = 100, position = Position(101, 100, 7))
+        monster.drainHealth(leader, 25)
+
+        assertThat(monster.getDamageMap()[leader.id]?.total).isEqualTo(25)
+        assertThat(party.isSharedExperienceEnabled()).isTrue()
+    }
+
+    @Test
+    fun `onAttackedCreatureDrainHealth ignores non-hostile monsters`() {
+        // `Monster::isHostile()` (monster.cpp:295-297) over
+        // `m_monsterType->info.isHostile`.
+        val leader = newPlayer()
+        val member = newPlayer(id = 2, name = "Member")
+        val party = Party(leader)
+        party.invitePlayer(member)
+        party.joinParty(member)
+        member.setFlag(PlayerFlags_t.NotGainInFight)
+        leader.monsterTypeProvider = { name -> MonsterType(name).apply { info.isHostile = false } }
+
+        val monster = Monster(id = 3, name = "Rat", maxHealth = 100, health = 100, position = Position(101, 100, 7))
+        monster.drainHealth(leader, 25)
+
+        assertThat(party.isSharedExperienceEnabled()).isFalse()
     }
 
     @Test
     fun `onAttackedCreatureDrainHealth skips player combat targets`() {
         // `m_party && !Combat::isPlayerCombat(target)` (6567).
-        val player = newPlayer()
-        Party(player)
-        val other = newPlayer()
-        var ticks = 0
+        val leader = newPlayer()
+        val member = newPlayer(id = 2, name = "Member")
+        val party = Party(leader)
+        party.invitePlayer(member)
+        party.joinParty(member)
+        member.setFlag(PlayerFlags_t.NotGainInFight)
 
-        player.onAttackedCreatureDrainHealth(
-            target = other,
-            points = 25,
-            isPlayerCombat = { true },
-            updatePlayerTicks = { ticks++ },
-        )
+        val victim = newPlayer(id = 3, name = "Victim")
+        victim.drainHealth(leader, 25)
 
-        assertThat(ticks).isZero()
-    }
-
-    @Test
-    fun `onAttackedCreatureDrainHealth credits the party for hostile monsters`() {
-        // `tmpMonster->isHostile()` (6571-6574).
-        val player = newPlayer()
-        Party(player)
-        val monster = Monster(id = 2, name = "Rat", maxHealth = 20, health = 20, position = Position(101, 100, 7))
-        var ticks = 0
-
-        player.onAttackedCreatureDrainHealth(
-            target = monster,
-            points = 25,
-            getMonster = { it as? Monster },
-            isHostile = { true },
-            updatePlayerTicks = { ticks++ },
-        )
-
-        assertThat(ticks).isEqualTo(1)
-    }
-
-    @Test
-    fun `onAttackedCreatureDrainHealth ignores non-hostile monsters`() {
-        // 6571-6572.
-        val player = newPlayer()
-        Party(player)
-        val monster = Monster(id = 2, name = "Rat", maxHealth = 20, health = 20, position = Position(101, 100, 7))
-        var ticks = 0
-
-        player.onAttackedCreatureDrainHealth(
-            target = monster,
-            points = 25,
-            getMonster = { it as? Monster },
-            isHostile = { false },
-            updatePlayerTicks = { ticks++ },
-        )
-
-        assertThat(ticks).isZero()
+        assertThat(victim.getDamageMap()[leader.id]?.total).isEqualTo(25)
+        assertThat(party.isSharedExperienceEnabled()).isFalse()
     }
 
     // --- Player::onTargetCreatureGainHealth --------------------------------------

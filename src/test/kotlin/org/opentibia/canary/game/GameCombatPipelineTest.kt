@@ -377,6 +377,180 @@ class GameCombatPipelineTest {
         assertThat(target.mana).isZero()
     }
 
+    @Test
+    fun `combatChangeMana credits the attacker on a manadrain change`() {
+        // game.cpp:9226 `target->drainMana(attacker, manaLoss)` ->
+        // Creature::drainMana (creature.cpp:901-907) -> addDamagePoints
+        // (creature.cpp:1195-1211).
+        val game = newGame()
+        val attacker = game.player(9, "Mage")
+        val target = Player(
+            id = 1,
+            name = "Hero",
+            maxHealth = 150,
+            health = 150,
+            maxMana = 200,
+            mana = 50,
+            position = center,
+        )
+        game.addPlayer(target)
+
+        val damage = CombatDamage(primaryValue = -30, primaryType = CombatType.MANADRAIN)
+        assertThat(game.combatChangeMana(attacker, target, damage)).isTrue()
+        assertThat(target.mana).isEqualTo(20)
+        assertThat(target.getDamageMap()[9L]?.total).isEqualTo(30)
+        assertThat(target.lastHitCreatureId).isEqualTo(9L)
+    }
+
+    @Test
+    fun `combatChangeMana leaves a casterless drain unattributed`() {
+        val game = newGame()
+        val target = Player(
+            id = 1,
+            name = "Hero",
+            maxHealth = 150,
+            health = 150,
+            maxMana = 200,
+            mana = 50,
+            position = center,
+        )
+        game.addPlayer(target)
+
+        val damage = CombatDamage(primaryValue = -30, primaryType = CombatType.MANADRAIN)
+        assertThat(game.combatChangeMana(null, target, damage)).isTrue()
+        assertThat(target.mana).isEqualTo(20)
+        assertThat(target.getDamageMap()).isEmpty()
+        assertThat(target.lastHitCreatureId).isZero()
+    }
+
+    @Test
+    fun `combatChangeMana clamps the credited loss to the available mana`() {
+        // game.cpp:9171 `manaLoss = min(target->getMana(), -manaChange)`.
+        val game = newGame()
+        val attacker = game.player(9, "Mage")
+        val target = Player(
+            id = 1,
+            name = "Hero",
+            maxHealth = 150,
+            health = 150,
+            maxMana = 200,
+            mana = 10,
+            position = center,
+        )
+        game.addPlayer(target)
+
+        val damage = CombatDamage(primaryValue = -30, primaryType = CombatType.MANADRAIN)
+        assertThat(game.combatChangeMana(attacker, target, damage)).isTrue()
+        assertThat(target.mana).isZero()
+        assertThat(target.getDamageMap()[9L]?.total).isEqualTo(10)
+    }
+
+    @Test
+    fun `combatChangeMana routes the drain through the player drainMana override`() {
+        // Player::drainMana (player.cpp:3549-3552) over Creature::drainMana.
+        val game = newGame()
+        val attacker = game.player(9, "Mage")
+        val target = Player(
+            id = 1,
+            name = "Hero",
+            maxHealth = 150,
+            health = 150,
+            maxMana = 200,
+            mana = 50,
+            position = center,
+        )
+        game.addPlayer(target)
+        var stats = 0
+        target.sendStats = { stats++ }
+
+        val damage = CombatDamage(primaryValue = -30, primaryType = CombatType.MANADRAIN)
+        game.combatChangeMana(attacker, target, damage)
+
+        assertThat(stats).isEqualTo(1)
+    }
+
+    @Test
+    fun `combatChangeMana refuses to drain an unattackable target`() {
+        // game.cpp:9162-9168: `!target->isAttackable()` -> POFF, return false.
+        val game = newGame()
+        val attacker = game.player(9, "Mage")
+        val target = Player(
+            id = 1,
+            name = "Hero",
+            maxHealth = 150,
+            health = 150,
+            maxMana = 200,
+            mana = 50,
+            position = center,
+        )
+        game.addPlayer(target)
+        game.isAttackable = { false }
+
+        val damage = CombatDamage(primaryValue = -30, primaryType = CombatType.MANADRAIN)
+        assertThat(game.combatChangeMana(attacker, target, damage)).isFalse()
+        assertThat(target.mana).isEqualTo(50)
+        assertThat(target.getDamageMap()).isEmpty()
+    }
+
+    @Test
+    fun `combatChangeMana blocks the drain of a manadrain-immune target`() {
+        // game.cpp:9177-9181: `target->blockHit(attacker, COMBAT_MANADRAIN,
+        // manaLoss)` -> `BLOCK_IMMUNITY` -> POFF, return false.
+        val game = newGame()
+        val attacker = game.player(9, "Mage")
+        val target = Player(
+            id = 1,
+            name = "Hero",
+            maxHealth = 150,
+            health = 150,
+            maxMana = 200,
+            mana = 50,
+            position = center,
+        )
+        game.addPlayer(target)
+        game.combatIsImmune = { _, combatType -> combatType == CombatType.MANADRAIN }
+
+        val damage = CombatDamage(primaryValue = -30, primaryType = CombatType.MANADRAIN)
+        assertThat(game.combatChangeMana(attacker, target, damage)).isFalse()
+        assertThat(target.mana).isEqualTo(50)
+        assertThat(target.getDamageMap()).isEmpty()
+    }
+
+    @Test
+    fun `combatChangeMana re-enters after the creature mana-change events consume the origin`() {
+        // game.cpp:9185-9194: the CREATURE_EVENT_MANACHANGE run resets the
+        // origin and recurses.
+        val game = newGame()
+        val attacker = game.player(9, "Mage")
+        val target = Player(
+            id = 1,
+            name = "Hero",
+            maxHealth = 150,
+            health = 150,
+            maxMana = 200,
+            mana = 50,
+            position = center,
+        )
+        game.addPlayer(target)
+        var executed = 0
+        game.executeCreatureManaChangeEvents = { _, _, _ ->
+            executed++
+            true
+        }
+
+        val damage = CombatDamage(
+            primaryValue = -30,
+            primaryType = CombatType.MANADRAIN,
+            origin = CombatOrigin.SPELL,
+        )
+        assertThat(game.combatChangeMana(attacker, target, damage)).isTrue()
+
+        assertThat(executed).isEqualTo(1)
+        assertThat(damage.origin).isEqualTo(CombatOrigin.NONE)
+        assertThat(target.mana).isEqualTo(20)
+        assertThat(target.getDamageMap()[9L]?.total).isEqualTo(30)
+    }
+
     // ----- leech -----
 
     @Test
