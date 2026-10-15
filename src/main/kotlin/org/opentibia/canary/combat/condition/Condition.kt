@@ -1,6 +1,9 @@
 package org.opentibia.canary.combat.condition
 
+import org.opentibia.canary.io.PropStream
+import org.opentibia.canary.io.PropWriteStream
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.spells.SoundEffect
 
 /**
  * Base `Condition` (`src/creatures/combat/condition.cpp:144-557`,
@@ -30,7 +33,8 @@ abstract class Condition(
     protected val now: () -> Long = { System.currentTimeMillis() },
 ) {
     /** `Condition::id` (`condition.hpp:67`). */
-    val id: ConditionId = id
+    var id: ConditionId = id
+        protected set
 
     /** `Condition::conditionType` (`condition.hpp:66`); mutable in `ConditionSpeed::setParam`. */
     var type: ConditionType = type
@@ -54,6 +58,14 @@ abstract class Condition(
 
     /** `Condition::drainBodyStage` (`condition.hpp:62`). */
     var drainBodyStage: Int = 0
+        protected set
+
+    /** `Condition::tickSound` (`condition.hpp:74`), default `SILENCE`. */
+    var tickSound: SoundEffect = SoundEffect.SILENCE
+        protected set
+
+    /** `Condition::addSound` (`condition.hpp:75`), default `SILENCE`. */
+    var addSound: SoundEffect = SoundEffect.SILENCE
         protected set
 
     /** `Condition::ticks` (`condition.hpp:65`); mutated through [setTicks]. */
@@ -88,8 +100,8 @@ abstract class Condition(
             return false
         }
 
-        // `g_game().sendSingleSoundEffect` (`condition.cpp:319-321`) is a pure
-        // presentation side effect and has no engine-visible state.
+        // `g_game().sendSingleSoundEffect` (`condition.cpp:319-321`) is not
+        // reproduced; the configured `tickSound` id is retained and serialized.
         return true
     }
 
@@ -148,11 +160,13 @@ abstract class Condition(
             true
         }
 
-        ConditionParam.CONDITION_PARAM_SOUND_TICK,
-        ConditionParam.CONDITION_PARAM_SOUND_ADD,
-        -> {
-            // SoundEffect_t storage is presentation-only; accepted for parity
-            // with `condition.cpp:169-177` but not retained.
+        ConditionParam.CONDITION_PARAM_SOUND_TICK -> {
+            tickSound = soundEffectOf(value)
+            true
+        }
+
+        ConditionParam.CONDITION_PARAM_SOUND_ADD -> {
+            addSound = soundEffectOf(value)
             true
         }
 
@@ -161,6 +175,90 @@ abstract class Condition(
 
     /** `Condition::setPositionParam` (`condition.cpp:185-187`) — default rejects. */
     open fun setPositionParam(param: ConditionParam, pos: Position): Boolean = false
+
+    /**
+     * `Condition::serialize` (`condition.cpp:277-301`): the base header, the
+     * retained tick/add sound slots and the persistence flag. Subclasses append
+     * their payload through the same override chain the C++ virtual defines.
+     */
+    open fun serialize(stream: PropWriteStream) {
+        stream.writeU8(ConditionAttr.CONDITIONATTR_TYPE.value)
+        stream.writeU8(type.value)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_ID.value)
+        stream.writeU32(id.value.toLong() and 0xFFFFFFFFL)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_TICKS.value)
+        stream.writeU32(ticksValue.toLong() and 0xFFFFFFFFL)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_ISBUFF.value)
+        stream.writeU8(if (isBuff) 1 else 0)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_SUBID.value)
+        stream.writeU32(subId.toLong() and 0xFFFFFFFFL)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_TICKSOUND.value)
+        stream.writeU16(tickSound.value)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_ADDSOUND.value)
+        stream.writeU16(addSound.value)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_PERSISTENT.value)
+        stream.writeU8(if (isPersistentFlag) 1 else 0)
+    }
+
+    /**
+     * `Condition::unserialize` (`condition.cpp:189-197`): reads attribute
+     * records until `CONDITIONATTR_END`; a failed read exits the loop and keeps
+     * the condition, a rejected attribute drops it.
+     */
+    fun unserialize(stream: PropStream): Boolean {
+        while (true) {
+            val attrValue = stream.readU8() ?: break
+            if (attrValue == ConditionAttr.CONDITIONATTR_END.value) {
+                break
+            }
+
+            val attr = ConditionAttr.entries.firstOrNull { it.value == attrValue } ?: return false
+            if (!unserializeProp(attr, stream)) {
+                return false
+            }
+        }
+        return true
+    }
+
+    /**
+     * `Condition::unserializeProp` (`condition.cpp:199-275`): the base
+     * attributes. An unknown attribute returns `false` and drops the condition
+     * exactly like the C++ `default`.
+     */
+    open fun unserializeProp(attr: ConditionAttr, stream: PropStream): Boolean {
+        when (attr) {
+            ConditionAttr.CONDITIONATTR_TYPE -> {
+                val value = stream.readI32() ?: return false
+                type = ConditionType.entries.firstOrNull { it.value == value } ?: return false
+            }
+
+            ConditionAttr.CONDITIONATTR_ID -> {
+                val value = stream.readI32() ?: return false
+                id = ConditionId.entries
+                    .firstOrNull { (it.value.toLong() and 0xFFFFFFFFL) == (value.toLong() and 0xFFFFFFFFL) }
+                    ?: return false
+            }
+
+            ConditionAttr.CONDITIONATTR_TICKS -> ticksValue = stream.readI32() ?: return false
+            ConditionAttr.CONDITIONATTR_ISBUFF -> isBuff = (stream.readU8() ?: return false) != 0
+            ConditionAttr.CONDITIONATTR_SUBID -> subId = stream.readU32()?.toInt() ?: return false
+            ConditionAttr.CONDITIONATTR_TICKSOUND -> tickSound = soundEffectOf(stream.readU16() ?: return false)
+            ConditionAttr.CONDITIONATTR_ADDSOUND -> addSound = soundEffectOf(stream.readU16() ?: return false)
+            ConditionAttr.CONDITIONATTR_PERSISTENT -> isPersistentFlag = (stream.readU8() ?: return false) != 0
+
+            ConditionAttr.CONDITIONATTR_END -> Unit
+
+            else -> return false
+        }
+        return true
+    }
 
     /** `Condition::getIcons` (`condition.cpp:514-521`). */
     open fun getIcons(): Set<PlayerIcon> {
@@ -239,6 +337,62 @@ abstract class Condition(
 
             else -> null
         }
+
+        /**
+         * `Condition::createCondition(PropStream &)` (`condition.cpp:414-462`):
+         * the loader header reader. Every record must appear in the exact
+         * `TYPE`, `ID`, `TICKS`, `ISBUFF`, `SUBID` order the serializer writes;
+         * any mismatch returns `null` like the C++ guard chain. `isPersistent`
+         * is not part of the header (the `PERSISTENT` attribute restores it).
+         */
+        fun createCondition(stream: PropStream): Condition? {
+            if (stream.readU8() != ConditionAttr.CONDITIONATTR_TYPE.value) {
+                return null
+            }
+            val typeValue = stream.readU8() ?: return null
+
+            if (stream.readU8() != ConditionAttr.CONDITIONATTR_ID.value) {
+                return null
+            }
+            val idValue = stream.readU32() ?: return null
+
+            if (stream.readU8() != ConditionAttr.CONDITIONATTR_TICKS.value) {
+                return null
+            }
+            val ticks = stream.readU32()?.toInt() ?: return null
+
+            if (stream.readU8() != ConditionAttr.CONDITIONATTR_ISBUFF.value) {
+                return null
+            }
+            val buff = stream.readU8() ?: return null
+
+            if (stream.readU8() != ConditionAttr.CONDITIONATTR_SUBID.value) {
+                return null
+            }
+            val subId = stream.readU32() ?: return null
+
+            val type = ConditionType.entries.firstOrNull { it.value == typeValue } ?: return null
+            val id = ConditionId.entries
+                .firstOrNull { (it.value.toLong() and 0xFFFFFFFFL) == idValue }
+                ?: return null
+
+            return createCondition(
+                id = id,
+                type = type,
+                ticks = ticks,
+                param = 0,
+                buff = buff != 0,
+                subId = subId.toInt(),
+            )
+        }
+
+        /**
+         * `static_cast<SoundEffect_t>(value)` (condition.cpp:170, 175). The
+         * complete C++ value mirror backs every valid id; an unknown id
+         * normalizes to `SILENCE` like the Lua bridge does.
+         */
+        private fun soundEffectOf(value: Int): SoundEffect =
+            SoundEffect.entries.firstOrNull { it.value == value } ?: SoundEffect.SILENCE
 
         /**
          * `Condition::createCondition` (`condition.cpp:343-412`).
@@ -413,8 +567,14 @@ open class ConditionGeneric(
     }
 
     /** `ConditionGeneric::clone` (`condition.cpp:651-653`). */
-    override fun clone(): Condition =
-        ConditionGeneric(id, type, ticks, isBuff, subId, isPersistentFlag, now)
+    override fun clone(): Condition {
+        val copy = ConditionGeneric(id, type, ticks, isBuff, subId, isPersistentFlag, now)
+        copy.apply {
+            tickSound = this@ConditionGeneric.tickSound
+            addSound = this@ConditionGeneric.addSound
+        }
+        return copy
+    }
 
     /** `ConditionGeneric::startCondition` (`condition.cpp:566-568`). */
     override fun startCondition(target: ConditionTarget?): Boolean =

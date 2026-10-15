@@ -1,5 +1,7 @@
 package org.opentibia.canary.combat.condition
 
+import org.opentibia.canary.io.PropStream
+import org.opentibia.canary.io.PropWriteStream
 import kotlin.random.Random
 
 /**
@@ -146,6 +148,57 @@ class ConditionSpeed(
         }
     }
 
+    /** `ConditionSpeed::serialize` (`condition.cpp:2510-2535`). */
+    override fun serialize(stream: PropWriteStream) {
+        super.serialize(stream)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_SPEEDDELTA.value)
+        stream.writeI32(speedDelta)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_FORMULA_MINA.value)
+        stream.writeU32(mina.toRawBits().toLong() and 0xFFFFFFFFL)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_FORMULA_MINB.value)
+        stream.writeU32(minb.toRawBits().toLong() and 0xFFFFFFFFL)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_FORMULA_MAXA.value)
+        stream.writeU32(maxa.toRawBits().toLong() and 0xFFFFFFFFL)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_FORMULA_MAXB.value)
+        stream.writeU32(maxb.toRawBits().toLong() and 0xFFFFFFFFL)
+
+        if (owner != 0) {
+            stream.writeU8(ConditionAttr.CONDITIONATTR_OWNER.value)
+            stream.writeU32(owner.toLong() and 0xFFFFFFFFL)
+        }
+    }
+
+    /** `ConditionSpeed::unserializeProp` (`condition.cpp:2493-2508`). */
+    override fun unserializeProp(attr: ConditionAttr, stream: PropStream): Boolean {
+        when (attr) {
+            ConditionAttr.CONDITIONATTR_SPEEDDELTA ->
+                speedDelta = stream.readI32() ?: return false
+
+            ConditionAttr.CONDITIONATTR_OWNER ->
+                owner = stream.readU32()?.toInt() ?: return false
+
+            ConditionAttr.CONDITIONATTR_FORMULA_MINA ->
+                mina = Float.fromBits(stream.readI32() ?: return false)
+
+            ConditionAttr.CONDITIONATTR_FORMULA_MINB ->
+                minb = Float.fromBits(stream.readI32() ?: return false)
+
+            ConditionAttr.CONDITIONATTR_FORMULA_MAXA ->
+                maxa = Float.fromBits(stream.readI32() ?: return false)
+
+            ConditionAttr.CONDITIONATTR_FORMULA_MAXB ->
+                maxb = Float.fromBits(stream.readI32() ?: return false)
+
+            else -> return super.unserializeProp(attr, stream)
+        }
+        return true
+    }
+
     /** `ConditionSpeed::getIcons` (`condition.cpp:2616-2631`). */
     override fun getIcons(): Set<PlayerIcon> {
         val icons = super.getIcons().toMutableSet()
@@ -163,6 +216,8 @@ class ConditionSpeed(
         copy.apply {
             endTime = this@ConditionSpeed.endTime
             owner = this@ConditionSpeed.owner
+            tickSound = this@ConditionSpeed.tickSound
+            addSound = this@ConditionSpeed.addSound
             mina = this@ConditionSpeed.mina
             minb = this@ConditionSpeed.minb
             maxa = this@ConditionSpeed.maxa

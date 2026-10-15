@@ -1,5 +1,7 @@
 package org.opentibia.canary.combat.condition
 
+import org.opentibia.canary.io.PropStream
+import org.opentibia.canary.io.PropWriteStream
 import kotlin.math.roundToInt
 
 /**
@@ -57,6 +59,15 @@ class ConditionAttributes(
 
     /** `ConditionAttributes::disableDefense` (`condition.hpp:198`). */
     private var disableDefense: Boolean = false
+
+    /** `ConditionAttributes::currentSkill` (`condition.hpp:186`). */
+    private var currentSkill: Int = 0
+
+    /** `ConditionAttributes::currentStat` (`condition.hpp:187`). */
+    private var currentStat: Int = 0
+
+    /** `ConditionAttributes::currentBuff` (`condition.hpp:188`). */
+    private var currentBuff: Int = 0
 
     /** `ConditionAttributes::startCondition` (`condition.cpp:830-852`). */
     override fun startCondition(target: ConditionTarget?): Boolean {
@@ -494,6 +505,108 @@ class ConditionAttributes(
         }
     }
 
+    /**
+     * `ConditionAttributes::serialize` (`condition.cpp:786-825`): the base
+     * header plus every flat skill/stat/buff slot in sequential index order,
+     * the 14 `(index, value)` absorb and increase records and the charm
+     * modifier.
+     */
+    override fun serialize(stream: PropWriteStream) {
+        super.serialize(stream)
+
+        for (index in Skill.FIRST..Skill.LAST) {
+            stream.writeU8(ConditionAttr.CONDITIONATTR_SKILLS.value)
+            stream.writeI32(skills[index])
+        }
+
+        for (index in Stat.FIRST..Stat.LAST) {
+            stream.writeU8(ConditionAttr.CONDITIONATTR_STATS.value)
+            stream.writeI32(stats[index])
+        }
+
+        for (index in Buff.FIRST..Buff.LAST) {
+            stream.writeU8(ConditionAttr.CONDITIONATTR_BUFFS.value)
+            stream.writeI32(buffs[index])
+        }
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_ABSORBS.value)
+        for (index in 0 until COMBAT_COUNT) {
+            stream.writeU8(index)
+            stream.writeI32(getAbsorbByIndex(index))
+        }
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_INCREASES.value)
+        for (index in 0 until COMBAT_COUNT) {
+            stream.writeU8(index)
+            stream.writeI32(getIncreaseByIndex(index))
+        }
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_CHARM_CHANCE_MODIFIER.value)
+        stream.writeU8(charmChanceModifier)
+    }
+
+    /**
+     * `ConditionAttributes::unserializeProp` (`condition.cpp:749-783`).
+     *
+     * The C++ sequential writes (`skills[currentSkill++]`, `stats[...]`,
+     * `buffs[...]`) are unguarded; an overflowed index is rejected here instead
+     * of writing past the array. Out-of-range absorb/increase indexes keep the
+     * C++ `setAbsorb`/`setIncrease` behaviour and are skipped.
+     */
+    override fun unserializeProp(attr: ConditionAttr, stream: PropStream): Boolean {
+        when (attr) {
+            ConditionAttr.CONDITIONATTR_SKILLS -> {
+                val value = stream.readI32() ?: return false
+                val index = currentSkill++
+                if (index > Skill.LAST) {
+                    return false
+                }
+                skills[index] = value
+            }
+
+            ConditionAttr.CONDITIONATTR_STATS -> {
+                val value = stream.readI32() ?: return false
+                val index = currentStat++
+                if (index > Stat.LAST) {
+                    return false
+                }
+                stats[index] = value
+            }
+
+            ConditionAttr.CONDITIONATTR_BUFFS -> {
+                val value = stream.readI32() ?: return false
+                val index = currentBuff++
+                if (index > Buff.LAST) {
+                    return false
+                }
+                buffs[index] = value
+            }
+
+            ConditionAttr.CONDITIONATTR_ABSORBS -> {
+                for (index in 0 until COMBAT_COUNT) {
+                    val absorbIndex = stream.readU8() ?: return false
+                    val value = stream.readI32() ?: return false
+                    setAbsorb(absorbIndex, value)
+                }
+            }
+
+            ConditionAttr.CONDITIONATTR_INCREASES -> {
+                for (index in 0 until COMBAT_COUNT) {
+                    val increaseIndex = stream.readU8() ?: return false
+                    val value = stream.readI32() ?: return false
+                    setIncrease(increaseIndex, value)
+                }
+            }
+
+            ConditionAttr.CONDITIONATTR_CHARM_CHANCE_MODIFIER -> {
+                charmChanceModifier = (stream.readU8() ?: return false).toByte().toInt()
+            }
+
+            else -> return super.unserializeProp(attr, stream)
+        }
+        return true
+    }
+
     /** `ConditionAttributes::updatePercentStats` (`condition.cpp:854-878`). */
     private fun updatePercentStats(player: ConditionPlayer) {
         for (stat in Stat.ALL) {
@@ -658,6 +771,8 @@ class ConditionAttributes(
             charmChanceModifier = this@ConditionAttributes.charmChanceModifier
             disableDefense = this@ConditionAttributes.disableDefense
             drainBodyStage = this@ConditionAttributes.drainBodyStage
+            tickSound = this@ConditionAttributes.tickSound
+            addSound = this@ConditionAttributes.addSound
         }
         return copy
     }

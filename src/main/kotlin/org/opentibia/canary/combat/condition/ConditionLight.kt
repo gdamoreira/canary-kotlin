@@ -1,5 +1,8 @@
 package org.opentibia.canary.combat.condition
 
+import org.opentibia.canary.io.PropStream
+import org.opentibia.canary.io.PropWriteStream
+
 /**
  * `ConditionLight` (`src/creatures/combat/condition.cpp:2758-2879`,
  * `condition.hpp:437-458`).
@@ -111,6 +114,46 @@ class ConditionLight(
         }
     }
 
+    /** `ConditionLight::serialize` (`condition.cpp:2862-2881`). */
+    override fun serialize(stream: PropWriteStream) {
+        super.serialize(stream)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_LIGHTCOLOR.value)
+        stream.writeU32(lightInfo.color.toLong() and 0xFFFFFFFFL)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_LIGHTLEVEL.value)
+        stream.writeU32(lightInfo.level.toLong() and 0xFFFFFFFFL)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_LIGHTTICKS.value)
+        stream.writeU32(internalLightTicks.toLong() and 0xFFFFFFFFL)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_LIGHTINTERVAL.value)
+        stream.writeU32(lightChangeInterval.toLong() and 0xFFFFFFFFL)
+    }
+
+    /**
+     * `ConditionLight::unserializeProp` (`condition.cpp:2837-2860`): the four
+     * fields are written directly, without the `setParam` clamping.
+     */
+    override fun unserializeProp(attr: ConditionAttr, stream: PropStream): Boolean {
+        when (attr) {
+            ConditionAttr.CONDITIONATTR_LIGHTCOLOR ->
+                lightInfo.color = stream.readU32()?.toInt() ?: return false
+
+            ConditionAttr.CONDITIONATTR_LIGHTLEVEL ->
+                lightInfo.level = stream.readU32()?.toInt() ?: return false
+
+            ConditionAttr.CONDITIONATTR_LIGHTTICKS ->
+                internalLightTicks = stream.readU32()?.toInt() ?: return false
+
+            ConditionAttr.CONDITIONATTR_LIGHTINTERVAL ->
+                lightChangeInterval = stream.readU32()?.toInt() ?: return false
+
+            else -> return super.unserializeProp(attr, stream)
+        }
+        return true
+    }
+
     /** `ConditionLight::clone` (`condition.cpp:2809-2811`). */
     override fun clone(): Condition {
         val copy = ConditionLight(
@@ -126,6 +169,8 @@ class ConditionLight(
         copy.apply {
             endTime = this@ConditionLight.endTime
             owner = this@ConditionLight.owner
+            tickSound = this@ConditionLight.tickSound
+            addSound = this@ConditionLight.addSound
             internalLightTicks = this@ConditionLight.internalLightTicks
             lightChangeInterval = this@ConditionLight.lightChangeInterval
         }

@@ -45,6 +45,8 @@ class ConditionSpellCooldown(
         copy.apply {
             endTime = this@ConditionSpellCooldown.endTime
             owner = this@ConditionSpellCooldown.owner
+            tickSound = this@ConditionSpellCooldown.tickSound
+            addSound = this@ConditionSpellCooldown.addSound
         }
         return copy
     }
