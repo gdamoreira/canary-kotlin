@@ -24,6 +24,7 @@ This directory is the main documentation hub for **Canary Kotlin Edition**.
 | [`building/kotlin-rebuild.md`](building/kotlin-rebuild.md) | Gradle incremental/daemon builds, distribution install and JVM crash analysis |
 | [`development/shared-build-cache.md`](development/shared-build-cache.md) | Gradle build cache and configuration cache across worktrees and forks |
 | [`docker/quickstart-for-beginners.md`](docker/quickstart-for-beginners.md) | Docker quickstart: PostgreSQL 16 + Canary Kotlin server on ports 7171/7172 |
+| [`client-setup.md`](client-setup.md) | Local client setup (OTClient Redemption + login-server; MyAAC optional) |
 | [`lua-api/lua_api.md`](lua-api/lua_api.md) | Lua API reference (the API surface is unchanged because Lua stays Lua) |
 | [`maps/startup-loading-performance.md`](maps/startup-loading-performance.md) | Kotlin map loader pipeline (OTBM, appearance protobuf, MapDownload) and startup notes |
 | [`systems/README.md`](systems/README.md) | Cross-cutting system contracts |

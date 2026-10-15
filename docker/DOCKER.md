@@ -11,6 +11,8 @@ it so `docker compose up` also works from the root.
 
 For a beginner walkthrough see
 [`docs/docker/quickstart-for-beginners.md`](../docs/docker/quickstart-for-beginners.md).
+To connect a real client locally (OTClient Redemption + login-server; MyAAC is
+optional), see [`docs/client-setup.md`](../docs/client-setup.md).
 
 ---
 

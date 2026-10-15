@@ -765,6 +765,12 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 80: Local Client Setup Guide (02:00 – 03:00)
+- **OTClient Redemption configured** — cloned into `../otclient` and `init.lua` points at the local stack (`http://127.0.0.1:8088/login`, protocol 1525); the client's `OTSERV_RSA` verified equal to the server's default modulus.
+- **`docs/client-setup.md`** — end-to-end local guide: MariaDB single-database mode (server + login-server share the game DB), MyAAC explicitly optional, client build steps (macOS preset + Intel triplet override), test accounts and troubleshooting.
+
+---
+
 ### Current Status
 - **Automated Tests**: **820 test suites / 8464 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
