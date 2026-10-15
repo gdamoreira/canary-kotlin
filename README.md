@@ -329,8 +329,8 @@ change seeded accounts.
 - **Verification**: live differential harness (packet-capture A/B replay against
   a running Canary instance) — the strongest remaining parity proof.
 - **Depth closure**: work through the ranked gaps in
-  [`docs/development/implementation-status.md`](docs/development/implementation-status.md) §3 (event fanout,
-  spell-actor execution, condition payload, visibility overrides).
+  [`docs/development/implementation-status.md`](docs/development/implementation-status.md) §3 (persistence
+  call-site tails, combat/spell wiring, renderer seams).
 - **Operations**: expanded CI (matrix JDK builds, Docker smoke), metrics
   exporter parity.
 - **Content**: multi-datapack boot selection and map distribution.
@@ -352,9 +352,9 @@ change seeded accounts.
   only) — see [`docs/development/implementation-status.md`](docs/development/implementation-status.md) §3.
 - Legacy protocol profiles (CipSoft860/old-protocol branches) are partially
   unmodeled; the current profile is fully wired.
-- Some monster event fanout call sites (normal say/yell spectators, spell-damage
-  `onPlayerAttack`) remain unbound.
-- Condition flat stat/buff payloads are not encoded on save (reload zeroes them).
+- Persistence call-site tails (login condition delegation, guild registration,
+  VIP/exiva sub-loads) remain unwired — tracked in
+  [`docs/development/implementation-status.md`](docs/development/implementation-status.md) §3.
 - Performance numbers in `docs/hardware-sizing.md` are upstream C++ measurements,
   labeled as such.
 

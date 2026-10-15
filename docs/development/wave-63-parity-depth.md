@@ -1,6 +1,6 @@
 # Wave 63 Plan — Parity Depth: Combat/Spells, Events, Conditions, Visibility, Composition, Item Text
 
-**Status:** Planned — awaiting dispatch
+**Status:** Completed (2026-10-15) — six workstreams merged; 702 suites / 7781 tests green
 **Baseline:** `main` @ `ae516ea9`; 694 suites / 7653 tests green; zero Kotlin warnings
 **Source of scope:** `docs/development/implementation-status.md` §3 (ranked gaps) plus the highest-impact `PARITY GAP` annotations (530 across `src/main`, concentrated in `game/Game.kt` 107, `creatures/Creature.kt` 47, `lua/bindings/core/PlayerFunctions.kt` 42, `network/protocol/GamePacketRouter.kt` 33, `map/Tile.kt` 21).
 **Convention:** documents live directly in `docs/development/` (AGENTS.md §5/§6); no lifecycle folders.
@@ -200,3 +200,15 @@ and this document's status in place (no `Done/` move). Push the docs commit.
 - CipSoft860/old-protocol wire branches; OpenTelemetry SDK + OStream reader.
 - The remaining low-impact `PARITY GAP` micro-seams (KV LRU ordering, logger
   `DEBUG_LOG`, thread-pool daemon flags, `TransportCodec` tails).
+
+---
+
+## Completion (2026-10-15)
+
+All six workstreams landed: event fanout (`f333648e`), combat/spell execution
+(`50df4b83`), condition payload (`8a08fbad`), visibility/viewport (`3939c932`),
+composition wiring (`a9e35c2b`) and item description (`e23e4552`) — merged into
+`main` with the integrated suite at **702 suites / 7781 tests, 0 failures, zero
+Kotlin warnings**. Remaining tails are recorded in
+`implementation-status.md` §3 (persistence call-site wiring, combat/spell
+wiring, event/transport tails, renderer seams, map depth).

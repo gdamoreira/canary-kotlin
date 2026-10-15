@@ -43,7 +43,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | Monster engine (`monster.cpp`, 4,014 lines) | 198 unique `Monster::` methods | 89 name-matched + async pipelines + host + type state + barrier buckets | **~85%** | wave 51: barrier-parallel creature async buckets, budget/requeue/promotion/rollback |
 | Map engine (`map.cpp`) | — | — | **~85%** | sight/`canWalkTo`/pathing/caches/spectators/houses/towns (wave 38) |
 | Persistence (`iologindata*`, `iomapserialize`) | — | — | **~80%** | 24/24 iologindata, 10/10 iomapserialize, market/prey/bestiary/bosstiary/guild/storage (V10–V14) |
-| **Estimated full-parity completion** | — | — | **~99.5%** | tracked inventory complete; boot registers 67/67 datapack monster types via Lua, spawn path live, all persistence sub-loads wired, wheel APIs + storage composition done |
+| **Estimated full-parity completion** | — | — | **~99.7%** | tracked inventory complete; wave 63 closed event fanout, spell execution, condition payload, client viewport, sub-load composition and the look-at renderer |
 
 #### 1.2 Module completion (by inventory rows in §2)
 
@@ -261,13 +261,14 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 ### 3. Highest-Impact Gaps (ranked, verified)
 
-**The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Remaining work is depth polish:
+**The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Wave 63 closed the
+previous six gaps; remaining work is call-site wiring and depth tails:
 
-1. **Event fanout call sites** — normal say/yell `Game::internalCreatureSay` spectator fanout isn't bound to `onCreatureSayEvent`; `onPlayerAttack` doesn't fire from spell damage (`Combat.doCombatHealth`/`CombatTarget` carry no Monster identity); named `CreatureEvent`s dispatch globally rather than per-creature filtered.
-2. **Spell actor execution** — registry-hit `MonsterRegisteredSpell` resolves but doesn't run the spell's Lua `onCastSpell` (no runner bound); compiled-spell boot population.
-3. **Condition flat payload** — `ConditionAttributes` skills/stats/buffs/absorbs/increases/charm arrays not encoded on save (private arrays; reload zeroes); tick/add sounds written as SILENCE.
-4. **Visibility overrides** — `Player::canSee(pos)` client-viewport override (11 vs 8) unmodeled; `sendCreatureTurn` canSee gate + stackpos fallback; CipSoft860 square branch.
-5. **Composition leftovers** — `ServerBootstrap` doesn't pass `subloadRepository`/`subloads`; `Player::isOffline` gate; V13 interim animus table retained.
+1. **Persistence call-site tails** — `IOLoginDataSubloads.loadPlayerConditions` still runs its own partial reader (buffs/absorbs/increases/soul/capacity skipped at login; delegate to `PlayerConditionPersistence.decodeConditions`); guild loaded at login is never registered in `Game.guilds`; `loadPlayerVip`/`loadPlayerExivaRestrictions` inert; `monsterTypeByRaceId` seam unported; `SaveManager.registerOnlinePlayer` gap.
+2. **Combat/spell wiring tails** — no production `CombatTarget` adapter for `onAttackedByPlayer` (Game.kt host wiring); `InstantSpell::canThrowSpell` range/sight seam; `CombatFunc` area-dispatch consumption tail; skill operand push for `valueCallback`; `getAimAtTargetSpells` population.
+3. **Event/transport tails** — global named-event dispatch (`ScriptingDispatch`) not yet walking the per-creature attached set; `creatureEventRegistered` boot injection; spawn-path `MonsterPipelinesHost.onSpawn` call site; `Game.sendCreatureTurn` composition wiring; non-`PlayerSendSink` transports keep the silent appear branch.
+4. **Renderer seam wiring** — `Item::getDescription` seams (items/spells/vocations/objectCategory) are unpassed from the composition root, so fluid/splash/rune/imbuement text degrades; Lua `item:getDescription` and the plural `Item::getDescriptions` remain unwired; shop look path.
+5. **Map depth** — `Tile.queryAdd` partial (monster push/field rules, account/PZ-lock, expert-PvP step, `Creature::isMoveLocked`).
 
 ---
 
