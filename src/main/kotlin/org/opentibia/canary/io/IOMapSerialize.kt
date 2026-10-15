@@ -1,6 +1,7 @@
 package org.opentibia.canary.io
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import org.opentibia.canary.database.SqlDialect
 import org.opentibia.canary.items.ATTR_CONTAINER_ITEMS
 import org.opentibia.canary.items.BedItem
 import org.opentibia.canary.items.Container
@@ -481,40 +482,11 @@ class IOMapSerialize(
     /** `IOMapSerialize::SaveHouseInfoGuard` (iomapserialize.cpp:403-468). */
     private fun saveHouseInfoGuard(connection: Connection): Boolean {
         // Canary uses MySQL `ON DUPLICATE KEY UPDATE` (DBInsert::execute,
-        // database.cpp:453-481). PostgreSQL 16 gets the equivalent
-        // `ON CONFLICT ... DO UPDATE`; H2's PostgreSQL mode does not parse
-        // `ON CONFLICT DO UPDATE`, so local runs use H2's `MERGE ... KEY`.
-        val h2 = !connection.metaData.databaseProductName.contains("PostgreSQL", ignoreCase = true)
-        val houseUpdate = if (h2) {
-            """
-            MERGE INTO houses (id, owner, paid, warnings, name, town_id, rent, size, beds, bidder,
-                bidder_name, highest_bid, internal_bid, bid_end_date, state, transfer_status)
-            KEY (id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """.trimIndent()
-        } else {
-            """
-            INSERT INTO houses (id, owner, paid, warnings, name, town_id, rent, size, beds, bidder,
-                bidder_name, highest_bid, internal_bid, bid_end_date, state, transfer_status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT (id) DO UPDATE SET
-                owner = EXCLUDED.owner,
-                paid = EXCLUDED.paid,
-                warnings = EXCLUDED.warnings,
-                name = EXCLUDED.name,
-                town_id = EXCLUDED.town_id,
-                rent = EXCLUDED.rent,
-                size = EXCLUDED.size,
-                beds = EXCLUDED.beds,
-                bidder = EXCLUDED.bidder,
-                bidder_name = EXCLUDED.bidder_name,
-                highest_bid = EXCLUDED.highest_bid,
-                internal_bid = EXCLUDED.internal_bid,
-                bid_end_date = EXCLUDED.bid_end_date,
-                state = EXCLUDED.state,
-                transfer_status = EXCLUDED.transfer_status
-            """.trimIndent()
-        }
+        // database.cpp:453-481), which MariaDB reuses verbatim. PostgreSQL 16
+        // gets the equivalent `ON CONFLICT ... DO UPDATE`; H2's PostgreSQL
+        // mode does not parse it, so local runs keep their `MERGE ... KEY`.
+        val dialect = SqlDialect.from(connection)
+        val houseUpdate = houseUpsertSql(dialect)
 
         connection.prepareStatement(houseUpdate).use { stmt ->
             for (house in map.houses.getHouses()) {
@@ -539,21 +511,7 @@ class IOMapSerialize(
             stmt.executeBatch()
         }
 
-        val listUpdate = if (h2) {
-            """
-            MERGE INTO house_lists (house_id, listid, list, version)
-            KEY (house_id, listid)
-            VALUES (?, ?, ?, ?)
-            """.trimIndent()
-        } else {
-            """
-            INSERT INTO house_lists (house_id, listid, list, version)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT (house_id, listid) DO UPDATE SET
-                list = EXCLUDED.list,
-                version = EXCLUDED.version
-            """.trimIndent()
-        }
+        val listUpdate = houseListsUpsertSql(dialect)
 
         val version = getTimeUsNow()
         connection.prepareStatement(listUpdate).use { stmt ->
@@ -629,6 +587,96 @@ class IOMapSerialize(
     private fun getTimeUsNow(): Long {
         val instant = Instant.now()
         return instant.epochSecond * 1_000_000 + instant.nano / 1000
+    }
+
+    companion object {
+        /**
+         * `houses` upsert of `SaveHouseInfoGuard` (iomapserialize.cpp:407-424):
+         * the 15 non-id upsert columns of `houseUpdate.upsert({...})` in C++.
+         */
+        internal fun houseUpsertSql(dialect: SqlDialect): String = when (dialect) {
+            SqlDialect.H2 -> """
+                MERGE INTO houses (id, owner, paid, warnings, name, town_id, rent, size, beds, bidder,
+                    bidder_name, highest_bid, internal_bid, bid_end_date, state, transfer_status)
+                KEY (id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """.trimIndent()
+
+            SqlDialect.POSTGRESQL -> """
+                INSERT INTO houses (id, owner, paid, warnings, name, town_id, rent, size, beds, bidder,
+                    bidder_name, highest_bid, internal_bid, bid_end_date, state, transfer_status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET
+                    owner = EXCLUDED.owner,
+                    paid = EXCLUDED.paid,
+                    warnings = EXCLUDED.warnings,
+                    name = EXCLUDED.name,
+                    town_id = EXCLUDED.town_id,
+                    rent = EXCLUDED.rent,
+                    size = EXCLUDED.size,
+                    beds = EXCLUDED.beds,
+                    bidder = EXCLUDED.bidder,
+                    bidder_name = EXCLUDED.bidder_name,
+                    highest_bid = EXCLUDED.highest_bid,
+                    internal_bid = EXCLUDED.internal_bid,
+                    bid_end_date = EXCLUDED.bid_end_date,
+                    state = EXCLUDED.state,
+                    transfer_status = EXCLUDED.transfer_status
+                """.trimIndent()
+
+            // `DBInsert::execute` renders `` `col` = VALUES(`col`) `` for the
+            // upsert columns (database.cpp:455-467).
+            SqlDialect.MARIADB -> """
+                INSERT INTO houses (id, owner, paid, warnings, name, town_id, rent, size, beds, bidder,
+                    bidder_name, highest_bid, internal_bid, bid_end_date, state, transfer_status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    owner = VALUES(owner),
+                    paid = VALUES(paid),
+                    warnings = VALUES(warnings),
+                    name = VALUES(name),
+                    town_id = VALUES(town_id),
+                    rent = VALUES(rent),
+                    size = VALUES(size),
+                    beds = VALUES(beds),
+                    bidder = VALUES(bidder),
+                    bidder_name = VALUES(bidder_name),
+                    highest_bid = VALUES(highest_bid),
+                    internal_bid = VALUES(internal_bid),
+                    bid_end_date = VALUES(bid_end_date),
+                    state = VALUES(state),
+                    transfer_status = VALUES(transfer_status)
+                """.trimIndent()
+        }
+
+        /**
+         * `house_lists` upsert of `SaveHouseInfoGuard` (iomapserialize.cpp:426-449):
+         * the `list`/`version` upsert columns of
+         * `listUpdate.upsert({"list", "version"})` in C++.
+         */
+        internal fun houseListsUpsertSql(dialect: SqlDialect): String = when (dialect) {
+            SqlDialect.H2 -> """
+                MERGE INTO house_lists (house_id, listid, list, version)
+                KEY (house_id, listid)
+                VALUES (?, ?, ?, ?)
+                """.trimIndent()
+
+            SqlDialect.POSTGRESQL -> """
+                INSERT INTO house_lists (house_id, listid, list, version)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (house_id, listid) DO UPDATE SET
+                    list = EXCLUDED.list,
+                    version = EXCLUDED.version
+                """.trimIndent()
+
+            SqlDialect.MARIADB -> """
+                INSERT INTO house_lists (house_id, listid, list, version)
+                VALUES (?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    list = VALUES(list),
+                    version = VALUES(version)
+                """.trimIndent()
+        }
     }
 }
 
