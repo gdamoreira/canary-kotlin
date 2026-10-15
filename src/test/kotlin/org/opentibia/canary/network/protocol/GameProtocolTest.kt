@@ -72,7 +72,11 @@ class GameProtocolTest {
 
         val bodyBuf = Unpooled.buffer()
         bodyBuf.writeShortLE(2) // OS
-        bodyBuf.writeShortLE(1098) // Protocol version
+        bodyBuf.writeShortLE(CLIENT_VERSION)
+        bodyBuf.writeIntLE(CLIENT_VERSION)
+        bodyBuf.writeTibiaString("")
+        bodyBuf.writeTibiaString("")
+        bodyBuf.writeByte(0)
         bodyBuf.writeBytes(rsaEncrypted)
 
         val checksum = Adler32Checksum.compute(bodyBuf, 0, bodyBuf.readableBytes())

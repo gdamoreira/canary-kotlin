@@ -12,6 +12,7 @@ import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Npc
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.Slots_t
+import org.opentibia.canary.creatures.players.ExivaRestrictions
 import org.opentibia.canary.creatures.players.PlayerFrameSink
 import org.opentibia.canary.creatures.players.PlayerSendSink
 import org.opentibia.canary.creatures.players.vip.VipClient
@@ -134,6 +135,41 @@ interface ProtocolSink : VipClient {
      * resolves from the client build string.
      */
     fun sendWeaponProficiencyWindow(weaponId: Int, sendDetailList: Boolean = false)
+
+    /**
+     * `ProtocolGame::sendWeaponProficiency(weaponId)` (0x5C,
+     * protocolgame.cpp:12313-12327). `weaponId == 0` resolves
+     * `Player::getWeaponId(true)`; the trailing frame always accompanies the
+     * `0xB3` window response.
+     */
+    fun sendWeaponProficiency(weaponId: Int)
+
+    /**
+     * `ProtocolGame::sendCreatureHelpers(creatureId, helpers)` (0x94,
+     * protocolgame.cpp:10928-10938). The `oldProtocol` early return lives in the
+     * session transport ([NettyProtocolSink]); the `Player::client != nullptr`
+     * gate is the sink itself (player.cpp:1820-1823). Transports without the
+     * negotiated profile stay silent.
+     */
+    fun sendCreatureHelpers(creatureId: Long, helpers: Int) {
+    }
+
+    /**
+     * `ProtocolGame::sendExivaRestrictions(isLogin, added..., removed...)`
+     * (0xCA, protocolgame.cpp:12252-12312). Login mode resolves the stored
+     * player/guild whitelists into names; update mode echoes the added/removed
+     * name lists a `parseExivaRestrictions` apply produced. The transports
+     * without a session whitelist resolver keep the empty default, and a
+     * `ProtocolGame::oldProtocol`/`player == nullptr` gate stays with the caller.
+     */
+    fun sendExivaRestrictions(
+        isLogin: Boolean = false,
+        addedPlayerNames: List<String> = emptyList(),
+        removedPlayerNames: List<String> = emptyList(),
+        addedGuildNames: List<String> = emptyList(),
+        removedGuildNames: List<String> = emptyList(),
+    ) {
+    }
 }
 
 /**
@@ -159,6 +195,13 @@ data class SelfAppearTail(
     val storeCoinPacket: Int = STORE_COIN_PACKET_DEFAULT,
     val oldProtocol: Boolean = false,
     val exivaEnabled: Boolean = false,
+    /**
+     * `hasInlineBugReportFlag` (protocolgame.cpp:8653-8656):
+     * `oldProtocol && (version >= 1054 || ProtocolFeature::InlineLoginBugReportFlag)`.
+     */
+    val inlineBugReportFlag: Boolean = false,
+    /** `Player::getAccountType() >= ACCOUNT_TYPE_NORMAL` byte value (protocolgame.cpp:8654-8658). */
+    val bugReportEnabled: Boolean = true,
 )
 
 /** `STORE_COIN_PACKET` config default (`loadIntConfig(..., 25)`, configmanager.cpp:359). */
@@ -181,6 +224,16 @@ abstract class ProtocolFrameSink(
      * `null` models a player without an open shop window.
      */
     private val shopOwner: (Player) -> Npc? = { null },
+    /**
+     * `WeaponProficiency::isUpgradeAvailable(weaponId)` resolver for the 0x5C
+     * frame (weapon_proficiency.cpp:823-864); the transports without the
+     * `proficiencies.json` registry report `false` like the C++ missing set.
+     */
+    private val weaponProficiencyUpgradeAvailable: (Int) -> Boolean = { false },
+    /** `IOLoginData::getNameByGuid` behind the login-mode 0xCA whitelist (protocolgame.cpp:12273). */
+    private val playerNameByGuid: (Long) -> String = { "" },
+    /** `g_game().getGuild(id, true)->getName()` behind the login-mode 0xCA whitelist (protocolgame.cpp:12292). */
+    private val guildNameById: (Long) -> String = { "" },
 ) : ProtocolSink {
 
     /**
@@ -391,6 +444,70 @@ abstract class ProtocolFrameSink(
         }
     }
 
+    /**
+     * `ProtocolGame::sendWeaponProficiency` (protocolgame.cpp:12313-12327):
+     * `weaponId == 0` resolves the equipped weapon and the experience comes from
+     * the player's per-weapon proficiency state. The `oldProtocol` early return
+     * (protocolgame.cpp:12314) stays with the session caller, whose `0xB3` parse
+     * gate already suppresses the frame.
+     */
+    override fun sendWeaponProficiency(weaponId: Int) {
+        val resolvedWeaponId = if (weaponId > 0) weaponId else player.getWeaponId(true)
+        val experience = player.features.weaponProficiencies[resolvedWeaponId]?.experience ?: 0
+        val upgradeAvailable = resolvedWeaponId > 0 && weaponProficiencyUpgradeAvailable(resolvedWeaponId)
+
+        emit {
+            WeaponProficiencyPayload.writeWeaponProficiency(
+                this,
+                weaponId = resolvedWeaponId,
+                experience = experience,
+                upgradeAvailable = upgradeAvailable,
+            )
+        }
+    }
+
+    /**
+     * `ProtocolGame::sendExivaRestrictions` (protocolgame.cpp:12252-12312):
+     * login mode resolves the stored guid/id whitelists through the injected
+     * `IOLoginData::getNameByGuid` / `Game::getGuild(id, true)` providers, update
+     * mode echoes the added/removed name lists the apply produced.
+     */
+    override fun sendExivaRestrictions(
+        isLogin: Boolean,
+        addedPlayerNames: List<String>,
+        removedPlayerNames: List<String>,
+        addedGuildNames: List<String>,
+        removedGuildNames: List<String>,
+    ) {
+        val restrictions = player.getExivaRestrictions()
+        val flags = exivaFlags(restrictions)
+
+        if (isLogin) {
+            emit {
+                MiscDataWriter.writeExivaRestrictions(
+                    this,
+                    flags,
+                    isLogin = true,
+                    playerWhitelistNames = restrictions.playerWhitelist.map(playerNameByGuid),
+                    guildWhitelistNames = restrictions.guildWhitelist.map(guildNameById),
+                )
+            }
+            return
+        }
+
+        emit {
+            MiscDataWriter.writeExivaRestrictions(
+                this,
+                flags,
+                isLogin = false,
+                addedPlayerNames = addedPlayerNames,
+                removedPlayerNames = removedPlayerNames,
+                addedGuildNames = addedGuildNames,
+                removedGuildNames = removedGuildNames,
+            )
+        }
+    }
+
     // --- VIP sends ---------------------------------------------------------------
 
     /**
@@ -597,6 +714,17 @@ abstract class ProtocolFrameSink(
 /** `MAX_STACKPOS` (`src/server/network/protocol/protocolgame.hpp`). */
 internal const val PROTOCOL_MAX_STACKPOS: Int = 10
 
+/** `ExivaRestrictions` flag bytes (`player.hpp`, protocolgame.cpp:12261-12267). */
+internal fun exivaFlags(restrictions: ExivaRestrictions): MiscDataWriter.ExivaRestrictionFlags =
+    MiscDataWriter.ExivaRestrictionFlags(
+        allowAll = if (restrictions.allowAll) 1 else 0,
+        allowOwnGuild = if (restrictions.allowOwnGuild) 1 else 0,
+        allowOwnParty = if (restrictions.allowOwnParty) 1 else 0,
+        allowVipList = if (restrictions.allowVipList) 1 else 0,
+        allowPlayerWhitelist = if (restrictions.allowPlayerWhitelist) 1 else 0,
+        allowGuildWhitelist = if (restrictions.allowGuildWhitelist) 1 else 0,
+    )
+
 /** `ProtocolGame::canSee(x, y, z)` (protocolgame.cpp:2396-2411). */
 internal fun protocolCanSeePosition(player: Player, x: Int, y: Int, z: Int): Boolean {
     val myPos = player.position
@@ -673,6 +801,12 @@ class NettyProtocolSink private constructor(
     private val shopOwner: (Player) -> Npc?,
     /** `ProtocolGame` session state behind the self appear frame (protocolgame.cpp:8641-8682). */
     private val selfAppearTail: SelfAppearTail,
+    /** `WeaponProficiency::isUpgradeAvailable(weaponId)` for the 0x5C frame. */
+    private val weaponProficiencyUpgradeAvailable: (Int) -> Boolean,
+    /** `IOLoginData::getNameByGuid` behind the login-mode 0xCA whitelist (protocolgame.cpp:12273). */
+    private val playerNameByGuid: (Long) -> String,
+    /** `g_game().getGuild(id, true)->getName()` behind the login-mode 0xCA whitelist (protocolgame.cpp:12292). */
+    private val guildNameById: (Long) -> String,
 ) : PlayerSendSink by delegate {
 
     constructor(
@@ -685,6 +819,12 @@ class NettyProtocolSink private constructor(
         shopOwner: (Player) -> Npc? = { null },
         /** The negotiated session tail of the self appear frame. */
         selfAppearTail: SelfAppearTail = SelfAppearTail(),
+        /** `WeaponProficiency::isUpgradeAvailable(weaponId)` for the 0x5C frame. */
+        weaponProficiencyUpgradeAvailable: (Int) -> Boolean = { false },
+        /** `IOLoginData::getNameByGuid` behind the login-mode 0xCA whitelist. */
+        playerNameByGuid: (Long) -> String = { "" },
+        /** `g_game().getGuild(id, true)->getName()` behind the login-mode 0xCA whitelist. */
+        guildNameById: (Long) -> String = { "" },
     ) : this(
         channel,
         player,
@@ -704,7 +844,21 @@ class NettyProtocolSink private constructor(
         ),
         shopOwner,
         selfAppearTail,
+        weaponProficiencyUpgradeAvailable,
+        playerNameByGuid,
+        guildNameById,
     )
+
+    /** Queues one frame on the session channel (fire-and-forget; closed channel releases). */
+    private inline fun emitSessionFrame(build: ByteBuf.() -> Unit) {
+        val frame = channel.alloc().buffer()
+        frame.build()
+        if (channel.isActive) {
+            channel.writeAndFlush(frame)
+        } else {
+            frame.release()
+        }
+    }
 
     /**
      * `ProtocolGame::sendAddCreature`'s `creature == player` branch resolved
@@ -733,14 +887,77 @@ class NettyProtocolSink private constructor(
     }
 
     override fun sendSaleItemList(inventoryMap: Map<Int, Int>) {
-        emitSaleItemList(player, shopOwner(player), inventoryMap) { build ->
-            val frame = channel.alloc().buffer()
-            frame.build()
-            if (channel.isActive) {
-                channel.writeAndFlush(frame)
-            } else {
-                frame.release()
+        emitSaleItemList(player, shopOwner(player), inventoryMap) { build -> emitSessionFrame(build) }
+    }
+
+    /**
+     * `ProtocolGame::sendCreatureHelpers` (protocolgame.cpp:10928-10938): the
+     * `oldProtocol` early return is the session's negotiated profile.
+     */
+    override fun sendCreatureHelpers(creatureId: Long, helpers: Int) {
+        if (!selfAppearTail.oldProtocol) {
+            return
+        }
+
+        emitSessionFrame { CreaturePacketWriter.writeCreatureHelpers(this, creatureId, helpers) }
+    }
+
+    /**
+     * `ProtocolGame::sendWeaponProficiency` (protocolgame.cpp:12313-12327) over
+     * this session's `isUpgradeAvailable` resolver.
+     */
+    override fun sendWeaponProficiency(weaponId: Int) {
+        val resolvedWeaponId = if (weaponId > 0) weaponId else player.getWeaponId(true)
+        val experience = player.features.weaponProficiencies[resolvedWeaponId]?.experience ?: 0
+        val upgradeAvailable = resolvedWeaponId > 0 && weaponProficiencyUpgradeAvailable(resolvedWeaponId)
+
+        emitSessionFrame {
+            WeaponProficiencyPayload.writeWeaponProficiency(
+                this,
+                weaponId = resolvedWeaponId,
+                experience = experience,
+                upgradeAvailable = upgradeAvailable,
+            )
+        }
+    }
+
+    /**
+     * `ProtocolGame::sendExivaRestrictions` (protocolgame.cpp:12252-12312) with
+     * this session's `IOLoginData::getNameByGuid` / `Game::getGuild` resolvers.
+     */
+    override fun sendExivaRestrictions(
+        isLogin: Boolean,
+        addedPlayerNames: List<String>,
+        removedPlayerNames: List<String>,
+        addedGuildNames: List<String>,
+        removedGuildNames: List<String>,
+    ) {
+        val restrictions = player.getExivaRestrictions()
+        val flags = exivaFlags(restrictions)
+
+        if (isLogin) {
+            emitSessionFrame {
+                MiscDataWriter.writeExivaRestrictions(
+                    this,
+                    flags,
+                    isLogin = true,
+                    playerWhitelistNames = restrictions.playerWhitelist.map(playerNameByGuid),
+                    guildWhitelistNames = restrictions.guildWhitelist.map(guildNameById),
+                )
             }
+            return
+        }
+
+        emitSessionFrame {
+            MiscDataWriter.writeExivaRestrictions(
+                this,
+                flags,
+                isLogin = false,
+                addedPlayerNames = addedPlayerNames,
+                removedPlayerNames = removedPlayerNames,
+                addedGuildNames = addedGuildNames,
+                removedGuildNames = removedGuildNames,
+            )
         }
     }
 }

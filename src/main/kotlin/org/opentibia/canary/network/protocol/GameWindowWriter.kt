@@ -882,10 +882,11 @@ object GameWindowWriter {
      * expert-PvP control bytes, the `version >= 1080` store-images URL /
      * coin-packet pair and the `!oldProtocol` exiva-button byte.
      *
-     * PARITY GAPS: the `oldProtocol && (version >= 1054 ||
-     * InlineLoginBugReportFlag)` inline bug-report flag byte written before the
-     * `>= 1054` byte (protocolgame.cpp:8653-8660) is not modeled; the port's
-     * supported profiles take the current-profile arm.
+     * The `oldProtocol && (version >= 1054 || InlineLoginBugReportFlag)` inline
+     * bug-report flag byte is written before the `>= 1054` byte
+     * (protocolgame.cpp:8653-8658); [SelfAppearTail.inlineBugReportFlag] is the
+     * resolved gate and [SelfAppearTail.bugReportEnabled] the
+     * `getAccountType() >= ACCOUNT_TYPE_NORMAL` value.
      */
     fun writeSelfAddCreature(
         out: ByteBuf,
@@ -900,6 +901,10 @@ object GameWindowWriter {
             out.writeCanaryDouble(SPEED_A, LOGIN_SPEED_PRECISION)
             out.writeCanaryDouble(SPEED_B, LOGIN_SPEED_PRECISION)
             out.writeCanaryDouble(SPEED_C, LOGIN_SPEED_PRECISION)
+        }
+
+        if (tail.inlineBugReportFlag) {
+            out.writeByte(if (tail.bugReportEnabled) 0x01 else 0x00)
         }
 
         if (tail.clientVersion >= 1054) {

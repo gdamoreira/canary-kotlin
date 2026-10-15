@@ -15,7 +15,14 @@ import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.LuaEventDispatcher
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.network.protocol.offline.StartOfflineTrainingPacketParser
+import org.opentibia.canary.network.protocol.proficiency.ItemRegistryProficiencyItems
 import org.opentibia.canary.network.protocol.proficiency.WeaponProficiencyPayload
+import org.opentibia.canary.network.protocol.proficiency.WeaponProficiencySelection
+import org.opentibia.canary.spells.WorldType
+import org.opentibia.canary.systems.proficiency.InMemoryWeaponProficiencyItems
+import org.opentibia.canary.systems.proficiency.Proficiency
+import org.opentibia.canary.systems.proficiency.ProficiencyItemType
+import org.opentibia.canary.systems.proficiency.WeaponProficiencyItems
 import org.opentibia.canary.network.protocol.rewardchest.RewardChestCollectPacketParser
 import org.opentibia.canary.network.protocol.bestiary.BestiaryPacketParser
 import org.opentibia.canary.network.protocol.forge.ForgePacketParser
@@ -86,7 +93,29 @@ data class GamePacketContext(
      * (`ProtocolFeature::OfficialWeaponProficiencyPayload`) reads it. `null`
      * keeps the short 0xC4 shape.
      */
-    val protocolProfile: ProtocolProfile? = null
+    val protocolProfile: ProtocolProfile? = null,
+    /**
+     * `WeaponProficiency::proficiencies` registry loaded from
+     * `proficiencies.json` (`WeaponProficiency::loadFromJson`,
+     * weapon_proficiency.cpp:79): the `0xB3` action `0x03` perk selection
+     * validates and resolves against it. Empty when the boot registry is not
+     * reachable, which makes every selection a no-op exactly like the C++
+     * missing-registry branch (weapon_proficiency.cpp:607-610).
+     */
+    val weaponProficiencyRegistry: Map<Int, Proficiency> = emptyMap(),
+    /**
+     * `IOLoginData::getGuidByName` (src/io/iologindata.cpp:310-320) behind the
+     * exiva player-whitelist apply (`ProtocolGame::parseExivaRestrictions`,
+     * protocolgame.cpp:12227).
+     */
+    val exivaPlayerGuidByName: (String) -> Long = { 0L },
+    /**
+     * `IOGuild::getGuildIdByName` (src/io/ioguild.cpp:47-58) behind the exiva
+     * guild-whitelist apply (protocolgame.cpp:12239).
+     */
+    val exivaGuildIdByName: (String) -> Long = { 0L },
+    /** `MAX_EXIVA_WHITELIST` (configmanager, default 100). */
+    val maxExivaWhitelist: Int = 100,
 )
 
 object GamePacketRouter {
@@ -1056,31 +1085,37 @@ object GamePacketRouter {
 
                 // Weapon proficiency: 0xB3 parseWeaponProficiency
                 WeaponProficiencyPacketHandler.OPCODE_WEAPON_PROFICIENCY -> {
-                    val command = WeaponProficiencyPacketHandler.parse(buffer)
-                    if (command == null) {
-                        false
-                    } else {
-                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            when (command) {
-                                // `action == 0x01` (protocolgame.cpp:3135-3141): one
-                                // `sendWeaponProficiencyWindow` per tracked weapon id,
-                                // sorted by `WeaponProficiency::getTrackedWeaponIds`
-                                // (weapon_proficiency.cpp:320-329). The action reads no
-                                // further payload and returns before the trailing
-                                // window/proficiency sends.
-                                is WeaponProficiencyWindowsCommand ->
-                                    sendTrackedWeaponWindows(player, context)
-
-                                // Actions 0x02-0x09 mutate the selected-perk state
-                                // (`clearSelectedPerks`/`setSelectedPerk`/`applyPerks`,
-                                // weapon_proficiency.cpp:575-640) before the trailing
-                                // window/proficiency sends; that component surface is not
-                                // ported, so the decoded command only marks the
-                                // confinement boundary (PARITY GAP).
-                                is WeaponProficiencyActionCommand -> Unit
-                            }
-                        }
+                    // `parseWeaponProficiency` returns before the action switch for
+                    // old-protocol sessions (protocolgame.cpp:3131-3133); the
+                    // payload is decoded and dropped like the C++ unread bytes.
+                    if (context.protocolProfile?.hasFeature(ProtocolFeature.OldProtocolCompat) == true) {
+                        buffer.skipBytes(buffer.readableBytes())
                         true
+                    } else {
+                        val command = WeaponProficiencyPacketHandler.parse(buffer)
+                        if (command == null) {
+                            false
+                        } else {
+                            context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                                when (command) {
+                                    // `action == 0x01` (protocolgame.cpp:3135-3141): one
+                                    // `sendWeaponProficiencyWindow` per tracked weapon id,
+                                    // sorted by `WeaponProficiency::getTrackedWeaponIds`
+                                    // (weapon_proficiency.cpp:320-329). The action reads no
+                                    // further payload and returns before the trailing
+                                    // window/proficiency sends.
+                                    is WeaponProficiencyWindowsCommand ->
+                                        sendTrackedWeaponWindows(player, context)
+
+                                    // Actions 0x00/0x02-0x09 mutate the selected-perk
+                                    // state before the trailing window (0xC4) and
+                                    // proficiency (0x5C) sends (protocolgame.cpp:3157-3202).
+                                    is WeaponProficiencyActionCommand ->
+                                        applyWeaponProficiencyAction(player, command, context)
+                                }
+                            }
+                            true
+                        }
                     }
                 }
 
@@ -1185,7 +1220,49 @@ object GamePacketRouter {
                     }
                 }
 
-                in ContainerBrowsePacketHandler.OPCODE_LIVESTREAM_VIEWER_CONTAINER..ContainerBrowsePacketHandler.OPCODE_SEEK_IN_CONTAINER -> {
+                // Exiva restrictions: 0xCA parseExivaRestrictions
+                ExivaRestrictionsPacketHandler.OPCODE_EXIVA_RESTRICTIONS -> {
+                    // `parsePacketFromDispatcher` gates the parse on
+                    // `!oldProtocol && g_game().getWorldType() == WORLD_TYPE_NO_PVP`
+                    // (protocolgame.cpp:1992-1996) and the function repeats the
+                    // `WORLD_TYPE == "no-pvp"` check (protocolgame.cpp:12210-12212);
+                    // on any other session the payload is not the normal-client
+                    // unrestricted 0xCA and the frame tail is dropped. The
+                    // livestream-viewer container resend for the same opcode is a
+                    // PARITY GAP (the port has no viewer sessions).
+                    val profile = context.protocolProfile
+                    val parsesExiva = profile?.hasFeature(ProtocolFeature.OldProtocolCompat) != true &&
+                        context.game?.getWorldType() == WorldType.NO_PVP
+                    if (!parsesExiva) {
+                        buffer.skipBytes(buffer.readableBytes())
+                        true
+                    } else {
+                        val command = ExivaRestrictionsPacketHandler.parse(buffer)
+                        if (command == null) {
+                            false
+                        } else {
+                            context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                                val echo = ExivaRestrictionsPacketHandler.apply(
+                                    player = player,
+                                    command = command,
+                                    maxWhitelist = context.maxExivaWhitelist,
+                                    playerGuidByName = context.exivaPlayerGuidByName,
+                                    guildIdByName = context.exivaGuildIdByName,
+                                )
+                                player.protocolSink?.sendExivaRestrictions(
+                                    isLogin = false,
+                                    addedPlayerNames = echo.addedPlayerNames,
+                                    removedPlayerNames = echo.removedPlayerNames,
+                                    addedGuildNames = echo.addedGuildNames,
+                                    removedGuildNames = echo.removedGuildNames,
+                                )
+                            }
+                            true
+                        }
+                    }
+                }
+
+                in ContainerBrowsePacketHandler.OPCODE_BROWSE_FIELD..ContainerBrowsePacketHandler.OPCODE_SEEK_IN_CONTAINER -> {
                     val command = ContainerBrowsePacketHandler.parse(opcode, buffer)
                     if (command == null) {
                         false
@@ -1482,9 +1559,81 @@ object GamePacketRouter {
             context.protocolProfile,
             context.clientVersionString,
         )
-        for (weaponId in player.features.weaponProficiencies.keys.sorted()) {
+        for (weaponId in WeaponProficiencySelection.getTrackedWeaponIds(player.features.weaponProficiencies)) {
             sink.sendWeaponProficiencyWindow(weaponId, sendDetailList)
         }
+    }
+
+    /**
+     * `ProtocolGame::parseWeaponProficiency`'s action switch
+     * (protocolgame.cpp:3157-3202): actions `0x02`/`0x03` mutate the stored
+     * selected-perk list, `0x00`/`0x04`-`0x09` keep their state (the payload
+     * consumption happens at decode), and every action then sends the trailing
+     * `sendWeaponProficiencyWindow` (0xC4) and `sendWeaponProficiency` (0x5C)
+     * frames.
+     *
+     * PARITY GAPS:
+     *  - `clearAllStats()`/`applyPerks()` target the live combat engine
+     *    instance (`WeaponProficiency::m_stats` etc.), which the session state
+     *    does not hold; the selection list mutation is fully ported.
+     *  - `WeaponProficiency::isUpgradeAvailable` for the 0x5C byte resolves
+     *    through the session sink resolver; the shared transport default is
+     *    `false` without the `proficiencies.json` registry.
+     */
+    private fun applyWeaponProficiencyAction(
+        player: Player,
+        command: WeaponProficiencyActionCommand,
+        context: GamePacketContext,
+    ) {
+        val state = player.features.weaponProficiencies
+        val equippedWeaponId = player.getWeaponId(true)
+        val weaponId = command.weaponId
+        val isEquippedWeapon = equippedWeaponId != 0 && weaponId == equippedWeaponId
+        val items: WeaponProficiencyItems =
+            context.itemTypes?.let(::ItemRegistryProficiencyItems) ?: InMemoryWeaponProficiencyItems()
+
+        when (command.action) {
+            // case 0x02 (protocolgame.cpp:3157-3165)
+            WeaponProficiencyPacketHandler.ACTION_CLEAR_SELECTED_PERKS -> {
+                if (isEquippedWeapon) {
+                    // `clearAllStats() + sendSkills()`: only the send is modeled
+                    // (PARITY GAP: no live combat engine instance).
+                    player.sendSkills()
+                }
+                WeaponProficiencySelection.clearSelectedPerks(state, weaponId)
+            }
+
+            // case 0x03 (protocolgame.cpp:3167-3185)
+            WeaponProficiencyPacketHandler.ACTION_SET_SELECTED_PERKS -> {
+                WeaponProficiencySelection.clearSelectedPerks(state, weaponId)
+                for (slot in command.selectedPerks) {
+                    WeaponProficiencySelection.setSelectedPerk(
+                        state = state,
+                        level = slot.level,
+                        perkIndex = slot.perkIndex,
+                        weaponId = weaponId,
+                        equippedWeaponId = equippedWeaponId,
+                        proficiencies = context.weaponProficiencyRegistry,
+                        items = items,
+                    )
+                }
+                // `applyPerks(weaponId)` when equipped is a PARITY GAP (no live
+                // combat engine instance).
+            }
+
+            // case 0x00 and the read-only 0x04-0x09 arms keep the stored state.
+            else -> Unit
+        }
+
+        val sink = player.protocolSink ?: return
+        sink.sendWeaponProficiencyWindow(
+            weaponId,
+            WeaponProficiencyPayload.shouldSendWeaponProficiencyDetailList(
+                context.protocolProfile,
+                context.clientVersionString,
+            ),
+        )
+        sink.sendWeaponProficiency(weaponId)
     }
 
     /**

@@ -79,7 +79,11 @@ class MultiCharacterSwitchMovementTest {
 
         val loginBody = Unpooled.buffer()
         loginBody.writeShortLE(2) // Windows
-        loginBody.writeShortLE(1098) // Client Version
+        loginBody.writeShortLE(CLIENT_VERSION)
+        loginBody.writeIntLE(CLIENT_VERSION)
+        loginBody.writeTibiaString("")
+        loginBody.writeTibiaString("")
+        loginBody.writeByte(0)
         loginBody.writeBytes(rsaCipher.encrypt(rsaPlain))
 
         val unchecksummed = Unpooled.buffer()
@@ -133,7 +137,11 @@ class MultiCharacterSwitchMovementTest {
 
         val char1GameBody = Unpooled.buffer()
         char1GameBody.writeShortLE(2)
-        char1GameBody.writeShortLE(1098)
+        char1GameBody.writeShortLE(CLIENT_VERSION)
+        char1GameBody.writeIntLE(CLIENT_VERSION)
+        char1GameBody.writeTibiaString("")
+        char1GameBody.writeTibiaString("")
+        char1GameBody.writeByte(0)
         char1GameBody.writeBytes(rsaCipher.encrypt(char1RsaPlain))
 
         val char1Checksum = Adler32Checksum.compute(char1GameBody, 0, char1GameBody.readableBytes())
@@ -241,7 +249,11 @@ class MultiCharacterSwitchMovementTest {
 
         val char2GameBody = Unpooled.buffer()
         char2GameBody.writeShortLE(2)
-        char2GameBody.writeShortLE(1098)
+        char2GameBody.writeShortLE(CLIENT_VERSION)
+        char2GameBody.writeIntLE(CLIENT_VERSION)
+        char2GameBody.writeTibiaString("")
+        char2GameBody.writeTibiaString("")
+        char2GameBody.writeByte(0)
         char2GameBody.writeBytes(rsaCipher.encrypt(char2RsaPlain))
 
         val char2Checksum = Adler32Checksum.compute(char2GameBody, 0, char2GameBody.readableBytes())

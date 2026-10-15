@@ -1,6 +1,7 @@
 package org.opentibia.canary.network
 
 import io.netty.buffer.ByteBuf
+import org.opentibia.canary.network.protocol.CLIENT_VERSION
 import io.netty.buffer.Unpooled
 import io.netty.channel.embedded.EmbeddedChannel
 import org.assertj.core.api.Assertions.assertThat
@@ -91,7 +92,11 @@ class CanaryServerEventCallerTest {
 
         val body = Unpooled.buffer()
         body.writeShortLE(2) // OS
-        body.writeShortLE(1098) // Protocol version
+        body.writeShortLE(CLIENT_VERSION)
+        body.writeIntLE(CLIENT_VERSION)
+        body.writeTibiaString("")
+        body.writeTibiaString("")
+        body.writeByte(0)
         body.writeBytes(rsaEncrypted)
 
         val checksum = Adler32Checksum.compute(body, 0, body.readableBytes())

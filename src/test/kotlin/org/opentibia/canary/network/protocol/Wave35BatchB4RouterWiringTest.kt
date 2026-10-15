@@ -17,14 +17,18 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Router wiring tests for the wave-35 batch B4 inbound opcodes: aim at target
- * (`0xC8`), transaction details (`0xC9`), livestream viewer container (`0xCA`),
- * browse field / seek in container (`0xCB`/`0xCC`), inspection (`0xCD`/`0xCE`),
+ * (`0xC8`), transaction details (`0xC9`), browse field / seek in container
+ * (`0xCB`/`0xCC`), inspection (`0xCD`/`0xCE`),
  * blessing window (`0xCF`), outfit request (`0xD2`), cyclopedia map/character
  * info (`0xDB`/`0xE5`), VIP (`0xDC`-`0xDF`), bug report (`0xE6`), offer
  * description (`0xE8`), prey (`0xEB`), hireling name (`0xEC`), resource balance
  * (`0xED`), NPC greet (`0xEE`) and object info (`0xF3`). Each decoded command
  * crosses the WorldCommit confinement boundary (AGENTS.md 1.2); the prey and
  * cyclopedia requests additionally apply their ported engine state.
+ *
+ * The same opcode `0xCA` is the exiva-restrictions frame on a no-PvP session
+ * (see [ExivaRestrictionsFramesTest]); the livestream-viewer container resend
+ * for that opcode is a PARITY GAP (the port has no viewer sessions).
  */
 class Wave35BatchB4RouterWiringTest {
 
@@ -33,7 +37,6 @@ class Wave35BatchB4RouterWiringTest {
         val frame = Unpooled.buffer()
         writeAimAtTarget(frame)
         writeTransactionDetails(frame)
-        writeLivestreamViewerContainer(frame)
         writeBrowseField(frame)
         writeSeekInContainer(frame)
         writeNormalObjectInspection(frame)
@@ -54,7 +57,7 @@ class Wave35BatchB4RouterWiringTest {
         writeGreet(frame)
         writeObjectInfo(frame)
 
-        assertThat(route(frame)).isEqualTo(22)
+        assertThat(route(frame)).isEqualTo(21)
     }
 
     @Test
@@ -205,11 +208,6 @@ class Wave35BatchB4RouterWiringTest {
     private fun writeTransactionDetails(frame: ByteBuf) {
         frame.writeByte(TransactionDetailsPacketHandler.OPCODE_GET_TRANSACTION_DETAILS)
         frame.writeIntLE(1)
-    }
-
-    private fun writeLivestreamViewerContainer(frame: ByteBuf) {
-        frame.writeByte(ContainerBrowsePacketHandler.OPCODE_LIVESTREAM_VIEWER_CONTAINER)
-        frame.writeByte(7)
     }
 
     private fun writeBrowseField(frame: ByteBuf) {

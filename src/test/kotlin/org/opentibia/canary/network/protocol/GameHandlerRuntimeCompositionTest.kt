@@ -156,7 +156,11 @@ class GameHandlerRuntimeCompositionTest {
 
         val body = Unpooled.buffer()
         body.writeShortLE(2)
-        body.writeShortLE(1098)
+        body.writeShortLE(CLIENT_VERSION)
+        body.writeIntLE(CLIENT_VERSION)
+        body.writeTibiaString("")
+        body.writeTibiaString("")
+        body.writeByte(0)
         body.writeBytes(rsaCipher.encrypt(rsaPlain))
 
         val checksum = Adler32Checksum.compute(body, 0, body.readableBytes())

@@ -141,6 +141,12 @@ class GameDispatcher(
         val reservedLane: DispatcherLane? = null,
         /** `true` when queued through [scheduleEvent] (`DispatcherType::ScheduledEvent`). */
         val scheduled: Boolean = false,
+        /**
+         * `Task::dispatcherSlotReserved` (task.hpp:188): the single release owner
+         * of the lane admission slot, so a concurrent `stopEvent` and the
+         * execution path cannot release the same reservation twice.
+         */
+        val slotReleased: AtomicBoolean = AtomicBoolean(false),
     ) : DispatcherQueueEntry {
         override val readyAt: Long get() = meta.readyAt
     }
@@ -149,6 +155,14 @@ class GameDispatcher(
 
     private val inbox = ConcurrentLinkedQueue<QueuedEvent>()
     private val scheduledEvents = ConcurrentHashMap<Long, QueuedEvent>()
+
+    /**
+     * `scheduledTasksRef`-kept entries for promoted scheduled tasks
+     * (dispatcher.cpp:879-904, 906-943): a due event stays registered while it
+     * waits in a lane queue and, for a cycle, while its callback runs, so
+     * [stopEvent] reaches a currently-executing cycle before it re-registers.
+     */
+    private val promotedEvents = ConcurrentHashMap<Long, QueuedEvent>()
     private val laneQueues = Array(DispatcherWeightedDeficitRoundRobin.LANE_COUNT) { ArrayDeque<QueuedEvent>() }
     private val wakeSignal = Channel<Unit>(Channel.CONFLATED)
     private val running = AtomicBoolean(false)
@@ -587,12 +601,15 @@ class GameDispatcher(
     }
 
     /**
-     * `Dispatcher::stopEvent` (dispatcher.cpp:1173-1180): the winner of the
-     * scheduled-map removal releases the admission slot; when the worker already
-     * promoted the event, the promotion owner releases it instead.
+     * `Dispatcher::stopEvent` (dispatcher.cpp:1171-1180): the event id is
+     * re-resolved against the pending scheduled map and the promoted registry
+     * (`scheduledTasksRef`), so a cycle that is queued or currently executing is
+     * cancelled before its reschedule. The reservation release is CAS-guarded
+     * ([QueuedEvent.slotReleased]) because the execution path releases the cycle
+     * after a cancelled callback returns.
      */
     fun stopEvent(eventId: Long) {
-        val event = scheduledEvents.remove(eventId) ?: return
+        val event = scheduledEvents.remove(eventId) ?: promotedEvents.remove(eventId) ?: return
         event.cancelled?.set(true)
         releaseReservedSlot(event)
         wake()
@@ -678,10 +695,16 @@ class GameDispatcher(
         }
     }
 
-    /** `Dispatcher::releaseDispatcherSlot` (dispatcher.cpp:764-775) for a queued event. */
+    /**
+     * `Dispatcher::releaseDispatcherSlot` (dispatcher.cpp:764-775) for a queued
+     * event, guarded by the task's `dispatcherSlotReserved` flag so the
+     * stop/cancel winner and the execution path release the slot once.
+     */
     private fun releaseReservedSlot(event: QueuedEvent) {
         val lane = event.reservedLane ?: return
-        reservedLaneSlots[lane.ordinal].release()
+        if (event.slotReleased.compareAndSet(false, true)) {
+            reservedLaneSlots[lane.ordinal].release()
+        }
     }
 
     private fun drainInbox() {
@@ -704,6 +727,7 @@ class GameDispatcher(
                 releaseReservedSlot(event)
                 continue
             }
+            promotedEvents[event.id] = event
             laneQueues[event.meta.lane.ordinal].addLast(event)
         }
     }
@@ -1043,8 +1067,11 @@ class GameDispatcher(
         // A one-shot event releases admission before its callback runs so a
         // successor can replace the chain at capacity (dispatcher.cpp:919-922);
         // a cycle keeps its slot across reschedules (dispatcher.cpp:937-939) and
-        // releases only when it stops (dispatcher.cpp:923-925, 941-943).
+        // releases only when it stops (dispatcher.cpp:923-925, 941-943). The
+        // promoted registry drops the one-shot before its callback, exactly
+        // like the C++ `scheduledTasksRef.erase` (dispatcher.cpp:918).
         if (!event.cycle) {
+            promotedEvents.remove(event.id)
             releaseReservedSlot(event)
         }
 
@@ -1080,10 +1107,15 @@ class GameDispatcher(
             dispatcherCycle.incrementAndGet()
             if (event.cycle && event.cancelled?.get() != true) {
                 rescheduleCycleEvent(event)
+                // The event is pending again (scheduledEvents), so the promoted
+                // registry no longer owns the lookup; a concurrent stopEvent
+                // still finds the rescheduled entry either way.
+                promotedEvents.remove(event.id)
                 return
             }
         }
         if (event.cycle) {
+            promotedEvents.remove(event.id)
             releaseReservedSlot(event)
         }
     }

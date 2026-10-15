@@ -214,7 +214,9 @@ class GameLoginTailFramesTest {
         awaitLane()
 
         // The 11.00 profile is `OldProtocolCompat`: no exiva byte in the self
-        // frame (protocolgame.cpp:8676-8682).
+        // frame (protocolgame.cpp:8676-8682), but the version is >= 1054 so the
+        // inline bug-report flag byte precedes the expert-PvP byte
+        // (protocolgame.cpp:8653-8658, account type NORMAL -> 0x01).
         assertThat(readBytes(ch)).isEqualTo(
             bytes(
                 0x17,
@@ -223,6 +225,7 @@ class GameLoginTailFramesTest {
                 0x03, 0x0F, 0x15, 0x0D, 0x80,
                 0x03, 0xA9, 0xFC, 0x03, 0x80,
                 0x03, 0x7D, 0xD5, 0xB6, 0x7F,
+                0x01,
                 0x00,
                 0x00,
                 0x00, 0x00,
