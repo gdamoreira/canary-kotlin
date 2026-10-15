@@ -196,9 +196,19 @@ class GameHandlerLoginVipBurstTest {
         ch.writeInbound(loginPacket())
         awaitLane()
 
-        // 1. Self appear (0x0A) + map description (0x64).
+        // 1. Self appear (0x17), map description (0x64) and the stats/skills
+        // frames of the login tail, each as its own output message.
         val loginFrame = readFrame(ch)
         assertThat(loginFrame.readUnsignedByte().toInt()).isEqualTo(GameHandler.PACKET_SELF_APPEAR)
+
+        val mapFrame = readFrame(ch)
+        assertThat(mapFrame.readUnsignedByte().toInt()).isEqualTo(MapPacketWriter.PACKET_MAP_DESCRIPTION.toInt())
+
+        val statsFrame = readFrame(ch)
+        assertThat(statsFrame.readUnsignedByte().toInt()).isEqualTo(GameWindowWriter.PACKET_STATS)
+
+        val skillsFrame = readFrame(ch)
+        assertThat(skillsFrame.readUnsignedByte().toInt()).isEqualTo(GameWindowWriter.PACKET_SKILLS)
 
         // 2. `sendVIPGroups` (0xD4): one group, `maxGroupEntries` (0 for a
         // non-premium account) minus the group count as the trailing byte.
@@ -258,6 +268,15 @@ class GameHandlerLoginVipBurstTest {
 
         val loginFrame = readFrame(ch)
         assertThat(loginFrame.readUnsignedByte().toInt()).isEqualTo(GameHandler.PACKET_SELF_APPEAR)
+
+        val mapFrame = readFrame(ch)
+        assertThat(mapFrame.readUnsignedByte().toInt()).isEqualTo(MapPacketWriter.PACKET_MAP_DESCRIPTION.toInt())
+
+        val statsFrame = readFrame(ch)
+        assertThat(statsFrame.readUnsignedByte().toInt()).isEqualTo(GameWindowWriter.PACKET_STATS)
+
+        val skillsFrame = readFrame(ch)
+        assertThat(skillsFrame.readUnsignedByte().toInt()).isEqualTo(GameWindowWriter.PACKET_SKILLS)
 
         val groupsFrame = readFrame(ch)
         assertThat(groupsFrame.readUnsignedByte().toInt()).isEqualTo(SocialWindowWriter.PACKET_VIP_GROUPS)

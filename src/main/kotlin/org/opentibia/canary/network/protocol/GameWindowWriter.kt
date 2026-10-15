@@ -482,7 +482,7 @@ private fun startCaseWithSpace(value: String): String {
  *  - `ProtocolGame::sendInventoryIds`               (0xF5, protocolgame.cpp:8893-8932)
  *  - `ProtocolGame::sendContainer`                  (0x6E, protocolgame.cpp:6336-6467)
  *  - `ProtocolGame::sendTextMessage`                (0xB4, protocolgame.cpp:6070-6189)
- *  - `ProtocolGame::sendAddCreature` + `AddCreature`(0x6A, protocolgame.cpp:8606-8638, 9662-9780)
+ *  - `ProtocolGame::sendAddCreature` + `AddCreature`(0x6A + self 0x17/0x0A, protocolgame.cpp:8606-8668, 9662-9780)
  *  - `ProtocolGame::RemoveTileThing`                (0x6C, protocolgame.cpp:10390-10398)
  *  - `ProtocolGame::AddOutfit`                      (protocolgame.cpp:10052-10076)
  *
@@ -508,6 +508,15 @@ object GameWindowWriter {
     const val PACKET_TEXT_MESSAGE: Int = 0xB4
     const val PACKET_ADD_CREATURE: Int = 0x6A
     const val PACKET_REMOVE_TILE_THING: Int = 0x6C
+
+    /** `sendAddCreature` self branch `version >= 980` opcode (protocolgame.cpp:8641). */
+    const val PACKET_SELF_APPEAR: Int = 0x17
+
+    /** `sendAddCreature` self branch `version < 980` opcode (protocolgame.cpp:8641). */
+    const val PACKET_SELF_APPEAR_LEGACY: Int = 0x0A
+
+    /** `SERVER_BEAT` (`src/game/game.hpp:64`). */
+    const val SERVER_BEAT: Int = 0x32
 
     /** `TEXTCOLOR_NONE` (`src/utils/utils_definitions.hpp:460`). */
     const val TEXTCOLOR_NONE: Int = 255
@@ -846,6 +855,37 @@ object GameWindowWriter {
         out.writePosition(pos)
         out.writeByte(stackpos)
         writeCreature(out, appearance)
+    }
+
+    /** `sendAddCreature` self branch opcode (protocolgame.cpp:8641). */
+    fun selfAppearOpcode(clientVersion: Int): Int =
+        if (clientVersion >= 980) PACKET_SELF_APPEAR else PACKET_SELF_APPEAR_LEGACY
+
+    /**
+     * `sendAddCreature` for the `creature == player` branch
+     * (protocolgame.cpp:8639-8668): the self appear opcode, the player id, the
+     * server beat and the `version >= 1054` expert-PvP controls byte.
+     *
+     * PARITY GAPS: the `version >= 981` speed-formula doubles, the `>= 1058`
+     * expert-mode byte, the `>= 1080` store images URL / coin-packet pair and
+     * the current-profile exiva-button byte are not modeled (the port's login
+     * tail does not resolve the `g_configManager()`/world-type values behind
+     * them), so this frame carries only the prefix fields above exactly like
+     * the pre-existing login frame it replaces.
+     */
+    fun writeSelfAddCreature(
+        out: ByteBuf,
+        playerId: Long,
+        clientVersion: Int = CLIENT_VERSION,
+        expertPvpControlsEnabled: Boolean = false,
+    ) {
+        out.writeByte(selfAppearOpcode(clientVersion))
+        out.writeIntLE(playerId.toInt())
+        out.writeShortLE(SERVER_BEAT)
+
+        if (clientVersion >= 1054) {
+            out.writeByte(if (expertPvpControlsEnabled) 0x01 else 0x00)
+        }
     }
 
     /** `RemoveTileThing` (protocolgame.cpp:10390-10398). */

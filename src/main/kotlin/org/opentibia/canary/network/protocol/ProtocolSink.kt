@@ -28,7 +28,9 @@ import org.opentibia.canary.network.protocol.container.ContainerItemWriter
 import org.opentibia.canary.network.protocol.creature.CreaturePacketWriter
 import org.opentibia.canary.network.protocol.map.TilePacketWriter
 import org.opentibia.canary.network.protocol.misc.MiscDataWriter
+import org.opentibia.canary.network.protocol.npcshop.NpcShopWindowSerializer
 import org.opentibia.canary.network.protocol.player.PlayerWindowWriter
+import org.opentibia.canary.network.protocol.proficiency.WeaponProficiencyPayload
 import org.opentibia.canary.network.protocol.vip.VipWindowWriter
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 
@@ -115,6 +117,23 @@ interface ProtocolSink : VipClient {
      * `ProtocolGame::sendModalWindow` (0xFA, protocolgame.cpp:9630-9659).
      */
     fun sendModalWindow(modalWindow: ModalWindow)
+
+    /**
+     * `Player::sendSaleItemList(inventoryMap)` (player.cpp:2408-2412) ->
+     * `ProtocolGame::sendSaleItemList` (0xEE balances + 0x7B list,
+     * protocolgame.cpp:6669-6736). The `client && shopOwner` gate and the
+     * owner's shop-vector resolution stay with the sink implementation.
+     */
+    fun sendSaleItemList(inventoryMap: Map<Int, Int>)
+
+    /**
+     * `ProtocolGame::sendWeaponProficiencyWindow(weaponId)`
+     * (0xC4, protocolgame.cpp:12329-12359). `weaponId == 0` resolves
+     * `Player::getWeaponId(true)` like Canary; [sendDetailList] is the
+     * `shouldSendWeaponProficiencyDetailList` trailing-list gate the caller
+     * resolves from the client build string.
+     */
+    fun sendWeaponProficiencyWindow(weaponId: Int, sendDetailList: Boolean = false)
 }
 
 /**
@@ -128,6 +147,12 @@ abstract class ProtocolFrameSink(
     protected val map: GameMap,
     /** `g_game().getCreatureByID` behind the known-set eviction (`protocolgame.cpp:2346`). */
     creatureById: (Long) -> Creature? = { null },
+    /**
+     * `Player::getShopOwner` (player.cpp:6123-6125) behind
+     * `Player::sendSaleItemList`'s `client && shopOwner` gate (player.cpp:2408).
+     * `null` models a player without an open shop window.
+     */
+    private val shopOwner: (Player) -> Npc? = { null },
 ) : ProtocolSink {
 
     /**
@@ -181,6 +206,16 @@ abstract class ProtocolFrameSink(
             emit { TilePacketWriter.writeUpdateTile(this, player, tile, position) { appearanceOf(it) } }
             return
         }
+
+        if (creature === player) {
+            // `ProtocolGame::sendAddCreature`'s `creature == player` branch
+            // (protocolgame.cpp:8639-8668): the self appear frame instead of
+            // the 0x6A add-creature frame, so the logging-in player's own
+            // placement fanout emits the login frame exactly once.
+            emit { GameWindowWriter.writeSelfAddCreature(this, player.id) }
+            return
+        }
+
         emit { GameWindowWriter.writeAddCreature(this, position, stackpos, appearanceOf(creature)) }
     }
 
@@ -289,6 +324,38 @@ abstract class ProtocolFrameSink(
                     defaultEnterButton = modalWindow.defaultEnterButton,
                     priority = modalWindow.priority,
                 ),
+            )
+        }
+    }
+
+    // --- shop / proficiency ------------------------------------------------------
+
+    /**
+     * `Player::sendSaleItemList(inventoryMap)` (player.cpp:2408-2412):
+     * `if (client && shopOwner)` then
+     * `client->sendSaleItemList(shopOwner->getShopItemVector(getGUID()), inventoryMap)`.
+     */
+    override fun sendSaleItemList(inventoryMap: Map<Int, Int>) {
+        emitSaleItemList(player, shopOwner(player), inventoryMap) { build -> emit(build) }
+    }
+
+    /**
+     * `ProtocolGame::sendWeaponProficiencyWindow` (protocolgame.cpp:12329-12359):
+     * `weaponId == 0` resolves the equipped weapon and the experience/perks come
+     * from the player's per-weapon proficiency state
+     * (`Player::weaponProficiency().getExperience/getSelectedPerks`).
+     */
+    override fun sendWeaponProficiencyWindow(weaponId: Int, sendDetailList: Boolean) {
+        val resolvedWeaponId = if (weaponId > 0) weaponId else player.getWeaponId(true)
+        val proficiency = player.features.weaponProficiencies[resolvedWeaponId]
+
+        emit {
+            WeaponProficiencyPayload.writeWeaponProficiencyWindow(
+                this,
+                weaponId = resolvedWeaponId,
+                experience = proficiency?.experience ?: 0,
+                selectedPerks = proficiency?.perks ?: emptyList(),
+                sendDetailList = sendDetailList,
             )
         }
     }
@@ -522,6 +589,31 @@ abstract class ProtocolFrameSink(
 }
 
 /**
+ * `Player::sendSaleItemList(inventoryMap)` emission shared by the sink
+ * transports: the `client && shopOwner` gate (player.cpp:2408) plus the
+ * owner's shop-vector/currency resolution into
+ * [NpcShopWindowSerializer.writeSaleItemListFrames].
+ */
+internal fun emitSaleItemList(
+    player: Player,
+    shopOwner: Npc?,
+    inventoryMap: Map<Int, Int>,
+    emit: (ByteBuf.() -> Unit) -> Unit,
+) {
+    if (shopOwner == null) {
+        return
+    }
+
+    NpcShopWindowSerializer.writeSaleItemListFrames(
+        emit = emit,
+        shopBlocks = shopOwner.getShopItemVector(player.getGUID()),
+        inventoryMap = inventoryMap,
+        bankBalance = player.getBankBalance(),
+        currency = shopOwner.getCurrency(),
+    )
+}
+
+/**
  * [PlayerSendSink] over a live Netty channel: the extended `Player::client`
  * surface `GameHandler` installs on login. The player senders delegate to a
  * [PlayerFrameSink] sharing this channel's allocator and writer, so both the
@@ -533,13 +625,20 @@ abstract class ProtocolFrameSink(
  * The `sendBasicData` spell list resolves through the session's attached
  * `g_spells()` registry ([basicDataSpellsOf]), exactly like the spell-registry
  * consumers of the login/window senders.
+ *
+ * [sendSaleItemList] is overridden instead of delegated because the shop-owner
+ * provider cannot reach the delegated [PlayerFrameSink]'s `ProtocolFrameSink`
+ * constructor (that surface lives outside this module's ownership); the frame
+ * sequence itself stays in [emitSaleItemList].
  */
 class NettyProtocolSink(
-    channel: Channel,
-    player: Player,
+    private val channel: Channel,
+    private val player: Player,
     map: GameMap,
     /** `g_game().getCreatureByID` behind the known-set eviction (protocolgame.cpp:2346). */
     creatureById: (Long) -> Creature? = { null },
+    /** `Player::getShopOwner` (player.cpp:6123-6125) behind `sendSaleItemList`. */
+    private val shopOwner: (Player) -> Npc? = { null },
 ) : PlayerSendSink by PlayerFrameSink(
     player,
     map,
@@ -553,7 +652,20 @@ class NettyProtocolSink(
     },
     basicDataSpells = { basicDataSpellsOf(player) },
     creatureById = creatureById,
-)
+) {
+
+    override fun sendSaleItemList(inventoryMap: Map<Int, Int>) {
+        emitSaleItemList(player, shopOwner(player), inventoryMap) { build ->
+            val frame = channel.alloc().buffer()
+            frame.build()
+            if (channel.isActive) {
+                channel.writeAndFlush(frame)
+            } else {
+                frame.release()
+            }
+        }
+    }
+}
 
 /**
  * `ProtocolGame::sendBasicData`'s valid spell list (protocolgame.cpp:5851-5883):

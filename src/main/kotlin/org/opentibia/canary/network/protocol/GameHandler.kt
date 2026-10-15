@@ -13,6 +13,7 @@ import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.players.PlayerTask
+import org.opentibia.canary.creatures.players.getAllSaleItemIdAndCount
 import org.opentibia.canary.creatures.players.vip.InMemoryVipRepository
 import org.opentibia.canary.creatures.players.vip.VipEntry
 import org.opentibia.canary.creatures.players.vip.VipRepository
@@ -193,6 +194,12 @@ class GameHandler(
         // `goToFollowCreature_async()` barrier; the bound host call runs the
         // full Pathfinder-batch pipeline (creature.cpp:1046-1056, 2148-2184).
         game.updateCreatureWalk = { player -> player.updateCreatureWalk() }
+        // `Player::getAllSaleItemIdAndCount(countMap)` (player.cpp:5982) and
+        // `Player::sendSaleItemList(inventoryMap)` (player.cpp:2408) behind
+        // `Game::updatePlayerSaleItems` (game.cpp:11596): the deferred
+        // shop-open/state sale-list refresh.
+        game.getAllSaleItemIdAndCount = { player, countMap -> player.getAllSaleItemIdAndCount(countMap) }
+        game.sendSaleItemList = { player, inventoryMap -> player.protocolSink?.sendSaleItemList(inventoryMap) }
 
         val engine = composedImbuementEngine
         if (engine != null) {
@@ -229,7 +236,12 @@ class GameHandler(
     }
 
     companion object {
-        const val PACKET_SELF_APPEAR = 0x0A
+        /**
+         * `sendAddCreature` self branch opcode for the supported profiles
+         * (`version >= 980`, protocolgame.cpp:8641): the sink's self branch
+         * writes it through [GameWindowWriter.writeSelfAddCreature].
+         */
+        const val PACKET_SELF_APPEAR = GameWindowWriter.PACKET_SELF_APPEAR
         const val PACKET_DISCONNECT = 0x14
 
         /**
@@ -351,20 +363,11 @@ class GameHandler(
             activePlayer,
             gameMap,
             creatureById = { id -> game.getCreatureByID(id) },
+            // `Player::getShopOwner` (player.cpp:6123-6125) behind the
+            // `Player::sendSaleItemList` gate (player.cpp:2408); the
+            // composition root binds the Lua-recorded merchant.
+            shopOwner = { player -> game.getShopOwner(player) },
         )
-
-        // `ProtocolGame::sendAddCreature`'s `creature == player` branch writes
-        // the self appear (0x17/0x0A) plus the login side systems; the port's
-        // frame sink has no self branch (PARITY GAP) and would emit a 0x6A
-        // add-creature frame for the logging-in player itself when the
-        // placement fanout reaches it. Bind the per-session seam so the self
-        // appear stays with `sendLoginSuccess` (exactly once) while every other
-        // creature keeps the sink's appear frame.
-        activePlayer.sendCreatureAppear = { creature, position, isLogin ->
-            if (creature !== activePlayer || !isLogin) {
-                activePlayer.protocolSink?.sendCreatureAppear(creature, position, isLogin)
-            }
-        }
 
         // Canary restores the persisted player systems during login
         // (IOLoginData::loadPlayer) before firing the login creature events
@@ -598,19 +601,21 @@ class GameHandler(
     }
 
     private fun sendLoginSuccess(ctx: ChannelHandlerContext, player: Player, version: Int) {
+        // The self appear (0x17) is emitted by the placement fanout through the
+        // session sink's `ProtocolGame::sendAddCreature` self branch, exactly
+        // once (the player is its own spectator, `Game::placeCreature`,
+        // game.cpp:1533). The login tail continues with the map description and
+        // the stats/skills frames `sendAddCreature` queues after it
+        // (protocolgame.cpp:8691-8707).
         val out = ctx.alloc().buffer()
-        // 1. Self Appear (0x0A)
-        out.writeByte(PACKET_SELF_APPEAR)
-        out.writeIntLE(player.id.toInt())
-        out.writeShortLE(50) // Graphics speed
-        out.writeByte(0) // Can report bugs
-
-        // 2. Map Description (0x64)
         MapPacketWriter.writeMapDescription(out, gameMap, player.position)
-
         ctx.writeAndFlush(out)
 
-        // 3. VIP burst (0xD4 + one 0xD2 per persisted record).
+        val sink = player.protocolSink
+        sink?.sendStats(player)
+        sink?.sendSkills(player)
+
+        // VIP burst (0xD4 + one 0xD2 per persisted record).
         sendVipBurst(player, version)
     }
 

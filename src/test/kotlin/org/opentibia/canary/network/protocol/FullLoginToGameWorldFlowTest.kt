@@ -146,24 +146,37 @@ class FullLoginToGameWorldFlowTest {
 
         gameChannel.writeInbound(clientGamePacket)
 
+        // The placement fanout's `sendAddCreature` self branch queues the self
+        // appear frame first (protocolgame.cpp:8639-8668).
+        val selfFrame: ByteBuf? = gameChannel.readOutbound()
+        assertThat(selfFrame).isNotNull
+
+        val selfLen = selfFrame!!.readUnsignedShortLE()
+        assertThat(selfFrame.readableBytes()).isEqualTo(selfLen)
+        selfFrame.readUnsignedIntLE()
+        assertThat(gameCipher.decrypt(selfFrame, selfFrame.readerIndex(), selfFrame.readableBytes())).isTrue()
+
+        // Verify Self-Appear (0x17)
+        val selfAppearOpcode = selfFrame.readUnsignedByte().toInt()
+        assertThat(selfAppearOpcode).isEqualTo(GameHandler.PACKET_SELF_APPEAR)
+
+        val creatureId = selfFrame.readUnsignedIntLE()
+        assertThat(creatureId).isEqualTo(1L)
+        val graphicsSpeed = selfFrame.readUnsignedShortLE()
+        assertThat(graphicsSpeed).isEqualTo(50)
+        val expertPvpControls = selfFrame.readUnsignedByte().toInt()
+        assertThat(expertPvpControls).isEqualTo(0)
+        selfFrame.release()
+
+        // The login tail then sends the map description as its own frame.
         val gameResponse: ByteBuf? = gameChannel.readOutbound()
         assertThat(gameResponse).isNotNull
 
         val gameRespLen = gameResponse!!.readUnsignedShortLE()
-        val gameRespChecksum = gameResponse.readUnsignedIntLE()
+        assertThat(gameResponse.readableBytes()).isEqualTo(gameRespLen)
+        gameResponse.readUnsignedIntLE()
         val decryptedGame = gameCipher.decrypt(gameResponse, gameResponse.readerIndex(), gameResponse.readableBytes())
         assertThat(decryptedGame).isTrue()
-
-        // Verify Self-Appear (0x0A)
-        val selfAppearOpcode = gameResponse.readUnsignedByte().toInt()
-        assertThat(selfAppearOpcode).isEqualTo(GameHandler.PACKET_SELF_APPEAR)
-
-        val creatureId = gameResponse.readUnsignedIntLE()
-        assertThat(creatureId).isEqualTo(1L)
-        val graphicsSpeed = gameResponse.readUnsignedShortLE()
-        assertThat(graphicsSpeed).isEqualTo(50)
-        val canReportBugs = gameResponse.readUnsignedByte().toInt()
-        assertThat(canReportBugs).isEqualTo(0)
 
         // Verify Map Description (0x64)
         val mapDescOpcode = gameResponse.readUnsignedByte().toInt()
@@ -171,5 +184,6 @@ class FullLoginToGameWorldFlowTest {
         assertThat(gameResponse.readUnsignedShortLE()).isEqualTo(1000) // Pos X
         assertThat(gameResponse.readUnsignedShortLE()).isEqualTo(1000) // Pos Y
         assertThat(gameResponse.readUnsignedByte().toInt()).isEqualTo(7)    // Pos Z
+        gameResponse.release()
     }
 }

@@ -144,17 +144,22 @@ class MultiCharacterSwitchMovementTest {
 
         char1Channel.writeInbound(char1Packet)
 
+        // The placement fanout's self branch queues the self appear frame.
+        val char1SelfAppear: ByteBuf = char1Channel.readOutbound()
+        char1SelfAppear.readUnsignedShortLE() // len
+        char1SelfAppear.readUnsignedIntLE()   // checksum
+        char1Cipher.decrypt(char1SelfAppear, char1SelfAppear.readerIndex(), char1SelfAppear.readableBytes())
+
+        assertThat(char1SelfAppear.readUnsignedByte().toInt()).isEqualTo(GameHandler.PACKET_SELF_APPEAR)
+        val char1CreatureId = char1SelfAppear.readUnsignedIntLE()
+        char1SelfAppear.readUnsignedShortLE() // server beat
+        char1SelfAppear.readUnsignedByte()    // expert PvP controls
+
+        // Read Map Description
         val char1Response: ByteBuf = char1Channel.readOutbound()
         char1Response.readUnsignedShortLE() // len
         char1Response.readUnsignedIntLE()   // checksum
         char1Cipher.decrypt(char1Response, char1Response.readerIndex(), char1Response.readableBytes())
-
-        assertThat(char1Response.readUnsignedByte().toInt()).isEqualTo(GameHandler.PACKET_SELF_APPEAR)
-        val char1CreatureId = char1Response.readUnsignedIntLE()
-        char1Response.readUnsignedShortLE() // graphics speed
-        char1Response.readUnsignedByte()    // bug report
-
-        // Read Map Description
         assertThat(char1Response.readUnsignedByte().toInt()).isEqualTo(MapPacketWriter.PACKET_MAP_DESCRIPTION.toInt())
         val char1StartX = char1Response.readUnsignedShortLE()
         val char1StartY = char1Response.readUnsignedShortLE()
@@ -236,17 +241,22 @@ class MultiCharacterSwitchMovementTest {
 
         char2Channel.writeInbound(char2Packet)
 
+        // The placement fanout's self branch queues the self appear frame.
+        val char2SelfAppear: ByteBuf = char2Channel.readOutbound()
+        char2SelfAppear.readUnsignedShortLE() // len
+        char2SelfAppear.readUnsignedIntLE()   // checksum
+        char2Cipher.decrypt(char2SelfAppear, char2SelfAppear.readerIndex(), char2SelfAppear.readableBytes())
+
+        assertThat(char2SelfAppear.readUnsignedByte().toInt()).isEqualTo(GameHandler.PACKET_SELF_APPEAR)
+        val char2CreatureId = char2SelfAppear.readUnsignedIntLE()
+        char2SelfAppear.readUnsignedShortLE() // server beat
+        char2SelfAppear.readUnsignedByte()    // expert PvP controls
+
+        // Read Map Description
         val char2Response: ByteBuf = char2Channel.readOutbound()
         char2Response.readUnsignedShortLE() // len
         char2Response.readUnsignedIntLE()   // checksum
         char2Cipher.decrypt(char2Response, char2Response.readerIndex(), char2Response.readableBytes())
-
-        assertThat(char2Response.readUnsignedByte().toInt()).isEqualTo(GameHandler.PACKET_SELF_APPEAR)
-        val char2CreatureId = char2Response.readUnsignedIntLE()
-        char2Response.readUnsignedShortLE() // graphics speed
-        char2Response.readUnsignedByte()    // bug report
-
-        // Read Map Description
         assertThat(char2Response.readUnsignedByte().toInt()).isEqualTo(MapPacketWriter.PACKET_MAP_DESCRIPTION.toInt())
         assertThat(char2Response.readUnsignedShortLE()).isEqualTo(1000)
         assertThat(char2Response.readUnsignedShortLE()).isEqualTo(1000)

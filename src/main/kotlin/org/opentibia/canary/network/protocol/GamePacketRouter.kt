@@ -1194,10 +1194,20 @@ object GamePacketRouter {
                                 is InspectObjectCommand.Cyclopedia ->
                                     context.game?.playerInspectItem(player, command.itemId, command.itemCount, true)
 
-                                // ProtocolGame::parseInspectPlayer (protocolgame.cpp:3325)
-                                // reads and discards its payload;
-                                // INSPECT_PROFICIENCY needs sendWeaponProficiencyWindow,
-                                // which is not ported (PARITY GAP).
+                                // ProtocolGame::parseInspectionObject's
+                                // INSPECT_PROFICIENCY branch (protocolgame.cpp:2926-2930):
+                                // the decoded item id feeds sendWeaponProficiencyWindow
+                                // (0xC4). The `shouldSendWeaponProficiencyDetailList`
+                                // trailing-list gate needs the client build string the
+                                // port's login does not parse (PARITY GAP), so the
+                                // shorter current shape is sent.
+                                is InspectObjectCommand.Proficiency ->
+                                    player.protocolSink?.sendWeaponProficiencyWindow(command.itemId)
+
+                                // INSPECT_PLAYERTRADE and the remaining inspection
+                                // types consume no further payload and send nothing
+                                // (protocolgame.cpp:2926-2931); parseInspectPlayer
+                                // (protocolgame.cpp:3325) reads and discards its own.
                                 else -> Unit
                             }
                         }
