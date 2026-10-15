@@ -600,6 +600,12 @@ class IOLoginDataSubloads(
      * loader reads them through `ValueWrapper::getNumber()`, which returns
      * `0.0` for the boolean variant (value_wrapper.hpp:51-58); a persisted
      * `true` therefore loads as `false` here exactly like the C++ port.
+     *
+     * The whitelist elements are the `static_cast<int>(guid)` values the saver
+     * stores, pushed into the C++ `std::vector<uint32_t>`
+     * (`player.hpp:190-191`) with the modulo-2^32 conversion, so a guid above
+     * `Int.MAX_VALUE` wraps back to its `uint32_t` value instead of
+     * sign-extending.
      */
     fun loadPlayerExivaRestrictions(player: Player) {
         val playerScopedKv = playerKv?.invoke(player) ?: return
@@ -616,13 +622,13 @@ class IOLoginDataSubloads(
 
         scope.get(KEY_PLAYER_WHITELIST)?.let { wrapper ->
             for (guid in wrapper.getArray()) {
-                restrictions.playerWhitelist.add(guid.getInt().toLong())
+                restrictions.playerWhitelist.add(guid.getInt().toLong() and UINT32_MASK)
             }
         }
 
         scope.get(KEY_GUILD_WHITELIST)?.let { wrapper ->
             for (guildId in wrapper.getArray()) {
-                restrictions.guildWhitelist.add(guildId.getInt().toLong())
+                restrictions.guildWhitelist.add(guildId.getInt().toLong() and UINT32_MASK)
             }
         }
     }

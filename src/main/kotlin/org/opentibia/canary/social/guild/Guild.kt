@@ -51,22 +51,27 @@ class GuildRank(
  * `Bankable` surface (`getBankBalance`/`setBankBalance`, `isOnline`/`setOnline`,
  * `isGuild`, bank.hpp:15-28) without the interface declaration.
  *
- * PARITY GAPS: `Guild::addMember`/`Guild::removeMember` broadcast
- * `g_game().updatePlayerHelpers(member)` (guild.cpp:17, 25, 28) and
- * `Guild::removeMember` calls `g_game().removeGuild(id)` once the online list
- * is empty (guild.cpp:29-31). The helper broadcasts belong to the protocol
- * layer; the game removal is a constructor-injected [removeGuild] seam
+ * `Guild::addMember`/`Guild::removeMember` broadcast
+ * `g_game().updatePlayerHelpers(member)` (guild.cpp:17, 25, 28), which sends
+ * `sendCreatureHelpers` to the spectators of the member (game.cpp:9690-9699);
+ * `Guild::removeMember` also calls `g_game().removeGuild(id)` once the online
+ * list is empty (guild.cpp:29-31). Both reaches are constructor-injected seams
  * (AGENTS.md 1.1).
  *
  * @param removeGuild `g_game().removeGuild(id)`, invoked once the online member
  *   list becomes empty; the default no-op keeps standalone guilds inert and
  *   every [GuildRepository] implementation installs the injected seam on the
  *   guilds it materializes.
+ * @param updatePlayerHelpers `g_game().updatePlayerHelpers(member)`, invoked
+ *   for every online member after the online list changes; the default no-op
+ *   keeps standalone guilds inert and every [GuildRepository] implementation
+ *   installs the injected seam on the guilds it materializes.
  */
 class Guild(
     val id: Long,
     val name: String,
     private val removeGuild: (Long) -> Unit = {},
+    private val updatePlayerHelpers: (Player) -> Unit = {},
 ) {
     /** `Guild::membersOnline` (guild.hpp:88), insertion ordered like `std::list`. */
     private val membersOnline = mutableListOf<Player>()
@@ -156,23 +161,35 @@ class Guild(
     }
 
     /**
-     * `Guild::addMember` (guild.cpp:14-19): the player joins the online list.
-     * The port also records `Player::guildRank` per member, so [getRank] can
-     * serve the chat/title checks without reaching into `Player`.
+     * `Guild::addMember` (guild.cpp:14-19): the player joins the online list
+     * and every online member (including the new one) has its helpers
+     * refreshed. The port also records `Player::guildRank` per member, so
+     * [getRank] can serve the chat/title checks without reaching into
+     * `Player`.
      */
     fun addMember(player: Player, rank: GuildRank = GuildRank.Member) {
         membersOnline.add(player)
         memberRanks[player.id] = rank
+        for (member in getMembersOnline()) {
+            updatePlayerHelpers(member)
+        }
     }
 
     /**
      * `Guild::removeMember` (guild.cpp:21-32): every online entry of the player
-     * is erased (`std::list::remove` semantics) and an empty guild is removed
-     * from the game.
+     * is erased (`std::list::remove` semantics), the remaining members and the
+     * removed player have their helpers refreshed and an empty guild is
+     * removed from the game.
      */
     fun removeMember(player: Player) {
         membersOnline.removeAll { it === player }
         memberRanks.remove(player.id)
+        for (member in membersOnline) {
+            updatePlayerHelpers(member)
+        }
+
+        updatePlayerHelpers(player)
+
         if (membersOnline.isEmpty()) {
             removeGuild(id)
         }
@@ -347,6 +364,8 @@ class InMemoryGuildRepository(
     val invites: MutableSet<GuildInvite> = mutableSetOf(),
     /** `Guild`'s `g_game().removeGuild(id)` seam (guild.cpp:29-31) installed on every loaded guild. */
     private val removeGuild: (Long) -> Unit = {},
+    /** `Guild`'s `g_game().updatePlayerHelpers(member)` seam (guild.cpp:17,25,28) installed on every loaded guild. */
+    private val updatePlayerHelpers: (Player) -> Unit = {},
 ) : GuildRepository {
 
     private class GuildRecord(
@@ -366,7 +385,12 @@ class InMemoryGuildRepository(
 
     override fun loadGuild(guildId: Long): Guild? {
         val record = guilds[guildId] ?: return null
-        val guild = Guild(record.id, record.name, removeGuild = removeGuild)
+        val guild = Guild(
+            record.id,
+            record.name,
+            removeGuild = removeGuild,
+            updatePlayerHelpers = updatePlayerHelpers,
+        )
         guild.setBankBalance(record.balance)
         for (rank in record.ranks) {
             guild.addRank(rank.id, rank.name, rank.level)
@@ -415,6 +439,8 @@ class JdbcGuildRepository(
     private val dataSource: DataSource,
     /** `Guild`'s `g_game().removeGuild(id)` seam (guild.cpp:29-31) installed on every loaded guild. */
     private val removeGuild: (Long) -> Unit = {},
+    /** `Guild`'s `g_game().updatePlayerHelpers(member)` seam (guild.cpp:17,25,28) installed on every loaded guild. */
+    private val updatePlayerHelpers: (Player) -> Unit = {},
 ) : GuildRepository {
 
     override fun loadGuild(guildId: Long): Guild? = dataSource.connection.use { conn ->
@@ -422,8 +448,12 @@ class JdbcGuildRepository(
             stmt.setLong(1, guildId)
             stmt.executeQuery().use { rs ->
                 if (rs.next()) {
-                    Guild(guildId, rs.getString("name"), removeGuild = removeGuild)
-                        .also { it.setBankBalance(rs.getLong("balance")) }
+                    Guild(
+                        guildId,
+                        rs.getString("name"),
+                        removeGuild = removeGuild,
+                        updatePlayerHelpers = updatePlayerHelpers,
+                    ).also { it.setBankBalance(rs.getLong("balance")) }
                 } else {
                     null
                 }
