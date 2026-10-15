@@ -11894,12 +11894,66 @@ class Game(
     fun getGameState(): GameState_t = gameState
 
     /**
-     * `Game::setGameState` (src/game/game.cpp:952). Reduced to the state
-     * assignment and the two guard clauses: the `GAME_STATE_INIT` world
-     * bootstrap runs inside `CanaryServer.start` (map spawns, raids, the global
-     * startup events), while the `GAME_STATE_SHUTDOWN` save/kick-all and the
-     * `GAME_STATE_CLOSED` kick of non-`CanAlwaysLogin` players are not wired
-     * (PARITY GAP).
+     * `map.spawnsMonster.startup()` (src/game/game.cpp:970): the ported
+     * spawn-engine start of `Game::setGameState(GAME_STATE_INIT)`. The Kotlin
+     * spawn engine (`MonsterSpawnPath`) parses the map spawn XML during map
+     * boot (`IOMap::loadMonsters`) and the network root binds this seam to its
+     * `startup` half (dispatched to the WorldCommit lane). The
+     * `map.spawnsNpc.startup()` call and the 50 custom-map spawn loops
+     * (game.cpp:971-977) are not ported (PARITY GAP).
+     */
+    var initSpawns: () -> Unit = {}
+
+    /**
+     * `Game::raids.loadFromXml(); raids.startup()` (src/game/game.cpp:979-980).
+     * The C++ `Game::raids` container stays root-owned in the port; the network
+     * root binds both statements here.
+     */
+    var initRaids: () -> Unit = {}
+
+    /**
+     * `Game::mounts->loadFromXml()` (src/game/game.cpp:982). The root-owned
+     * `g_game().mounts` registry (`Mounts`, game.hpp:628) reads
+     * `{CORE_DIRECTORY}/XML/mounts.xml`; the network root binds the load and the
+     * `Mounts::getMountByClientID`/`getMountByID` accessors to the same
+     * registry.
+     */
+    var initMounts: () -> Unit = {}
+
+    /**
+     * `Game::m_attachedEffects->loadFromXml()` (src/game/game.cpp:983). The
+     * registry itself is Game-owned ([getAttachedEffects]); the network root
+     * feeds the `{CORE_DIRECTORY}/XML/attachedeffects.xml` source through this
+     * seam.
+     */
+    var initAttachedEffects: () -> Unit = {}
+
+    /**
+     * `g_globalEvents().startup()` (src/game/game.cpp:988): the `startup`
+     * global event family (globalevent.cpp:112-114). The port reaches the
+     * `LuaEnvironment` registry through the network root's
+     * `ScriptingDispatch.globalStartup()` binding.
+     */
+    var initGlobalEvents: () -> Unit = {}
+
+    /**
+     * `Game::m_IOWheel->initializeGlobalData()` (src/game/game.cpp:991): the
+     * wheel spell-table registration (io_wheel.cpp:123-177). The ported body is
+     * `WheelSpellRegistration.initializeGlobalData` over the booted engine
+     * `g_spells()` registry; the network root binds it.
+     */
+    var initWheelGlobalData: () -> Unit = {}
+
+    /**
+     * `Game::setGameState` (src/game/game.cpp:952): the two guard clauses, the
+     * state assignment and the wired `GAME_STATE_INIT` world bootstrap. The arm
+     * runs exactly once per transition into `GAME_STATE_INIT` (the repeated
+     * state guard above), in the C++ statement order (see [gameStateInit]).
+     *
+     * PARITY GAPS: the `GAME_STATE_SHUTDOWN` save/kick-all arm (game.cpp:995-1012),
+     * the `GAME_STATE_CLOSED` kick of non-`CanAlwaysLogin` players and the
+     * maintain-mode arm (game.cpp:1014-1035) and the `GAME_STATE_CLOSING` arm
+     * are not wired.
      */
     fun setGameState(newState: GameState_t) {
         if (gameState == GameState_t.GAME_STATE_SHUTDOWN) {
@@ -11911,6 +11965,41 @@ class Game(
         }
 
         gameState = newState
+
+        if (newState == GameState_t.GAME_STATE_INIT) {
+            gameStateInit()
+        }
+    }
+
+    /**
+     * The `GAME_STATE_INIT` arm of `Game::setGameState` (src/game/game.cpp:963-993)
+     * in C++ statement order: `loadItemsPrice()`, the spawn start,
+     * `raids.loadFromXml(); raids.startup()`, `mounts->loadFromXml()`,
+     * `m_attachedEffects->loadFromXml()`, `loadMotdNum()`, `loadPlayersRecord()`,
+     * `g_globalEvents().startup()` and `m_IOWheel->initializeGlobalData()`.
+     *
+     * BOOT-OWNED PIECES (not repeated here): `groups.load()` (game.cpp:966) is
+     * loaded by `ServerBootstrap` before the listener exists; the NPC and
+     * custom-map spawn starts (game.cpp:971-977) are unported. `g_chat().load()`
+     * (game.cpp:967) has no production `ChatManager` registry to load into yet
+     * (PARITY GAP).
+     */
+    private fun gameStateInit() {
+        loadItemsPrice()
+
+        initSpawns()
+
+        initRaids()
+
+        initMounts()
+        initAttachedEffects()
+
+        loadMotdNum()
+        loadPlayersRecord()
+
+        initGlobalEvents()
+
+        initWheelGlobalData()
     }
 
     /** `Game::setWorldType` (src/game/game.cpp:926). */

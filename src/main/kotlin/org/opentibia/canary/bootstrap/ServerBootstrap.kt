@@ -341,6 +341,10 @@ internal fun defaultListenerFactory(rsaCipher: RsaCipher = RsaCipher.fromEnviron
             // loads `{DATA_DIRECTORY}/raids/raids.xml` at `GAME_STATE_INIT`
             // (src/lua/creature/raids.cpp:29).
             dataDirectory = config.dataDir,
+            // `g_configManager().getString(CORE_DIRECTORY)`: the
+            // `GAME_STATE_INIT` loaders read `{CORE_DIRECTORY}/XML/mounts.xml`
+            // and `{CORE_DIRECTORY}/XML/attachedeffects.xml` (game.cpp:982-983).
+            coreDirectory = config.coreDir,
             dispatcher = dispatcher,
             rsaCipher = rsaCipher,
             luaEnvironment = luaEnvironment,
