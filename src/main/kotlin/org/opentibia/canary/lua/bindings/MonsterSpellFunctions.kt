@@ -20,16 +20,23 @@ import org.opentibia.canary.creatures.monsters.BaseSpell
 import org.opentibia.canary.creatures.monsters.MonsterCombatSpell
 import org.opentibia.canary.creatures.monsters.MonsterCombatSpellCombat
 import org.opentibia.canary.creatures.monsters.MonsterSpellCaster
+import org.opentibia.canary.creatures.monsters.MonsterSpellTarget
 import org.opentibia.canary.creatures.monsters.SpellBlock
 import org.opentibia.canary.lua.bindings.core.luaFunction
 import org.opentibia.canary.lua.bindings.core.retrieveUserdata
 import org.opentibia.canary.lua.registry.LuaSpell
 import org.opentibia.canary.lua.registry.SpellType
 import org.opentibia.canary.lua.runtime.LuaEnvironment
+import org.opentibia.canary.map.GameMap
+import org.opentibia.canary.spells.InstantSpell
 import org.opentibia.canary.spells.LuaVariant
 import org.opentibia.canary.spells.LuaVariantType
 import org.opentibia.canary.spells.MonsterRegisteredSpellRunner
+import org.opentibia.canary.spells.RuneSpell
 import org.opentibia.canary.spells.SoundEffect
+import org.opentibia.canary.spells.SpellCaster
+import org.opentibia.canary.spells.SpellEngine
+import org.opentibia.canary.spells.SpellScriptRunner
 import org.opentibia.canary.spells.Spells
 import kotlin.math.abs
 import kotlin.math.max
@@ -102,6 +109,12 @@ class MonsterRegisteredSpell(
      * (AGENTS.md deferred-callback lifetime safety).
      */
     private val runner: MonsterRegisteredSpellRunner? = null,
+    /**
+     * `InstantSpell::canThrowSpell` gate override (spells.cpp:1299-1310); null
+     * resolves the [MonsterSpellFunctions] gate the world attaches at install
+     * time, which keeps a re-initialized environment from holding a stale map.
+     */
+    private val canThrowSpellGate: ((Monster, Creature, LuaSpell) -> Boolean)? = null,
 ) : BaseSpell {
 
     override fun castSpell(caster: Monster, target: Creature) {
@@ -144,8 +157,14 @@ class MonsterRegisteredSpell(
             if (attacked == null || attacked.health <= 0) {
                 return
             }
-            // PARITY GAP: `InstantSpell::canThrowSpell` (spells.cpp:1299-1310)
-            // needs the Game::canThrowObjectTo world seam.
+            // `if (!canThrowSpell(creature, target)) return false;`
+            // (spells.cpp:1319-1321) over the wave-64 `SpellEngine` gate.
+            val canThrow = canThrowSpellGate ?: { casterCreature, attackedCreature, registered ->
+                MonsterSpellFunctions.canThrowSpell(casterCreature, attackedCreature, registered)
+            }
+            if (!canThrow(caster, attacked, spell)) {
+                return
+            }
             variant.type = LuaVariantType.VARIANT_NUMBER
             variant.number = attacked.id
         } else if (spell.needDirection) {
@@ -194,7 +213,16 @@ class MonsterRegisteredSpell(
 object MonsterSpellFunctions {
     const val MONSTER_SPELL_TYPE = "MonsterSpell"
 
-    fun install(env: LuaEnvironment) {
+    /**
+     * `InstantSpell::canThrowSpell` (spells.cpp:1299-1310) over the wave-64
+     * `SpellEngine` gate and the `Game::canThrowObjectTo` map fold. Installed
+     * by [install]; an unwired map leaves the gate permissive exactly like the
+     * pre-gate port did (PARITY GAP: the real C++ always has a map).
+     */
+    @Volatile
+    private var canThrowSpellGate: ((Monster, Creature, LuaSpell) -> Boolean)? = null
+
+    fun install(env: LuaEnvironment, gameMap: GameMap? = null) {
         val registry = env.userdata
 
         registry.registerClass(MONSTER_SPELL_TYPE, "", luaFunction {
@@ -356,6 +384,50 @@ object MonsterSpellFunctions {
                 LuaValue.TRUE
             }
         })
+
+        canThrowSpellGate = gameMap?.let(::canThrowSpellGateFor)
+    }
+
+    /**
+     * Re-binds the `canThrowSpell` gate over [gameMap] after install; the
+     * composition root calls this alongside `WorldLuaOperations.attachCombat`
+     * when the world (and its map) exists.
+     */
+    fun attachCanThrowSpellWorld(gameMap: GameMap) {
+        canThrowSpellGate = canThrowSpellGateFor(gameMap)
+    }
+
+    /** Builds the `Game::canThrowObjectTo`-backed gate of one map. */
+    private fun canThrowSpellGateFor(gameMap: GameMap): (Monster, Creature, LuaSpell) -> Boolean {
+        val engine = SpellEngine(Spells(), LuaSpellWorld(gameMap), MonsterSpellNoScriptRunner)
+        return { caster, target, spell ->
+            engine.canThrowSpell(
+                MonsterSpellCaster(caster),
+                monsterInstantSpell(spell),
+                MonsterSpellTarget(target),
+            )
+        }
+    }
+
+    /**
+     * `InstantSpell::canThrowSpell` (spells.cpp:1299-1310) for a registered
+     * monster spell: the [SpellEngine] gate folds the floor guard and the
+     * `Game::canThrowObjectTo` sight/range check. A miss before [install] or
+     * without a wired map keeps the historical permissive behavior.
+     */
+    fun canThrowSpell(caster: Monster, target: Creature, spell: LuaSpell): Boolean =
+        canThrowSpellGate?.invoke(caster, target, spell) ?: true
+
+    /**
+     * The registered [LuaSpell] view the engine gate reads: `InstantSpell`'s
+     * `checkLineOfSight` defaults true and has no Lua setter
+     * (spells.hpp:316-347), the registered `spell:range(...)` carries over.
+     */
+    private fun monsterInstantSpell(spell: LuaSpell): InstantSpell {
+        val instant = InstantSpell()
+        instant.name = spell.name
+        instant.range = spell.range
+        return instant
     }
 
     /**
@@ -665,4 +737,20 @@ object MonsterSpellFunctions {
 
     /** `ITEM_ENERGYFIELD_PVP` (`src/utils/utils_definitions.hpp:522`). */
     private const val ITEM_ENERGYFIELD_PVP = 2122
+}
+
+/**
+ * Inert `SpellScriptRunner` for the `canThrowSpell`-only [SpellEngine] of
+ * [MonsterSpellFunctions]: the gate never executes a spell script, so both
+ * overloads are unreachable (they mirror the interface for construction).
+ */
+private object MonsterSpellNoScriptRunner : SpellScriptRunner {
+    override fun executeCastSpell(caster: SpellCaster, spell: InstantSpell, variant: LuaVariant): Boolean = false
+
+    override fun executeCastSpell(
+        caster: SpellCaster,
+        rune: RuneSpell,
+        variant: LuaVariant,
+        isHotkey: Boolean,
+    ): Boolean = false
 }

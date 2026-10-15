@@ -1,5 +1,7 @@
 package org.opentibia.canary.lua.runtime
 
+import org.opentibia.canary.combat.CombatEffects
+import org.opentibia.canary.combat.CombatTargetState
 import org.opentibia.canary.combat.condition.CombatType
 import org.luaj.vm2.LuaError
 import org.luaj.vm2.LuaValue
@@ -53,6 +55,10 @@ import org.opentibia.canary.lua.bindings.LootData
 import org.opentibia.canary.lua.bindings.LootFunctions
 import org.opentibia.canary.lua.bindings.LootOperations
 import org.opentibia.canary.lua.bindings.LuaCombat
+import org.opentibia.canary.lua.bindings.LuaCombatAreaRegistry
+import org.opentibia.canary.lua.bindings.LuaCombatCallbackBridge
+import org.opentibia.canary.lua.bindings.LuaCombatExecutor
+import org.opentibia.canary.lua.bindings.LuaCombatNoEffects
 import org.opentibia.canary.lua.bindings.MonsterAttackInfo
 import org.opentibia.canary.lua.bindings.MonsterFunctions
 import org.opentibia.canary.lua.bindings.MonsterOperations
@@ -109,6 +115,7 @@ import org.opentibia.canary.lua.bindings.library.BatchUpdateFunctions
 import org.opentibia.canary.lua.bindings.library.ConfigFunctions
 import org.opentibia.canary.lua.bindings.library.DbFunctions
 import org.opentibia.canary.lua.bindings.library.GlobalFunctions
+import org.opentibia.canary.lua.bindings.library.GlobalOperations
 import org.opentibia.canary.lua.bindings.library.KvFunctions
 import org.opentibia.canary.lua.bindings.library.LoggerFunctions
 import org.opentibia.canary.lua.bindings.library.LuaEnums
@@ -202,6 +209,16 @@ import kotlin.random.Random
  *   defaults to the in-memory `KVMemory` when no SQL-backed `KVSQL` is injected.
  * @param isDay `g_game().gameIsDay()` read by `MonsterType::canSpawn`; defaults to day
  *   because the Lua seam owns no world-light clock (PARITY GAP).
+ * @param combatTargetState the game-owned [CombatTargetState] of the production
+ *   `CreatureCombatTarget` adapter behind the Lua combat entry points; inert by default.
+ * @param combatEffects the `g_game()` effect fanout seam of the area dispatch.
+ * @param creatureById `g_game().getCreatureByID(id)` backing `combat:execute`'s
+ *   number variant; null resolves nothing.
+ * @param playerByName `g_game().getPlayerByNameWildcard(name)` backing the
+ *   string variant; null resolves nothing.
+ * @param combatRandom the `uniform_random` source of the ported damage math.
+ * @param combatValuesOf `Creature::getCombatValues(min, max)` seam; the monster
+ *   behavior state owns the values, so the default resolves none (PARITY GAP).
  */
 class WorldLuaOperations(
     private val itemTypes: ItemTypeRegistry? = null,
@@ -210,7 +227,7 @@ class WorldLuaOperations(
     monsterTypesByName: Map<String, Any> = emptyMap(),
     monsterTypesByRaceId: Map<Int, Any> = emptyMap(),
     npcTypesByName: Map<String, Any> = emptyMap(),
-    gameMap: GameMap? = null,
+    private val gameMap: GameMap? = null,
     itemClassifications: ItemClassifications? = null,
     towns: Towns? = null,
     imbuements: Imbuements? = null,
@@ -219,6 +236,24 @@ class WorldLuaOperations(
     startTrade: (Player, Player, Item) -> Boolean = { _, _, _ -> false },
     isDay: () -> Boolean = { true },
     private val kv: KV = KVMemory(),
+    /**
+     * The game-owned combat state seam of [LuaCombatExecutor]; defaults to the
+     * wave-64 inert [CombatTargetState].
+     */
+    combatTargetState: CombatTargetState = CombatTargetState.Inert,
+    /** The `g_game()` effect fanout seam of the area dispatch. */
+    combatEffects: CombatEffects = LuaCombatNoEffects,
+    /** `g_game().getCreatureByID(id)` backing `combat:execute`'s number variant. */
+    creatureById: (Long) -> Creature? = { null },
+    /** `g_game().getPlayerByNameWildcard(name)` backing the string variant. */
+    playerByName: (String) -> Player? = { null },
+    /** `Creature::blockHit`'s `uniform_random` (creature.cpp:968) source. */
+    combatRandom: java.util.Random = java.util.Random(),
+    /**
+     * `Creature::getCombatValues(min, max)` seam (combat.cpp:186-190); the
+     * monster behavior state owns the values, so the default resolves none.
+     */
+    combatValuesOf: (Creature) -> Pair<Int, Int>? = { null },
 ) {
     private val worldGame: WorldGameOperations =
         WorldGameOperations(itemIdsByName, itemTypes, gameMap, monsterTypesByName, itemClassifications)
@@ -276,6 +311,31 @@ class WorldLuaOperations(
         worldMonsterType.attachMonsterEvents(liveMonsterEvents, isStartup)
     }
 
+    /**
+     * Wires the world-owned combat seams of the Lua entry points after binding
+     * install, mirroring [attachMonsters]: the boot's `g_game().map`, the game
+     * combat state/effect fanout and the creature/player lookups. Re-binds the
+     * [MonsterSpellFunctions] `canThrowSpell` gate over the new map too.
+     *
+     * Canary always has the map through `g_game()`; the port's
+     * `LuaEnvironment.initState` installs the bindings before the world exists,
+     * so a composition root calls this when it does.
+     */
+    fun attachCombat(
+        gameMap: GameMap,
+        targetState: CombatTargetState = CombatTargetState.Inert,
+        effects: CombatEffects = LuaCombatNoEffects,
+        creatureById: (Long) -> Creature? = { null },
+        playerByName: (String) -> Player? = { null },
+    ) {
+        combatExecutor.targetState = targetState
+        combatExecutor.effects = effects
+        combatExecutor.creatureById = creatureById
+        combatExecutor.playerByName = playerByName
+        combatExecutor.gameMap = gameMap
+        MonsterSpellFunctions.attachCanThrowSpellWorld(gameMap)
+    }
+
     val loot: LootOperations = WorldLootOperations(itemIdsByName)
 
     val npc: NpcOperations = WorldNpcOperations(itemTypes)
@@ -283,7 +343,30 @@ class WorldLuaOperations(
     val npcType: NpcTypeOperations = WorldNpcTypeOperations(npcTypesByName, itemTypes)
     val weapon: WeaponOperations = WorldWeaponOperations(itemTypes)
     val spell: SpellOperations = WorldSpellOperations(itemTypes)
-    val combat: CombatOperations = WorldCombatOperations()
+
+    /** `g_luaEnvironment()`'s area registry behind `createCombatArea`/`getAreaObject`. */
+    private val combatAreas: LuaCombatAreaRegistry = LuaCombatAreaRegistry()
+
+    /**
+     * The Lua entry-point execution over the wave-64 combat core, shared by
+     * `combat:execute` ([WorldCombatOperations]) and the global `do*Combat*`
+     * functions ([WorldGlobalOperations]).
+     */
+    private val combatExecutor: LuaCombatExecutor = LuaCombatExecutor(combatRandom).apply {
+        targetState = combatTargetState
+        effects = combatEffects
+        this.creatureById = creatureById
+        this.playerByName = playerByName
+        this.combatValuesOf = combatValuesOf
+        gameMap = this@WorldLuaOperations.gameMap
+        noPvpWorld = { this@WorldLuaOperations.worldGame.getWorldType() == WORLD_TYPE_NO_PVP }
+    }
+
+    val combat: CombatOperations = WorldCombatOperations(combatExecutor, combatAreas)
+
+    /** `GlobalFunctions` world seam; only the combat entry points are live. */
+    private val worldGlobal: WorldGlobalOperations = WorldGlobalOperations(combatExecutor, combatAreas)
+
     val variant: VariantOperations = WorldVariantOperations()
 
     val house: HouseOperations = WorldHouseOperations(gameMap, towns, playerByGuid, startTrade)
@@ -321,7 +404,9 @@ class WorldLuaOperations(
         // Wave 40 lua-monster-npc
         NpcFunctions.install(env, npc)
         NpcTypeFunctions.install(env, npcType)
-        MonsterSpellFunctions.install(env)
+        // The `canThrowSpell` gate binds the `Game::canThrowObjectTo` fold of
+        // the wired map (spells.cpp:1299-1310).
+        MonsterSpellFunctions.install(env, gameMap)
         CharmFunctions.install(env)
         ShopFunctions.install(env, WorldShopOperations(itemIdsByName))
         // Wave 40 lua-weapon-spell
@@ -329,6 +414,10 @@ class WorldLuaOperations(
         // `LuaEventDispatcher` reads, and delegates the binding surface to SpellFunctions.
         env.installSpells(SpellBindings.install(env, spell))
         WeaponFunctions.install(env, weapon)
+        // `combat:setCallback` scripts stay Lua: the executor resolves them
+        // through the bridge of the environment they were registered in
+        // (AGENTS.md 1.4).
+        combatExecutor.callbackBridge = LuaCombatCallbackBridge(env)
         CombatFunctions.install(env, combat, variant)
 
         // Wave 40 lua-libraries
@@ -343,7 +432,7 @@ class WorldLuaOperations(
         BankFunctions.install(env)
         BatchUpdateFunctions.install(env)
         ConfigFunctions.install(env)
-        GlobalFunctions.install(env)
+        GlobalFunctions.install(env, worldGlobal)
         ModalWindowFunctions.install(env)
         ZoneFunctions.install(env)
         LuaEnums.install(env)
@@ -360,6 +449,9 @@ class WorldLuaOperations(
     }
 
     companion object {
+        /** `WORLD_TYPE_NO_PVP` (`src/creatures/creatures_definitions.hpp`). */
+        private const val WORLD_TYPE_NO_PVP = 0
+
         /** Convenience factory that installs the real seams on [env] immediately. */
         fun forEnvironment(env: LuaEnvironment): WorldLuaOperations =
             WorldLuaOperations(itemClassifications = env.itemClassifications).also { it.install(env) }
@@ -3108,20 +3200,232 @@ class WorldSpellOperations(
 }
 
 /**
- * `Combat` seam. The Kotlin `Combat` port is a stateless damage core, so the
- * world-backed `execute` dispatch is not wired yet.
+ * `Combat` seam over the wave-64 combat core.
  *
- * PARITY GAPS: `g_luaEnvironment().getAreaObject(id)` is owned by the (not yet
- * ported) area registry and returns null; `execute` does not run
- * `Combat::doCombat` over the map; the script-id gate returns
- * `EVENT_ID_LOADING`, so `combat:setArea` follows the loading path.
+ * `combat:execute` (combat_functions.cpp:165-250) dispatches through
+ * [LuaCombatExecutor] over `Combat::doCombat` (combat.cpp:1461-1505);
+ * `combat:setArea` resolves the [LuaCombatAreaRegistry] behind
+ * `g_luaEnvironment().getAreaObject` (lua_environment.cpp:97-109). The
+ * script-id gate returns `EVENT_ID_LOADING`, so `combat:setArea` follows the
+ * loading path (the C++ `EVENT_ID_LOADING` guard is not modelled; PARITY GAP).
  */
-class WorldCombatOperations : CombatOperations {
+class WorldCombatOperations(
+    private val executor: LuaCombatExecutor = LuaCombatExecutor(),
+    private val areas: LuaCombatAreaRegistry = LuaCombatAreaRegistry(),
+) : CombatOperations {
     override fun getScriptId(): Int = CombatFunctions.EVENT_ID_LOADING
 
-    override fun getAreaObject(id: Int): AreaCombat? = null
+    override fun getAreaObject(id: Int): AreaCombat? = areas.getAreaObject(id)
 
-    override fun execute(combat: LuaCombat, creature: Any, variant: LuaVariant): Boolean = false
+    /** `CombatFunctions::luaCombatExecute` over the ported execution. */
+    override fun execute(combat: LuaCombat, creature: Any, variant: LuaVariant): Boolean =
+        executor.execute(combat, creature as? Creature, variant)
+}
+
+/**
+ * `GlobalOperations` world seam behind the `GlobalFunctions` globals
+ * (src/lua/functions/core/game/global_functions.cpp).
+ *
+ * The combat entry points (`doTargetCombatHealth`/`Mana`/`Condition`/`Dispel`
+ * and their area variants) run through [LuaCombatExecutor] over the wave-64
+ * combat core; `createCombatArea` populates the [LuaCombatAreaRegistry] the
+ * `area` argument resolves through
+ * (`g_luaEnvironment().createAreaObject`, lua_environment.cpp:105-109).
+ *
+ * PARITY GAPS (inherited defaults): the UID registry, waypoints, war lists,
+ * chat sends, depot lookups and map clean/save stay unwired, and the C++
+ * `createCombatArea` `EVENT_ID_LOADING` guard is not modelled.
+ */
+class WorldGlobalOperations(
+    private val executor: LuaCombatExecutor = LuaCombatExecutor(),
+    private val areas: LuaCombatAreaRegistry = LuaCombatAreaRegistry(),
+) : GlobalOperations {
+
+    /** `GlobalFunctions::luaCreateCombatArea` (global_functions.cpp:269-308). */
+    override fun createCombatArea(area: List<List<Int>>, extendedArea: List<List<Int>>?): Long? {
+        if (area.isEmpty()) {
+            return null
+        }
+        val id = areas.createAreaObject()
+        val combatArea = areas.getAreaObject(id) ?: return null
+        if (extendedArea != null) {
+            combatArea.setupExtArea(extendedArea.flatten(), extendedArea.size)
+        }
+        combatArea.setupArea(area.flatten(), area.size)
+        return id.toLong()
+    }
+
+    /** `GlobalFunctions::luaDoAreaCombatHealth` (global_functions.cpp:310-346). */
+    override fun doAreaCombatHealth(
+        creature: Any?,
+        combatType: Int,
+        position: Position,
+        areaId: Long,
+        min: Int,
+        max: Int,
+        effect: Int,
+        origin: Int,
+        instantSpellName: String,
+        runeSpellName: String,
+    ): Boolean {
+        if (!areaFound(areaId)) {
+            return false
+        }
+        return executor.doAreaCombatHealth(
+            caster = creature as? Creature,
+            position = position,
+            area = areaOrNull(areaId),
+            combatType = combatType,
+            min = min,
+            max = max,
+            effect = effect,
+            origin = origin,
+            instantSpellName = instantSpellName,
+            runeSpellName = runeSpellName,
+        )
+    }
+
+    /** `GlobalFunctions::luaDoTargetCombatHealth` (global_functions.cpp:348-397). */
+    override fun doTargetCombatHealth(
+        creature: Any?,
+        target: Any,
+        combatType: Int,
+        min: Int,
+        max: Int,
+        effect: Int,
+        origin: Int,
+        instantSpellName: String,
+        runeSpellName: String,
+    ): Boolean = executor.doTargetCombatHealth(
+        caster = creature as? Creature,
+        target = target as? Creature ?: return false,
+        combatType = combatType,
+        min = min,
+        max = max,
+        effect = effect,
+        origin = origin,
+        instantSpellName = instantSpellName,
+        runeSpellName = runeSpellName,
+    )
+
+    /** `GlobalFunctions::luaDoAreaCombatMana` (global_functions.cpp:399-427). */
+    override fun doAreaCombatMana(
+        creature: Any?,
+        position: Position,
+        areaId: Long,
+        min: Int,
+        max: Int,
+        effect: Int,
+        origin: Int,
+        instantSpellName: String,
+        runeSpellName: String,
+    ): Boolean {
+        if (!areaFound(areaId)) {
+            return false
+        }
+        return executor.doAreaCombatMana(
+            caster = creature as? Creature,
+            position = position,
+            area = areaOrNull(areaId),
+            min = min,
+            max = max,
+            effect = effect,
+            origin = origin,
+            instantSpellName = instantSpellName,
+            runeSpellName = runeSpellName,
+        )
+    }
+
+    /** `GlobalFunctions::luaDoTargetCombatMana` (global_functions.cpp:429-464). */
+    override fun doTargetCombatMana(
+        creature: Any?,
+        target: Any,
+        min: Int,
+        max: Int,
+        effect: Int,
+        origin: Int,
+        instantSpellName: String,
+        runeSpellName: String,
+    ): Boolean = executor.doTargetCombatMana(
+        caster = creature as? Creature,
+        target = target as? Creature ?: return false,
+        min = min,
+        max = max,
+        effect = effect,
+        origin = origin,
+        instantSpellName = instantSpellName,
+        runeSpellName = runeSpellName,
+    )
+
+    /** `GlobalFunctions::luaDoAreaCombatCondition` (global_functions.cpp:470-499). */
+    override fun doAreaCombatCondition(
+        creature: Any?,
+        position: Position,
+        areaId: Long,
+        condition: Any,
+        effect: Int,
+    ): Boolean {
+        if (!areaFound(areaId)) {
+            return false
+        }
+        return executor.doAreaCombatCondition(
+            caster = creature as? Creature,
+            position = position,
+            area = areaOrNull(areaId),
+            condition = condition as? Condition ?: return false,
+            effect = effect,
+        )
+    }
+
+    /** `GlobalFunctions::luaDoTargetCombatCondition` (global_functions.cpp:501-513). */
+    override fun doTargetCombatCondition(creature: Any?, target: Any, condition: Any, effect: Int): Boolean =
+        executor.doTargetCombatCondition(
+            caster = creature as? Creature,
+            target = target as? Creature ?: return false,
+            condition = condition as? Condition ?: return false,
+            effect = effect,
+        )
+
+    /** `GlobalFunctions::luaDoAreaCombatDispel` (global_functions.cpp:515-531). */
+    override fun doAreaCombatDispel(
+        creature: Any?,
+        position: Position,
+        areaId: Long,
+        dispelType: Int,
+        effect: Int,
+    ): Boolean {
+        if (!areaFound(areaId)) {
+            return false
+        }
+        return executor.doAreaCombatDispel(
+            caster = creature as? Creature,
+            position = position,
+            area = areaOrNull(areaId),
+            dispelType = dispelType,
+            effect = effect,
+        )
+    }
+
+    /** `GlobalFunctions::luaDoTargetCombatDispel` (global_functions.cpp:533-560). */
+    override fun doTargetCombatDispel(creature: Any?, target: Any, dispelType: Int, effect: Int): Boolean =
+        executor.doTargetCombatDispel(
+            caster = creature as? Creature,
+            target = target as? Creature ?: return false,
+            dispelType = dispelType,
+            effect = effect,
+        )
+
+    /**
+     * `g_luaEnvironment().getAreaObject(areaId)`; the C++ `if (area || areaId == 0)`
+     * gate admits the null-area strike on the bare target tile, so an unknown
+     * non-zero id reports false.
+     */
+    private fun areaOrNull(areaId: Long): AreaCombat? =
+        if (areaId == 0L) null else areas.getAreaObject(areaId.toInt())
+
+    /** The C++ `(area || areaId == 0)` presence gate of the `doAreaCombat*` bindings. */
+    private fun areaFound(areaId: Long): Boolean =
+        areaId == 0L || areas.getAreaObject(areaId.toInt()) != null
 }
 
 /** `Variant` seam resolving `Lua::getThing(thing)->getPosition()` for creatures and tiles. */
