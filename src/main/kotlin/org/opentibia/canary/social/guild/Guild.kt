@@ -1,6 +1,7 @@
 package org.opentibia.canary.social.guild
 
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.database.SqlDialect
 import java.sql.SQLException
 import javax.sql.DataSource
 
@@ -510,7 +511,10 @@ class JdbcGuildRepository(
 
     override fun getGuildInvites(playerId: Long): List<GuildInvite> = dataSource.connection.use { conn ->
         val invites = mutableListOf<GuildInvite>()
-        conn.prepareStatement("SELECT player_id, guild_id, \"date\" FROM guild_invites WHERE player_id = ?").use { stmt ->
+        conn.prepareStatement(
+            "SELECT player_id, guild_id, ${SqlDialect.from(conn).quoteIdentifier("date")} " +
+                "FROM guild_invites WHERE player_id = ?",
+        ).use { stmt ->
             stmt.setLong(1, playerId)
             stmt.executeQuery().use { rs ->
                 while (rs.next()) {
@@ -529,7 +533,10 @@ class JdbcGuildRepository(
 
     override fun addGuildInvite(playerId: Long, guildId: Long, date: Long): Boolean = try {
         dataSource.connection.use { conn ->
-            conn.prepareStatement("INSERT INTO guild_invites (player_id, guild_id, \"date\") VALUES (?, ?, ?)").use { stmt ->
+            conn.prepareStatement(
+                "INSERT INTO guild_invites (player_id, guild_id, ${SqlDialect.from(conn).quoteIdentifier("date")}) " +
+                    "VALUES (?, ?, ?)",
+            ).use { stmt ->
                 stmt.setLong(1, playerId)
                 stmt.setLong(2, guildId)
                 stmt.setLong(3, date)

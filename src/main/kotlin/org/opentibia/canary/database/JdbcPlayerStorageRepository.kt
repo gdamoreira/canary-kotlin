@@ -22,8 +22,10 @@ interface PlayerStorageRepository {
  * JDBC persistence for the `player_storage` map (schema.sql:802-812).
  *
  * [upsert] mirrors `DBInsert::upsert({"value"})` through a portable
- * update-then-insert pair so it works on both PostgreSQL 16 and the H2
- * PostgreSQL-mode test database. [deleteKeys] builds the same
+ * update-then-insert pair that works on PostgreSQL 16, MariaDB and the H2
+ * PostgreSQL-mode test database; the `key`/`value` identifiers are quoted by
+ * [SqlDialect.quoteIdentifier] because both are keywords under
+ * MariaDB/MySQL. [deleteKeys] builds the same
  * `DELETE ... WHERE player_id = ? AND key IN (...)` as
  * `DbPlayerStorageRepository::deleteKeys`.
  */
@@ -32,8 +34,10 @@ class JdbcPlayerStorageRepository(private val dataSource: DataSource) : PlayerSt
     override fun load(playerId: Long): List<PlayerStorageRow> {
         val result = mutableListOf<PlayerStorageRow>()
         dataSource.connection.use { conn ->
+            val dialect = SqlDialect.from(conn)
             conn.prepareStatement(
-                "SELECT \"key\", \"value\" FROM player_storage WHERE player_id = ?",
+                "SELECT ${dialect.quoteIdentifier("key")}, ${dialect.quoteIdentifier("value")} " +
+                    "FROM player_storage WHERE player_id = ?",
             ).use { stmt ->
                 stmt.setLong(1, playerId)
                 stmt.executeQuery().use { rs ->
@@ -55,7 +59,8 @@ class JdbcPlayerStorageRepository(private val dataSource: DataSource) : PlayerSt
         return try {
             dataSource.connection.use { conn ->
                 conn.prepareStatement(
-                    "DELETE FROM player_storage WHERE player_id = ? AND \"key\" IN ($placeholders)",
+                    "DELETE FROM player_storage WHERE player_id = ? AND " +
+                        "${SqlDialect.from(conn).quoteIdentifier("key")} IN ($placeholders)",
                 ).use { stmt ->
                     stmt.setLong(1, playerId)
                     keys.forEachIndexed { index, key -> stmt.setInt(index + 2, key) }
@@ -76,20 +81,23 @@ class JdbcPlayerStorageRepository(private val dataSource: DataSource) : PlayerSt
         dataSource.connection.use { conn ->
             conn.autoCommit = false
             try {
+                val dialect = SqlDialect.from(conn)
+                val key = dialect.quoteIdentifier("key")
+                val value = dialect.quoteIdentifier("value")
                 conn.prepareStatement(
-                    "UPDATE player_storage SET \"value\" = ? WHERE player_id = ? AND \"key\" = ?",
+                    "UPDATE player_storage SET $value = ? WHERE player_id = ? AND $key = ?",
                 ).use { update ->
                     conn.prepareStatement(
-                        "INSERT INTO player_storage (player_id, \"key\", \"value\") VALUES (?, ?, ?)",
+                        "INSERT INTO player_storage (player_id, $key, $value) VALUES (?, ?, ?)",
                     ).use { insert ->
-                        for ((key, value) in kv) {
-                            update.setInt(1, value)
+                        for ((storageKey, storageValue) in kv) {
+                            update.setInt(1, storageValue)
                             update.setLong(2, playerId)
-                            update.setInt(3, key)
+                            update.setInt(3, storageKey)
                             if (update.executeUpdate() == 0) {
                                 insert.setLong(1, playerId)
-                                insert.setInt(2, key)
-                                insert.setInt(3, value)
+                                insert.setInt(2, storageKey)
+                                insert.setInt(3, storageValue)
                                 insert.executeUpdate()
                             }
                         }

@@ -1,6 +1,7 @@
 package org.opentibia.canary.systems.prey
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import org.opentibia.canary.database.SqlDialect
 import java.sql.SQLException
 import javax.sql.DataSource
 import org.opentibia.canary.systems.taskhunting.PlayerTaskHuntingState
@@ -150,7 +151,8 @@ class IOPreyPersistence(
     private fun selectPreyRows(playerGuid: Long): List<PreyRow> =
         dataSource.connection.use { connection ->
             connection.prepareStatement(
-                "SELECT slot, state, raceid, \"option\", bonus_type, bonus_rarity, bonus_percentage, " +
+                "SELECT slot, state, raceid, ${SqlDialect.from(connection).quoteIdentifier("option")}, " +
+                    "bonus_type, bonus_rarity, bonus_percentage, " +
                     "bonus_time, free_reroll, monster_list FROM player_prey WHERE player_id = ?",
             ).use { statement ->
                 statement.setLong(1, playerGuid)
@@ -208,8 +210,9 @@ class IOPreyPersistence(
 
     private fun upsertPreyRow(playerGuid: Long, slot: PreySlot): Boolean =
         inTransaction { connection ->
+            val option = SqlDialect.from(connection).quoteIdentifier("option")
             val updated = connection.prepareStatement(
-                "UPDATE player_prey SET state = ?, raceid = ?, \"option\" = ?, bonus_type = ?, bonus_rarity = ?, " +
+                "UPDATE player_prey SET state = ?, raceid = ?, $option = ?, bonus_type = ?, bonus_rarity = ?, " +
                     "bonus_percentage = ?, bonus_time = ?, free_reroll = ?, monster_list = ? " +
                     "WHERE player_id = ? AND slot = ?",
             ).use { statement ->
@@ -229,7 +232,7 @@ class IOPreyPersistence(
 
             if (updated == 0) {
                 connection.prepareStatement(
-                    "INSERT INTO player_prey (player_id, slot, state, raceid, \"option\", bonus_type, bonus_rarity, " +
+                    "INSERT INTO player_prey (player_id, slot, state, raceid, $option, bonus_type, bonus_rarity, " +
                         "bonus_percentage, bonus_time, free_reroll, monster_list) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 ).use { statement ->
                     statement.setLong(1, playerGuid)

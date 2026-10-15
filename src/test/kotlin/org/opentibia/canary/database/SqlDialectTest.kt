@@ -68,4 +68,24 @@ class SqlDialectTest {
             assertThat(SqlDialect.from(connection)).isEqualTo(SqlDialect.H2)
         }
     }
+
+    @Test
+    fun `H2 and PostgreSQL quote identifiers with ANSI double quotes`() {
+        assertThat(SqlDialect.H2.quoteIdentifier("type")).isEqualTo("\"type\"")
+        assertThat(SqlDialect.H2.quoteIdentifier("key")).isEqualTo("\"key\"")
+        assertThat(SqlDialect.POSTGRESQL.quoteIdentifier("value")).isEqualTo("\"value\"")
+    }
+
+    @Test
+    fun `MariaDB quotes identifiers with backticks`() {
+        assertThat(SqlDialect.MARIADB.quoteIdentifier("type")).isEqualTo("`type`")
+        assertThat(SqlDialect.MARIADB.quoteIdentifier("key")).isEqualTo("`key`")
+    }
+
+    @Test
+    fun `quoteIdentifier escapes the dialect quote character`() {
+        assertThat(SqlDialect.H2.quoteIdentifier("we\"ird")).isEqualTo("\"we\"\"ird\"")
+        assertThat(SqlDialect.POSTGRESQL.quoteIdentifier("we\"ird")).isEqualTo("\"we\"\"ird\"")
+        assertThat(SqlDialect.MARIADB.quoteIdentifier("we`ird")).isEqualTo("`we``ird`")
+    }
 }

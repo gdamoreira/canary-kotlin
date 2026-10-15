@@ -17,6 +17,20 @@ enum class SqlDialect {
     POSTGRESQL,
     MARIADB;
 
+    /**
+     * Quotes an SQL identifier for this dialect. H2 and PostgreSQL use ANSI
+     * double quotes; MariaDB/MySQL in their default `sql_mode` treat `"name"`
+     * as a string literal, so identifiers are wrapped in backticks — the same
+     * quoting upstream Canary's queries use (e.g.
+     * `SELECT \`key\`,\`value\` FROM \`player_storage\``,
+     * src/io/player_storage_repository_db.cpp:27). An embedded quote character
+     * is doubled, as both dialects require.
+     */
+    fun quoteIdentifier(name: String): String = when (this) {
+        H2, POSTGRESQL -> "\"${name.replace("\"", "\"\"")}\""
+        MARIADB -> "`${name.replace("`", "``")}`"
+    }
+
     companion object {
         /**
          * Maps `DatabaseMetaData.getDatabaseProductName()` onto the dialect;

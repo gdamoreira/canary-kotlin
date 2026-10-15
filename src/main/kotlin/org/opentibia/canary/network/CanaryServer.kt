@@ -30,6 +30,7 @@ import org.opentibia.canary.creatures.spawns.MonsterSpawnPath
 import org.opentibia.canary.creatures.spawns.dispatcherSpawnScheduler
 import org.opentibia.canary.database.Database
 import org.opentibia.canary.database.DatabaseConnectionFactory
+import org.opentibia.canary.database.SqlDialect
 import org.opentibia.canary.game.Game
 import org.opentibia.canary.game.GameState_t
 import org.opentibia.canary.game.modal.ModalWindowManager
@@ -752,12 +753,27 @@ class CanaryServer(
             game.loadMotdHashValue = { serverConfigValue("motd_hash") }
             game.loadPlayersRecordValue = { serverConfigValue("players_record")?.toIntOrNull() }
             game.createPlayersRecord = {
-                db.executeQuery("INSERT INTO server_config (config, \"value\") VALUES ('players_record', '0')")
+                db.executeQuery(
+                    "INSERT INTO server_config (config, $serverConfigValueColumn) VALUES ('players_record', '0')",
+                )
             }
             game.savePlayersRecord = { value ->
-                db.executeQuery("UPDATE server_config SET \"value\" = '$value' WHERE config = 'players_record'")
+                db.executeQuery(
+                    "UPDATE server_config SET $serverConfigValueColumn = '$value' WHERE config = 'players_record'",
+                )
             }
         }
+    }
+
+    /**
+     * Dialect-quoted `server_config.value` identifier, resolved once from the
+     * booted [dataSource]: `value` is a keyword that MariaDB/MySQL's default
+     * `sql_mode` treats as a string literal when double-quoted, exactly like
+     * upstream Canary's backticked `` `value` `` lookup (game.cpp:9594).
+     */
+    private val serverConfigValueColumn: String by lazy {
+        val source = checkNotNull(dataSource) { "server_config SQL requires a booted dataSource" }
+        source.connection.use { connection -> SqlDialect.from(connection).quoteIdentifier("value") }
     }
 
     /**
@@ -768,7 +784,7 @@ class CanaryServer(
         dataSource?.let { source ->
             DatabaseConnectionFactory.storeQuery(
                 source,
-                "SELECT \"value\" FROM server_config WHERE config = '$name'",
+                "SELECT $serverConfigValueColumn FROM server_config WHERE config = '$name'",
             )?.getString("value")
         }
 

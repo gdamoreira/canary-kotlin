@@ -21,6 +21,7 @@ import org.opentibia.canary.creatures.Skulls_t
 import org.opentibia.canary.creatures.players.PlayerSocialState
 import org.opentibia.canary.creatures.players.components.PlayerStorage
 import org.opentibia.canary.creatures.players.vip.PlayerVip
+import org.opentibia.canary.database.SqlDialect
 import org.opentibia.canary.database.VipLoginRepository
 import org.opentibia.canary.io.IOGuild
 import org.opentibia.canary.io.PlayerStorageRepository
@@ -104,7 +105,7 @@ class DbPlayerSubloadRepository(private val dataSource: DataSource) : PlayerSubl
 
     override fun loadConditionSkull(playerId: Long): PlayerConditionSkullRecord? = try {
         dataSource.connection.use { connection ->
-            connection.prepareStatement(LOAD_SQL).use { statement ->
+            connection.prepareStatement(loadSql(SqlDialect.from(connection))).use { statement ->
                 statement.setLong(1, playerId)
                 statement.executeQuery().use { result ->
                     if (result.next()) {
@@ -126,7 +127,7 @@ class DbPlayerSubloadRepository(private val dataSource: DataSource) : PlayerSubl
 
     override fun loadOutfit(playerId: Long): PlayerOutfitRecord? = try {
         dataSource.connection.use { connection ->
-            connection.prepareStatement(OUTFIT_SQL).use { statement ->
+            connection.prepareStatement(outfitSql(SqlDialect.from(connection))).use { statement ->
                 statement.setLong(1, playerId)
                 statement.executeQuery().use { result ->
                     if (result.next()) {
@@ -161,7 +162,7 @@ class DbPlayerSubloadRepository(private val dataSource: DataSource) : PlayerSubl
      */
     override fun saveConditions(playerId: Long, blob: ByteArray): Boolean = try {
         dataSource.connection.use { connection ->
-            connection.prepareStatement(SAVE_CONDITIONS_SQL).use { statement ->
+            connection.prepareStatement(saveConditionsSql(SqlDialect.from(connection))).use { statement ->
                 statement.setBytes(1, blob)
                 statement.setLong(2, playerId)
                 statement.executeUpdate() > 0
@@ -188,14 +189,32 @@ class DbPlayerSubloadRepository(private val dataSource: DataSource) : PlayerSubl
         const val LOOK_MOUNT_FEET_COLUMN = "lookmountfeet"
         const val LOOK_FAMILIARS_TYPE_COLUMN = "lookfamiliarstype"
 
-        const val LOAD_SQL = """SELECT "conditions", "skull", "skulltime" FROM players WHERE id = ?"""
+        /** `SELECT` of `loadConditionSkull` with dialect-quoted column names. */
+        fun loadSql(dialect: SqlDialect): String =
+            "SELECT ${dialect.quoteIdentifier(CONDITIONS_COLUMN)}, ${dialect.quoteIdentifier(SKULL_COLUMN)}, " +
+                "${dialect.quoteIdentifier(SKULL_TIME_COLUMN)} FROM players WHERE id = ?"
 
-        const val SAVE_CONDITIONS_SQL = """UPDATE players SET "conditions" = ? WHERE id = ?"""
+        /** `UPDATE` of `saveConditions` with the dialect-quoted `conditions` column. */
+        fun saveConditionsSql(dialect: SqlDialect): String =
+            "UPDATE players SET ${dialect.quoteIdentifier(CONDITIONS_COLUMN)} = ? WHERE id = ?"
 
-        const val OUTFIT_SQL =
-            """SELECT "looktype", "lookhead", "lookbody", "looklegs", "lookfeet", "lookaddons", """ +
-                """"lookmounthead", "lookmountbody", "lookmountlegs", "lookmountfeet", "lookfamiliarstype" """ +
-                """FROM players WHERE id = ?"""
+        /** `SELECT` of `loadOutfit` with dialect-quoted look columns. */
+        fun outfitSql(dialect: SqlDialect): String {
+            val columns = listOf(
+                LOOK_TYPE_COLUMN,
+                LOOK_HEAD_COLUMN,
+                LOOK_BODY_COLUMN,
+                LOOK_LEGS_COLUMN,
+                LOOK_FEET_COLUMN,
+                LOOK_ADDONS_COLUMN,
+                LOOK_MOUNT_HEAD_COLUMN,
+                LOOK_MOUNT_BODY_COLUMN,
+                LOOK_MOUNT_LEGS_COLUMN,
+                LOOK_MOUNT_FEET_COLUMN,
+                LOOK_FAMILIARS_TYPE_COLUMN,
+            ).joinToString(", ") { dialect.quoteIdentifier(it) }
+            return "SELECT $columns FROM players WHERE id = ?"
+        }
     }
 }
 
@@ -231,7 +250,7 @@ class DbGuildMembershipRepository(private val dataSource: DataSource) : GuildMem
 
     override fun loadMembership(playerId: Long): GuildMembershipRow? = try {
         dataSource.connection.use { connection ->
-            connection.prepareStatement(MEMBERSHIP_SQL).use { statement ->
+            connection.prepareStatement(membershipSql(SqlDialect.from(connection))).use { statement ->
                 statement.setLong(1, playerId)
                 statement.executeQuery().use { result ->
                     if (result.next()) {
@@ -253,7 +272,7 @@ class DbGuildMembershipRepository(private val dataSource: DataSource) : GuildMem
 
     override fun loadRank(rankId: Long): GuildRank? = try {
         dataSource.connection.use { connection ->
-            connection.prepareStatement(RANK_SQL).use { statement ->
+            connection.prepareStatement(rankSql(SqlDialect.from(connection))).use { statement ->
                 statement.setLong(1, rankId)
                 statement.executeQuery().use { result ->
                     if (result.next()) {
@@ -275,7 +294,7 @@ class DbGuildMembershipRepository(private val dataSource: DataSource) : GuildMem
 
     override fun countMembers(guildId: Long): Long = try {
         dataSource.connection.use { connection ->
-            connection.prepareStatement(MEMBER_COUNT_SQL).use { statement ->
+            connection.prepareStatement(memberCountSql(SqlDialect.from(connection))).use { statement ->
                 statement.setLong(1, guildId)
                 statement.executeQuery().use { result ->
                     if (result.next()) result.getLong(MEMBERS_COLUMN) else 0L
@@ -293,13 +312,20 @@ class DbGuildMembershipRepository(private val dataSource: DataSource) : GuildMem
         const val NICK_COLUMN = "nick"
         const val MEMBERS_COLUMN = "members"
 
-        const val MEMBERSHIP_SQL =
-            """SELECT "guild_id", "rank_id", "nick" FROM guild_membership WHERE player_id = ?"""
+        /** `SELECT` of `loadMembership` with dialect-quoted column names. */
+        fun membershipSql(dialect: SqlDialect): String =
+            "SELECT ${dialect.quoteIdentifier(GUILD_ID_COLUMN)}, ${dialect.quoteIdentifier(RANK_ID_COLUMN)}, " +
+                "${dialect.quoteIdentifier(NICK_COLUMN)} FROM guild_membership WHERE player_id = ?"
 
-        const val RANK_SQL = """SELECT "id", "name", "level" FROM guild_ranks WHERE id = ?"""
+        /** `SELECT` of `loadRank` with dialect-quoted column names. */
+        fun rankSql(dialect: SqlDialect): String =
+            "SELECT ${dialect.quoteIdentifier("id")}, ${dialect.quoteIdentifier("name")}, " +
+                "${dialect.quoteIdentifier("level")} FROM guild_ranks WHERE id = ?"
 
-        const val MEMBER_COUNT_SQL =
-            """SELECT COUNT(*) AS "members" FROM guild_membership WHERE guild_id = ?"""
+        /** `SELECT COUNT(*)` of `countMembers` with the dialect-quoted alias. */
+        fun memberCountSql(dialect: SqlDialect): String =
+            "SELECT COUNT(*) AS ${dialect.quoteIdentifier(MEMBERS_COLUMN)} " +
+                "FROM guild_membership WHERE guild_id = ?"
     }
 }
 

@@ -1,6 +1,7 @@
 package org.opentibia.canary.kv
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import org.opentibia.canary.database.SqlDialect
 import org.opentibia.canary.protobuf.kv.ValueWrapper as ProtoValueWrapper
 import java.sql.Connection
 import java.sql.SQLException
@@ -15,8 +16,10 @@ private val logger = KotlinLogging.logger {}
  * The C++ class receives the DI `Database&`; this port receives its [DataSource],
  * matching the other JDBC repositories. `INSERT ... ON DUPLICATE KEY UPDATE`
  * (`DBInsert::upsert`, database.cpp:453-475) is reproduced with the portable
- * update-then-insert pair used by `JdbcPlayerStorageRepository`, which runs on both
- * PostgreSQL 16 and the H2 PostgreSQL-mode test database.
+ * update-then-insert pair used by `JdbcPlayerStorageRepository`, which runs on
+ * PostgreSQL 16, MariaDB and the H2 PostgreSQL-mode test database; the
+ * `timestamp`/`value` identifiers are quoted by [SqlDialect.quoteIdentifier]
+ * because both are keywords under MariaDB/MySQL.
  */
 class KVSQL(private val dataSource: DataSource, maxSize: Int = KVStore.MAX_SIZE) : KVStore(maxSize) {
 
@@ -24,7 +27,11 @@ class KVSQL(private val dataSource: DataSource, maxSize: Int = KVStore.MAX_SIZE)
         logger.trace { "KVSQL::load($key)" }
         return try {
             dataSource.connection.use { connection ->
-                connection.prepareStatement("SELECT \"timestamp\", \"value\" FROM kv_store WHERE key_name = ?")
+                val dialect = SqlDialect.from(connection)
+                connection.prepareStatement(
+                    "SELECT ${dialect.quoteIdentifier("timestamp")}, ${dialect.quoteIdentifier("value")} " +
+                        "FROM kv_store WHERE key_name = ?",
+                )
                     .use { statement ->
                         statement.setString(1, key)
                         statement.executeQuery().use { result ->
@@ -127,7 +134,10 @@ class KVSQL(private val dataSource: DataSource, maxSize: Int = KVStore.MAX_SIZE)
     }
 
     private fun upsert(connection: Connection, key: String, timestamp: Long, data: ByteArray): Boolean {
-        connection.prepareStatement("UPDATE kv_store SET \"timestamp\" = ?, \"value\" = ? WHERE key_name = ?")
+        val dialect = SqlDialect.from(connection)
+        val timestampColumn = dialect.quoteIdentifier("timestamp")
+        val valueColumn = dialect.quoteIdentifier("value")
+        connection.prepareStatement("UPDATE kv_store SET $timestampColumn = ?, $valueColumn = ? WHERE key_name = ?")
             .use { update ->
                 update.setLong(1, timestamp)
                 update.setBytes(2, data)
@@ -137,7 +147,7 @@ class KVSQL(private val dataSource: DataSource, maxSize: Int = KVStore.MAX_SIZE)
                 }
             }
 
-        connection.prepareStatement("INSERT INTO kv_store (key_name, \"timestamp\", \"value\") VALUES (?, ?, ?)")
+        connection.prepareStatement("INSERT INTO kv_store (key_name, $timestampColumn, $valueColumn) VALUES (?, ?, ?)")
             .use { insert ->
                 insert.setString(1, key)
                 insert.setLong(2, timestamp)

@@ -35,7 +35,8 @@ class JdbcPlayerKillsRepository(private val dataSource: DataSource) : PlayerKill
                 }
                 if (kills.isNotEmpty()) {
                     conn.prepareStatement(
-                        "INSERT INTO player_kills (player_id, \"time\", target, unavenged) VALUES (?, ?, ?, ?)",
+                        "INSERT INTO player_kills (player_id, ${SqlDialect.from(conn).quoteIdentifier("time")}, " +
+                            "target, unavenged) VALUES (?, ?, ?, ?)",
                     ).use { stmt ->
                         for (kill in kills) {
                             stmt.setLong(1, playerId)
@@ -59,7 +60,8 @@ class JdbcPlayerKillsRepository(private val dataSource: DataSource) : PlayerKill
         val result = mutableListOf<Kill>()
         dataSource.connection.use { conn ->
             conn.prepareStatement(
-                "SELECT target, \"time\", unavenged FROM player_kills WHERE player_id = ?",
+                "SELECT target, ${SqlDialect.from(conn).quoteIdentifier("time")}, unavenged " +
+                    "FROM player_kills WHERE player_id = ?",
             ).use { stmt ->
                 stmt.setLong(1, playerId)
                 stmt.executeQuery().use { rs ->

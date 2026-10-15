@@ -4,6 +4,7 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import org.opentibia.canary.creatures.monsters.BosstiaryRarity_t
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.monsters.Monsters
+import org.opentibia.canary.database.SqlDialect
 import javax.sql.DataSource
 import kotlin.math.sqrt
 
@@ -351,7 +352,9 @@ class IOBosstiary(
     private data class BoostedBossRow(val date: String, val boostName: String, val raceId: String)
 
     private fun readBoostedBossRow(): BoostedBossRow? = dataSource.connection.use { conn ->
-        conn.prepareStatement("SELECT \"date\", boostname, raceid FROM boosted_boss").use { stmt ->
+        conn.prepareStatement(
+            "SELECT ${SqlDialect.from(conn).quoteIdentifier("date")}, boostname, raceid FROM boosted_boss",
+        ).use { stmt ->
             stmt.executeQuery().use { rs ->
                 if (rs.next()) {
                     BoostedBossRow(
@@ -372,7 +375,7 @@ class IOBosstiary(
             conn.prepareStatement(
                 """
                 UPDATE boosted_boss SET
-                    "date" = ?, boostname = ?, raceid = ?,
+                    ${SqlDialect.from(conn).quoteIdentifier("date")} = ?, boostname = ?, raceid = ?,
                     looktypeEx = ?, looktype = ?, lookfeet = ?, looklegs = ?,
                     lookhead = ?, lookbody = ?, lookaddons = ?, lookmount = ?
                 """.trimIndent(),

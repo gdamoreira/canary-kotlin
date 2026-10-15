@@ -96,17 +96,17 @@ class JdbcAccountRepository(private val dataSource: DataSource) : AccountLoginRe
 
     /** Mirrors `AccountRepositoryDB::loadByID` (src/account/account_repository_db.cpp:28-31). */
     override fun loadByID(id: Long, acc: AccountInfo): Boolean =
-        loadInfoInto("$ACCOUNT_INFO_COLUMNS WHERE id = ?", acc) { it.setLong(1, id) }
+        loadInfoInto({ "${accountInfoColumns(it)} WHERE id = ?" }, acc) { it.setLong(1, id) }
 
     /** Mirrors `AccountRepositoryDB::loadByEmailOrName` (src/account/account_repository_db.cpp:33-37). */
     override fun loadByEmailOrName(oldProtocol: Boolean, emailOrName: String, acc: AccountInfo): Boolean {
         val identifier = if (oldProtocol) "name" else "email"
-        return loadInfoInto("$ACCOUNT_INFO_COLUMNS WHERE $identifier = ?", acc) { it.setString(1, emailOrName) }
+        return loadInfoInto({ "${accountInfoColumns(it)} WHERE $identifier = ?" }, acc) { it.setString(1, emailOrName) }
     }
 
     /** Mirrors `AccountRepositoryDB::loadBySession` (src/account/account_repository_db.cpp:39-53). */
     override fun loadBySession(sessionKey: String, acc: AccountInfo): Boolean =
-        loadInfoInto(SESSION_ACCOUNT_INFO_QUERY, acc) { stmt ->
+        loadInfoInto({ sessionAccountInfoQuery(it) }, acc) { stmt ->
             val sha256SessionId = Tools.transformToSHA256(sessionKey)
             stmt.setString(1, sha256SessionId)
             stmt.setString(2, Tools.transformToSHA1(sessionKey))
@@ -116,7 +116,9 @@ class JdbcAccountRepository(private val dataSource: DataSource) : AccountLoginRe
     /** Mirrors `AccountRepositoryDB::getPassword` (src/account/account_repository_db.cpp:86-95); `null` is the C++ `false`. */
     override fun getPassword(id: Long): String? {
         dataSource.connection.use { conn ->
-            conn.prepareStatement("SELECT \"password\" FROM accounts WHERE id = ?").use { stmt ->
+            conn.prepareStatement(
+                "SELECT ${SqlDialect.from(conn).quoteIdentifier("password")} FROM accounts WHERE id = ?",
+            ).use { stmt ->
                 stmt.setLong(1, id)
                 stmt.executeQuery().use { rs ->
                     return if (rs.next()) rs.getString("password") else null
@@ -141,7 +143,9 @@ class JdbcAccountRepository(private val dataSource: DataSource) : AccountLoginRe
     /** `IOLoginData::getAccountType` (src/io/iologindata.cpp:69-78); `ACCOUNT_TYPE_NORMAL` is 1. */
     override fun getAccountType(accountId: Long): Int {
         dataSource.connection.use { conn ->
-            conn.prepareStatement("SELECT \"type\" FROM accounts WHERE id = ?").use { stmt ->
+            conn.prepareStatement(
+                "SELECT ${SqlDialect.from(conn).quoteIdentifier("type")} FROM accounts WHERE id = ?",
+            ).use { stmt ->
                 stmt.setLong(1, accountId)
                 stmt.executeQuery().use { rs ->
                     return if (rs.next()) rs.getInt("type") else ACCOUNT_TYPE_NORMAL
@@ -155,9 +159,9 @@ class JdbcAccountRepository(private val dataSource: DataSource) : AccountLoginRe
      * (src/account/account_repository_db.cpp:285-303): fills the account row,
      * loads the non-deleted characters, then runs the loyalty sync into [acc].
      */
-    private fun loadInfoInto(sql: String, acc: AccountInfo, bind: (PreparedStatement) -> Unit): Boolean {
+    private fun loadInfoInto(buildSql: (SqlDialect) -> String, acc: AccountInfo, bind: (PreparedStatement) -> Unit): Boolean {
         dataSource.connection.use { conn ->
-            conn.prepareStatement(sql).use { stmt ->
+            conn.prepareStatement(buildSql(SqlDialect.from(conn))).use { stmt ->
                 bind(stmt)
                 stmt.executeQuery().use { rs ->
                     if (!rs.next()) {
@@ -236,13 +240,14 @@ class JdbcAccountRepository(private val dataSource: DataSource) : AccountLoginRe
     }
 
     private fun saveInfo(info: AccountInfo): Boolean {
-        val sql = """
-            UPDATE accounts
-            SET "type" = ?, premdays = ?, lastday = ?, creation = ?, premdays_purchased = ?, house_bid_id = ?
-            WHERE id = ?
-        """.trimIndent()
-
         dataSource.connection.use { conn ->
+            val type = SqlDialect.from(conn).quoteIdentifier("type")
+            val sql = """
+                UPDATE accounts
+                SET $type = ?, premdays = ?, lastday = ?, creation = ?, premdays_purchased = ?, house_bid_id = ?
+                WHERE id = ?
+            """.trimIndent()
+
             conn.prepareStatement(sql).use { stmt ->
                 stmt.setInt(1, info.accountType.value)
                 stmt.setInt(2, info.premiumRemainingDays)
@@ -304,13 +309,14 @@ class JdbcAccountRepository(private val dataSource: DataSource) : AccountLoginRe
 
     /** Mirrors `AccountRepositoryDB::loadByID` (src/account/account_repository_db.cpp:28-31). */
     fun loadAccount(id: Long): AccountRecord? {
-        val sql = """
-            SELECT id, "type", premdays, lastday, creation, premdays_purchased, house_bid_id, 0 AS expires
-            FROM accounts
-            WHERE id = ?
-        """.trimIndent()
-
         dataSource.connection.use { conn ->
+            val type = SqlDialect.from(conn).quoteIdentifier("type")
+            val sql = """
+                SELECT id, $type, premdays, lastday, creation, premdays_purchased, house_bid_id, 0 AS expires
+                FROM accounts
+                WHERE id = ?
+            """.trimIndent()
+
             conn.prepareStatement(sql).use { stmt ->
                 stmt.setLong(1, id)
                 stmt.executeQuery().use { rs ->
@@ -350,16 +356,17 @@ class JdbcAccountRepository(private val dataSource: DataSource) : AccountLoginRe
         val sha256SessionId = Tools.transformToSHA256(sessionKey)
         val sha1SessionId = Tools.transformToSHA1(sessionKey)
 
-        val sql = """
-            SELECT accounts.id, "type", premdays, lastday, creation, premdays_purchased, house_bid_id, account_sessions.expires
-            FROM accounts
-            INNER JOIN account_sessions ON account_sessions.account_id = accounts.id
-            WHERE account_sessions.id IN (?, ?)
-            ORDER BY CASE account_sessions.id WHEN ? THEN 0 ELSE 1 END
-            LIMIT 1
-        """.trimIndent()
-
         dataSource.connection.use { conn ->
+            val type = SqlDialect.from(conn).quoteIdentifier("type")
+            val sql = """
+                SELECT accounts.id, $type, premdays, lastday, creation, premdays_purchased, house_bid_id, account_sessions.expires
+                FROM accounts
+                INNER JOIN account_sessions ON account_sessions.account_id = accounts.id
+                WHERE account_sessions.id IN (?, ?)
+                ORDER BY CASE account_sessions.id WHEN ? THEN 0 ELSE 1 END
+                LIMIT 1
+            """.trimIndent()
+
             conn.prepareStatement(sql).use { stmt ->
                 stmt.setString(1, sha256SessionId)
                 stmt.setString(2, sha1SessionId)
@@ -386,9 +393,9 @@ class JdbcAccountRepository(private val dataSource: DataSource) : AccountLoginRe
     /** Mirrors `AccountRepositoryDB::getCoins` (src/account/account_repository_db.cpp:97-119); `null` is `false`. */
     override fun getCoins(id: UInt, coinType: CoinType): UInt? {
         val column = AccountCoinColumns.columnOf(coinType)
-        val sql = "SELECT \"$column\" FROM accounts WHERE id = ?"
 
         dataSource.connection.use { conn ->
+            val sql = "SELECT ${SqlDialect.from(conn).quoteIdentifier(column)} FROM accounts WHERE id = ?"
             conn.prepareStatement(sql).use { stmt ->
                 stmt.setLong(1, id.toLong())
                 stmt.executeQuery().use { rs ->
@@ -401,9 +408,9 @@ class JdbcAccountRepository(private val dataSource: DataSource) : AccountLoginRe
     /** Mirrors `AccountRepositoryDB::setCoins` (src/account/account_repository_db.cpp:121-142). */
     override fun setCoins(id: UInt, coinType: CoinType, amount: UInt): Boolean {
         val column = AccountCoinColumns.columnOf(coinType)
-        val sql = "UPDATE accounts SET \"$column\" = ? WHERE id = ?"
 
         dataSource.connection.use { conn ->
+            val sql = "UPDATE accounts SET ${SqlDialect.from(conn).quoteIdentifier(column)} = ? WHERE id = ?"
             conn.prepareStatement(sql).use { stmt ->
                 stmt.setLong(1, amount.toLong())
                 stmt.setLong(2, id.toLong())
@@ -436,7 +443,10 @@ class JdbcAccountRepository(private val dataSource: DataSource) : AccountLoginRe
         dataSource.connection.use { conn ->
             conn.autoCommit = false
             try {
-                val select = "SELECT \"$primaryColumn\", \"$secondaryColumn\" FROM accounts WHERE id = ? FOR UPDATE"
+                val dialect = SqlDialect.from(conn)
+                val primaryQuoted = dialect.quoteIdentifier(primaryColumn)
+                val secondaryQuoted = dialect.quoteIdentifier(secondaryColumn)
+                val select = "SELECT $primaryQuoted, $secondaryQuoted FROM accounts WHERE id = ? FOR UPDATE"
                 val primaryCoins: UInt
                 val secondaryCoins: UInt
                 conn.prepareStatement(select).use { stmt ->
@@ -459,7 +469,7 @@ class JdbcAccountRepository(private val dataSource: DataSource) : AccountLoginRe
                 val primaryCoinsRemoved = minOf(primaryCoins, amount)
                 val secondaryCoinsRemoved = amount - primaryCoinsRemoved
 
-                val update = "UPDATE accounts SET \"$primaryColumn\" = ?, \"$secondaryColumn\" = ? WHERE id = ?"
+                val update = "UPDATE accounts SET $primaryQuoted = ?, $secondaryQuoted = ? WHERE id = ?"
                 conn.prepareStatement(update).use { stmt ->
                     stmt.setLong(1, (primaryCoins - primaryCoinsRemoved).toLong())
                     stmt.setLong(2, (secondaryCoins - secondaryCoinsRemoved).toLong())
@@ -605,12 +615,15 @@ class JdbcAccountRepository(private val dataSource: DataSource) : AccountLoginRe
         accountType: Int,
         creation: Long,
     ) {
-        val sql = """
-            INSERT INTO accounts (id, name, "password", email, premdays, lastday, "type", creation)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """.trimIndent()
-
         dataSource.connection.use { conn ->
+            val dialect = SqlDialect.from(conn)
+            val password = dialect.quoteIdentifier("password")
+            val type = dialect.quoteIdentifier("type")
+            val sql = """
+                INSERT INTO accounts (id, name, $password, email, premdays, lastday, $type, creation)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """.trimIndent()
+
             conn.prepareStatement(sql).use { stmt ->
                 stmt.setLong(1, id)
                 stmt.setString(2, name)
@@ -643,12 +656,13 @@ class JdbcAccountRepository(private val dataSource: DataSource) : AccountLoginRe
         const val ACCOUNT_TYPE_NORMAL = 1
 
         /** Column projection shared by `loadByID`/`loadByEmailOrName` (src/account/account_repository_db.cpp:28-37). */
-        const val ACCOUNT_INFO_COLUMNS =
-            "SELECT id, \"type\", premdays, lastday, creation, premdays_purchased, 0 AS expires FROM accounts"
+        fun accountInfoColumns(dialect: SqlDialect): String =
+            "SELECT id, ${dialect.quoteIdentifier("type")}, premdays, lastday, creation, " +
+                "premdays_purchased, 0 AS expires FROM accounts"
 
         /** `loadBySession` query (src/account/account_repository_db.cpp:39-53). */
-        const val SESSION_ACCOUNT_INFO_QUERY =
-            "SELECT accounts.id, \"type\", premdays, lastday, creation, premdays_purchased, " +
+        fun sessionAccountInfoQuery(dialect: SqlDialect): String =
+            "SELECT accounts.id, ${dialect.quoteIdentifier("type")}, premdays, lastday, creation, premdays_purchased, " +
                 "account_sessions.expires FROM accounts " +
                 "INNER JOIN account_sessions ON account_sessions.account_id = accounts.id " +
                 "WHERE account_sessions.id IN (?, ?) " +
