@@ -7,7 +7,8 @@ import java.util.concurrent.atomic.AtomicInteger
 private val logger = KotlinLogging.logger {}
 
 /**
- * Composition root behind the thin `Main.kt`: parses CLI overrides, wires
+ * Composition root behind the thin `Main.kt`: parses CLI overrides (including the
+ * wave-75 `--role`, resolved with `CANARY_ROLE` by the config boot), wires
  * [ServerBootstrap] with SIGINT/SIGTERM and uncaught-exception handling, then blocks
  * like Canary's `ServiceManager::run` until the first shutdown request.
  */

@@ -6,7 +6,8 @@ import org.opentibia.canary.database.DatabaseEngine
 /**
  * Command-line overrides resolved from `main`'s arguments. `null` means "not supplied",
  * so environment values and defaults stay in effect. Precedence is CLI > config file >
- * environment > defaults.
+ * environment > defaults; the deployment-scoped [role] is the exception (CLI >
+ * `CANARY_ROLE` > [ServerRole.ALL], never the config file).
  */
 data class CliOptions(
     val configPath: String? = null,
@@ -15,7 +16,8 @@ data class CliOptions(
     val dbPort: Int? = null,
     val dbName: String? = null,
     val dbUser: String? = null,
-    val dbPassword: String? = null
+    val dbPassword: String? = null,
+    val role: ServerRole? = null
 )
 
 /**
@@ -33,7 +35,8 @@ object ServerCli {
         "--db-port",
         "--db-name",
         "--db-user",
-        "--db-password"
+        "--db-password",
+        "--role"
     )
 
     fun parse(args: Array<String>): CliOptions {
@@ -65,9 +68,31 @@ object ServerCli {
             },
             dbName = values["--db-name"],
             dbUser = values["--db-user"],
-            dbPassword = values["--db-password"]
+            dbPassword = values["--db-password"],
+            role = values["--role"]?.let { value -> parseRole("--role", value) }
         )
     }
+
+    /**
+     * Resolves the wave-75 [ServerRole] with the CLI > `CANARY_ROLE` > [ServerRole.ALL]
+     * precedence. An unknown value fails fast naming the variable.
+     */
+    fun role(
+        environment: Map<String, String> = System.getenv(),
+        options: CliOptions = CliOptions()
+    ): ServerRole =
+        options.role
+            ?: environment["CANARY_ROLE"]?.takeIf { it.isNotBlank() }
+                ?.let { value -> parseRole("CANARY_ROLE", value) }
+            ?: ServerRole.ALL
+
+    private fun parseRole(variable: String, value: String): ServerRole =
+        when (value.trim().lowercase()) {
+            "all" -> ServerRole.ALL
+            "login" -> ServerRole.LOGIN
+            "game" -> ServerRole.GAME
+            else -> throw IllegalArgumentException("Invalid $variable value: $value")
+        }
 
     /**
      * Resolves the external database settings (CLI > `CANARY_DB_*` > defaults).

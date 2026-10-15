@@ -28,7 +28,14 @@ data class ServerConfig(
     val maxPlayers: Int = 1000,
     val motd: String = "Welcome to Canary Kotlin Edition!",
     val dataDir: String = "data-canary",
-    val coreDir: String = "data"
+    val coreDir: String = "data",
+    /**
+     * Wave-75 deployment role selecting which listeners the process binds
+     * ([ServerRole]). Resolved by [ServerCli.role] with CLI > `CANARY_ROLE` >
+     * [ServerRole.ALL] precedence; the `config.lua`/properties surface never
+     * supplies it.
+     */
+    val role: ServerRole = ServerRole.ALL
 )
 
 /**
@@ -243,6 +250,9 @@ class ConfigManager(
             return fileConfig.copy(
                 dataDir = AppPaths.resolveDirectory(options.dataDir ?: fileConfig.dataDir, environment),
                 coreDir = AppPaths.resolveDirectory(fileConfig.coreDir, environment),
+                // Deployment-scoped role: CLI > CANARY_ROLE > ALL; a config file
+                // never overrides it (wave-75 role split).
+                role = options.role ?: fileConfig.role,
             )
         }
 
@@ -260,7 +270,8 @@ class ConfigManager(
                 maxPlayers = environment["CANARY_MAX_PLAYERS"]?.toIntOrNull() ?: 1000,
                 motd = environment["CANARY_MOTD"] ?: "Welcome to Canary Kotlin Edition!",
                 dataDir = environment["CANARY_DATA_DIR"] ?: "data-canary",
-                coreDir = environment["CANARY_CORE_DIR"] ?: "data"
+                coreDir = environment["CANARY_CORE_DIR"] ?: "data",
+                role = ServerCli.role(environment)
             )
         }
 

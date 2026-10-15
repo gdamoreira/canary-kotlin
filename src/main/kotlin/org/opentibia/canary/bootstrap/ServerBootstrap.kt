@@ -8,6 +8,7 @@ import org.opentibia.canary.config.ConfigManager
 import org.opentibia.canary.config.AppPaths
 import org.opentibia.canary.config.ConfigSource
 import org.opentibia.canary.config.ServerConfig
+import org.opentibia.canary.config.ServerRole
 import org.opentibia.canary.config.configSourceOf
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.monsters.LootBlock
@@ -346,6 +347,7 @@ internal fun defaultListenerFactory(rsaCipher: RsaCipher = RsaCipher.fromEnviron
         CanaryServer(
             loginPort = config.loginPort,
             gamePort = config.gamePort,
+            role = config.role,
             accountRepository = accountRepository,
             gameMap = gameMap,
             // `g_configManager().getString(DATA_DIRECTORY)`: the raid container
@@ -381,6 +383,32 @@ internal fun defaultListenerFactory(rsaCipher: RsaCipher = RsaCipher.fromEnviron
         }
     }
 
+/**
+ * Creates the login/status-only listener for the [ServerRole.LOGIN] role
+ * ([ListenerFactory] covers [ServerRole.ALL]/[ServerRole.GAME]). The login role
+ * needs no world, map, Lua, items, dispatcher or persistence beyond the account
+ * repository, so this path never boots the world composition.
+ */
+fun interface LoginListenerFactory {
+    fun create(config: ServerConfig, accountRepository: AccountRepository): ListenerBoot
+}
+
+/**
+ * Production [LoginListenerFactory]: the [ServerRole.LOGIN] process binds the
+ * login/status listener ([CanaryServer], which selects login+status only by its
+ * role) and nothing else.
+ */
+internal fun defaultLoginListenerFactory(rsaCipher: RsaCipher = RsaCipher.fromEnvironment()): LoginListenerFactory =
+    LoginListenerFactory { config, accountRepository ->
+        CanaryServer(
+            loginPort = config.loginPort,
+            gamePort = config.gamePort,
+            role = config.role,
+            accountRepository = accountRepository,
+            rsaCipher = rsaCipher,
+        )
+    }
+
 /** JDBC/Hikari/Flyway implementation of [DatabaseBoot]; `null` config selects local H2. */
 object JdbcDatabaseBoot : DatabaseBoot {
     override fun connect(config: DatabaseConfig?): DataSource {
@@ -409,6 +437,13 @@ object JdbcDatabaseBoot : DatabaseBoot {
  * hook -> monster compute start -> dispatcher start -> listeners bind. [shutdown]
  * drains listeners, monster compute, dispatcher, SaveManager and database exactly
  * once and is safe to call twice (AGENTS.md).
+ *
+ * The resolved [ServerConfig.role] selects the boot path (wave-75 role split):
+ * [ServerRole.ALL] keeps the sequence above (the listener binds login/status and
+ * game), [ServerRole.GAME] boots the same world with a game-only listener, and
+ * [ServerRole.LOGIN] stops after the database so only the login/status listener
+ * binds — no map, Lua, items, imbuements, monsters, vocations, dispatcher or
+ * SaveManager.
  */
 class ServerBootstrap(
     private val environment: Map<String, String> = System.getenv(),
@@ -437,6 +472,8 @@ class ServerBootstrap(
     /** `g_game().groups` loader (defaults to `{CORE_DIRECTORY}/XML/groups.xml`). */
     private val groupsBoot: GroupsBoot = GroupsBoot(::defaultGroupsBoot),
     private val listenerFactory: ListenerFactory = defaultListenerFactory(),
+    /** [ServerRole.LOGIN] listener factory; never invoked for ALL/GAME. */
+    private val loginListenerFactory: LoginListenerFactory = defaultLoginListenerFactory(),
     /**
      * `g_dispatcher()` (`Dispatcher::init`, dispatcher.cpp:114-131): the booted
      * dispatcher or one this root composes over [configManagerBoot] and the
@@ -477,6 +514,16 @@ class ServerBootstrap(
         if (!started.compareAndSet(false, true)) return
 
         val config = configBoot.load(environment, options)
+
+        // Wave-75 role split: a LOGIN process boots config + database + the
+        // account repository + the login/status listener only; the world (map,
+        // Lua, items, imbuements, monsters, vocations, dispatcher, SaveManager)
+        // stays unbooted.
+        if (config.role == ServerRole.LOGIN) {
+            bootLoginRole(config)
+            return
+        }
+
         val configManager = configManagerBoot.load(environment, options)
 
         // `metricsEnablePrometheus` HTTP exporter over the in-process registry
@@ -720,6 +767,24 @@ class ServerBootstrap(
         worldGame.set(server.game)
         server.start()
         logger.info { "${config.serverName} server online!" }
+    }
+
+    /**
+     * [ServerRole.LOGIN] boot: config -> database connect + migrate -> account
+     * repository -> login/status listener ([LoginListenerFactory]). The login
+     * protocol only needs the account repository and the RSA cipher, and the
+     * game handoff is DB-mediated, so no world service is booted; [shutdown]
+     * drains the listener and the database exactly once.
+     */
+    private fun bootLoginRole(config: ServerConfig) {
+        val source = databaseBoot.connect(databaseConfig)
+        dataSource = source
+        databaseBoot.migrate(source)
+
+        val server = loginListenerFactory.create(config, JdbcAccountRepository(source))
+        listener = server
+        server.start()
+        logger.info { "${config.serverName} login server online!" }
     }
 
     /** `ServiceManager::run` equivalent: blocks until a signal or crash drains the server. */

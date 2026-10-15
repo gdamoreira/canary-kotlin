@@ -19,6 +19,7 @@ import org.opentibia.canary.chat.ChatManager
 import org.opentibia.canary.combat.CombatType
 import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
+import org.opentibia.canary.config.ServerRole
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.monsters.MonsterBehavior
@@ -76,6 +77,7 @@ import org.opentibia.canary.systems.raid.Raids
 import org.opentibia.canary.systems.raid.WorldRaidEnvironment
 import org.opentibia.canary.systems.wheel.WheelSpellRegistration
 import java.io.IOException
+import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
@@ -109,6 +111,12 @@ interface ListenerBoot {
 
 /**
  * Netty-based TCP Server managing inbound client connections across Login (7171) and Game (7172) ports.
+ *
+ * Which listeners [start] binds is selected by the wave-75 [role]: [ServerRole.ALL]
+ * (default) binds both like upstream Canary's single process
+ * (`CanaryServer::run`, src/canary_server.cpp:132), [ServerRole.LOGIN] binds
+ * login/status only and skips the world boot tail, [ServerRole.GAME] binds the
+ * game listener only.
  */
 class CanaryServer(
     private val loginPort: Int = 7171,
@@ -230,6 +238,15 @@ class CanaryServer(
      * reads the persisted rows. `null` keeps the fallback inert.
      */
     internal val guildRepository: GuildRepository? = null,
+    /**
+     * Wave-75 role selection: which listeners [start] binds and whether the
+     * world boot tail runs. [ServerRole.ALL] (default) keeps Canary's
+     * single-process login+game behavior (`CanaryServer::run`,
+     * src/canary_server.cpp:132-249); [ServerRole.LOGIN] binds login/status only
+     * and skips the world INIT/start tail; [ServerRole.GAME] binds the game
+     * listener only.
+     */
+    private val role: ServerRole = ServerRole.ALL,
 ) : ListenerBoot {
     /**
      * `g_dispatcher()` (`CanaryServer::run`, src/canary_server.cpp:132): the
@@ -916,6 +933,14 @@ class CanaryServer(
     private var gameChannelFuture: ChannelFuture? = null
     private val stopped = AtomicBoolean(false)
 
+    /** Actual login/status port bound by [start]; `null` when the role skips that listener. */
+    internal val boundLoginPort: Int?
+        get() = (loginChannelFuture?.channel()?.localAddress() as? InetSocketAddress)?.port
+
+    /** Actual game port bound by [start]; `null` when the role skips that listener. */
+    internal val boundGamePort: Int?
+        get() = (gameChannelFuture?.channel()?.localAddress() as? InetSocketAddress)?.port
+
     /** Live client connections; `ConnectionManager` registry equivalent for `closeAll`. */
     private val connectionChannels: ChannelGroup = DefaultChannelGroup("canary-connections", GlobalEventExecutor.INSTANCE)
 
@@ -923,26 +948,37 @@ class CanaryServer(
         bossGroup = NioEventLoopGroup(1)
         workerGroup = NioEventLoopGroup()
 
-        // 1. Login & Status Server Bootstrap (Port 7171)
-        val loginBootstrap = ServerBootstrap()
-            .group(bossGroup, workerGroup)
-            .channel(NioServerSocketChannel::class.java)
-            .childOption(ChannelOption.TCP_NODELAY, true)
-            .childOption(ChannelOption.SO_KEEPALIVE, true)
-            .childHandler(object : ChannelInitializer<SocketChannel>() {
-                override fun initChannel(ch: SocketChannel) {
-                    connectionChannels.add(ch)
-                    val pipeline = ch.pipeline()
-                    pipeline.addLast("rateLimiter", RateLimiterHandler(maxPacketsPerSecond = 50))
-                    pipeline.addLast("frameDecoder", TibiaFrameDecoder())
-                    pipeline.addLast("messageEncoder", TibiaMessageEncoder())
-                    pipeline.addLast("statusHandler", StatusHandler())
-                    pipeline.addLast("loginHandler", LoginHandler(rsaCipher, accountRepository))
-                }
-            })
+        // 1. Login & Status Server Bootstrap (Port 7171): bound by the ALL and
+        // LOGIN roles; a GAME instance serves the game protocol only.
+        if (role != ServerRole.GAME) {
+            val loginBootstrap = ServerBootstrap()
+                .group(bossGroup, workerGroup)
+                .channel(NioServerSocketChannel::class.java)
+                .childOption(ChannelOption.TCP_NODELAY, true)
+                .childOption(ChannelOption.SO_KEEPALIVE, true)
+                .childHandler(object : ChannelInitializer<SocketChannel>() {
+                    override fun initChannel(ch: SocketChannel) {
+                        connectionChannels.add(ch)
+                        val pipeline = ch.pipeline()
+                        pipeline.addLast("rateLimiter", RateLimiterHandler(maxPacketsPerSecond = 50))
+                        pipeline.addLast("frameDecoder", TibiaFrameDecoder())
+                        pipeline.addLast("messageEncoder", TibiaMessageEncoder())
+                        pipeline.addLast("statusHandler", StatusHandler())
+                        pipeline.addLast("loginHandler", LoginHandler(rsaCipher, accountRepository))
+                    }
+                })
 
-        loginChannelFuture = loginBootstrap.bind(loginPort).sync()
-        logger.info { "Canary Login/Status listener running on port $loginPort" }
+            loginChannelFuture = loginBootstrap.bind(loginPort).sync()
+            logger.info { "Canary Login/Status listener running on port $loginPort" }
+        }
+
+        // A LOGIN process serves the login/status protocol only: there is no
+        // game listener and no world boot tail (`GAME_STATE_INIT`, spawns,
+        // market checks, cycle events, webhook stay unarmed).
+        if (role == ServerRole.LOGIN) {
+            logger.info { "Canary Kotlin login role online (world boot skipped)" }
+            return
+        }
 
         // 2. Game World Server Bootstrap (Port 7172)
         val gameBootstrap = ServerBootstrap()
