@@ -152,7 +152,7 @@ class MonsterEventDispatchTest {
     }
 
     @Test
-    fun `an onAppear callback returning true stops the appear tail but not onSpawn`() {
+    fun `an onAppear callback returning true stops the appear tail and never dispatches onSpawn`() {
         env.loadChunk(
             """
             local mType = Game.createMonsterType("Rat")
@@ -171,11 +171,13 @@ class MonsterEventDispatchTest {
 
         host.onCreatureAppear(ratMonster.id, ratMonster, false)
 
-        assertThat(env.getGlobal("spawnCount").toint()).isEqualTo(1)
+        // `Monster::onCreatureAppear` (monster.cpp:348-389) never runs onSpawn;
+        // only the explicit spawn-engine/raid/Game.createMonster call sites do.
+        assertThat(env.getGlobal("spawnCount").toint()).isZero()
     }
 
     @Test
-    fun `onSpawn dispatches once with the spawn position and latches the appear fallback`() {
+    fun `onSpawn dispatches once with the spawn position and never from the appear path`() {
         env.loadChunk(
             """
             local mType = Game.createMonsterType("Rat")

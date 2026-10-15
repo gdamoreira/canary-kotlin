@@ -273,9 +273,9 @@ class MonsterPipelinesHost(
         /**
          * `Monster::onSpawn` is a creation-time event in C++ (called by the spawn
          * engine and `Game::createMonster` after placement). [onSpawn] is the
-         * explicit entry; the first self `onCreatureAppear` still fires it as
-         * the fallback so a rejected placement cannot trigger it; the latch
-         * keeps a re-appear from firing it twice.
+         * only dispatch entry, exactly like C++: `Monster::onCreatureAppear`
+         * (monster.cpp:348-389) never runs it, so the first self appear does
+         * not fire the event. The latch makes a repeated [onSpawn] a no-op.
          */
         internal var spawnEventDispatched: Boolean = false
     }
@@ -416,6 +416,8 @@ class MonsterPipelinesHost(
     /**
      * `Monster::hasExtraSwing` (monster.cpp:2091-2093),
      * `Creature::checkCreatureAttack` (creature.cpp:174-186),
+     * `Monster::isPushable` (monster.cpp:275-277, the live
+     * `m_monsterType->info.pushable` read),
      * `Creature::enqueueAsyncTask`'s dispatcher hand-back
      * (creature.cpp:2031-2055) and the
      * `Monster::onCreatureAppear`/`onRemoveCreature`/`onCreatureMove`/
@@ -444,6 +446,14 @@ class MonsterPipelinesHost(
         }
         monster.hasExtraSwingProvider = { MonsterBehavior.hasExtraSwing(entry.behaviorState) }
         monster.checkCreatureAttack = { checkCreatureAttack(monster) }
+        monster.isPushableProvider = {
+            val current = entries[monsterId]
+            if (current?.monster === monster) {
+                current.typeState.monsterType?.info?.pushable ?: true
+            } else {
+                true
+            }
+        }
         monster.onExecuteAsyncTasksHost = {
             if (isCurrentOwner(monsterId, monster)) onExecuteAsyncTasks(monsterId)
         }
@@ -671,13 +681,20 @@ class MonsterPipelinesHost(
      * `Game.createSoulPitMonster` Lua bindings (game_functions.cpp:589, 641)
      * dispatch it after a successful placement. Returns whether this call
      * dispatched the event; the [Entry.spawnEventDispatched] latch makes a
-     * later first-self [onCreatureAppear] fallback a no-op.
+     * repeated dispatch a no-op.
      *
-     * CALL-SITE NEED: the Kotlin spawn engine (`SpawnMonster`/
-     * `GameMonsterFactory` in the `creatures/spawns` package) does not call this
-     * entry yet, so the production spawn path still reaches `onSpawn` through
-     * the first self [onCreatureAppear] (PARITY GAP, different dispatch time,
-     * same payload).
+     * The production spawn engine reaches this through
+     * `MonsterSpawnPath.onMonsterSpawn` (bound to this entry by the composition
+     * root), so the dispatch point is the C++ one: after placement, direction
+     * and spawn-owner wiring, with the block position.
+     *
+     * PARITY GAPS (owner call sites genuinely absent in this port): the legacy
+     * raid composition has no production `RaidSpawner`/`RaidMonster` bridge
+     * (`systems/raid` is outside this wave's ownership; the `RaidMonster.onSpawn`
+     * stub is inert), and the `Game.createMonster`/`Game.createSoulPitMonster`
+     * Lua bindings are unwired (`WorldLuaOperations.createMonster` keeps the
+     * `GameFunctions` null default). When either owner loop lands it must call
+     * this entry after `Game::placeCreature` succeeds.
      */
     fun onSpawn(monsterId: Long, position: Position): Boolean {
         val entry = entries[monsterId] ?: return false
@@ -693,10 +710,10 @@ class MonsterPipelinesHost(
      * `Monster::onCreatureAppear` (monster.cpp:348-389) after the
      * `Creature::onCreatureAppear` base call: the Lua `creatureAppearEvent`
      * dispatch runs first and, when it handles the event, stops the default
-     * flow. The port fires `Monster::onSpawn` on the first self appear because
-     * the spawn engine entry point is not part of this host (monster.cpp:627-648
-     * runs after `Game::placeCreature` returns); the latch keeps a re-appear
-     * from firing it twice.
+     * flow. Like the C++ body, the self branch never dispatches
+     * `Monster::onSpawn` (monster.cpp:348-389 has no onSpawn call): the spawn
+     * event fires only from the explicit [onSpawn] entry points (spawn engine,
+     * raids, `Game.createMonster`).
      */
     fun onCreatureAppear(monsterId: Long, creature: Creature, isLogin: Boolean) {
         val entry = entries[monsterId] ?: return
@@ -707,7 +724,6 @@ class MonsterPipelinesHost(
                 requestUpdateTargetList(monsterId)
                 entry.host.updateIdleStatus()
             }
-            onSpawn(monsterId, entry.monster.position)
             return
         }
 

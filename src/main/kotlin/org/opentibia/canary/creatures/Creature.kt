@@ -1399,12 +1399,33 @@ abstract class Creature(
     }
 
     /**
+     * `Creature::onThink` scripting lambda (src/creatures/creature.cpp:157-163):
+     * executes the `think` creature events attached to this creature through
+     * [registerCreatureEvent], in attachment order. Canary runs the loop inline;
+     * the port routes the Lua dispatch through the composition root's
+     * `ScriptingDispatch.creatureOnThink`, which confines the callback to the
+     * WorldCommit lane (AGENTS.md 1.2). The unbound default keeps the loop
+     * inert for embedded/test roots without a Lua environment.
+     *
+     * CALL-SITE NEED (files outside this wave's ownership): the network
+     * composition root (`CanaryServer`/`GameHandler`, where `scriptingDispatch`
+     * lives) must bind this for every creature entering the world, e.g.
+     * `creature.onThinkEventsHost = { c, interval -> scriptingDispatch.creatureOnThink(c, interval.toLong()) }`.
+     * Until then the production loop stays inert (PARITY GAP).
+     */
+    var onThinkEventsHost: (Creature, Int) -> Unit = { _, _ -> }
+
+    /**
      * `Creature::onThink` (creature.cpp:128-172) folded with the condition tick
      * `Game::checkCreatures` performs on the creature right after it
-     * (game.cpp:7726-7733). The follow/block/scripting steps of the C++ body
-     * belong to their own subsystems in this port.
+     * (game.cpp:7726-7733). The attached `think` events run before the
+     * condition tick, exactly like the C++ `onThink` lambda that
+     * `Game::checkCreatures` calls before `executeConditions`; the
+     * follow/block steps of the C++ body belong to their own subsystems in
+     * this port.
      */
     open fun onThink(interval: Int) {
+        onThinkEventsHost(this, interval)
         executeConditions(interval)
     }
 
@@ -1478,15 +1499,34 @@ abstract class Creature(
     }
 
     /**
+     * `Creature::dropCorpse` death-event loop (src/creatures/creature.cpp:819-824):
+     * executes the `death` creature events attached to this creature through
+     * [registerCreatureEvent], in attachment order, after the corpse exists and
+     * before `Creature::death` (creature.cpp:720-722). The loop hands over the
+     * creature only: the C++ corpse creation and the last-hit/most-damage
+     * resolution (creature.cpp:577-720) stay with the unported damage
+     * bookkeeping (PARITY GAP), so the binder owns the
+     * `ScriptingDispatch.creatureOnDeath` payload. The unbound default keeps the
+     * loop inert for embedded/test roots without a Lua environment.
+     *
+     * CALL-SITE NEED (files outside this wave's ownership): the network
+     * composition root (`CanaryServer`/`GameHandler`, where `scriptingDispatch`
+     * lives) must bind this for every creature entering the world. Until then
+     * the production loop stays inert (PARITY GAP).
+     */
+    var onDeathEventsHost: (Creature) -> Unit = { _ -> }
+
+    /**
      * `Creature::onDeath` (`creature.cpp:579-692`). The portable tail runs the
-     * registered death listeners (the scripting `onDeath` events fire while the
-     * corpse exists, `creature.cpp:819-824`), the `death(lastHitCreature)` hook
-     * and `removeMaster()` (`creature.cpp:671-673`). Damage-map killer
-     * resolution, corpse/loot and bestiary handling stay with their owning
-     * subsystems (PARITY GAP).
+     * registered death listeners, the `dropCorpse` death-event loop
+     * (`creature.cpp:819-824`, the scripting `onDeath` events fire while the
+     * corpse exists), the `death(lastHitCreature)` hook and `removeMaster()`
+     * (`creature.cpp:671-673`). Damage-map killer resolution, corpse/loot and
+     * bestiary handling stay with their owning subsystems (PARITY GAP).
      */
     fun onDeath() {
         onDeathHandlers.toList().forEach { it(this) }
+        onDeathEventsHost(this)
         death(null)
         if (getMaster() != null) {
             removeMaster()
@@ -1572,6 +1612,19 @@ class Monster(
 
     /** `MonsterBehavior::hasExtraSwing` state projection (monster.cpp:2091-2093). */
     var hasExtraSwingProvider: () -> Boolean = { false }
+
+    /**
+     * `Monster::m_monsterType` (src/creatures/monsters/monster.hpp:363)
+     * `info.pushable` read by [isPushable]. Bound by
+     * `MonsterPipelinesHost.bindMonsterHooks` when the monster registers, so
+     * the flag stays live like the C++ pointer dereference; the unbound
+     * default keeps the `MonsterType::info.pushable` seed (`true`,
+     * src/creatures/monsters/monsters.hpp) for a directly constructed monster.
+     */
+    var isPushableProvider: () -> Boolean = { true }
+
+    /** `Monster::isPushable()` (src/creatures/monsters/monster.cpp:275-277): `m_monsterType->info.pushable && baseSpeed != 0`. */
+    override fun isPushable(): Boolean = isPushableProvider() && getBaseSpeed() != 0
 
     /** `Monster::soulPit` (monster.hpp:466). */
     private var soulPit: Boolean = false

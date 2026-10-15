@@ -89,7 +89,9 @@ class MonsterTypeCallbackLuaTest {
         val rat = registry.getMonsterType("rat")!!
         val ratMonster = monster()
         host.register(ratMonster, rat)
-        host.onCreatureAppear(ratMonster.id, ratMonster, false)
+        // `Monster::onSpawn` (monster.cpp:627-648) fires from the spawn engine,
+        // raids and `Game.createMonster`; the appear path never dispatches it.
+        host.onSpawn(ratMonster.id, origin)
 
         assertThat(env.getGlobal("spawnCount").toint()).isEqualTo(1)
         assertThat(env.getGlobal("spawnName").tojstring()).isEqualTo("Rat")
@@ -111,8 +113,8 @@ class MonsterTypeCallbackLuaTest {
         val rat = registry.getMonsterType("rat")!!
         val ratMonster = monster()
         host.register(ratMonster, rat)
-        host.onCreatureAppear(ratMonster.id, ratMonster, false)
-        host.onCreatureAppear(ratMonster.id, ratMonster, false)
+        host.onSpawn(ratMonster.id, origin)
+        host.onSpawn(ratMonster.id, origin)
 
         assertThat(env.getGlobal("spawnCount").toint()).isEqualTo(1)
     }

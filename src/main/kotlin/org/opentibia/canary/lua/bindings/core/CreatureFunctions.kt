@@ -1,6 +1,7 @@
 package org.opentibia.canary.lua.bindings.core
 
 import org.luaj.vm2.LuaValue
+import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
 
@@ -18,6 +19,29 @@ interface CreatureOperations {
     fun getPosition(creature: Any): Position
     fun getDirection(creature: Any): Int
     fun setDirection(creature: Any, direction: Int): Boolean
+
+    /**
+     * `Creature::isMoveLocked()` (src/creatures/creature.hpp:189-191) behind
+     * `CreatureFunctions::luaCreatureIsMoveLocked`
+     * (src/lua/functions/creatures/creature_functions.cpp:648-657).
+     *
+     * Domain-backed default: the port's [Creature] owns the flag, so the
+     * composed `WorldCreatureOperations` inherits the production behavior
+     * without a duplicate implementation (the wave-67 D2 ownership excludes
+     * the `lua/runtime` package).
+     */
+    fun isMoveLocked(creature: Any): Boolean = (creature as? Creature)?.isMoveLocked() ?: false
+
+    /**
+     * `Creature::setMoveLocked(bool)` (src/creatures/creature.hpp:192-194)
+     * behind `CreatureFunctions::luaCreatureSetMoveLocked`
+     * (src/lua/functions/creatures/creature_functions.cpp:659-669).
+     */
+    fun setMoveLocked(creature: Any, moveLocked: Boolean): Boolean {
+        val target = creature as? Creature ?: return false
+        target.setMoveLocked(moveLocked)
+        return true
+    }
 }
 
 /**
@@ -32,6 +56,8 @@ interface CreatureOperations {
  *   creature:getPosition()
  *   creature:getDirection()
  *   creature:setDirection(direction)
+ *   creature:isMoveLocked()
+ *   creature:setMoveLocked(moveLocked)
  *
  * Canary shares the `Creature` class with `Player`, `Monster` and `Npc` through
  * `Lua::registerSharedClass(..., "Creature", ...)`; the derived classes inherit these
@@ -97,6 +123,17 @@ object CreatureFunctions {
             val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             val direction = args.arg(2).toint()
             LuaValue.valueOf(operations.setDirection(creature, direction))
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "isMoveLocked", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.isMoveLocked(creature))
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "setMoveLocked", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val moveLocked = args.arg(2).toboolean()
+            LuaValue.valueOf(operations.setMoveLocked(creature, moveLocked))
         })
     }
 }
