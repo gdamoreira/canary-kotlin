@@ -1,6 +1,6 @@
 # Wave 70 Plan — Engine Internals & Remaining Tails
 
-**Status:** In progress — dispatched
+**Status:** Completed (2026-10-15) — four workstreams merged; 779 suites / 8200 tests green
 **Baseline:** `main` @ `480a650b`; 766 suites / 8127 tests green; zero Kotlin warnings
 **Source of scope:** `docs/development/implementation-status.md` §3 items 1–3. **Scaling proposals excluded.**
 **Convention:** documents live directly in `docs/development/` (AGENTS.md §5/§6).
@@ -116,3 +116,13 @@ Update `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`
 
 Scaling proposals (`scaling-and-multi-world.md`); deferred list unchanged
 (differential harness; CipSoft860 profile; OTel SDK/OStream; micro-seams).
+
+---
+
+## Completion (2026-10-15)
+
+death-corpse (`96218aaf`), cylinder-producers (`015afb8e`), lua-create-raid
+(`fb52d039`), protocol-dispatcher-tails (`dc96ea43`) merged; the G3 boot
+call-site (`attachMonsterSpawn`) and one stale login fixture were fixed at
+integration. Integrated suite: **779 suites / 8200 tests, 0 failures, zero
+Kotlin warnings**; ancestry verified.

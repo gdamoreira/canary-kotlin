@@ -712,8 +712,17 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 74: Wave 70 — Engine Internals & Remaining Tails (12:00 – 14:00)
+- **Death/corpse pipeline** — `Creature::onDeath` damage-map resolution, corpse creation, loot/experience on death, per-monster death host (15 tests).
+- **Cylinder producers** — `postAddNotification`/`postRemoveNotification` + the inventory-change → `updateState` → sale-refresh chain (26 tests).
+- **Lua createMonster + raid bridge** — production create/place/onSpawn chain bound at the root; `GameRaidSpawner`/`GameRaidMonster` over real placement (12 tests).
+- **Protocol/dispatcher tails** — old-protocol `0x94` helpers, `0xCA` exiva frame, `0xB3` perk actions + 0x5C, login bug-report/version gates; `stopEvent` executing-cycle fix (20 tests).
+- **779 suites / 8200 tests, all green**; all commits ancestry-verified.
+
+---
+
 ### Current Status
-- **Automated Tests**: **766 test suites / 8127 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **779 test suites / 8200 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.
