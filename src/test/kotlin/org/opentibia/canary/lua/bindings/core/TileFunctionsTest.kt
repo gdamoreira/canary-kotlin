@@ -126,7 +126,6 @@ class TileFunctionsTest {
         val tile = map.getOrCreateTile(Position(100, 100, 7))
         val field = MagicField(
             1497,
-            25,
             type = ItemType(1497, "fire field", type = ItemTypes_t.ITEM_TYPE_MAGICFIELD),
         )
         tile.internalAddThing(field)

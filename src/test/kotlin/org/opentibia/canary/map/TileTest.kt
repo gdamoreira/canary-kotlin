@@ -2,6 +2,7 @@ package org.opentibia.canary.map
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.combat.condition.ConditionDamage
 import org.opentibia.canary.combat.condition.ConditionId
 import org.opentibia.canary.combat.condition.ConditionInvisible
 import org.opentibia.canary.combat.condition.ConditionType
@@ -38,7 +39,14 @@ class TileTest {
         register(ItemType(103, "top 4", alwaysOnTopOrder = 4))
         register(ItemType(104, "top 3", alwaysOnTopOrder = 3))
         register(ItemType(105, "splash", isSplash = true, alwaysOnTopOrder = 1))
-        register(ItemType(106, "magic field", type = ItemTypes_t.ITEM_TYPE_MAGICFIELD))
+        register(
+            ItemType(106, "magic field", type = ItemTypes_t.ITEM_TYPE_MAGICFIELD).apply {
+                conditionDamage = ConditionDamage(
+                    ConditionId.CONDITIONID_COMBAT,
+                    ConditionType.CONDITION_FIRE,
+                ).apply { addDamage(1, 1000, -20) }
+            },
+        )
         register(ItemType(107, "wall", isGroundTile = true, blockSolid = true, isPickupable = false))
         register(ItemType(108, "coin", isStackable = true))
         register(ItemType(109, "look through", lookThrough = true))
@@ -447,8 +455,8 @@ class TileTest {
     @Test
     fun `addThing replaces a replaceable magic field`() {
         val tile = tileWithGround()
-        val first = MagicField(106, damage = 10, type = types.get(106))
-        val second = MagicField(106, damage = 20, type = types.get(106))
+        val first = MagicField(106, type = types.get(106))
+        val second = MagicField(106, type = types.get(106))
 
         tile.addThing(first)
         tile.addThing(second)
@@ -460,8 +468,11 @@ class TileTest {
     @Test
     fun `addThing refuses to replace a permanent magic field`() {
         val tile = tileWithGround()
-        val permanent = MagicField(106, damage = 10, replaceable = false, type = types.get(106))
-        val next = MagicField(106, damage = 20, type = types.get(106))
+        val permanentType = ItemType(106, "magic field", type = ItemTypes_t.ITEM_TYPE_MAGICFIELD).apply {
+            replaceable = false
+        }
+        val permanent = MagicField(106, type = permanentType)
+        val next = MagicField(106, type = types.get(106))
         tile.addThing(permanent)
 
         tile.addThing(next)
@@ -678,7 +689,7 @@ class TileTest {
         val tile = tileWithGround()
         assertThat(tile.getFieldItem()).isNull()
 
-        val field = MagicField(106, damage = 20, type = types.get(106))
+        val field = MagicField(106, type = types.get(106))
         tile.internalAddThing(field)
 
         assertThat(tile.getFieldItem()).isSameAs(field)
@@ -688,7 +699,7 @@ class TileTest {
     @Test
     fun `hasHarmfulField requires a damaging non-blocking field`() {
         val tile = tileWithGround()
-        val harmless = MagicField(106, damage = 0, type = types.get(106))
+        val harmless = MagicField(106, type = ItemType(106, "magic field", type = ItemTypes_t.ITEM_TYPE_MAGICFIELD))
         tile.internalAddThing(harmless)
 
         assertThat(tile.hasHarmfulField()).isFalse()

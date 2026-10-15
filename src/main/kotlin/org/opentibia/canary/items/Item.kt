@@ -1381,6 +1381,20 @@ open class Item(
     }
 
     /**
+     * `Item::setOwner(const std::shared_ptr<Creature> &owner)`
+     * (src/items/item.cpp:1541-1548): a player owner is stamped by GUID, every
+     * other creature by id.
+     */
+    fun setOwner(owner: Creature?) {
+        if (owner == null) {
+            return
+        }
+
+        val ownerId = if (owner is Player) owner.getGUID() else owner.id
+        setOwner(ownerId)
+    }
+
+    /**
      * `Item::getOwnerId` (src/items/item.cpp:1563).
      */
     open fun getOwnerId(): Long = intAttribute(ItemAttribute.OWNER) and 0xFFFFFFFFL
@@ -2229,6 +2243,7 @@ open class Item(
         private fun createLike(itemType: ItemType?, id: Int, count: Int): Item = when {
             itemType?.isContainer == true -> Container(id, capacity = itemType.capacity, type = itemType)
             itemType?.isTrashHolder == true -> TrashHolder(id, type = itemType)
+            itemType?.isMagicField() == true -> MagicField(id, type = itemType)
             itemType?.isDoor == true -> Door(id, type = itemType)
             itemType?.isBed == true -> BedItem(id, type = itemType)
             else -> Item(id, count = count, type = itemType)

@@ -21,10 +21,15 @@ import org.opentibia.canary.combat.CombatParams
 import org.opentibia.canary.combat.CombatTarget
 import org.opentibia.canary.combat.CombatTargetState
 import org.opentibia.canary.combat.CombatType
+import org.opentibia.canary.combat.ConditionTargetState
+import org.opentibia.canary.combat.CreatureCombatActor
 import org.opentibia.canary.combat.CreatureCombatTarget
+import org.opentibia.canary.combat.CreatureConditionTarget
+import org.opentibia.canary.combat.PlayerCombatActor
 import org.opentibia.canary.combat.condition.Buff
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionId
+import org.opentibia.canary.combat.condition.ConditionTarget
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.LightInfo
 import org.opentibia.canary.combat.condition.Outfit
@@ -2144,6 +2149,12 @@ class Game(
         }
         bindCreatureAsyncTaskHost(player)
 
+        // `Creature::conditionTarget`: a session player never enters the
+        // spatial grid in this port, so `internalPlaceCreature`'s binding never
+        // runs for it; the login path installs the same production
+        // `ConditionTarget` view the condition engine drives.
+        player.conditionTarget = conditionTargetOf(player)
+
         // `Creature::onDeath` (creature.cpp:577-720): a session player never
         // enters the spatial grid in this port, so the placement binding
         // (`internalPlaceCreature`) never runs for it; the login path installs
@@ -2836,6 +2847,12 @@ class Game(
         // (creature.cpp:859-861): bind the spectator fanout once the creature
         // is on the map.
         creature.addCreatureHealth = ::addCreatureHealth
+
+        // `Creature::conditionTarget`: the production `ConditionTarget` view the
+        // condition engine drives (`Creature::executeConditions`,
+        // creature.cpp:1565-1583). Without it condition damage attaches but
+        // never drains (condition.cpp:1998-2031 receives a null target).
+        creature.conditionTarget = conditionTargetOf(creature)
 
         // `Creature::enqueueAsyncTask`'s `g_dispatcher()` and the shared
         // `getCreatureAsyncTaskBuckets` state (creature.cpp:34-55,
@@ -7039,9 +7056,35 @@ class Game(
      * [internalRemoveItem]) is kept in step.
      */
     private fun addThing(tile: Tile, item: Item, index: Int) {
+        bindMagicField(item)
         tile.addThing(index, item)
         item.setParent(tile)
         itemParents[item] = tile
+    }
+
+    /**
+     * Binds the `g_game()` lookups `MagicField::onStepInField` performs globally
+     * (src/creatures/combat/combat.cpp:2614-2633) onto a magic field entering
+     * the world: `getWorldType` (2615), `getPlayerByGUID`/`getCreatureByID`
+     * (2617-2626), `getPlayerByID` (2628) and `Combat::isProtected` (2630). The
+     * Kotlin port resolves these through the world facade, so every field
+     * placed by the game (combat casts, Lua `Game.createItem`, map loads)
+     * receives the production owner catalogs here.
+     */
+    private fun bindMagicField(item: Item) {
+        val field = item.getMagicField() ?: return
+
+        field.noPvpWorld = { getWorldType() == WorldType.NO_PVP }
+        field.ownerPlayerByGuidProvider = { ownerId -> getPlayerByGUID(ownerId) }
+        field.ownerCreatureProvider = { ownerId -> getCreatureByID(ownerId) }
+        field.ownerPlayerByIdProvider = { ownerId -> getPlayerByID(ownerId) }
+        field.combatIsProtected = { attacker, target ->
+            Combat.isProtected(
+                PlayerCombatActor(attacker, gameCombatTargetState),
+                PlayerCombatActor(target, gameCombatTargetState),
+                attacker.protectionLevel,
+            )
+        }
     }
 
     /** `Tile::queryAdd` item branch (src/items/tile.cpp:691-962). */
@@ -15902,13 +15945,17 @@ class Game(
     var getHealingCombatValue: (Monster, CombatType) -> Int = { _, _ -> 0 }
 
     /** `Creature::getAbsorbPercent(combat)` (creature.cpp:1979) seam (game.cpp:7921, 7996). */
-    var getAbsorbPercent: (Creature, CombatType) -> Int = { _, _ -> 0 }
+    var getAbsorbPercent: (Creature, CombatType) -> Int = { creature, combatType ->
+        creature.getAbsorbPercent(combatType)
+    }
 
     /** `Creature::getAbsorbFlat(combat)` (creature.cpp:1962) seam (creature.cpp:930). */
     var getAbsorbFlat: (Creature, CombatType) -> Int = { _, _ -> 0 }
 
     /** `Creature::getIncreasePercent(combat)` (creature.cpp:1996) seam (game.cpp:7924, 7999). */
-    var getIncreasePercent: (Creature, CombatType) -> Int = { _, _ -> 0 }
+    var getIncreasePercent: (Creature, CombatType) -> Int = { creature, combatType ->
+        creature.getIncreasePercent(combatType)
+    }
 
     /** `Creature::getReflectPercent(combat, useCharges)` (creature.cpp) seam (game.cpp:7957, 8017). */
     var getReflectPercent: (Creature, CombatType, Boolean) -> Double = { _, _, _ -> 0.0 }
@@ -15964,6 +16011,40 @@ class Game(
      * `onPlayerAttack` event in production.
      */
     fun combatTargetOf(creature: Creature): CombatTarget = CreatureCombatTarget(creature, gameCombatTargetState)
+
+    /**
+     * Production [ConditionTarget] adapter over a live [Creature].
+     *
+     * C++ passes the raw `std::shared_ptr<Creature>` into the condition engine;
+     * the port replaces it with the [ConditionTarget] seam, so the world
+     * installs this view as `Creature::conditionTarget` ([addPlayer] and
+     * [internalPlaceCreature]). The [ConditionTargetState] binds the
+     * game-owned reads the ported conditions reach through `g_game()`
+     * (`getPlayerByGUID`/`getCreatureByID` owner resolution, `changeSpeed`,
+     * `internalCreatureChangeVisible`/`internalCreatureChangeOutfit`,
+     * `changeLight`), so a condition's owner-resolved drain runs in production.
+     */
+    fun conditionTargetOf(creature: Creature): ConditionTarget =
+        CreatureConditionTarget(creature, gameConditionTargetState)
+
+    /** The [ConditionTargetState] binding the game facade's condition seams. */
+    private val gameConditionTargetState: ConditionTargetState = object : ConditionTargetState {
+        override fun isAttackable(creature: Creature): Boolean = this@Game.isAttackable(creature)
+
+        override fun getCreatureFromOwner(owner: Int): Creature? =
+            this@Game.getPlayerByGUID(owner.toLong()) ?: this@Game.getCreatureByID(owner.toLong())
+
+        override fun changeSpeed(creature: Creature, delta: Int) =
+            this@Game.changeSpeed(creature, delta)
+
+        override fun internalCreatureChangeVisible(creature: Creature, visible: Boolean) =
+            this@Game.internalCreatureChangeVisible(creature, visible)
+
+        override fun internalCreatureChangeOutfit(creature: Creature, outfit: Outfit) =
+            this@Game.internalCreatureChangeOutfit(creature, outfit)
+
+        override fun changeLight(creature: Creature) = this@Game.changeLight(creature)
+    }
 
     /**
      * `MonsterPipelinesHost.combatTargetState()` adopted for the monster-owned

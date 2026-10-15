@@ -995,6 +995,80 @@ abstract class Creature(
         varBuffs[buff.value] = 100
     }
 
+    // --- condition-shield state (creature.hpp:293-306, 907-916, 938, 943) --------
+
+    /** `Creature::manaShield` (creature.hpp:907), default 0. */
+    private var manaShieldValue: Int = 0
+
+    /** `Creature::getManaShield` (creature.hpp:293-295). */
+    fun getManaShield(): Int = manaShieldValue
+
+    /** `Creature::setManaShield` (creature.hpp:297-299). */
+    fun setManaShield(value: Int) {
+        manaShieldValue = value
+    }
+
+    /** `Creature::maxManaShield` (creature.hpp:908), default 0. */
+    private var maxManaShieldValue: Int = 0
+
+    /** `Creature::getMaxManaShield` (creature.hpp:301-303). */
+    fun getMaxManaShield(): Int = maxManaShieldValue
+
+    /** `Creature::setMaxManaShield` (creature.hpp:305-307). */
+    fun setMaxManaShield(value: Int) {
+        maxManaShieldValue = value
+    }
+
+    /** `Creature::absorbPercent` (creature.hpp:914), indexed by `combatTypeToIndex`. */
+    private val absorbPercent = IntArray(CombatType.COUNT.value)
+
+    /** `Creature::getAbsorbPercent` (creature.cpp:1979-1986): out-of-range answers 0. */
+    fun getAbsorbPercent(combat: CombatType): Int = absorbPercent.getOrElse(Tools.combatTypeToIndex(combat)) { 0 }
+
+    /** `Creature::setAbsorbPercent` (creature.cpp:1988-1994) — accumulates. */
+    fun setAbsorbPercent(combat: CombatType, value: Int) {
+        val index = Tools.combatTypeToIndex(combat)
+        if (index in absorbPercent.indices) {
+            absorbPercent[index] += value
+        }
+    }
+
+    /** `Creature::increasePercent` (creature.hpp:915), indexed by `combatTypeToIndex`. */
+    private val increasePercent = IntArray(CombatType.COUNT.value)
+
+    /** `Creature::getIncreasePercent` (creature.cpp:1996-2003): out-of-range answers 0. */
+    fun getIncreasePercent(combat: CombatType): Int = increasePercent.getOrElse(Tools.combatTypeToIndex(combat)) { 0 }
+
+    /** `Creature::setIncreasePercent` (creature.cpp:2005-2011) — accumulates. */
+    fun setIncreasePercent(combat: CombatType, value: Int) {
+        val index = Tools.combatTypeToIndex(combat)
+        if (index in increasePercent.indices) {
+            increasePercent[index] += value
+        }
+    }
+
+    /** `Creature::charmChanceModifier` (creature.hpp:943), default 0. */
+    private var charmChanceModifierValue: Int = 0
+
+    /** `Creature::getCharmChanceModifier` (creature.hpp:791-793). */
+    fun getCharmChanceModifier(): Int = charmChanceModifierValue
+
+    /** `Creature::setCharmChanceModifier` (creature.hpp:800-802). */
+    fun setCharmChanceModifier(value: Int) {
+        charmChanceModifierValue = value
+    }
+
+    /** `Creature::canUseDefense` (creature.hpp:938), default true. */
+    private var canUseDefenseValue: Boolean = true
+
+    /** `Creature::canUseDefense` read (creature.hpp:938). */
+    fun canUseDefense(): Boolean = canUseDefenseValue
+
+    /** `Creature::setUseDefense` (creature.hpp:647-649). */
+    fun setUseDefense(value: Boolean) {
+        canUseDefenseValue = value
+    }
+
     // --- loot/skill-loss flags (creature.hpp:641-646, 932-933) --------------------
 
     /**

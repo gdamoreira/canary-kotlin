@@ -10,11 +10,19 @@ import org.opentibia.canary.combat.condition.SpellGroup
 import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Monster
+import org.opentibia.canary.creatures.Npc
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.creatures.Skulls_t
 import org.opentibia.canary.creatures.monsters.Faction
 import org.opentibia.canary.creatures.players.getMantra
+import org.opentibia.canary.creatures.players.hasPermittedConditionInPZ
 import org.opentibia.canary.creatures.skills_t
+import org.opentibia.canary.game.zones.TileFlags
+import org.opentibia.canary.game.zones.ZoneType
+import org.opentibia.canary.items.ItemProperty
+import org.opentibia.canary.map.Position
+import org.opentibia.canary.map.Tile
 
 /**
  * Injected view of the game-owned creature combat state the production
@@ -307,4 +315,185 @@ class PlayerConditionTarget(
 
     /** PARITY GAP: `Player::setImmuneFear` state lives in the unported soul-war engine. */
     override fun setImmuneFear(immuneTime: Long) = Unit
+}
+
+/**
+ * Production [CombatActor] view of a live game [Creature].
+ *
+ * The C++ target-validation and combat-entry functions receive the raw
+ * `std::shared_ptr<Creature>`; the port replaces it with the injected
+ * [CombatActor] seam. This adapter transcribes the `Creature`/`Monster` half,
+ * with the game-owned reads (`isAttackable`, the monster faction/enemy lookups,
+ * `onAttackedByPlayer`) coming from the injected [state]. It backs the world
+ * gates that need a `CombatActor` without a Lua environment, e.g. the
+ * `Combat::isProtected` check of `MagicField::onStepInField`
+ * (src/creatures/combat/combat.cpp:2628-2633).
+ *
+ * PARITY GAP: `Creature::getFaction()` uses the same projection as the Lua
+ * [org.opentibia.canary.lua.bindings.LuaCombatWorld] default
+ * (`Faction.Player` for players, `Faction.Default` otherwise); the
+ * monster-type faction table stays with the host state.
+ */
+class CreatureCombatActor(
+    /** The adapted creature. */
+    val creature: Creature,
+    private val state: CombatTargetState = CombatTargetState.Inert,
+) : CombatActor {
+
+    /** `Creature::getPlayer()`; null for monsters and NPCs. */
+    override fun getPlayer(): CombatPlayer? = (creature as? Player)?.let { PlayerCombatActor(it, state) }
+
+    /** `Creature::getMonster()`; null for players and NPCs. */
+    override fun getMonster(): CombatMonster? {
+        val monster = creature as? Monster ?: return null
+        return object : CombatMonster {
+            override fun isEnemyFaction(faction: Faction): Boolean = state.isEnemyFaction(monster, faction)
+
+            override fun onAttackedByPlayer(attackerPlayer: ConditionPlayer) {
+                val attacker = (attackerPlayer as? PlayerConditionTarget)?.player ?: return
+                state.onAttackedByPlayer(monster, attacker)
+            }
+        }
+    }
+
+    /** `Creature::getNpc()` non-null check (combat.cpp:547). */
+    override fun getNpc(): Boolean = creature is Npc
+
+    /** `Creature::getMaster()`. */
+    override fun getMaster(): CombatActor? = creature.getMaster()?.let { CreatureCombatActor(it, state) }
+
+    /** `Creature::isSummon()`. */
+    override fun isSummon(): Boolean = creature.isSummon()
+
+    /** `Creature::isAttackable()` (combat.cpp:348). */
+    override fun isAttackable(): Boolean = state.isAttackable(creature)
+
+    /** `Creature::getZoneType()`. */
+    override fun getZoneType(): ZoneType = creature.getZoneType()
+
+    /** `Creature::getFaction()` (combat.cpp:498-541); see the class PARITY GAP. */
+    override fun getFaction(): Faction = if (creature is Player) Faction.Player else Faction.Default
+
+    /** `Creature::getPosition()`. */
+    override fun getPosition(): Position = creature.position
+
+    /** `Creature::getTile()`. */
+    override fun getTile(): CombatTile? = creature.getTile()?.let { CreatureCombatTile(it, state) }
+}
+
+/**
+ * Production [CombatPlayer] view of a live game [Player].
+ *
+ * `Combat::isProtected` (`src/creatures/combat/combat.cpp:432-447`) reads the
+ * level, vocation, skull and PZ-permission members; every accessor transcribes
+ * the `Player` symbol it replaces, mirroring the Lua
+ * [org.opentibia.canary.lua.bindings.LuaCombatPlayer] adapter without the Lua
+ * environment.
+ */
+class PlayerCombatActor(
+    /** The adapted player. */
+    val player: Player,
+    private val state: CombatTargetState = CombatTargetState.Inert,
+) : CombatPlayer {
+
+    /** `Player::getPlayer()` — a player is its own player view. */
+    override fun getPlayer(): CombatPlayer = this
+
+    /** `Player::getMonster()` — null for a player. */
+    override fun getMonster(): CombatMonster? = null
+
+    /** `Player::getNpc()` — false for a player. */
+    override fun getNpc(): Boolean = false
+
+    /** `Player::getMaster()`. */
+    override fun getMaster(): CombatActor? = player.getMaster()?.let { CreatureCombatActor(it, state) }
+
+    /** `Player::isSummon()`. */
+    override fun isSummon(): Boolean = player.isSummon()
+
+    /** `Player::isAttackable()` (`combat.cpp:348`). */
+    override fun isAttackable(): Boolean = state.isAttackable(player)
+
+    /** `Player::getZoneType()`. */
+    override fun getZoneType(): ZoneType = player.getZoneType()
+
+    /** `Player::getFaction()`; see [CreatureCombatActor]'s PARITY GAP. */
+    override fun getFaction(): Faction = Faction.Player
+
+    /** `Player::getPosition()`. */
+    override fun getPosition(): Position = player.position
+
+    /** `Player::getTile()`. */
+    override fun getTile(): CombatTile? = player.getTile()?.let { CreatureCombatTile(it, state) }
+
+    /** `Player::hasFlag(flag)` (`combat.cpp:326`, `348`). */
+    override fun hasFlag(flag: PlayerFlags_t): Boolean = player.hasFlag(flag)
+
+    /** `Player::getLevel()` (`combat.cpp:434`). */
+    override fun getLevel(): Int = player.level
+
+    /** `Player::getSkull()` (`combat.cpp:442`). */
+    override fun getSkull(): Skulls_t = player.getSkull()
+
+    /** `Player::getSkullClient(creature)` (`combat.cpp:442`, player.cpp:7127-7151). */
+    override fun getSkullClient(creature: CombatActor): Skulls_t {
+        val target = when (creature) {
+            is CreatureCombatActor -> creature.creature
+            is PlayerCombatActor -> creature.player
+            else -> return Skulls_t.SKULL_NONE
+        }
+        return player.pvpPlayer.getSkullClient(target)
+    }
+
+    /** `Player::hasSecureMode()` (`combat.cpp:368`). */
+    override fun hasSecureMode(): Boolean = player.secureMode
+
+    /** `Player::hasPermittedConditionInPZ()` (`combat.cpp:461`, player.cpp:12897-12921). */
+    override fun hasPermittedConditionInPZ(): Boolean = player.hasPermittedConditionInPZ()
+
+    /** `Player::getVocation()->canCombat()` (`combat.cpp:438`). */
+    override fun getVocationCanCombat(): Boolean =
+        player.vocations?.getVocation(player.vocationId)?.canCombat() ?: false
+
+    /** `Player::getVocationId()` (`combat.cpp:438`). */
+    override fun getVocationId(): Int = player.getVocationId()
+}
+
+/**
+ * Production [CombatTile] view of a live game [Tile]
+ * (`Game::map.getTile(pos)`), carrying the `Tile` accessors of
+ * `Combat::canDoCombat`/`Combat::CombatFunc` (`combat.cpp:376-426`,
+ * `1507-1643`).
+ */
+class CreatureCombatTile(
+    /** The adapted tile. */
+    val tile: Tile,
+    private val state: CombatTargetState = CombatTargetState.Inert,
+) : CombatTile {
+
+    /** `Tile::hasFlag(flag)` (`combat.cpp:398-460`). */
+    override fun hasFlag(flag: TileFlags): Boolean = tile.hasFlag(flag.value)
+
+    /** `Tile::hasProperty(prop)` (`combat.cpp:381`, `457`). */
+    override fun hasProperty(property: Int): Boolean {
+        val itemProperty = ItemProperty.entries.firstOrNull { it.value == property } ?: return false
+        return tile.hasProperty(itemProperty)
+    }
+
+    /** `Tile::getPosition()` (`combat.cpp:408`). */
+    override fun getPosition(): Position = tile.position
+
+    /** `Tile::getTeleportItem()` (`combat.cpp:402`). */
+    override fun getTeleportItem(): Boolean = tile.getTeleportItem() != null
+
+    /** The `Tile::getItemList()` item ids (`combat.cpp:384-391`, magic wall check). */
+    override fun getItemIds(): List<Int> = tile.items.map { it.id }
+
+    /** `Tile::getCreatures()` (`combat.cpp:1536`, `1610`). */
+    override fun getCreatures(): List<CombatActor> =
+        tile.getCreatures().map { CreatureCombatActor(it, state) }
+
+    /** `Tile::getTopCreature()` (`combat.cpp:1537`, `1612`). */
+    override fun getTopCreature(): CombatActor? =
+        tile.getTopCreature()?.let { CreatureCombatActor(it, state) }
 }

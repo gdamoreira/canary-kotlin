@@ -2,6 +2,9 @@ package org.opentibia.canary.creatures.players
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.combat.condition.ConditionDamage
+import org.opentibia.canary.combat.condition.ConditionId
+import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Npc
@@ -13,6 +16,7 @@ import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.items.ItemType
+import org.opentibia.canary.items.ItemTypes_t
 import org.opentibia.canary.items.MagicField
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Tile
@@ -124,8 +128,18 @@ class PlayerWalkQueueTest {
 
     private fun fieldTile(position: Position, damage: Int): Tile = Tile(position).apply {
         setFlag(TileFlags.TILESTATE_MAGICFIELD.value)
-        ground = MagicField(1497, damage)
+        ground = MagicField(1497, type = fieldType(damage))
     }
+
+    private fun fieldType(damage: Int): ItemType =
+        ItemType(id = 1497, name = "fire field", type = ItemTypes_t.ITEM_TYPE_MAGICFIELD).apply {
+            if (damage != 0) {
+                conditionDamage = ConditionDamage(
+                    ConditionId.CONDITIONID_COMBAT,
+                    ConditionType.CONDITION_FIRE,
+                ).apply { addDamage(1, 1000, -damage) }
+            }
+        }
 
     // --- setNextActionTask & variants (player.cpp:3014-3070) ----------------------
 
@@ -474,7 +488,7 @@ class PlayerWalkQueueTest {
         sink.player = newPlayer(1, level = 1)
         sink.protectionLevel = 1
         val subject = newPlayer(2, Position(101, 100, 7), level = 1)
-        subject.setParent(Tile(Position(101, 100, 7)).apply { ground = MagicField(1497, 0, type = ItemType(id = 1497, name = "field")) })
+        subject.setParent(Tile(Position(101, 100, 7)).apply { ground = MagicField(1497, type = ItemType(id = 1497, name = "field")) })
         val state = newState()
         now = 5_000
 
@@ -493,7 +507,7 @@ class PlayerWalkQueueTest {
         sink.player = newPlayer(1, level = 1)
         sink.protectionLevel = 1
         val subject = newPlayer(2, Position(101, 100, 7), level = 1)
-        subject.setParent(Tile(Position(101, 100, 7)).apply { ground = MagicField(1497, 0, type = ItemType(id = 1497, name = "field")) })
+        subject.setParent(Tile(Position(101, 100, 7)).apply { ground = MagicField(1497, type = ItemType(id = 1497, name = "field")) })
         val state = newState()
         now = 5_000
         state.canWalkthrough(subject)
@@ -502,7 +516,7 @@ class PlayerWalkQueueTest {
 
         subject.setParent(
             Tile(Position(102, 100, 7)).apply {
-                ground = MagicField(1497, 0, type = ItemType(id = 1497, name = "field"))
+                ground = MagicField(1497, type = ItemType(id = 1497, name = "field"))
             },
         )
 
@@ -516,7 +530,7 @@ class PlayerWalkQueueTest {
         sink.player = newPlayer(1, level = 1)
         sink.protectionLevel = 1
         val subject = newPlayer(2, Position(101, 100, 7), level = 1)
-        subject.setParent(Tile(Position(101, 100, 7)).apply { ground = MagicField(1497, 0, type = ItemType(id = 1497, name = "field").apply { walkStack = false }) })
+        subject.setParent(Tile(Position(101, 100, 7)).apply { ground = MagicField(1497, type = ItemType(id = 1497, name = "field").apply { walkStack = false }) })
         val state = newState()
 
         assertThat(state.canWalkthrough(subject)).isFalse()

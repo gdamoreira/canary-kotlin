@@ -6,6 +6,9 @@ import org.opentibia.canary.account.Account
 import org.opentibia.canary.account.AccountType
 import org.opentibia.canary.chat.SpeakClasses
 import org.opentibia.canary.combat.CombatType
+import org.opentibia.canary.combat.condition.ConditionDamage
+import org.opentibia.canary.combat.condition.ConditionId
+import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.monsters.MonsterType
@@ -40,7 +43,12 @@ class TileQueryAddTest {
                 "fire field",
                 type = ItemTypes_t.ITEM_TYPE_MAGICFIELD,
                 combatType = CombatType.FIREDAMAGE,
-            ),
+            ).apply {
+                conditionDamage = ConditionDamage(
+                    ConditionId.CONDITIONID_COMBAT,
+                    ConditionType.CONDITION_FIRE,
+                ).apply { addDamage(1, 1000, -20) }
+            },
         )
         register(ItemType(120, "wall", blockSolid = true))
         register(ItemType(121, "movable solid", blockSolid = true, isMovable = true))
@@ -78,8 +86,8 @@ class TileQueryAddTest {
     private fun monster(id: Long, name: String = "M$id", position: Position = pos): Monster =
         Monster(id = id, name = name, maxHealth = 100, health = 100, position = position)
 
-    private fun field(damage: Int = 20): MagicField =
-        MagicField(106, damage = damage, type = types.get(106))
+    private fun field(): MagicField =
+        MagicField(106, type = types.get(106))
 
     // --- monster push/field rules (tile.cpp:716-782) -------------------------
 
@@ -262,7 +270,7 @@ class TileQueryAddTest {
     // --- expert-PvP field step (tile.cpp:34-84, 794-803, 856-878) ------------
 
     private fun expertMagicWall(ownerMode: PvpMode_t): MagicField =
-        MagicField(ExpertPvp.ITEM_MAGICWALL, damage = 0, type = types.get(ExpertPvp.ITEM_MAGICWALL)).apply {
+        MagicField(ExpertPvp.ITEM_MAGICWALL, type = types.get(ExpertPvp.ITEM_MAGICWALL)).apply {
             setCustomAttribute("expertPvpOwnerGuid", 99L)
             setCustomAttribute("expertPvpOwnerMode", ownerMode.value.toLong())
             setCustomAttribute("expertPvpCanonicalItemId", ExpertPvp.ITEM_MAGICWALL.toLong())
@@ -314,7 +322,7 @@ class TileQueryAddTest {
     @Test
     fun `queryAdd removes a safe magic wall and returns noerror`() {
         val tile = tileWithGround()
-        val safeWall = MagicField(ExpertPvp.ITEM_MAGICWALL_SAFE, damage = 0, type = types.get(ExpertPvp.ITEM_MAGICWALL_SAFE))
+        val safeWall = MagicField(ExpertPvp.ITEM_MAGICWALL_SAFE, type = types.get(ExpertPvp.ITEM_MAGICWALL_SAFE))
         tile.internalAddThing(safeWall)
         val removed = mutableListOf<Pair<Item, Int>>()
         tile.internalRemoveItem = { findfield, count -> removed.add(findfield to count) }
