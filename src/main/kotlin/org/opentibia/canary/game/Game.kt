@@ -1412,8 +1412,25 @@ class Game(
     /** `Player::sendMonsterPodiumWindow(item, pos, itemId, stackPos)` protocol seam (game.cpp:5213). */
     var sendMonsterPodiumWindow: (Player, Item, Position, Int, Int) -> Unit = { _, _, _, _, _ -> }
 
-    /** `Item::getDescription(itemType, 1, nullptr, count)` renderer seam (src/items/item.cpp:625). */
-    var getItemDescription: (ItemType, Int) -> String = { _, _ -> "" }
+    /**
+     * `Item::getDescription(itemType, 1, nullptr, count)` renderer seam
+     * (`Game::playerLookInShop`, src/game/game.cpp:6353): the default composes
+     * the ported renderer with the booted `Item::items` registry, the
+     * `g_vocations()` registry and `Game::getObjectCategory`. The `g_spells()`
+     * registry has no `Game`-level composition (a host can override the seam
+     * with a registry-aware renderer).
+     */
+    var getItemDescription: (ItemType, Int) -> String = { itemType, count ->
+        Item.getDescription(
+            itemType,
+            1,
+            null,
+            count,
+            items = itemTypes,
+            vocations = vocations,
+            objectCategory = { item -> getObjectCategory(item) },
+        )
+    }
 
     /** `g_events().eventPlayerOnLookInShop(player, itemType, count)` veto seam (game.cpp:6341). */
     var eventPlayerOnLookInShop: (Player, ItemType, Int) -> Boolean = { _, _, _ -> true }
