@@ -1,6 +1,7 @@
 package org.opentibia.canary.game
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import io.netty.buffer.Unpooled
 import org.opentibia.canary.account.Account
 import org.opentibia.canary.account.AccountErrors
 import org.opentibia.canary.account.AccountType
@@ -75,6 +76,7 @@ import org.opentibia.canary.creatures.players.PlayerTask
 import org.opentibia.canary.creatures.players.playerSendSink
 import org.opentibia.canary.creatures.players.sendCreatureReload
 import org.opentibia.canary.creatures.players.sendForgingData
+import org.opentibia.canary.creatures.players.sendNetworkMessage
 import org.opentibia.canary.creatures.players.sendPartyPlayerMana
 import org.opentibia.canary.creatures.players.sendPartyPlayerVocation
 import org.opentibia.canary.creatures.vocations.Vocation
@@ -149,6 +151,7 @@ import org.opentibia.canary.network.protocol.CreatureType
 import org.opentibia.canary.network.protocol.ContainerCategory
 import org.opentibia.canary.network.protocol.HighscoresWindowSerializer
 import org.opentibia.canary.network.protocol.HouseAuctionType
+import org.opentibia.canary.network.protocol.InspectionWindowWriter
 import org.opentibia.canary.network.protocol.MessageClass
 import org.opentibia.canary.network.protocol.SourceEffect
 import org.opentibia.canary.network.protocol.StoreWindowWriter
@@ -1386,8 +1389,38 @@ class Game(
     /** `Player::pushEvent(bool)` (player.cpp:7225) seam used by [playerMoveCreature]. */
     var playerPushEvent: (Player, Boolean) -> Unit = { _, _ -> }
 
-    /** `Player::sendItemInspection(itemId, itemCount, item, cyclopedia)` protocol seam (game.cpp:1635, 1652). */
-    var sendItemInspection: (Player, Int, Int, Item?, Boolean) -> Unit = { _, _, _, _, _ -> }
+    /**
+     * `Player::sendItemInspection(itemId, itemCount, item, cyclopedia)`
+     * (player.cpp:8402-8406) protocol seam used by [playerInspectItem]
+     * (game.cpp:1635-1656). The default composes the ported
+     * `ProtocolGame::sendItemInspection` window ([InspectionWindowWriter]) with
+     * the booted `Item::items` registry, the plural `Item::getDescriptions` and
+     * the `Game::getObjectCategory` seam, then hands the serialized frame to the
+     * player's raw output-buffer transport (`Player::sendNetworkMessage` ->
+     * `client->writeToOutputBuffer`, player.cpp:8534). A player without a client
+     * sink drops the window exactly like `Player::client == nullptr`.
+     */
+    var sendItemInspection: (Player, Int, Int, Item?, Boolean) -> Unit =
+        { player, itemId, itemCount, item, cyclopedia ->
+            val out = Unpooled.buffer()
+            try {
+                InspectionWindowWriter.writeItemInspection(
+                    out = out,
+                    playerId = player.id,
+                    cyclopedia = cyclopedia,
+                    itemId = itemId,
+                    itemCount = itemCount,
+                    item = item,
+                    items = itemTypes,
+                    objectCategory = { inspected -> getObjectCategory(inspected) },
+                )
+                val frame = ByteArray(out.readableBytes())
+                out.readBytes(frame)
+                player.sendNetworkMessage(frame)
+            } finally {
+                out.release()
+            }
+        }
 
     /** `g_events().eventPlayerOnMoveCreature(player, creature, fromPos, toPos)` veto seam (game.cpp:1866). */
     var eventPlayerOnMoveCreature: (Player, Creature, Position, Position) -> Boolean = { _, _, _, _ -> true }

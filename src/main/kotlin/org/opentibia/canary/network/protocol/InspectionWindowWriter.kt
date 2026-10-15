@@ -2,6 +2,9 @@ package org.opentibia.canary.network.protocol
 
 import io.netty.buffer.ByteBuf
 import org.opentibia.canary.items.Item
+import org.opentibia.canary.items.ItemType
+import org.opentibia.canary.items.Items
+import org.opentibia.canary.items.ObjectCategory_t
 import org.opentibia.canary.network.message.writeTibiaString
 
 /**
@@ -14,9 +17,8 @@ import org.opentibia.canary.network.message.writeTibiaString
  * `INSPECT_NORMALOBJECT`/`INSPECT_NPCTRADE`/`INSPECT_CYCLOPEDIA`
  * (protocolgame.cpp:2913-2931); the cyclopedia character inspection
  * (`CYCLOPEDIA_CHARACTERINFO_INSPECTION`) lives in `CyclopediaCharacterWriter`.
- * `Item::getDescriptions` results and the item display name are passed in by
- * the caller; the `oldProtocol` guard stays with the caller. Every multi-byte
- * field is Little-Endian and strings are `uint16` length plus UTF-8.
+ * The `oldProtocol` guard stays with the caller. Every multi-byte field is
+ * Little-Endian and strings are `uint16` length plus UTF-8.
  */
 object InspectionWindowWriter {
 
@@ -26,12 +28,15 @@ object InspectionWindowWriter {
     private const val CYCLOPEDIA_FLAG = 0x01
 
     /**
-     * `sendItemInspection` (protocolgame.cpp:2943-2973).
+     * `sendItemInspection` (protocolgame.cpp:2943-2973), including the
+     * `Item::getDescriptions(it, item)` key/value list (src/items/item.cpp:1658-2298).
      *
-     * When [item] is null Canary resolves the `ItemType` from [itemId] and calls
-     * `AddItem(msg, it.id, itemCount, 0)`; [itemInfo] carries the `ItemType`
-     * subtype flags for that path. [descriptions] is the `Item::getDescriptions`
-     * pair list in caller order.
+     * `it` is the `Item::items[itemId]` registry entry; a `null` registry or an
+     * unknown id behaves like the absent global lookup (the empty `ItemType`).
+     * The item display name is `item->getName()` for an item instance and
+     * `it.name` otherwise; [objectCategory] is the `g_game().getObjectCategory(item)`
+     * seam behind the `Tier` description entry. The `Item::getDescriptions`
+     * pairs are written in their resolved list order.
      */
     fun writeItemInspection(
         out: ByteBuf,
@@ -39,10 +44,9 @@ object InspectionWindowWriter {
         cyclopedia: Boolean,
         itemId: Int,
         itemCount: Int,
-        itemName: String,
         item: Item? = null,
-        itemInfo: ItemWireInfo = ItemWireInfo.from(item?.type),
-        descriptions: List<Pair<String, String>> = emptyList(),
+        items: Items? = null,
+        objectCategory: ((Item) -> ObjectCategory_t)? = null,
     ) {
         out.writeByte(PACKET_ITEM_INSPECTION)
         out.writeByte(0x00)
@@ -50,14 +54,19 @@ object InspectionWindowWriter {
         out.writeIntLE(playerId.toInt())
         out.writeByte(0x01)
 
-        out.writeTibiaString(itemName)
+        val it = items?.get(itemId) ?: ItemType(id = 0, name = "")
+
         if (item != null) {
-            GameWindowWriter.writeItem(out, item, itemInfo)
+            out.writeTibiaString(item.getName())
+            GameWindowWriter.writeItem(out, item, ItemWireInfo.from(item.type ?: it))
         } else {
-            GameWindowWriter.writeItem(out, Item(itemId, itemCount), itemInfo)
+            out.writeTibiaString(it.name)
+            GameWindowWriter.writeItem(out, Item(itemId, itemCount), ItemWireInfo.from(it))
         }
 
         out.writeByte(0)
+
+        val descriptions = Item.getDescriptions(it, item, items, objectCategory)
         out.writeByte(descriptions.size)
         for ((key, value) in descriptions) {
             out.writeTibiaString(key)
