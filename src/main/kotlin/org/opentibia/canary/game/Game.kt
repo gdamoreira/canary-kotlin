@@ -12167,16 +12167,43 @@ class Game(
      */
     var initWheelGlobalData: () -> Unit = {}
 
+    /** `g_globalEvents().save()` (src/game/game.cpp:996, 1015) seam of the SHUTDOWN/CLOSED arms. */
+    var saveGlobalEvents: () -> Unit = {}
+
+    /** `g_globalEvents().shutdown()` (src/game/game.cpp:997) seam of the SHUTDOWN arm. */
+    var shutdownGlobalEvents: () -> Unit = {}
+
+    /**
+     * `g_saveManager().saveAll()` (src/game/game.cpp:1008, 1028) seam of the
+     * SHUTDOWN/CLOSED arms; the world root binds the `SaveManager` rotation.
+     */
+    var saveAllPlayers: () -> Unit = {}
+
+    /**
+     * `g_dispatcher().addEvent([this] { shutdown(); }, __FUNCTION__)`
+     * (src/game/game.cpp:1010) seam of the SHUTDOWN arm. The owned dispatcher
+     * enqueues [shutdown] on the `WorldCommit` lane when its loop is running,
+     * keeping the teardown off the caller's thread (AGENTS.md 1.2).
+     */
+    var scheduleShutdown: () -> Unit = { dispatcher.dispatch(DispatcherLane.WorldCommit) { shutdown() } }
+
     /**
      * `Game::setGameState` (src/game/game.cpp:952): the two guard clauses, the
-     * state assignment and the wired `GAME_STATE_INIT` world bootstrap. The arm
-     * runs exactly once per transition into `GAME_STATE_INIT` (the repeated
-     * state guard above), in the C++ statement order (see [gameStateInit]).
+     * state assignment and the wired switch arms in the C++ statement order:
+     * `GAME_STATE_INIT` ([gameStateInit], game.cpp:963-993),
+     * `GAME_STATE_SHUTDOWN` ([gameStateShutdown], game.cpp:995-1012) and
+     * `GAME_STATE_CLOSED` ([gameStateClosed], game.cpp:1014-1030). Each arm runs
+     * exactly once per transition (the repeated-state guard above).
      *
-     * PARITY GAPS: the `GAME_STATE_SHUTDOWN` save/kick-all arm (game.cpp:995-1012),
-     * the `GAME_STATE_CLOSED` kick of non-`CanAlwaysLogin` players and the
-     * maintain-mode arm (game.cpp:1014-1035) and the `GAME_STATE_CLOSING` arm
-     * are not wired.
+     * `GAME_STATE_MAINTAIN` and `GAME_STATE_CLOSING` keep the C++ `default:
+     * break` (state assignment only); the maintain-mode refusal lives at the
+     * protocol boundary and is folded by [loginRefusal].
+     *
+     * PARITY GAPS: the [saveGlobalEvents], [shutdownGlobalEvents] and
+     * [saveAllPlayers] seams keep their inert defaults until the composition
+     * root binds the `g_globalEvents()`/`g_saveManager()` registries (the booted
+     * `Game` does not own them); [loginRefusal] is not consulted by the Kotlin
+     * login handlers yet.
      */
     fun setGameState(newState: GameState_t) {
         if (gameState == GameState_t.GAME_STATE_SHUTDOWN) {
@@ -12189,8 +12216,11 @@ class Game(
 
         gameState = newState
 
-        if (newState == GameState_t.GAME_STATE_INIT) {
-            gameStateInit()
+        when (newState) {
+            GameState_t.GAME_STATE_INIT -> gameStateInit()
+            GameState_t.GAME_STATE_SHUTDOWN -> gameStateShutdown()
+            GameState_t.GAME_STATE_CLOSED -> gameStateClosed()
+            else -> Unit
         }
     }
 
@@ -12224,6 +12254,104 @@ class Game(
 
         initWheelGlobalData()
     }
+
+    /**
+     * The `GAME_STATE_SHUTDOWN` arm of `Game::setGameState` (src/game/game.cpp:995-1012)
+     * in C++ statement order: `g_globalEvents().save()`, `g_globalEvents().shutdown()`,
+     * the kick-all loop (`Player::removePlayer(true)` until `Game::players` is empty),
+     * `saveMotdNum()`, `g_saveManager().saveAll()` and the dispatcher-enqueued
+     * `Game::shutdown` ([scheduleShutdown]).
+     *
+     * The C++ loop restarts from `players.begin()` after every removal because the
+     * forced logout erases the session mid-iteration; the port kicks the snapshot in
+     * insertion order and erases through [removePlayer] (the C++ `players` map is
+     * id-sorted, so only the removal order differs — the kicked set is identical).
+     * The [playerRemovePlayer] seam models `Player::removePlayer(displayEffect)`,
+     * whose disconnect keeps the erase on the callee in Canary; the explicit
+     * [removePlayer] keeps the arm total when an embedded root leaves the seam inert.
+     */
+    private fun gameStateShutdown() {
+        saveGlobalEvents()
+        shutdownGlobalEvents()
+
+        kickAllPlayers()
+
+        saveMotdNum()
+        saveAllPlayers()
+
+        scheduleShutdown()
+    }
+
+    /**
+     * The `GAME_STATE_CLOSED` arm of `Game::setGameState` (src/game/game.cpp:1014-1030)
+     * in C++ statement order: `g_globalEvents().save()`, the kick of every player
+     * without the `CanAlwaysLogin` flag and `g_saveManager().saveAll()`. The loop
+     * carries the same restart-from-begin shape (and the same fold) as
+     * [gameStateShutdown].
+     */
+    private fun gameStateClosed() {
+        saveGlobalEvents()
+
+        for (player in players.values.filterNot { it.hasFlag(PlayerFlags_t.CanAlwaysLogin) }) {
+            playerRemovePlayer(player, true)
+            removePlayer(player)
+        }
+
+        saveAllPlayers()
+    }
+
+    /** The `Player::removePlayer(true)` kick-all loop of the SHUTDOWN arm (game.cpp:1001-1005). */
+    private fun kickAllPlayers() {
+        for (player in players.values.toList()) {
+            playerRemovePlayer(player, true)
+            removePlayer(player)
+        }
+    }
+
+    /**
+     * Folded game-state login gate of `ProtocolGame::onRecvFirstMessage`
+     * (src/server/network/protocol/protocolgame.cpp:1388-1396),
+     * `ProtocolGame::login`'s post-authentication checks (protocolgame.cpp:955-966)
+     * and `ProtocolLogin::getCharacterList` (protocollogin.cpp:240-248).
+     *
+     * Returns the exact `disconnectClient` message of the first failing state
+     * gate, `""` for the C++ message-less `disconnect()` of `GAME_STATE_SHUTDOWN`,
+     * or `null` when the session may proceed. A `null` [player] applies the
+     * pre-authentication gates only (`STARTUP`/`MAINTAIN`/`SHUTDOWN`); the
+     * `CLOSING`/`CLOSED` gates additionally require the player to lack
+     * `CanAlwaysLogin`, matching the C++ order.
+     *
+     * PARITY GAP: the Kotlin login handlers (`LoginHandler`/`GameHandler`) do not
+     * consult this gate yet, so the production disconnect is not emitted.
+     */
+    fun loginRefusal(player: Player? = null): String? {
+        when (gameState) {
+            GameState_t.GAME_STATE_STARTUP -> return "Gameworld is starting up. Please wait."
+            GameState_t.GAME_STATE_MAINTAIN -> return "Gameworld is under maintenance. Please re-connect in a while."
+            GameState_t.GAME_STATE_SHUTDOWN -> return ""
+            else -> Unit
+        }
+
+        val session = player ?: return null
+        if (session.hasFlag(PlayerFlags_t.CanAlwaysLogin)) {
+            return null
+        }
+
+        return when (gameState) {
+            GameState_t.GAME_STATE_CLOSING -> "The game is just going down.\nPlease try again later."
+            GameState_t.GAME_STATE_CLOSED ->
+                configuredMaintainModeMessage().ifEmpty { "Server is currently closed.\nPlease try again later." }
+            else -> null
+        }
+    }
+
+    /** `g_configManager().getString(MAINTAIN_MODE_MESSAGE)` (protocolgame.cpp:958) with the C++ default `""`. */
+    private fun configuredMaintainModeMessage(): String =
+        configManager?.let { config ->
+            ConfigKeys.byName("MAINTAIN_MODE_MESSAGE")?.let { key ->
+                config.getString(key, key.defaultValue as String)
+            }
+        } ?: ""
 
     /** `Game::setWorldType` (src/game/game.cpp:926). */
     fun setWorldType(type: WorldType) {
