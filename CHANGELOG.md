@@ -721,8 +721,17 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 75: Wave 71 — Combat/Death Tails, Producers, Raids (14:00 – 16:00)
+- **Damage attribution** — attacker threaded through the combat drain; combat kills populate the damage map (last-hit/most-damage, summon/master credit) (7 tests).
+- **Death tails** — Lua `onKill` host (+ monster binding at the root), player corpse with the kill description, `dropCorpse` protocol tail (reward gate, loot message, auto-loot, container update), `MESSAGE_EXPERIENCE_OTHERS`, death counters wired to the shared registry (24 tests).
+- **Producer/transport** — source-cylinder notifications, `queryRemove`/`canRemove` gates, items-light composition, Lua addItem producers, `proficiencies.json` injection, 0xCA livestream resend (23 tests).
+- **Raids composition** — `Raids` composed at the root (load/startup/clear, announcer, script runner, clock, `startRaid`) (16 tests).
+- **792 suites / 8270 tests, all green**; all commits ancestry-verified.
+
+---
+
 ### Current Status
-- **Automated Tests**: **779 test suites / 8200 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **792 test suites / 8270 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.

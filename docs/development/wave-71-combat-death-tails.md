@@ -1,6 +1,6 @@
 # Wave 71 Plan — Damage Attribution, Death Tails, Producer/Transport, Raids
 
-**Status:** In progress — dispatched
+**Status:** Completed (2026-10-15) — four workstreams merged; 792 suites / 8270 tests green
 **Baseline:** `main` @ `c80a5b52`; 779 suites / 8200 tests green; zero Kotlin warnings
 **Source of scope:** `docs/development/implementation-status.md` §3 items 1–3. **Scaling proposals excluded.**
 **Convention:** documents live directly in `docs/development/` (AGENTS.md §5/§6).
@@ -121,3 +121,13 @@ Update `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`
 
 Scaling proposals; deferred list (differential harness, CipSoft860 profile,
 OTel SDK/OStream, micro-seams).
+
+---
+
+## Completion (2026-10-15)
+
+damage-attribution (`78065398`), death-tails (`344a464e`),
+producer-transport-tails (`b46f1279`), raids-composition (`e15d193d`) merged;
+the pending root bindings (monster kill events, shared metrics registry) were
+applied at integration. Integrated suite: **792 suites / 8270 tests, 0
+failures, zero Kotlin warnings**; ancestry verified.
