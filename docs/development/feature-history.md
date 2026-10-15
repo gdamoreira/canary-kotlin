@@ -1780,7 +1780,7 @@ Endgame character customization and power progression for level 50..1000+ charac
 
 ### 7. Implementation Status
 
-Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/game-play-features.md`.
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/implementation-status.md`.
 
 ---
 
@@ -1816,7 +1816,7 @@ Endgame item sink, economy driver, and equipment progression.
 
 ### 7. Implementation Status
 
-Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/game-play-features.md`.
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/implementation-status.md`.
 
 ---
 
@@ -1851,7 +1851,7 @@ Core mid-to-endgame hunting incentive; affects combat DPS on high-health creatur
 
 ### 7. Implementation Status
 
-Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/game-play-features.md`.
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/implementation-status.md`.
 
 ---
 
@@ -1886,7 +1886,7 @@ Server monetization, premium item delivery, and automated service transactions.
 
 ### 7. Implementation Status
 
-Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/game-play-features.md`.
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/implementation-status.md`.
 
 ---
 
@@ -1921,7 +1921,7 @@ Pinnacle endgame team-hunting difficulty modifier.
 
 ### 7. Implementation Status
 
-Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/game-play-features.md`.
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/implementation-status.md`.
 
 ---
 
@@ -1956,7 +1956,7 @@ Daily player retention driver and resting-zone passive regeneration.
 
 ### 7. Implementation Status
 
-Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/game-play-features.md`.
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/implementation-status.md`.
 
 ---
 
@@ -1992,7 +1992,7 @@ Eliminates loot theft and griefing in large boss encounters.
 
 ### 7. Implementation Status
 
-Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/game-play-features.md`.
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/implementation-status.md`.
 
 ---
 
@@ -2026,7 +2026,7 @@ Mid-to-endgame solo hunting combat amplifier and boss support.
 
 ### 7. Implementation Status
 
-Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/game-play-features.md`.
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/implementation-status.md`.
 
 ---
 
@@ -2061,7 +2061,7 @@ Private house utility, convenience for players, and gold sink.
 
 ### 7. Implementation Status
 
-Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/game-play-features.md`.
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/implementation-status.md`.
 
 ---
 
@@ -2096,7 +2096,7 @@ Movement speed progression, exploration pacing, and collection mechanics.
 
 ### 7. Implementation Status
 
-Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/game-play-features.md`.
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/implementation-status.md`.
 
 ---
 
@@ -2131,7 +2131,7 @@ Long-term weapon mastery progression in protocol versions >= 13.30.
 
 ### 7. Implementation Status
 
-Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/game-play-features.md`.
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/implementation-status.md`.
 
 ---
 
@@ -2166,7 +2166,7 @@ Premier endgame questline mechanics and high-risk boss strategy.
 
 ### 7. Implementation Status
 
-Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/game-play-features.md`.
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/implementation-status.md`.
 
 ---
 
@@ -2201,7 +2201,7 @@ Server-wide community events, rare loot opportunities, and activity surges.
 
 ### 7. Implementation Status
 
-Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/game-play-features.md`.
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/implementation-status.md`.
 
 ---
 
@@ -2237,7 +2237,7 @@ Core daily progression for offline players.
 
 ### 7. Implementation Status
 
-Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/game-play-features.md`.
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/implementation-status.md`.
 
 ---
 
@@ -2273,5 +2273,5 @@ Consumable gold sink and tactical preparation for bossing/hunting.
 
 ### 7. Implementation Status
 
-Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/game-play-features.md`.
+Implemented and tested in Kotlin (`systems/<feature>/` engine core + application services + protocol parsers where applicable). The Lua-authored portions remain Lua per AGENTS.md 1.4. Residual parity gaps are tracked in `docs/development/implementation-status.md`.
 

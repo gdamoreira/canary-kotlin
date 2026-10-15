@@ -112,8 +112,7 @@ Each document must follow this layout:
 After **each wave** (a batch of parallel-agent implementations merged into `main`), the following is a **MUST** and is not complete until every step has run:
 
 1. **Update every affected document.**
-   - `docs/development/missing-features.md` — coverage numbers and the affected inventory rows/ranked gaps.
-   - `docs/development/game-play-features.md` — status, implemented components, residual gaps, and the current test-suite/test-count metrics.
+   - `docs/development/implementation-status.md` — parity coverage numbers, the affected inventory rows/ranked gaps, the gameplay matrix status, the improvement tracker and the current test-suite/test-count metrics.
    - `docs/development/` — **update the wave document in place** with its Implementation Status and completion notes; keep feature documents directly in `docs/development/`.
    - `README.md` — feature coverage, project structure, and test metrics.
    - `CHANGELOG.md` — add the new phase entry and refresh the Current Status metrics.

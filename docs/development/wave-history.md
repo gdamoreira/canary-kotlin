@@ -48,7 +48,7 @@
 - [Wave 57 — Final Depth Polish](#wave-57)
 - [Wave 58 — Combat Spell Actor, Host/Lua Unification, Known-Creature Set, Codec Fidelity](#wave-58)
 - [Wave 59 — Event Dispatch, Spell Registry, Condition Save, Visibility](#wave-59)
-- [Wave 60 — Repository Improvements (`docs/development/improvements.md`)](#wave-60)
+- [Wave 60 — Repository Improvements (`docs/development/implementation-status.md`)](#wave-60)
 
 ---
 
@@ -61,7 +61,7 @@
 
 ### Goal
 
-Advance the highest-impact gaps from `docs/development/missing-features.md`: the party and VIP player components, a batch of remaining inbound protocol opcodes, and full player inventory persistence.
+Advance the highest-impact gaps from `docs/development/implementation-status.md`: the party and VIP player components, a batch of remaining inbound protocol opcodes, and full player inventory persistence.
 
 ### Tasks
 
@@ -96,11 +96,11 @@ Advance the highest-impact gaps from `docs/development/missing-features.md`: the
 
 ### Post-wave (AGENTS.md §6)
 
-Update `docs/development/missing-features.md`, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
+Update `docs/development/implementation-status.md`, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
 
 ### Completion
 
-Completed. Party system, VIP component, 11 inbound opcodes, and inventory persistence (Flyway V5) implemented and merged; full suite green. See `docs/development/missing-features.md` for updated coverage.
+Completed. Party system, VIP component, 11 inbound opcodes, and inventory persistence (Flyway V5) implemented and merged; full suite green. See `docs/development/implementation-status.md` for updated coverage.
 
 ---
 
@@ -113,7 +113,7 @@ Completed. Party system, VIP component, 11 inbound opcodes, and inventory persis
 
 ### Goal
 
-Continue closing the highest-impact gaps in `docs/development/missing-features.md`: missing player components, the imbuement engine, the prey/task-hunting runtime, and a second batch of inbound opcodes.
+Continue closing the highest-impact gaps in `docs/development/implementation-status.md`: missing player components, the imbuement engine, the prey/task-hunting runtime, and a second batch of inbound opcodes.
 
 ### Tasks
 
@@ -147,11 +147,11 @@ Continue closing the highest-impact gaps in `docs/development/missing-features.m
 
 ### Post-wave (AGENTS.md §6)
 
-Update `docs/development/missing-features.md`, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
+Update `docs/development/implementation-status.md`, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
 
 ### Completion
 
-Completed. Player components (titles/badges/achievements), imbuement engine, prey + task-hunting engines, and inbound opcode batch 2 implemented and merged; full suite green. See `docs/development/missing-features.md` for updated coverage.
+Completed. Player components (titles/badges/achievements), imbuement engine, prey + task-hunting engines, and inbound opcode batch 2 implemented and merged; full suite green. See `docs/development/implementation-status.md` for updated coverage.
 
 ---
 
@@ -198,7 +198,7 @@ Close more high-impact gaps: the monster targeting/loot runtime, monster Lua bin
 
 ### Post-wave (AGENTS.md §6)
 
-Update `docs/development/missing-features.md`, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
+Update `docs/development/implementation-status.md`, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
 
 ### Completion
 
@@ -249,7 +249,7 @@ Close further high-impact gaps: item/tile/container Lua bindings, the Zone engin
 
 ### Post-wave (AGENTS.md §6)
 
-Update `docs/development/missing-features.md`, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
+Update `docs/development/implementation-status.md`, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
 
 ### Completion
 
@@ -263,7 +263,7 @@ Completed. Lua item/tile/container/position bindings, Zone engine, spell engine 
 
 **Status:** In progress
 **Process:** AGENTS.md §6 (plan doc before the wave; docs update + separate commit + push after; plan moved to `Done/`).
-**Tracking:** First section of `docs/development/missing-features.md` §2 (`src/` bootstrap). Goal: turn the `PARTIAL` rows in that section into `IMPLEMENTED`.
+**Tracking:** First section of `docs/development/implementation-status.md` §2 (`src/` bootstrap). Goal: turn the `PARTIAL` rows in that section into `IMPLEMENTED`.
 
 ### Rows being closed
 
@@ -299,11 +299,11 @@ Completed. Lua item/tile/container/position bindings, Zone engine, spell engine 
 
 ### Post-wave (AGENTS.md §6)
 
-Update `docs/development/missing-features.md` (flip the `src/` bootstrap + protobuf rows to `IMPLEMENTED` and refresh coverage), `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
+Update `docs/development/implementation-status.md` (flip the `src/` bootstrap + protobuf rows to `IMPLEMENTED` and refresh coverage), `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
 
 ### Completion
 
-Completed. `src/` bootstrap section implemented: service bootstrap + CLI/signals/crash handler + idempotent shutdown drain, appearances protobuf loader, and `DatabaseTasks`. The `src/` bootstrap and `appearances.proto` rows are now IMPLEMENTED in `docs/development/missing-features.md`.
+Completed. `src/` bootstrap section implemented: service bootstrap + CLI/signals/crash handler + idempotent shutdown drain, appearances protobuf loader, and `DatabaseTasks`. The `src/` bootstrap and `appearances.proto` rows are now IMPLEMENTED in `docs/development/implementation-status.md`.
 
 ---
 
@@ -313,7 +313,7 @@ Completed. `src/` bootstrap section implemented: service bootstrap + CLI/signals
 
 **Status:** In progress
 **Process:** AGENTS.md §6 (plan doc before the wave; docs update + separate commit + push after; plan moved to `Done/`).
-**Tracking:** Second section of `docs/development/missing-features.md` §2 (`src/account/`). Goal: turn the `PARTIAL` rows in that section into `IMPLEMENTED`.
+**Tracking:** Second section of `docs/development/implementation-status.md` §2 (`src/account/`). Goal: turn the `PARTIAL` rows in that section into `IMPLEMENTED`.
 
 ### Rows being closed
 
@@ -343,7 +343,7 @@ Completed. `src/` bootstrap section implemented: service bootstrap + CLI/signals
 
 ### Post-wave (AGENTS.md §6)
 
-Flip the `src/account/` rows to `IMPLEMENTED` in `docs/development/missing-features.md`; update `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
+Flip the `src/account/` rows to `IMPLEMENTED` in `docs/development/implementation-status.md`; update `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
 
 ### Completion
 
@@ -357,7 +357,7 @@ Completed. `src/account/` section implemented: Account auth/session/load/save/pr
 
 **Status:** In progress
 **Process:** AGENTS.md §6 (plan doc before the wave; docs update + separate commit + push after; plan moved to `Done/`).
-**Tracking:** Third section of `docs/development/missing-features.md` §2 (`src/config/`). Goal: turn the `PARTIAL` rows into `IMPLEMENTED`.
+**Tracking:** Third section of `docs/development/implementation-status.md` §2 (`src/config/`). Goal: turn the `PARTIAL` rows into `IMPLEMENTED`.
 
 ### Rows being closed
 
@@ -386,7 +386,7 @@ Completed. `src/account/` section implemented: Account auth/session/load/save/pr
 
 ### Post-wave (AGENTS.md §6)
 
-Flip the `src/config/` rows to `IMPLEMENTED` in `docs/development/missing-features.md`; update `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
+Flip the `src/config/` rows to `IMPLEMENTED` in `docs/development/implementation-status.md`; update `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
 
 ### Completion
 
@@ -400,7 +400,7 @@ Completed. `src/config/` section implemented: `ConfigKeys` (360 keys, exact name
 
 **Status:** In progress
 **Process:** AGENTS.md §6 (plan doc before the wave; docs update + separate commit + push after; plan moved to `Done/`).
-**Tracking:** Fourth section of `docs/development/missing-features.md` §2 (`src/creatures/`, part 1). Goal: turn the covered `PARTIAL`/`MISSING` rows into `IMPLEMENTED`.
+**Tracking:** Fourth section of `docs/development/implementation-status.md` §2 (`src/creatures/`, part 1). Goal: turn the covered `PARTIAL`/`MISSING` rows into `IMPLEMENTED`.
 
 ### Rows being closed
 
@@ -443,7 +443,7 @@ Completed. `src/config/` section implemented: `ConfigKeys` (360 keys, exact name
 
 ### Post-wave (AGENTS.md §6)
 
-Flip the covered `src/creatures/` rows to `IMPLEMENTED` in `docs/development/missing-features.md`; update `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
+Flip the covered `src/creatures/` rows to `IMPLEMENTED` in `docs/development/implementation-status.md`; update `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
 
 ### Completion
 
@@ -504,7 +504,7 @@ Completed. `src/creatures/` part 1: Creature core (outfit/light/speed, hooks, ma
 
 ### Post-wave (AGENTS.md §6)
 
-Flip the covered `src/creatures/` rows to `IMPLEMENTED` in `docs/development/missing-features.md`; update `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
+Flip the covered `src/creatures/` rows to `IMPLEMENTED` in `docs/development/implementation-status.md`; update `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
 
 ### Completion
 
@@ -567,7 +567,7 @@ Completed. Conditions completed, monster runtime (spells/death/defense/walk/desp
 
 ### Post-wave (AGENTS.md §6)
 
-Flip the covered rows to `IMPLEMENTED` in `docs/development/missing-features.md`; update `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
+Flip the covered rows to `IMPLEMENTED` in `docs/development/implementation-status.md`; update `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
 
 ### Completion
 
@@ -624,7 +624,7 @@ Completed. NPC runtime + registry, PvP components, ban/waitlist/livestream, stas
 
 ### Post-wave (AGENTS.md §6)
 
-Flip the covered rows to `IMPLEMENTED` in `docs/development/missing-features.md`; update `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
+Flip the covered rows to `IMPLEMENTED` in `docs/development/implementation-status.md`; update `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
 
 ### Completion
 
@@ -685,7 +685,7 @@ Completed. Player runtime chunk 1 (conditions/spells/cooldowns/PvP/async tasks),
 
 ### Post-wave (AGENTS.md §6)
 
-Flip the covered rows to `IMPLEMENTED` in `docs/development/missing-features.md`; update `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
+Flip the covered rows to `IMPLEMENTED` in `docs/development/implementation-status.md`; update `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
 
 ### Completion
 
@@ -721,7 +721,7 @@ Completed. Player runtime chunk 2 (blessings/containers/harmony), spells+mounts 
 
 ### Post-wave (AGENTS.md §6)
 
-Flip `player.cpp` to `IMPLEMENTED` in `docs/development/missing-features.md` (the `src/creatures/` section is then fully IMPLEMENTED); update `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
+Flip `player.cpp` to `IMPLEMENTED` in `docs/development/implementation-status.md` (the `src/creatures/` section is then fully IMPLEMENTED); update `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
 
 ### Completion
 
@@ -735,7 +735,7 @@ Completed. Player feature hooks (wheel/forge/prey/task-hunting/cyclopedia). The 
 
 **Status:** In progress
 **Process:** AGENTS.md §6 (plan doc before the wave; docs update + separate commit + push after; plan moved to `Done/`).
-**Tracking:** `src/database/` section (newly added to `docs/development/missing-features.md`). Goal: turn the `PARTIAL` rows into `IMPLEMENTED`.
+**Tracking:** `src/database/` section (newly added to `docs/development/implementation-status.md`). Goal: turn the `PARTIAL` rows into `IMPLEMENTED`.
 
 ### Rows being closed
 
@@ -771,7 +771,7 @@ Completed. Player feature hooks (wheel/forge/prey/task-hunting/cyclopedia). The 
 
 ### Post-wave (AGENTS.md §6)
 
-Flip the `src/database/` rows to `IMPLEMENTED` in `docs/development/missing-features.md`; update `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
+Flip the `src/database/` rows to `IMPLEMENTED` in `docs/development/implementation-status.md`; update `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
 
 ### Completion
 
@@ -785,7 +785,7 @@ Completed. Database core (transactions/escaping/retry/size limits), manager (poo
 
 **Status:** In progress
 **Process:** AGENTS.md §6 (plan doc before the wave; docs update + separate commit + push after; plan moved to `Done/`).
-**Tracking:** `src/enums/` section (newly added to `docs/development/missing-features.md`). All rows are already IMPLEMENTED except `container_type.hpp`/`object_category.hpp`.
+**Tracking:** `src/enums/` section (newly added to `docs/development/implementation-status.md`). All rows are already IMPLEMENTED except `container_type.hpp`/`object_category.hpp`.
 
 ### Row being closed
 
@@ -807,7 +807,7 @@ Completed. Database core (transactions/escaping/retry/size limits), manager (poo
 
 ### Post-wave (AGENTS.md §6)
 
-Flip the `src/enums/` rows to `IMPLEMENTED` in `docs/development/missing-features.md`; update `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
+Flip the `src/enums/` rows to `IMPLEMENTED` in `docs/development/implementation-status.md`; update `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
 
 ### Completion
 
@@ -821,7 +821,7 @@ Completed. `ContainerSpecial_t` + `ObjectCategory_t` ported. The `src/enums/` se
 
 **Status:** In progress
 **Process:** AGENTS.md §6 (plan doc before the wave; docs update + separate commit + push after; plan moved to `Done/`).
-**Tracking:** `src/game/` section (10 rows) + `docs/development/missing-features.md` §4 (65 missing inbound opcodes, 133 missing outbound senders).
+**Tracking:** `src/game/` section (10 rows) + `docs/development/implementation-status.md` §4 (65 missing inbound opcodes, 133 missing outbound senders).
 
 ### Group A — `src/game/` section (4 tasks)
 
@@ -881,7 +881,7 @@ VIP, cyclopedia, forge browse/history, prey, task hunting, bosstiary, stash, sto
 
 ### Post-wave (AGENTS.md §6)
 
-Flip the `src/game/` rows and update §1/§3/§4 in `docs/development/missing-features.md`; update `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
+Flip the `src/game/` rows and update §1/§3/§4 in `docs/development/implementation-status.md`; update `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
 
 ### Completion
 
@@ -942,7 +942,7 @@ Existing migrations: V1–V9. Each agent uses its assigned versions only; if no 
 
 ### Post-wave (AGENTS.md §6)
 
-Flip all `src/io/` rows to `IMPLEMENTED`; update `docs/development/missing-features.md` §1–§3, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
+Flip all `src/io/` rows to `IMPLEMENTED`; update `docs/development/implementation-status.md` §1–§3, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
 
 ### Completion
 
@@ -996,7 +996,7 @@ Completed. All 9 `src/io/` rows are now IMPLEMENTED (iologindata 24/24, iomapser
 
 ### Post-wave (AGENTS.md §6)
 
-Flip all `src/items/` rows to `IMPLEMENTED`; update `docs/development/missing-features.md` §1–§3, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
+Flip all `src/items/` rows to `IMPLEMENTED`; update `docs/development/implementation-status.md` §1–§3, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
 
 ### Completion
 
@@ -1057,7 +1057,7 @@ Do not edit another agent's files; document cross-file needs in the report.
 
 ### Post-wave (AGENTS.md §6)
 
-Flip all `src/map/` rows to `IMPLEMENTED`; update `docs/development/missing-features.md` §1–§3, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
+Flip all `src/map/` rows to `IMPLEMENTED`; update `docs/development/implementation-status.md` §1–§3, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
 
 ### Completion
 
@@ -1118,7 +1118,7 @@ Canary `src/lua/functions/items/item_type_functions.cpp` (57) + `src/lua/functio
 
 ### Post-wave (AGENTS.md §6)
 
-Update the `src/lua/` row counts in `docs/development/missing-features.md` (partial progress is recorded honestly); update `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
+Update the `src/lua/` row counts in `docs/development/implementation-status.md` (partial progress is recorded honestly); update `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move this document to `docs/development/done/`; commit the docs separately and push to `origin`.
 
 ### Completion
 
@@ -1168,7 +1168,7 @@ Each agent adds its own install line(s) in `lua/runtime/WorldLuaOperations.kt` (
 
 ### Post-wave (§6)
 
-Update the `src/lua/` rows and §1–§3; update `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+Update the `src/lua/` rows and §1–§3; update `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
 
 ### Completion
 
@@ -1211,7 +1211,7 @@ Part 2 completed: player 277/305, monster/npc/weapon/spell/combat complete, libr
 
 ### Post-wave (§6)
 
-Flip the `kv`/`lib`/`utils`/`protobuf`/`server` rows and update `src/lua/` + `game.cpp` rows; update §1–§3, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+Flip the `kv`/`lib`/`utils`/`protobuf`/`server` rows and update `src/lua/` + `game.cpp` rows; update §1–§3, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
 
 ### Completion
 
@@ -1254,7 +1254,7 @@ Completed: kv, lib, utils, protobuf (kv.proto), server edge, lua remainder (play
 
 ### Post-wave (§6)
 
-Flip the 3 PARTIAL rows if closed; update §1–§4 (sender counts), `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+Flip the 3 PARTIAL rows if closed; update §1–§4 (sender counts), `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
 
 ### Completion
 
@@ -1296,7 +1296,7 @@ Completed: `luascript.cpp`/`script_environment.cpp` row flipped to IMPLEMENTED; 
 
 ### Post-wave (§6)
 
-Update §1–§4, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+Update §1–§4, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
 
 ### Completion
 
@@ -1338,7 +1338,7 @@ Completed: production Game wiring, 4 more opcode groups applied, 34 misc senders
 
 ### Post-wave (§6)
 
-Update §1–§4, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+Update §1–§4, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
 
 ### Completion
 
@@ -1380,7 +1380,7 @@ Completed: all 187 senders, full opcode application, game.cpp market/forge/wheel
 
 ### Post-wave (§6)
 
-Update §1–§3, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+Update §1–§3, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
 
 ### Completion
 
@@ -1422,7 +1422,7 @@ Completed: game.cpp remainder batch, monster host wiring, player host wiring, Pr
 
 ### Post-wave (§6)
 
-Update §1–§3, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+Update §1–§3, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
 
 ### Completion
 
@@ -1462,7 +1462,7 @@ Completed: combat pipeline, player depth 3 (596/821), composition plumbing, mons
 
 ### Post-wave (§6)
 
-Update §1–§3, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+Update §1–§3, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
 
 ### Completion
 
@@ -1500,7 +1500,7 @@ Completed: game remainder 2 (~84 members left), creature hooks, player depth 4 (
 
 ### Post-wave (§6)
 
-Update §1–§3, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+Update §1–§3, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
 
 ### Completion
 
@@ -1538,7 +1538,7 @@ Completed: game remainder 3 (~39 members left), player depth 5 + async follow (6
 
 ### Post-wave (§6)
 
-Update §1–§3, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+Update §1–§3, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
 
 ### Completion
 
@@ -1576,7 +1576,7 @@ Completed: game.cpp final batch (7 members left), player depth 6 (672/821), comp
 
 ### Post-wave (§6)
 
-Update §1–§3, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+Update §1–§3, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
 
 ### Completion
 
@@ -1614,7 +1614,7 @@ Completed: all 7 final `Game::` members (game.cpp row IMPLEMENTED), player depth
 
 ### Post-wave (§6)
 
-Update §1–§3, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+Update §1–§3, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
 
 ### Completion
 
@@ -1652,7 +1652,7 @@ Completed: player depth 8 (733/821), host bindings, persistence depth (live save
 
 ### Post-wave (§6)
 
-Update §1–§3, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+Update §1–§3, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
 
 ### Completion
 
@@ -1690,7 +1690,7 @@ Completed: composition one-liners, player depth 9 (747/821), persistence guard, 
 
 ### Post-wave (§6)
 
-Update §1–§3, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+Update §1–§3, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
 
 ### Completion
 
@@ -1728,7 +1728,7 @@ Completed: composition root final, player final depth (754/821), persistence fin
 
 ### Post-wave (§6)
 
-Update §1–§3, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+Update §1–§3, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
 
 ### Completion
 
@@ -1768,7 +1768,7 @@ Note A1/A4 share `GameHandler.kt`; A1 does the sink install, A4 the login load. 
 
 ### Post-wave (§6)
 
-Update §1–§3, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+Update §1–§3, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
 
 ### Completion
 
@@ -1844,7 +1844,7 @@ Completed: registry injection, production spawn path, persistence sub-loads (V19
 
 ### Post-wave (§6)
 
-Update §1–§3, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+Update §1–§3, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
 
 ### Completion
 
@@ -1882,7 +1882,7 @@ Completed: datapack monster-type registration at boot (67/67), outfit sub-load +
 
 ### Post-wave (§6)
 
-Update §1–§3, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+Update §1–§3, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
 
 ### Completion
 
@@ -1920,7 +1920,7 @@ Completed: CombatSpell actor + nested loot + inline callbacks, host/Lua unificat
 
 ### Post-wave (§6)
 
-Update §1–§3, `docs/development/game-play-features.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
+Update §1–§3, `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`; move plan to `Done/`; separate docs commit; push.
 
 ### Completion
 
@@ -1930,13 +1930,13 @@ Completed: monster event dispatch (14), spell registry hit, condition save + V21
 
 <a id="wave-60"></a>
 
-## Wave 60 — Repository Improvements (`docs/development/improvements.md`)
+## Wave 60 — Repository Improvements (`docs/development/implementation-status.md`)
 
 **Status:** Completed (2026-10-14) — all 8 improvements merged and pushed
 **Decisions (user):** I2 keep upstream download URLs annotated · I7 copy datapack verbatim · I4 full 45-file port · I8 keep root compose + add docker/ guides · I5 **MIT license** (user-elected; upstream Canary is GPL-2.0 — provenance noted in README acknowledgments) · Q1-Q7 resolved as listed
-**Source of requirements:** `docs/development/improvements.md` (user-authored)
+**Source of requirements:** `docs/development/implementation-status.md` (user-authored)
 **Baseline:** `main` @ `cf6496d`; 689 suites / 7620 tests green; zero Kotlin warnings
-**Rules from improvements.md:** every improvement documented in `docs/`; **each improvement committed as a separate commit**
+**Rules from implementation-status.md:** every improvement documented in `docs/`; **each improvement committed as a separate commit**
 
 ---
 
@@ -1967,7 +1967,7 @@ All items are **sequential on `main`** (they overlap files; parallel worktrees w
 - `AGENTS.md` (§5.1 template: "Canary Repository Root: `/Users/<name>/.projects/canary`")
 - `docs/development/TEMPLATE_FEATURE.md` (same template)
 - `docs/development/done/050-…` – `docs/development/done/064-…` (15 feature docs)
-- `docs/development/missing-features.md`, `docs/development/improvements.md`
+- `docs/development/implementation-status.md`, `docs/development/implementation-status.md`
 - `src/main`: `systems/hireling/Hireling.kt`, `systems/hireling/HirelingRegistry.kt`, `systems/rewardchest/{ReturnValue,Reward,RewardChest}.kt` (KDoc "Source:" lines)
 - ~35 test files (KDoc "Canary source of truth / Source of truth / Source" lines)
 
@@ -1976,7 +1976,7 @@ All items are **sequential on `main`** (they overlap files; parallel worktrees w
 **Task:**
 1. Mechanical sweep: `/Users/<name>/.projects/canary` → `../.projects/canary`, preserving subpaths and `:line` suffixes.
 2. Update `AGENTS.md` §5.1 and `docs/development/TEMPLATE_FEATURE.md` so the **convention is relative going forward** (prevents recurrence).
-3. Reword the `docs/development/improvements.md` directive line to use `/Users/<name>` placeholder (self-referential literal otherwise defeats the check).
+3. Reword the `docs/development/implementation-status.md` directive line to use `/Users/<name>` placeholder (self-referential literal otherwise defeats the check).
 
 **Validation:**
 - `git grep -nE "Users/[A-Za-z0-9._-]+"` → **0 matches**.
@@ -2003,7 +2003,7 @@ All items are **sequential on `main`** (they overlap files; parallel worktrees w
 | `OpcodeApplicationMarketRouterTest.kt` | 1 | test string | Check context → change |
 | `data-canary/scripts/actions/objects/world_board.lua` | 2 | datapack Lua text (`github.com/opentibiabr` org URL, donation link) | **Gameplay content** → Q1 |
 | `data-canary/world/canary.otbm` | 1 (binary) | string inside the map binary | Do not edit binary → leave |
-| `docs/development/improvements.md` | 1 | the directive itself | Leave |
+| `docs/development/implementation-status.md` | 1 | the directive itself | Leave |
 
 **Decision (Q1):** functional map/config download URLs in `MapDownload.kt` fetch artifacts that only exist on the upstream repo. Pointing them at the fork breaks downloads unless the fork hosts releases. Options: keep upstream for the *data source* with an explicit comment, or fork-all + publish artifacts.
 
@@ -2139,7 +2139,7 @@ All items are **sequential on `main`** (they overlap files; parallel worktrees w
 1. **Sequential commits on `main`**, one per improvement, in order I1 → I8.
 2. Docs for each improvement ride in that improvement's commit (satisfies "each improvement as separate commits" + "all improvements documented in `docs/`"). This plan is committed before starting (§6).
 3. Full `./gradlew clean test` after I1, I3, I7 and a final run; zero warnings policy unchanged.
-4. `CHANGELOG.md` gains one "Repository Improvements" phase entry; `docs/development/improvements.md` gets a status/log table as items complete (V-style record), or move to `docs/development/done/` style only if requested.
+4. `CHANGELOG.md` gains one "Repository Improvements" phase entry; `docs/development/implementation-status.md` gets a status/log table as items complete (V-style record), or move to `docs/development/done/` style only if requested.
 5. No parallel worktrees (file overlap), except I7 could be isolated if desired (pure add).
 
 ### Verification matrix
@@ -2180,6 +2180,6 @@ All items are **sequential on `main`** (they overlap files; parallel worktrees w
 ### Completion (2026-10-14)
 
 All eight improvements landed as separate commits on `main` (see the status
-table in `docs/development/improvements.md`), ending with **690 suites / 7627 tests green**
+table in `docs/development/implementation-status.md`), ending with **690 suites / 7627 tests green**
 and zero Kotlin warnings. This plan moves to `docs/development/done/`.
 

@@ -156,10 +156,10 @@ canary-kotlin/
 │   ├── docker/            # Docker quickstart guide
 │   ├── systems/           # Engine subsystem contracts (upstream-adapted)
 │   ├── development/       # Development docs (agents write here; no lifecycle folders)
+│   │   ├── implementation-status.md  # Parity inventory, 56-feature matrix, audit, improvements
 │   │   ├── architecture-and-roadmap.md  # Architecture mapping, parity strategy, roadmap
 │   │   ├── feature-history.md    # Aggregated 64 feature specifications (001–064)
-│   │   ├── wave-history.md       # Aggregated wave plans (20–60)
-│   │   └── game-play-features.md # Master 56-feature matrix (all implemented) & residual gaps
+│   │   └── wave-history.md       # Aggregated wave plans (20–60)
 ├── src/
 │   ├── main/
 │   │   ├── kotlin/org/opentibia/canary/
@@ -219,11 +219,11 @@ Consequently, each of the 15 advanced features (see `docs/development/feature-hi
 
 ## 🧩 Feature Coverage
 
-**All 56 Canary gameplay systems are implemented** (`docs/development/game-play-features.md`). The 15 advanced systems (`docs/development/feature-history.md`) are delivered as faithful C++ engine cores in `systems/<feature>/` with application services and protocol parsers/serializers, wired where applicable:
+**All 56 Canary gameplay systems are implemented** (`docs/development/implementation-status.md`). The 15 advanced systems (`docs/development/feature-history.md`) are delivered as faithful C++ engine cores in `systems/<feature>/` with application services and protocol parsers/serializers, wired where applicable:
 
 `wheel` · `forge` · `bestiary` · `gamestore` · `hazard` · `dailyreward` · `rewardchest` · `familiar` · `hireling` · `mount` · `proficiency` · `soulwar` · `raid` · `offlinetraining` · `concoction`
 
-Protocol parsers/serializers for wheel (`0x61`/`0x62`/`0xE7`), offline training (`0x74`), reward chest (`0xFF`), bestiary (`0xE1`–`0xE4`), forge (`0xBF`) and weapon proficiencies are routed through `GamePacketRouter` on the WorldCommit lane. Residual per-feature parity gaps (protocol sends, deeper persistence, Lua-driven side effects) are tracked in `docs/development/game-play-features.md`.
+Protocol parsers/serializers for wheel (`0x61`/`0x62`/`0xE7`), offline training (`0x74`), reward chest (`0xFF`), bestiary (`0xE1`–`0xE4`), forge (`0xBF`) and weapon proficiencies are routed through `GamePacketRouter` on the WorldCommit lane. Residual per-feature parity gaps (protocol sends, deeper persistence, Lua-driven side effects) are tracked in `docs/development/implementation-status.md`.
 
 ---
 
@@ -233,7 +233,7 @@ The port is a faithful, incremental transcription of Canary's C++ engine. Two vi
 
 | View | Progress |
 |---|---|
-| **Tracked gameplay features** (`docs/development/game-play-features.md`) | **56 / 56 (100%)** — engine scope, tested |
+| **Tracked gameplay features** (`docs/development/implementation-status.md`) | **56 / 56 (100%)** — engine scope, tested |
 | **Inbound `ProtocolGame` opcodes** | **141 / 141 decoded (100%)**; ~46 fully applied (~33%) |
 | **Outbound `ProtocolGame` senders** | 187 / 187 (**100%**) |
 | **Lua bindings** | 1,246 / 1,246 method registrations (**100%**) |
@@ -243,7 +243,7 @@ The port is a faithful, incremental transcription of Canary's C++ engine. Two vi
 | **Persistence** | **~80%** |
 | **Estimated full-parity completion** | **~99.5%** |
 
-The 56 tracked gameplay features are engine-complete, but Canary's full surface (`player.cpp` ~765 methods, `game.cpp` ~352 methods, ~1,310 Lua registrations, ~105 opcodes) is far larger. The complete per-subsystem inventory and ranked remaining work lives in **[`docs/development/missing-features.md`](docs/development/missing-features.md)**.
+The 56 tracked gameplay features are engine-complete, but Canary's full surface (`player.cpp` ~765 methods, `game.cpp` ~352 methods, ~1,310 Lua registrations, ~105 opcodes) is far larger. The complete per-subsystem inventory and ranked remaining work lives in **[`docs/development/implementation-status.md`](docs/development/implementation-status.md)**.
 
 ---
 
@@ -278,9 +278,7 @@ The documentation hub is [`docs/README.md`](docs/README.md). Highlights:
 | [`docs/development.md`](docs/development.md) | Gradle workflow and coding standards |
 | [`docs/operations.md`](docs/operations.md) | Deployment, monitoring, backups |
 | [`docs/docker/quickstart-for-beginners.md`](docs/docker/quickstart-for-beginners.md) | Docker quickstart |
-| [`docs/development/missing-features.md`](docs/development/missing-features.md) | Parity inventory and ranked remaining work |
-| [`docs/development/game-play-features.md`](docs/development/game-play-features.md) | 56-feature gameplay matrix |
-| [`docs/development/improvements.md`](docs/development/improvements.md) | Repository improvement tracker |
+| [`docs/development/implementation-status.md`](docs/development/implementation-status.md) | Parity inventory, gameplay matrix, audit and improvement tracker |
 
 ---
 
@@ -331,7 +329,7 @@ change seeded accounts.
 - **Verification**: live differential harness (packet-capture A/B replay against
   a running Canary instance) — the strongest remaining parity proof.
 - **Depth closure**: work through the ranked gaps in
-  [`docs/development/missing-features.md`](docs/development/missing-features.md) §3 (event fanout,
+  [`docs/development/implementation-status.md`](docs/development/implementation-status.md) §3 (event fanout,
   spell-actor execution, condition payload, visibility overrides).
 - **Operations**: expanded CI (matrix JDK builds, Docker smoke), metrics
   exporter parity.
@@ -351,7 +349,7 @@ change seeded accounts.
 ## 🐞 Known Issues
 
 - No live differential verification against Canary yet (unit/integration tests
-  only) — see [`docs/development/missing-features.md`](docs/development/missing-features.md) §3.
+  only) — see [`docs/development/implementation-status.md`](docs/development/implementation-status.md) §3.
 - Legacy protocol profiles (CipSoft860/old-protocol branches) are partially
   unmodeled; the current profile is fully wired.
 - Some monster event fanout call sites (normal say/yell spectators, spell-damage

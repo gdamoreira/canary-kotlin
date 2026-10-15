@@ -27,10 +27,7 @@ This directory is the main documentation hub for **Canary Kotlin Edition**.
 | [`lua-api/lua_api.md`](lua-api/lua_api.md) | Lua API reference (the API surface is unchanged because Lua stays Lua) |
 | [`maps/startup-loading-performance.md`](maps/startup-loading-performance.md) | Kotlin map loader pipeline (OTBM, appearance protobuf, MapDownload) and startup notes |
 | [`systems/README.md`](systems/README.md) | Cross-cutting system contracts |
-| [`development/canary-codebase-implementation-audit.md`](development/canary-codebase-implementation-audit.md) | Per-subsystem audit of the C++ to Kotlin port |
-| [`development/missing-features.md`](development/missing-features.md) | Complete per-subsystem inventory and ranked remaining work |
-| [`development/game-play-features.md`](development/game-play-features.md) | 56-feature gameplay matrix and residual parity gaps |
-| [`development/improvements.md`](development/improvements.md) | Repository improvement backlog |
+| [`development/implementation-status.md`](development/implementation-status.md) | Parity inventory, gameplay matrix, codebase audit and improvement tracker |
 | [`development/architecture-and-roadmap.md`](development/architecture-and-roadmap.md) | Architecture mapping, parity strategy and roadmap |
 | [`development/feature-history.md`](development/feature-history.md) | All 64 feature specifications (001–064) |
 | [`development/wave-history.md`](development/wave-history.md) | All wave plans (20–60) |
@@ -82,11 +79,11 @@ docs/
     ├── plan/                       # Architecture guidelines and wave plans
     ├── implementing/               # Features actively in progress
     ├── done/                       # Completed specifications and wave plans
-    ├── missing-features.md
-    ├── game-play-features.md
-    ├── improvements.md
+    ├── implementation-status.md
+    ├── implementation-status.md
+    ├── implementation-status.md
     ├── TEMPLATE_FEATURE.md
-    ├── canary-codebase-implementation-audit.md
+    ├── implementation-status.md
     └── shared-build-cache.md
 ```
 
@@ -149,9 +146,9 @@ was ported and adapted. The mapping below records every source and target file.
 | `canary-logo.png`, `canary-logo-transparent.png` | `canary-logo.png`, `canary-logo-transparent.png` | Branding assets copied byte-for-byte (binary files carry no in-file provenance line). |
 
 Nothing existing in `canary-kotlin/docs` was removed or replaced by this port:
-`development/missing-features.md`, `development/game-play-features.md`,
-`development/improvements.md`, `development/TEMPLATE_FEATURE.md`,
-`development/canary-codebase-implementation-audit.md` and the
+`development/implementation-status.md`, `development/implementation-status.md`,
+`development/implementation-status.md`, `development/TEMPLATE_FEATURE.md`,
+`development/implementation-status.md` and the
 `development/`, `development/`, `development/`
 folders remain the authoritative Kotlin-specific documents.
 

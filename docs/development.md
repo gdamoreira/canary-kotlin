@@ -552,7 +552,7 @@ This is the AGENTS.md §5 mandate. Never invent or assume upstream file paths.
 Before each wave, create `docs/development/wave-<N>-<topic>.md`. After each wave
 (AGENTS.md §6):
 
-1. Update `docs/development/missing-features.md`, `docs/development/game-play-features.md`,
+1. Update `docs/development/implementation-status.md`, `docs/development/implementation-status.md`,
    `README.md` and `CHANGELOG.md`.
 2. Update the wave document in place in `docs/development/` (there is no
    plan/implementing/done lifecycle folder).
