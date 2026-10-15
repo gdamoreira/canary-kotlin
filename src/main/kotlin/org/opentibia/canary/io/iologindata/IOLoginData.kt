@@ -8,6 +8,7 @@ import org.opentibia.canary.creatures.OpenContainer
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerPronoun_t
 import org.opentibia.canary.creatures.Slots_t
+import org.opentibia.canary.creatures.grouping.Group
 import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.monsters.Monsters
@@ -217,6 +218,24 @@ class IOLoginData(
      * return, leaving the persisted skills unapplied.
      */
     private val vocations: Vocations? = null,
+    /**
+     * `g_game().groups.getGroup(id)` registry read (`Groups::getGroup`,
+     * src/creatures/players/grouping/groups.cpp:78-169) that
+     * `IOLoginDataLoad::loadPlayerBasicInfo`
+     * (src/io/functions/iologindata_load_player.cpp:140-145) resolves the
+     * persisted `players.group_id` through before calling `Player::setGroup`
+     * (src/creatures/players/player.hpp:519-521). The port replaces the global
+     * with injection (AGENTS.md 1.1); the composition root binds the booted
+     * `Groups` registry. Unwired, or with an id the registry does not know, the
+     * player keeps its default group exactly like the `getGuild` miss of
+     * `IOLoginDataSubloads.loadPlayerGuild` — group 1
+     * (`GroupType::GROUP_TYPE_NORMAL`,
+     * src/enums/account_group_type.hpp:17) therefore stays the port default
+     * until the `Groups::load` XML port lands (PARITY GAP: Canary fails the
+     * load for an id no group matches, while the port cannot fail without a
+     * registry).
+     */
+    private val groups: (Int) -> Group? = { null },
     /**
      * The six `IOLoginDataLoad` sub-loads of `IOLoginData::loadPlayer`
      * (conditions, skull, guild, storage map, VIP and exiva restrictions;
@@ -1354,6 +1373,12 @@ class IOLoginData(
 
     private fun loadPlayerBasicInfo(player: Player, record: PlayerRecord) {
         player.vocationId = record.vocation
+        // `IOLoginDataLoad::loadPlayerBasicInfo` group load
+        // (src/io/functions/iologindata_load_player.cpp:140-145): resolve the
+        // persisted `group_id` through the groups registry and `setGroup` it.
+        // A miss (unwired registry or unknown id) keeps the player's current
+        // group — group 1 is `GROUP_TYPE_NORMAL` and keeps the default.
+        groups(record.groupId)?.let { player.group = it }
         player.level = maxOf(1, record.level)
         player.health = record.health
         player.maxHealth = record.healthMax
