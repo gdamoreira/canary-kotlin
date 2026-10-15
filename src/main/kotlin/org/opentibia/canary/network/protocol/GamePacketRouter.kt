@@ -8,6 +8,7 @@ import org.opentibia.canary.game.QuickLootFilter_t
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.io.IOMarket
+import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemTypeRegistry
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.LuaEventDispatcher
@@ -276,7 +277,19 @@ object GamePacketRouter {
 
                 // Look At
                 0x8C, 0x8D -> {
-                    LookPacketHandler.handleLook(player, buffer, context.map) != null
+                    // The `Item::getDescription` composition seams: the booted
+                    // `Item::items` registry, the `g_spells()`/`g_vocations()`
+                    // registries injected onto the player at login and
+                    // `g_game().getObjectCategory`.
+                    LookPacketHandler.handleLook(
+                        player,
+                        buffer,
+                        context.map,
+                        items = context.itemTypes,
+                        spells = player.spells,
+                        vocations = player.vocations,
+                        objectCategory = context.game?.let { game -> { item: Item -> game.getObjectCategory(item) } },
+                    ) != null
                 }
 
                 // Quick loot: 0x8F parseQuickLoot / 0x90 parseLootContainer /

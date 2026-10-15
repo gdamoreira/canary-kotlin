@@ -134,8 +134,15 @@ interface ItemOperations {
      */
     fun moveTo(item: Any, destination: Any?, position: Position?, flags: Long): Boolean = false
 
-    /** Mirrors `item:getDescription(distance)`; empty when no description is modeled. */
-    fun getDescription(item: Any, distance: Int): String = ""
+    /**
+     * Mirrors `item:getDescription(distance)` through the ported renderer
+     * (`ItemFunctions::luaItemGetDescription`, item_functions.cpp:854-864 ->
+     * `Item::getDescription(int32_t)`, item.cpp:3352-3355); the default backs
+     * the real [Item], so the renderer's type and text are never dropped. The
+     * world seam overrides it with the booted `Item::items` registry.
+     */
+    fun getDescription(item: Any, distance: Int): String =
+        (item as? Item)?.getDescription(distance) ?: ""
 
     /** Mirrors `item:isContainer()`; false when container status is not modeled. */
     fun isContainer(item: Any): Boolean = false

@@ -229,7 +229,7 @@ class WorldLuaOperations(
 
     val creature: CreatureOperations = WorldCreatureOperations()
 
-    val item: ItemOperations = WorldItemOperations(itemIdsByName, itemAttributeIdsByName)
+    val item: ItemOperations = WorldItemOperations(itemIdsByName, itemAttributeIdsByName, itemTypes)
 
     val itemType: ItemTypeOperations = WorldItemTypeOperations(itemTypes, itemIdsByName)
 
@@ -1099,6 +1099,7 @@ class WorldCreatureOperations : CreatureOperations {
 class WorldItemOperations(
     private val itemIdsByName: Map<String, Int> = emptyMap(),
     private val itemAttributeIdsByName: Map<String, Int> = emptyMap(),
+    private val itemTypes: ItemTypeRegistry? = null,
 ) : ItemOperations {
     /** `Item::setActor` flags keyed by instance identity; released with the item. */
     private val actors = WeakHashMap<Any, Boolean>()
@@ -1157,6 +1158,20 @@ class WorldItemOperations(
     override fun getPluralName(item: Any): String = stringAttribute(item, ItemAttribute.PLURALNAME)
 
     override fun getArticle(item: Any): String = stringAttribute(item, ItemAttribute.ARTICLE)
+
+    /**
+     * Mirrors `ItemFunctions::luaItemGetDescription` (item_functions.cpp:854-864)
+     * over `Item::getDescription(int32_t)` (item.cpp:3352-3355): the receiver's
+     * type resolves through the booted `Item::items` registry like the C++
+     * `items[id]` lookup, falling back to the item's own type. The
+     * `g_spells()`/`g_vocations()`/`Game::getObjectCategory` seams have no
+     * composition at this layer (PARITY GAP) and stay absent.
+     */
+    override fun getDescription(item: Any, distance: Int): String {
+        val target = item as? Item ?: return ""
+        val itemType = itemTypes?.get(target.id) ?: target.type ?: ItemType(target.id, "")
+        return Item.getDescription(itemType, distance, target, items = itemTypes)
+    }
 
     override fun hasAttribute(item: Any, attribute: Int): Boolean {
         val target = item as? Item ?: return false
