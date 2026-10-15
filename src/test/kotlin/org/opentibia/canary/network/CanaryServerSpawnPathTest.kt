@@ -118,6 +118,51 @@ class CanaryServerSpawnPathTest {
     }
 
     @Test
+    fun `the booted spawn path dispatches the captured onSpawn through the world host`() {
+        // `Monster::onSpawn(position)` (monster.cpp:627-648) is dispatched by
+        // `SpawnMonster::spawnMonster` (spawn_monster.cpp:220) through the
+        // composition root's `monsterPipelinesHost.onSpawn` binding, at the
+        // block position and after the placement/direction/spawn-owner wiring.
+        val environment = LuaEnvironment().apply { initState() }
+        val registered = Monsters()
+        environment.worldOperations!!.attachMonsters(registered)
+        environment.loadChunk(
+            """
+            local mType = Game.createMonsterType("Rat")
+            spawnCount = 0
+            spawnX = 0
+            mType.onSpawn = function(monster, spawnPosition)
+                spawnCount = spawnCount + 1
+                spawnX = spawnPosition.x
+            end
+            """.trimIndent(),
+        )
+        val service = MonsterComputeService()
+        service.start(MonsterComputeConfig(configuredThreads = 0, capacity = 16, hardwareConcurrency = 1))
+        var composed: CanaryServer? = null
+        try {
+            composed = CanaryServer(
+                loginPort = 0,
+                gamePort = 0,
+                gameMap = gameMap,
+                dispatcher = dispatcher,
+                configManager = ConfigManager(keyMap = ConfigKeys.all.associateWith { it.luaIdentifier }),
+                luaEnvironment = environment,
+                monsters = registered,
+                monsterComputeService = service,
+            )
+            composed.start()
+            awaitLane()
+
+            assertThat(environment.getGlobal("spawnCount").toint()).isEqualTo(1)
+            assertThat(environment.getGlobal("spawnX").toint()).isEqualTo(spawnPosition.x)
+        } finally {
+            composed?.stop()
+            service.shutdown()
+        }
+    }
+
+    @Test
     fun `boot injects the creature event registry lookup into the monster host`() {
         // `Creature::registerCreatureEvent` (creature.cpp:1674-1693) validates
         // the name through `g_creatureEvents().getEventByName` (creatureevent.cpp:43-52);

@@ -271,6 +271,7 @@ class SpawnMonsterTest {
         val rat = MonsterType("Rat", isBlockable = true)
         val pos = Position(100, 100, 7)
         val spawned = mutableListOf<Pair<Monster, Position>>()
+        val directionsAtSpawn = mutableListOf<Direction>()
         val spawn = SpawnMonster(
             centerPos = pos,
             radius = 3,
@@ -278,13 +279,18 @@ class SpawnMonsterTest {
             monsterFactory = factory,
             scheduler = scheduler,
             now = { now },
-            onMonsterSpawn = { monster, position -> spawned.add(monster to position) },
+            onMonsterSpawn = { monster, position ->
+                spawned.add(monster to position)
+                directionsAtSpawn.add(monster.direction)
+            },
         )
         spawn.addMonster("Rat", pos, Direction.North, 2000L)
 
         spawn.startup()
 
         assertThat(spawned).containsExactly(factory.created.single() to pos)
+        // The C++ dispatch point is after `monster->setDirection(sb.direction)`.
+        assertThat(directionsAtSpawn).containsExactly(Direction.North)
 
         val first = spawn.spawnedMonsterMap[1]!!
         now = 500
