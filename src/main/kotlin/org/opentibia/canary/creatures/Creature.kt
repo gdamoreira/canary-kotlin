@@ -196,6 +196,17 @@ abstract class Creature(
     /** `Creature::isPushable()` (src/creatures/creature.hpp:207-209); `getWalkDelay()` is a PARITY GAP. */
     override fun isPushable(): Boolean = true
 
+    /** `Creature::moveLocked` (src/creatures/creature.hpp:939). */
+    private var moveLocked: Boolean = false
+
+    /** `Creature::isMoveLocked()` (src/creatures/creature.hpp:189-191). */
+    fun isMoveLocked(): Boolean = moveLocked
+
+    /** `Creature::setMoveLocked()` (src/creatures/creature.hpp:192-194). */
+    fun setMoveLocked(locked: Boolean) {
+        moveLocked = locked
+    }
+
     /** `Creature::getDescription(int32_t)` is implemented by Player/Monster/Npc; the base placeholder is a PARITY GAP. */
     override fun getDescription(lookDistance: Int): String = ""
 

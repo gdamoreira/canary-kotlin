@@ -343,7 +343,11 @@ class TileTest {
 
     @Test
     fun `queryAdd occupancy skips a ghost player but keeps normal creatures blocking`() {
-        // tile.cpp:850/911: only non-ghost creatures block the tile occupancy.
+        // tile.cpp:786-792: the player branch routes the occupancy through
+        // `Player::canWalkthrough`, which always passes a ghost occupant
+        // (player.cpp:1426) and denies a visible one (the level-1 walker stays
+        // inside the legacy walkthrough zone but the ground is not a walkStack
+        // tile, player.cpp:1455-1458).
         val tile = tileWithGround()
         val ghost = creature(1, "Ghost").apply { switchGhostMode() }
         tile.addThing(ghost)
@@ -351,7 +355,7 @@ class TileTest {
         assertThat(tile.queryAdd(INDEX_WHEREEVER, creature(2), 1, 0)).isEqualTo(ReturnValue.NOERROR)
 
         tile.addThing(creature(3, "Solid"))
-        assertThat(tile.queryAdd(INDEX_WHEREEVER, creature(4), 1, 0)).isEqualTo(ReturnValue.NOTENOUGHROOM)
+        assertThat(tile.queryAdd(INDEX_WHEREEVER, creature(4), 1, 0)).isEqualTo(ReturnValue.NOTPOSSIBLE)
     }
 
     @Test
