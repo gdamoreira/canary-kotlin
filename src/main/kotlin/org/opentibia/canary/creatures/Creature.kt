@@ -3434,23 +3434,35 @@ class Player(
     }
 
     /**
-     * `Player::hasFlag` (player.cpp:7853-7855) — port of the group flag lookup.
-     * Canary resolves flags from `Group::flags` (`groups.hpp:16`); the port's
-     * [Group] does not model the array yet, so the flags are held on the player.
+     * Fallback flag store used only while no [Group] is resolved; Canary always
+     * has a group (`Player::group`, player.hpp:1759) and never models a local
+     * set, so this is a port-only stand-in for directly constructed players
+     * (tooling/tests).
      */
     private val playerFlags = mutableSetOf<PlayerFlags_t>()
 
-    /** `Player::hasFlag` (player.cpp:7853-7855). */
-    fun hasFlag(flag: PlayerFlags_t): Boolean = flag in playerFlags
+    /** `Player::hasFlag` (player.cpp:7853-7855): `group->flags[flag]`. */
+    fun hasFlag(flag: PlayerFlags_t): Boolean =
+        group?.flags?.contains(flag) ?: (flag in playerFlags)
 
-    /** `Player::setFlag` (player.cpp:7857-7859). */
+    /** `Player::setFlag` (player.cpp:7857-7859): raises the shared group flag. */
     fun setFlag(flag: PlayerFlags_t) {
-        playerFlags.add(flag)
+        val currentGroup = group
+        if (currentGroup != null) {
+            currentGroup.flags.add(flag)
+        } else {
+            playerFlags.add(flag)
+        }
     }
 
-    /** `Player::removeFlag` (player.cpp:7861-7863). */
+    /** `Player::removeFlag` (player.cpp:7861-7863): clears the shared group flag. */
     fun removeFlag(flag: PlayerFlags_t) {
-        playerFlags.remove(flag)
+        val currentGroup = group
+        if (currentGroup != null) {
+            currentGroup.flags.remove(flag)
+        } else {
+            playerFlags.remove(flag)
+        }
     }
 
     /** `Player::getSkull` (player.cpp:7116-7121): `NotGainInFight` hides the skull. */

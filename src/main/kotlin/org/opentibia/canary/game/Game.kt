@@ -50,6 +50,7 @@ import org.opentibia.canary.creatures.appearance.effects.AttachedEffects
 import org.opentibia.canary.creatures.grouping.Party
 import org.opentibia.canary.creatures.grouping.TeamFinder
 import org.opentibia.canary.creatures.grouping.TeamFinderList
+import org.opentibia.canary.creatures.monsters.Faction
 import org.opentibia.canary.creatures.monsters.ForgeClassification
 import org.opentibia.canary.creatures.monsters.MonsterForge
 import org.opentibia.canary.creatures.monsters.MonsterPipelinesHost
@@ -14941,12 +14942,30 @@ class Game(
      */
     fun combatTargetOf(creature: Creature): CombatTarget = CreatureCombatTarget(creature, gameCombatTargetState)
 
+    /**
+     * `MonsterPipelinesHost.combatTargetState()` adopted for the monster-owned
+     * reads the game facade cannot resolve itself: the per-monster immunity
+     * latch/type bitsets (`Monster::isImmune`, monster.cpp:3535-3541) and the
+     * master-chain `Monster::isEnemyFaction` (monster.cpp:267-273). The host
+     * re-resolves the owner per call, so a removed or replaced monster falls
+     * back to the inert defaults (AGENTS.md deferred-callback lifetime
+     * safety); without a host the whole state stays inert.
+     */
+    private val hostCombatTargetState: CombatTargetState =
+        monsterHost?.combatTargetState() ?: CombatTargetState.Inert
+
     /** The [CombatTargetState] binding the game facade's combat seams. */
     private val gameCombatTargetState: CombatTargetState = object : CombatTargetState {
         override fun isAttackable(creature: Creature): Boolean = this@Game.isAttackable(creature)
 
         override fun isImmune(creature: Creature, combatType: CombatType): Boolean =
             this@Game.combatIsImmune(creature, combatType)
+
+        override fun isImmuneCondition(creature: Creature, conditionType: ConditionType): Boolean =
+            hostCombatTargetState.isImmuneCondition(creature, conditionType)
+
+        override fun isEnemyFaction(monster: Monster, faction: Faction): Boolean =
+            hostCombatTargetState.isEnemyFaction(monster, faction)
 
         override fun getDefense(creature: Creature): Int = this@Game.getDefense(creature)
 
