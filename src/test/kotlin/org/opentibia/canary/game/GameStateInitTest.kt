@@ -41,6 +41,7 @@ class GameStateInitTest {
         ioMarket = IOMarket(dataSource = dataSource, now = { fixedNow })
         game = Game(GameMap(), GameDispatcher(), ioMarket = ioMarket)
 
+        game.initChat = { events += "chat" }
         game.initSpawns = {
             events += "spawns"
             itemsPriceReadyAtSpawns = game.itemsPriceMap.isNotEmpty()
@@ -99,6 +100,7 @@ class GameStateInitTest {
         assertThat(game.itemsPriceMap[2160]?.get(0)).isEqualTo(250)
 
         assertThat(events).containsExactly(
+            "chat",
             "spawns",
             "raids",
             "mounts",
@@ -124,7 +126,7 @@ class GameStateInitTest {
 
         game.setGameState(GameState_t.GAME_STATE_INIT)
 
-        assertThat(firstRun).hasSize(9)
+        assertThat(firstRun).hasSize(10)
         assertThat(events).isEqualTo(firstRun)
     }
 

@@ -12066,13 +12066,21 @@ class Game(
     fun getGameState(): GameState_t = gameState
 
     /**
-     * `map.spawnsMonster.startup()` (src/game/game.cpp:970): the ported
-     * spawn-engine start of `Game::setGameState(GAME_STATE_INIT)`. The Kotlin
-     * spawn engine (`MonsterSpawnPath`) parses the map spawn XML during map
-     * boot (`IOMap::loadMonsters`) and the network root binds this seam to its
-     * `startup` half (dispatched to the WorldCommit lane). The
-     * `map.spawnsNpc.startup()` call and the 50 custom-map spawn loops
-     * (game.cpp:971-977) are not ported (PARITY GAP).
+     * `g_chat().load()` (src/game/game.cpp:967): the `Chat` channel registry
+     * load (`{CORE_DIRECTORY}/chatchannels/chatchannels.xml`, chat.cpp:340-410).
+     * The network root binds the core-directory read and feeds
+     * `ChatManager.load` (game.cpp:966 `groups.load()` stays boot-owned).
+     */
+    var initChat: () -> Unit = {}
+
+    /**
+     * `map.spawnsMonster.startup(); map.spawnsNpc.startup()` (src/game/game.cpp:970-971):
+     * the ported spawn-engine start of `Game::setGameState(GAME_STATE_INIT)`.
+     * The Kotlin spawn engines (`MonsterSpawnPath`/`NpcSpawnPath`) parse the map
+     * spawn XML during map boot (`IOMap::loadMonsters`/`IOMap::loadNpcs`) and
+     * the network root binds this seam to their `startup` halves in C++
+     * statement order (dispatched to the WorldCommit lane). The 50 custom-map
+     * spawn loops (game.cpp:972-977) are not ported (PARITY GAP).
      */
     var initSpawns: () -> Unit = {}
 
@@ -12145,19 +12153,19 @@ class Game(
 
     /**
      * The `GAME_STATE_INIT` arm of `Game::setGameState` (src/game/game.cpp:963-993)
-     * in C++ statement order: `loadItemsPrice()`, the spawn start,
-     * `raids.loadFromXml(); raids.startup()`, `mounts->loadFromXml()`,
+     * in C++ statement order: `loadItemsPrice()`, `g_chat().load()`, the spawn
+     * start, `raids.loadFromXml(); raids.startup()`, `mounts->loadFromXml()`,
      * `m_attachedEffects->loadFromXml()`, `loadMotdNum()`, `loadPlayersRecord()`,
      * `g_globalEvents().startup()` and `m_IOWheel->initializeGlobalData()`.
      *
      * BOOT-OWNED PIECES (not repeated here): `groups.load()` (game.cpp:966) is
-     * loaded by `ServerBootstrap` before the listener exists; the NPC and
-     * custom-map spawn starts (game.cpp:971-977) are unported. `g_chat().load()`
-     * (game.cpp:967) has no production `ChatManager` registry to load into yet
-     * (PARITY GAP).
+     * loaded by `ServerBootstrap` before the listener exists; the custom-map
+     * spawn loops (game.cpp:972-977) are unported (PARITY GAP).
      */
     private fun gameStateInit() {
         loadItemsPrice()
+
+        initChat()
 
         initSpawns()
 

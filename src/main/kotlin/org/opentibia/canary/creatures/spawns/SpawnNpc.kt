@@ -35,9 +35,16 @@ fun interface NpcTypeLookup {
     fun getNpcType(name: String): NpcType?
 }
 
-/** `std::make_shared<Npc>(npcType)` (src/creatures/npcs/spawns/spawn_npc.cpp:194). */
+/**
+ * `std::make_shared<Npc>(npcType)` plus the world-entry tail of
+ * `SpawnNpc::spawnNpc` (src/creatures/npcs/spawns/spawn_npc.cpp:194-205): the
+ * factory creates the npc and places it (`g_game().internalPlaceCreature` on
+ * startup, `g_game().placeCreature` on a respawn), because the port keeps the
+ * engine free of the `g_game()` global. `null` mirrors the C++ `return false`
+ * when the npc cannot enter the world.
+ */
 fun interface NpcFactory {
-    fun create(npcType: NpcType, position: Position): Npc
+    fun create(npcType: NpcType, position: Position, startup: Boolean): Npc?
 }
 
 /** `spawnBlockNpc_t` (src/creatures/npcs/spawns/spawn_npc.hpp:17). */
@@ -217,7 +224,7 @@ class SpawnNpc(
     }
 
     private fun spawnNpc(spawnId: Int, npcType: NpcType, pos: Position, dir: Direction, startup: Boolean = false): Boolean {
-        val npc = npcFactory.create(npcType, pos)
+        val npc = npcFactory.create(npcType, pos, startup) ?: return false
         npc.direction = dir
         spawnedNpcMap.getOrPut(spawnId) { mutableListOf() }.add(npc)
         spawnNpcMap[spawnId]?.lastSpawnNpc = now()

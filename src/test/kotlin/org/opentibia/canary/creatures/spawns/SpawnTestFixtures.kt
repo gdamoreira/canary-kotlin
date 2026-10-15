@@ -48,7 +48,7 @@ class FakeNpcFactory : NpcFactory {
     private var nextId = 1L
     val created = mutableListOf<Npc>()
 
-    override fun create(npcType: NpcType, position: Position): Npc {
+    override fun create(npcType: NpcType, position: Position, startup: Boolean): Npc {
         val npc = Npc(nextId++, npcType.name, position = position)
         created.add(npc)
         return npc

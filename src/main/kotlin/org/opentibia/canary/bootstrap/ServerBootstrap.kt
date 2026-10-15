@@ -13,6 +13,7 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.monsters.LootBlock
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.monsters.Monsters
+import org.opentibia.canary.creatures.npcs.Npcs
 import org.opentibia.canary.creatures.players.grouping.Groups
 import org.opentibia.canary.creatures.players.livestream.LivestreamManager
 import org.opentibia.canary.creatures.players.vip.VipRepository
@@ -309,6 +310,16 @@ class GameComposition(
      * registry saves.
      */
     val guildRepository: GuildRepository? = null,
+    /**
+     * `g_npcs()` registry (`src/creatures/npcs/npcs.hpp:98`): the NPC type
+     * catalog the listener's `IOMap::loadNpcs`/`SpawnNpc` path resolves block
+     * names through and the source of each spawned npc's stats/outfit. Canary
+     * fills it from the datapack Lua scripts (`Npcs::load(false, true)`,
+     * src/canary_server.cpp:605); the port's `NpcType(name)` registration boot
+     * is a PARITY GAP, so the production registry is composed empty and the
+     * spawn engine places nothing until that registration lands.
+     */
+    val npcs: Npcs = Npcs(),
 )
 
 /** Creates the network listener (`CanaryServer`) from the booted services. */
@@ -355,6 +366,7 @@ internal fun defaultListenerFactory(rsaCipher: RsaCipher = RsaCipher.fromEnviron
             suppliedCreatureAsyncTaskBuckets = composition.creatureAsyncTaskBuckets,
             monsterComputeService = composition.monsterComputeService,
             monsters = composition.monsters,
+            npcs = composition.npcs,
             vocations = composition.vocations,
             ioLoginData = composition.playerSavePath.loginData,
             saveManager = composition.saveManager,

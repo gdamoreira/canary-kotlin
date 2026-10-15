@@ -184,7 +184,12 @@ class PlayerFeatures(
             ?.let { VocationRequirementsAdapter(it) }
             ?: UnwiredVocationRequirements
     },
-    /** `Mounts::getInstance()` definition registry. */
+    /**
+     * `Mounts::getInstance()` definition registry, injected by the composition
+     * root with the registry `GAME_STATE_INIT` loaded from
+     * `{CORE_DIRECTORY}/XML/mounts.xml` (`mounts->loadFromXml()`, game.cpp:982);
+     * direct construction (tests/tooling) keeps a self-contained empty registry.
+     */
     private val mountDefinitions: Mounts = Mounts(),
     /** `Familiars::getInstance()` definition registry. */
     private val familiarDefinitions: Familiars = Familiars(),
