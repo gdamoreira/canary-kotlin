@@ -43,7 +43,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | Monster engine (`monster.cpp`, 4,014 lines) | 198 unique `Monster::` methods | 89 name-matched + async pipelines + host + type state + barrier buckets | **~85%** | wave 51: barrier-parallel creature async buckets, budget/requeue/promotion/rollback |
 | Map engine (`map.cpp`) | — | — | **~85%** | sight/`canWalkTo`/pathing/caches/spectators/houses/towns (wave 38) |
 | Persistence (`iologindata*`, `iomapserialize`) | — | — | **~80%** | 24/24 iologindata, 10/10 iomapserialize, market/prey/bestiary/bosstiary/guild/storage (V10–V14) |
-| **Estimated full-parity completion** | — | — | **~99.9%** | tracked inventory complete; wave 66 closed the logout tail, exiva save, guild removal + map saver and the login group load |
+| **Estimated full-parity completion** | — | — | **~99.9%** | tracked inventory complete; waves 65–67 bound the seams at the root, closed the persistence saves, login placement/burst/groups, combat depth, monster tails and the spell consumers. What remains is the deliberately deferred list plus minor seam bindings |
 
 #### 1.2 Module completion (by inventory rows in §2)
 
@@ -261,13 +261,11 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 ### 3. Highest-Impact Gaps (ranked, verified)
 
-**The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Waves 63–66 closed
-the previous tails; what remains:
+**The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Waves 63–67 closed
+every planned tail; what remains:
 
-1. **Login/boot bindings** — player placement at login (`ProtocolGame::login` → `placeCreature`); `SaveManager.savePlayer` production binding + `Game.playerVip` (VIP offline broadcast); `Groups::load` over `data/XML/groups.xml` + its bootstrap binding (group-gated logic keeps defaults until then); `CanaryServer` guild repository (offline guild loads); map/house load path so `mapSaver` persists instead of wiping `tile_store`.
-2. **Combat/monster depth (wave 67)** — ExpertPvp field swaps/fight-tick, wheel beam mastery, per-creature `getCombatDamage` override, `applyExtensions`; adapter stubs (`isImmuneCondition` bitset, `isEnemyFaction`, `getMantra`); `PlayerSpellCaster` inert side effects (mana progression, aggressive-action clock, cancel builder); `Monster::getCombatValues`; `Monster::isPushable`; `combatTileEffects` COMBAT_NONE path.
-3. **Remaining call sites** — Lua `player:registerEvent`; modal window sink (`sendModalWindow`) + 0xF9 route; shop-owner composition; `WorldLuaOperations.attachCombat` boot call; spell-registry consumer re-binds (`WorldPlayerSocialOperations.canLearnSpell`/`getInstantSpells`, `PlayerWheel` default `Spells()`, basic-data spell list, look rune seam); login VIP burst; `creatureOnThink`/`creatureOnDeath` player loops; raid + `Game.createMonster` onSpawn; Lua `creature:isMoveLocked`; `savePlayerSystems`; load-side guid wrap.
-4. **Deferred (unchanged)** — live differential harness; CipSoft860/old-protocol branches; OpenTelemetry SDK/OStream; remaining micro-seams (KV LRU ordering, `DEBUG_LOG`, daemon flags, `TransportCodec` tails).
+1. **Minor seam bindings** — think/death Lua loops need the `ScriptingDispatch` binding at the root; `Game.modalWindowManager` client; `attachCombat` target state/effects; wheel beam-mastery host adapter; `Game.combatTargetOf` adopting the host state; `Player.hasFlag` reading `Group.flags`; `Player.spells` field; guild helper broadcasts (`updatePlayerHelpers`); `savePlayerSystems`; load-side guid wrap; `sendSaleItemList`; `sendWeaponProficiencyWindow`; CanaryServer placement tails (self 0x6A branch, full login frame).
+2. **Deferred by design** — live differential harness (packet-capture A/B vs a running Canary); CipSoft860/old-protocol wire branches; OpenTelemetry SDK/OStream periodic reader; micro-seams (KV LRU ordering, `DEBUG_LOG`, daemon flags, `TransportCodec` tails).
 
 ---
 

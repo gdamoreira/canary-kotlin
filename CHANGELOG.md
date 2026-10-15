@@ -680,8 +680,17 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 70: Wave 67 — Combat Depth, Monster Tails, Login Bindings (05:00 – 07:00)
+- **Combat depth** — ExpertPvp wall swaps + fight-tick, beam-mastery seam, per-creature `getCombatDamage`, `applyExtensions` copy semantics, mantra absorb, monster combat-target state (immunity bitset/enemy faction/`getCombatValues`), `PlayerSpellCaster` mana progression + cancel sink + aggressive clock (23 tests).
+- **Monster tails** — `Monster::isPushable` live in both push paths, think/death attached-event loops, spawn order fixed to the C++ call points, Lua `creature:isMoveLocked`/`setMoveLocked` (13 tests).
+- **Login bindings** — player placement at login with the `addList` fanout, login VIP burst, `Groups::load` (XML) + boot binding, guild repository + `savePlayer`/`playerVip` bindings (16 tests).
+- **Spell consumers** — registry re-binds (`canLearnSpell`/`getInstantSpells`/wheel/basic-data/rune look), `attachCombat` boot call, modal sink + 0xF9 route, shop-owner composition, Lua `player:registerEvent` (10 tests).
+- **748 suites / 8041 tests, all green**; all commits ancestry-verified.
+
+---
+
 ### Current Status
-- **Automated Tests**: **733 test suites / 7979 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **748 test suites / 8041 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.

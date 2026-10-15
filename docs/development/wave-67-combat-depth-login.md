@@ -1,6 +1,6 @@
 # Wave 67 Plan — Combat Depth, Monster Tails, Login Bindings, Spell Consumers
 
-**Status:** In progress — dispatched
+**Status:** Completed (2026-10-15) — four workstreams merged; 748 suites / 8041 tests green
 **Baseline:** `main` @ `f1258f31`; 733 suites / 7979 tests green; zero Kotlin warnings
 **Source of scope:** `docs/development/implementation-status.md` §3 items 1–3.
 **Convention:** documents live directly in `docs/development/` (AGENTS.md §5/§6).
@@ -128,3 +128,13 @@ Update `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`
 Live differential harness; CipSoft860/old-protocol branches; OpenTelemetry
 SDK/OStream; micro-seams (KV LRU ordering, `DEBUG_LOG`, daemon flags,
 `TransportCodec` tails).
+
+---
+
+## Completion (2026-10-15)
+
+combat-depth (`56c1ffa5`), monster-tails (`c586e496`), login-bindings
+(`42492604`), spell-consumers (`ff619ee3`) merged (one union conflict in
+`CreatureFunctions` resolved by keeping both binding sets). Integrated suite:
+**748 suites / 8041 tests, 0 failures, zero Kotlin warnings**; ancestry verified.
+Remaining work is the deliberately deferred list plus minor seam bindings.
