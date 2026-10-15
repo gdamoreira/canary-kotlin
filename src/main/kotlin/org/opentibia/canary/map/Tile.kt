@@ -1,8 +1,20 @@
 package org.opentibia.canary.map
 
+import org.opentibia.canary.account.Account
+import org.opentibia.canary.account.AccountType
+import org.opentibia.canary.chat.SpeakClasses
+import org.opentibia.canary.combat.CombatType
 import org.opentibia.canary.creatures.Creature
+import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Npc
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.monsters.MonsterInfo
+import org.opentibia.canary.creatures.monsters.MonsterType
+import org.opentibia.canary.creatures.players.pvp.ExpertFieldContext
+import org.opentibia.canary.creatures.players.pvp.ExpertPvp
+import org.opentibia.canary.creatures.players.pvp.ExpertPvpRelationContext
+import org.opentibia.canary.creatures.players.pvp.ExpertPvpRelationResult
+import org.opentibia.canary.creatures.players.pvp.PvpMode_t
 import org.opentibia.canary.game.CylinderFlags
 import org.opentibia.canary.game.movement.Teleport
 import org.opentibia.canary.game.zones.TileFlags
@@ -22,6 +34,7 @@ import org.opentibia.canary.items.QueryMaxCountResult
 import org.opentibia.canary.items.Thing
 import org.opentibia.canary.items.TrashHolder
 import org.opentibia.canary.map.house.House
+import org.opentibia.canary.spells.WorldType
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import kotlin.math.max
 
@@ -39,8 +52,9 @@ import kotlin.math.max
  * `onAddTileItem`/`onUpdateTileItem`/`onRemoveTileItem`/`onUpdateTile` client
  * sends, `browseFields` remaps, automatic carpet propagation, clean-tile
  * scheduling, movement-script calls, `Zone::itemAdded`/`thingAdded` callbacks,
- * the floor-change `ItemType::floorChange` bit, mailbox/depot tile flags,
- * `safeCall` and the monster/player branches of `queryAdd`.
+ * the floor-change `ItemType::floorChange` bit, mailbox/depot tile flags and
+ * `safeCall`. The `queryAdd` creature branch is ported with the injected
+ * `g_game()`/`g_configManager()`/`ExpertPvp` seams.
  */
 open class Tile(override val position: Position) : Cylinder {
     /** `Tile::ground` (src/items/tile.hpp:286). */
@@ -812,14 +826,81 @@ open class Tile(override val position: Position) : Cylinder {
         }
     }
 
+    // --- queryAdd environment -------------------------------------------------
+
+    /**
+     * `Monster::m_monsterType` (src/creatures/monsters/monster.hpp:363) accessor
+     * seam for the monster-type facts `Monster::isFamiliar`/`canPushItems`/
+     * `canPushCreatures`/`canWalkOnFieldType` read. The world host owns the
+     * registered type (`MonsterPipelinesHost.register`), so the composition root
+     * binds this to `entryOf(monster.id)?.typeState?.monsterType` (AGENTS.md 1.1);
+     * an unresolved type keeps the C++ default `MonsterInfo` values.
+     */
+    var monsterTypeProvider: (Monster) -> MonsterType? = { null }
+
+    /**
+     * `Monster::getIgnoreFieldDamage()` (src/creatures/monsters/monster.cpp:3144-3146)
+     * seam; the runtime flag is owned by `MonsterBehaviorState.ignoreFieldDamage`.
+     */
+    var ignoreFieldDamageProvider: (Monster) -> Boolean = { false }
+
+    /**
+     * `Monster::isImmune(CombatType_t)` (src/creatures/monsters/monster.cpp:3539-3541)
+     * seam: the `m_isImmune` runtime override plus the monster-type damage
+     * immunities (`MonsterBehaviorState` owns both in this port).
+     */
+    var monsterIsImmuneProvider: (Monster, CombatType) -> Boolean = { _, _ -> false }
+
+    /** `g_configManager().getNumber(MAX_PLAYERS_PER_ACCOUNT)` (configmanager.cpp:318, config.lua.dist:79). */
+    var maxPlayersPerAccount: Int = 1
+
+    /** `g_configManager().getNumber(MAX_PLAYERS_OUTSIDE_PZ_PER_ACCOUNT)` (configmanager.cpp:316, config.lua.dist:80). */
+    var maxPlayersOutsidePzPerAccount: Int = 1
+
+    /**
+     * `g_game().getPlayersByAccount(account)` (src/game/game.cpp:1480-1491)
+     * seam. The C++ default `allowOffline = false` resolves online players
+     * only, so the redundant `accountPlayer->isOffline()` guard of tile.cpp:819
+     * is folded into this contract.
+     */
+    var playersByAccountProvider: (Account) -> List<Player> = { emptyList() }
+
+    /**
+     * `Player::sendCreatureSay(player, TALKTYPE_MONSTER_SAY, text, &getPosition())`
+     * (src/creatures/players/player.cpp:8831-8835) protocol seam for the
+     * account-limit message (tile.cpp:827); an unbound tile keeps the C++
+     * `client == nullptr` silence.
+     */
+    var sendCreatureSay: (Player, Creature, SpeakClasses, String, Position) -> Unit = { _, _, _, _, _ -> }
+
+    /**
+     * `g_game().internalRemoveItem(item, 1)` (src/game/game.cpp:2785) seam for
+     * the non-PvP safe magic-wall/wild-growth removal (tile.cpp:870).
+     */
+    var internalRemoveItem: (Item, Int) -> Unit = { _, _ -> }
+
+    /** `ExpertPvp::isEnabled()` reading the configured `WORLD_TYPE` (expert_pvp.cpp:361-363). */
+    var expertPvpEnabled: Boolean = false
+
+    /** `g_game().getWorldType()` (src/game/game.cpp:926-928) seam used by `ExpertPvp::classifyRelation`. */
+    var worldTypeProvider: () -> WorldType = { WorldType.PVP }
+
+    /**
+     * `g_game().getPlayerByGUID(guid)` (src/game/game.cpp) seam used by the
+     * field-relation classification (expert_pvp.cpp:534); the re-resolvable id
+     * lookup drops a stale field owner instead of retaining it.
+     */
+    var playerByGuidProvider: (Long) -> Player? = { null }
+
     // --- cylinder queries -----------------------------------------------------
 
     /**
-     * `Tile::queryAdd` (src/items/tile.cpp:691-964). The item branch is
-     * faithful; the creature branch ports the npc/pathfinding/occupancy and
-     * ignore-block-item rules, while the monster push/field rules, player
-     * account/PZ-lock rules and the expert-pvp field step need `g_game()`,
-     * `g_configManager()` and `ExpertPvp` (PARITY GAP).
+     * `Tile::queryAdd` (src/items/tile.cpp:691-964): the full creature branch —
+     * npc field check, move lock, monster push/field rules, player
+     * occupancy/PZ-lock/account rules, the `queryExpertPvpFieldStep` tail and
+     * the item branch. The `g_game()`/`g_configManager()`/`ExpertPvp` globals
+     * are the injected seams above (AGENTS.md 1.1); `actor` is unused exactly
+     * like the C++ parameter.
      */
     override fun queryAdd(index: Int, thing: Thing?, count: Int, flags: Int, actor: Creature?): ReturnValue {
         if (thing == null) {
@@ -845,13 +926,184 @@ open class Tile(override val position: Position) : Cylinder {
                 return ReturnValue.NOTPOSSIBLE
             }
 
-            // Creature::isMoveLocked() is not modelled (PARITY GAP).
-            if (ground == null) {
+            if (creature.isMoveLocked() || ground == null) {
                 return ReturnValue.NOTPOSSIBLE
             }
 
-            if (_creatures.isNotEmpty() && flags and CylinderFlags.FLAG_IGNOREBLOCKCREATURE == 0) {
-                for (tileCreature in _creatures) {
+            if (creature is Monster) {
+                val monsterInfo = monsterTypeProvider(creature)?.info
+                val monsterIsFamiliar = monsterInfo?.isFamiliar == true
+
+                if (hasFlag(
+                        TileFlags.TILESTATE_PROTECTIONZONE.value or
+                            TileFlags.TILESTATE_FLOORCHANGE.value or
+                            TileFlags.TILESTATE_TELEPORT.value,
+                    ) &&
+                    (!monsterIsFamiliar || creature.getMaster()?.getAttackedCreature() != null)
+                ) {
+                    return ReturnValue.NOTPOSSIBLE
+                }
+
+                if (creature.isSummon()) {
+                    val groundId = ground?.id
+                    if (groundId != null && groundId in ITEM_WALKABLE_SEA_START..ITEM_WALKABLE_SEA_END) {
+                        return ReturnValue.NOTPOSSIBLE
+                    }
+                }
+
+                val creatures = getCreatures()
+                if (monsterInfo?.canPushCreatures == true && !creature.isSummon()) {
+                    for (tileCreature in creatures) {
+                        val tileCreaturePlayer = tileCreature as? Player
+                        if (tileCreaturePlayer != null && tileCreaturePlayer.isInGhostMode()) {
+                            continue
+                        }
+
+                        val tileCreatureMonster = tileCreature as? Monster
+                        if (tileCreatureMonster == null ||
+                            !tileCreature.isPushable() ||
+                            (tileCreatureMonster.isSummon() && tileCreatureMonster.getMaster() is Player)
+                        ) {
+                            return ReturnValue.NOTPOSSIBLE
+                        }
+                    }
+                } else if (creatures.isNotEmpty()) {
+                    for (tileCreature in creatures) {
+                        if (!tileCreature.isInGhostMode()) {
+                            return ReturnValue.NOTENOUGHROOM
+                        }
+                    }
+                }
+
+                if (hasFlag(TileFlags.TILESTATE_IMMOVABLEBLOCKSOLID.value)) {
+                    return ReturnValue.NOTPOSSIBLE
+                }
+
+                if (flags and CylinderFlags.FLAG_PATHFINDING != 0 &&
+                    hasFlag(TileFlags.TILESTATE_IMMOVABLENOFIELDBLOCKPATH.value)
+                ) {
+                    return ReturnValue.NOTPOSSIBLE
+                }
+
+                if (hasFlag(TileFlags.TILESTATE_BLOCKSOLID.value) ||
+                    (flags and CylinderFlags.FLAG_PATHFINDING != 0 &&
+                        hasFlag(TileFlags.TILESTATE_NOFIELDBLOCKPATH.value))
+                ) {
+                    if (!(monsterInfo?.canPushItems == true || flags and CylinderFlags.FLAG_IGNOREBLOCKITEM != 0)) {
+                        return ReturnValue.NOTPOSSIBLE
+                    }
+                }
+
+                if (hasHarmfulField()) {
+                    val combatType = getFieldItem()?.type?.combatType ?: CombatType.NONE
+
+                    // There is 3 options for a monster to enter a magic field
+                    // 1) Monster is immune
+                    if (!monsterIsImmuneProvider(creature, combatType)) {
+                        // 1) Monster is able to walk over field type
+                        // 2) Being attacked while random stepping will make it ignore field damages
+                        if (flags and CylinderFlags.FLAG_IGNOREFIELDDAMAGE != 0) {
+                            if (!(ignoreFieldDamageProvider(creature) || monsterCanWalkOnFieldType(monsterInfo, combatType))) {
+                                return ReturnValue.NOTPOSSIBLE
+                            }
+                        } else {
+                            return ReturnValue.NOTPOSSIBLE
+                        }
+                    }
+                }
+
+                return ReturnValue.NOERROR
+            }
+
+            val creatures = getCreatures()
+            if (creature is Player) {
+                if (creatures.isNotEmpty() &&
+                    flags and CylinderFlags.FLAG_IGNOREBLOCKCREATURE == 0 &&
+                    !creature.isAccessPlayer()
+                ) {
+                    for (tileCreature in creatures) {
+                        if (!creature.canWalkthrough(tileCreature)) {
+                            return ReturnValue.NOTPOSSIBLE
+                        }
+                    }
+                }
+
+                if (flags and CylinderFlags.FLAG_PATHFINDING != 0 && hasFlag(TileFlags.TILESTATE_BLOCKPATH.value)) {
+                    val expertPvpFieldStepRet = queryExpertPvpFieldStep(creature, ground, _items, flags)
+                    if (expertPvpFieldStepRet != null) {
+                        if (expertPvpFieldStepRet != ReturnValue.NOERROR) {
+                            return expertPvpFieldStepRet
+                        }
+                    } else {
+                        return ReturnValue.NOTPOSSIBLE
+                    }
+                }
+
+                if (creature.getParent() == null && hasFlag(TileFlags.TILESTATE_NOLOGOUT.value)) {
+                    // player is trying to login to a "no logout" tile
+                    return ReturnValue.NOTPOSSIBLE
+                }
+
+                val playerTile = creature.getTile()
+                // moving from a pz tile to a non-pz tile
+                if (playerTile != null && playerTile.hasFlag(TileFlags.TILESTATE_PROTECTIONZONE.value)) {
+                    val maxOnline = maxPlayersPerAccount
+                    if (maxOnline > 1 &&
+                        creature.getAccountType().value < AccountType.ACCOUNT_TYPE_GAMEMASTER.value &&
+                        !hasFlag(TileFlags.TILESTATE_PROTECTIONZONE.value)
+                    ) {
+                        val maxOutsidePz = maxPlayersOutsidePzPerAccount
+                        var countOutsizePz = 0
+                        val account = creature.account
+                        if (account != null) {
+                            for (accountPlayer in playersByAccountProvider(account)) {
+                                if (accountPlayer === creature) {
+                                    continue
+                                }
+                                val accountTile = accountPlayer.getTile()
+                                if (accountTile != null &&
+                                    !accountTile.hasFlag(TileFlags.TILESTATE_PROTECTIONZONE.value)
+                                ) {
+                                    ++countOutsizePz
+                                }
+                            }
+                        }
+                        if (countOutsizePz >= maxOutsidePz) {
+                            val countText = if (maxOutsidePz == 1) "one" else maxOutsidePz.toString()
+                            val pluralSuffix = if (maxOutsidePz > 1) "s" else ""
+                            sendCreatureSay(
+                                creature,
+                                creature,
+                                SpeakClasses.TALKTYPE_MONSTER_SAY,
+                                "You can only have $countText character$pluralSuffix from your account outside of a protection zone.",
+                                position,
+                            )
+                            return ReturnValue.NOTPOSSIBLE
+                        }
+                    }
+                }
+                if (playerTile != null && creature.isPzLocked()) {
+                    if (!playerTile.hasFlag(TileFlags.TILESTATE_PVPZONE.value)) {
+                        // player is trying to enter a pvp zone while being pz-locked
+                        if (hasFlag(TileFlags.TILESTATE_PVPZONE.value)) {
+                            return ReturnValue.PLAYERISPZLOCKEDENTERPVPZONE
+                        }
+                    } else if (!hasFlag(TileFlags.TILESTATE_PVPZONE.value)) {
+                        // player is trying to leave a pvp zone while being pz-locked
+                        return ReturnValue.PLAYERISPZLOCKEDLEAVEPVPZONE
+                    }
+
+                    if ((!playerTile.hasFlag(TileFlags.TILESTATE_NOPVPZONE.value) &&
+                            hasFlag(TileFlags.TILESTATE_NOPVPZONE.value)) ||
+                        (!playerTile.hasFlag(TileFlags.TILESTATE_PROTECTIONZONE.value) &&
+                            hasFlag(TileFlags.TILESTATE_PROTECTIONZONE.value))
+                    ) {
+                        // player is trying to enter a non-pvp/protection zone while being pz-locked
+                        return ReturnValue.PLAYERISPZLOCKED
+                    }
+                }
+            } else if (creatures.isNotEmpty() && flags and CylinderFlags.FLAG_IGNOREBLOCKCREATURE == 0) {
+                for (tileCreature in creatures) {
                     // tile.cpp:850: only non-ghost creatures occupy the tile.
                     if (!tileCreature.isInGhostMode()) {
                         return ReturnValue.NOTENOUGHROOM
@@ -860,9 +1112,27 @@ open class Tile(override val position: Position) : Cylinder {
             }
 
             if (flags and CylinderFlags.FLAG_IGNOREBLOCKITEM == 0) {
+                // If the FLAG_IGNOREBLOCKITEM bit isn't set we dont have to iterate every single item
                 if (hasFlag(TileFlags.TILESTATE_BLOCKSOLID.value)) {
-                    // ExpertPvp field step and safe magic-wall removal are
-                    // PARITY GAPS.
+                    val expertPvpFieldStepRet = queryExpertPvpFieldStep(creature, ground, _items, flags)
+                    if (expertPvpFieldStepRet != null) {
+                        return expertPvpFieldStepRet
+                    }
+
+                    // NO PVP magic wall or wild growth field check
+                    val player = creature as? Player
+                    if (player != null) {
+                        for (findfield in _items) {
+                            if (findfield.id == ExpertPvp.ITEM_WILDGROWTH_SAFE ||
+                                findfield.id == ExpertPvp.ITEM_MAGICWALL_SAFE
+                            ) {
+                                if (!player.isInGhostMode()) {
+                                    internalRemoveItem(findfield, 1)
+                                }
+                                return ReturnValue.NOERROR
+                            }
+                        }
+                    }
                     return ReturnValue.NOTENOUGHROOM
                 }
             } else {
@@ -952,6 +1222,209 @@ open class Tile(override val position: Position) : Cylinder {
             }
         }
         return ReturnValue.NOERROR
+    }
+
+    /** `Monster::canWalkOnFieldType(CombatType_t)` (src/creatures/monsters/monster.cpp:196-207). */
+    private fun monsterCanWalkOnFieldType(info: MonsterInfo?, combatType: CombatType): Boolean = when (combatType) {
+        CombatType.ENERGYDAMAGE -> info?.canWalkOnEnergy ?: true
+        CombatType.FIREDAMAGE -> info?.canWalkOnFire ?: true
+        CombatType.EARTHDAMAGE -> info?.canWalkOnPoison ?: true
+        else -> true
+    }
+
+    /**
+     * `queryExpertPvpFieldStep` (src/items/tile.cpp:34-84). The C++
+     * `ReturnValue &ret` out-parameter is modelled by the return value: `null`
+     * mirrors the `false` result, otherwise the value written to `ret`.
+     */
+    private fun queryExpertPvpFieldStep(
+        creature: Creature?,
+        ground: Item?,
+        items: List<Item>,
+        tileFlags: Int,
+    ): ReturnValue? {
+        if (creature !is Player || !expertPvpEnabled) {
+            return null
+        }
+
+        var handledExpertField = false
+        val pathfinding = tileFlags and CylinderFlags.FLAG_PATHFINDING != 0
+        if (ground != null &&
+            (ground.hasProperty(ItemProperty.CONST_PROP_BLOCKSOLID) ||
+                (pathfinding && ground.hasProperty(ItemProperty.CONST_PROP_BLOCKPATH)))
+        ) {
+            return null
+        }
+
+        for (item in items) {
+            var handledItem = false
+            val field = item.getMagicField()
+            if (field != null) {
+                val fieldContext = getExpertFieldContext(field)
+                val relation = classifyFieldRelation(fieldContext, creature)
+                val decision = ExpertPvp.evaluateFieldStep(fieldContext, relation.facts)
+                if (decision.handled) {
+                    handledExpertField = true
+                    handledItem = true
+                    if (!decision.canStep) {
+                        if (!pathfinding) {
+                            ExpertPvp.applyFieldStepSideEffects(
+                                decision,
+                                relation.facts,
+                                expertPvpEnabled,
+                                { guid -> playerByGuidProvider(guid)?.pvpPlayer },
+                            )
+                        }
+                        return ReturnValue.NOTENOUGHROOM
+                    }
+                }
+            }
+
+            if (!handledItem &&
+                (item.hasProperty(ItemProperty.CONST_PROP_BLOCKSOLID) ||
+                    (pathfinding && item.hasProperty(ItemProperty.CONST_PROP_BLOCKPATH)))
+            ) {
+                return null
+            }
+        }
+
+        if (handledExpertField) {
+            return ReturnValue.NOERROR
+        }
+
+        return null
+    }
+
+    /**
+     * `ExpertPvp::getFieldContext(item)` (expert_pvp.cpp:1003-1018) plus the
+     * `getCustomAttributeU32/U16/Bool/String` and `parseGuidList` file locals
+     * (expert_pvp.cpp:79-125): rebuilds the cast-time field context from the
+     * item's custom attributes. Kept beside its only caller until
+     * `ExpertPvp::attachFieldContext` lands with the ExpertPvp owner
+     * (AGENTS.md 1.1).
+     */
+    private fun getExpertFieldContext(item: Item): ExpertFieldContext {
+        if (!ExpertPvp.isExpertFieldItem(item.id)) {
+            return ExpertFieldContext()
+        }
+
+        val ownerGuidAttribute = item.getCustomAttribute(EXPERT_FIELD_OWNER_GUID_ATTRIBUTE)
+        val ownerGuid = ownerGuidAttribute?.getInteger() ?: 0L
+        val ownerMode = item.getCustomAttribute(EXPERT_FIELD_OWNER_MODE_ATTRIBUTE)?.getInteger()?.toInt()
+            ?: PvpMode_t.PVP_MODE_DOVE.value
+        val ownerWasPlayerOrSummon =
+            item.getCustomAttribute(EXPERT_FIELD_OWNER_WAS_PLAYER_OR_SUMMON_ATTRIBUTE)?.getBool()
+                ?: (ownerGuidAttribute != null)
+
+        val context = ExpertPvp.makeFieldContext(ownerGuid, PvpMode_t(ownerMode), item.id, ownerWasPlayerOrSummon)
+        context.canonicalItemId =
+            item.getCustomAttribute(EXPERT_FIELD_CANONICAL_ITEM_ID_ATTRIBUTE)?.getInteger()?.toInt()
+                ?: context.canonicalItemId
+        context.safeVisualItemId =
+            item.getCustomAttribute(EXPERT_FIELD_SAFE_VISUAL_ITEM_ID_ATTRIBUTE)?.getInteger()?.toInt()
+                ?: context.safeVisualItemId
+        context.blockingVisualItemId =
+            item.getCustomAttribute(EXPERT_FIELD_BLOCKING_VISUAL_ITEM_ID_ATTRIBUTE)?.getInteger()?.toInt()
+                ?: context.blockingVisualItemId
+        context.ownerTargetsAtCast =
+            parseGuidList(item.getCustomAttribute(EXPERT_FIELD_OWNER_TARGETS_AT_CAST_ATTRIBUTE)?.getString() ?: "")
+        context.ownerAttackersAtCast =
+            parseGuidList(item.getCustomAttribute(EXPERT_FIELD_OWNER_ATTACKERS_AT_CAST_ATTRIBUTE)?.getString() ?: "")
+        return context
+    }
+
+    /**
+     * `ExpertPvp::classifyFieldRelation(fieldContext, subject)`
+     * (expert_pvp.cpp:525-560) plus the file-local `applyFieldRelationSnapshot`
+     * (expert_pvp.cpp:222-238). The `g_game().getPlayerByGUID` and
+     * `g_game().getWorldType()` globals become [playerByGuidProvider] and
+     * [worldTypeProvider] (AGENTS.md 1.1); the logic folds back into `ExpertPvp`
+     * once that file's owner ports it.
+     */
+    private fun classifyFieldRelation(
+        fieldContext: ExpertFieldContext,
+        subject: Creature?,
+    ): ExpertPvpRelationResult {
+        if (fieldContext.canonicalItemId == 0 || fieldContext.ownerGuid == 0L || subject == null) {
+            return ExpertPvp.classifyRelation(
+                ExpertPvpRelationContext(
+                    actorGuid = fieldContext.ownerGuid,
+                    actorMode = fieldContext.ownerMode,
+                ),
+            )
+        }
+
+        val ownerPlayer = playerByGuidProvider(fieldContext.ownerGuid)
+        if (ownerPlayer != null) {
+            val relation = ExpertPvp.classifyRelation(ownerPlayer, subject, worldTypeProvider())
+            val facts = applyFieldRelationSnapshot(
+                fieldContext,
+                relation.facts.copy(
+                    actorGuid = fieldContext.ownerGuid,
+                    actorMode = fieldContext.ownerMode,
+                ),
+            )
+            return ExpertPvp.classifyRelation(facts)
+        }
+
+        val subjectPlayer = subject as? Player
+        val subjectMonster = subject as? Monster
+        val subjectOwnerPlayer = subjectPlayer ?: (subject.getMaster() as? Player)
+        val context = ExpertPvpRelationContext(
+            actorGuid = fieldContext.ownerGuid,
+            actorMode = fieldContext.ownerMode,
+            subjectGuid = subjectOwnerPlayer?.getGUID() ?: 0L,
+            subjectIsPlayer = subjectPlayer != null,
+            subjectIsMonster = subjectMonster != null,
+            subjectIsPlayerSummon = subjectPlayer == null && subject.isSummon() && subjectOwnerPlayer != null,
+            subjectIsNpc = subject is Npc,
+            subjectIsAccessPlayer = subjectOwnerPlayer?.group?.access == true,
+            isSelf = subjectPlayer != null && subjectPlayer.getGUID() == fieldContext.ownerGuid,
+        )
+
+        return ExpertPvp.classifyRelation(applyFieldRelationSnapshot(fieldContext, context))
+    }
+
+    /** File-local `applyFieldRelationSnapshot` (expert_pvp.cpp:222-238). */
+    private fun applyFieldRelationSnapshot(
+        fieldContext: ExpertFieldContext,
+        context: ExpertPvpRelationContext,
+    ): ExpertPvpRelationContext {
+        if (context.subjectGuid == 0L || context.subjectGuid == fieldContext.ownerGuid) {
+            return context
+        }
+
+        val subjectWasTargetAtCast = fieldContext.ownerTargetsAtCast.contains(context.subjectGuid)
+        val subjectWasAttackerAtCast = fieldContext.ownerAttackersAtCast.contains(context.subjectGuid)
+        if (subjectWasAttackerAtCast) {
+            return context.copy(directAttacker = true)
+        }
+
+        if (subjectWasTargetAtCast) {
+            return context.copy(directTarget = true, directAttacker = false)
+        }
+
+        return context
+    }
+
+    /** File-local `parseGuidList` (expert_pvp.cpp:104-125): comma-separated non-zero `uint32_t` guids. */
+    private fun parseGuidList(value: String): MutableList<Long> {
+        val guids = mutableListOf<Long>()
+        var offset = 0
+        while (offset < value.length) {
+            val delimiter = value.indexOf(',', offset)
+            val tokenEnd = if (delimiter == -1) value.length else delimiter
+            val token = value.substring(offset, tokenEnd)
+            val guid = token.toLongOrNull()
+            if (guid != null && guid in 1..0xFFFFFFFFL) {
+                guids.add(guid)
+            }
+            if (delimiter == -1) {
+                break
+            }
+            offset = delimiter + 1
+        }
+        return guids
     }
 
     /** `Tile::queryMaxCount` (src/items/tile.cpp:978-981). */
@@ -1440,6 +1913,24 @@ open class Tile(override val position: Position) : Cylinder {
     fun getZones(): Set<Zone> = zones
 
     companion object {
+        /** `ITEM_WALKABLE_SEA_START`/`ITEM_WALKABLE_SEA_END` (src/utils/utils_definitions.hpp:657-658). */
+        private const val ITEM_WALKABLE_SEA_START = 629
+        private const val ITEM_WALKABLE_SEA_END = 634
+
+        /**
+         * Expert-field custom attribute names (expert_pvp.cpp:36-43), kept beside
+         * their only reader until `ExpertPvp::attachFieldContext` is ported into
+         * `ExpertPvp`.
+         */
+        private const val EXPERT_FIELD_OWNER_GUID_ATTRIBUTE = "expertPvpOwnerGuid"
+        private const val EXPERT_FIELD_OWNER_MODE_ATTRIBUTE = "expertPvpOwnerMode"
+        private const val EXPERT_FIELD_CANONICAL_ITEM_ID_ATTRIBUTE = "expertPvpCanonicalItemId"
+        private const val EXPERT_FIELD_SAFE_VISUAL_ITEM_ID_ATTRIBUTE = "expertPvpSafeVisualItemId"
+        private const val EXPERT_FIELD_BLOCKING_VISUAL_ITEM_ID_ATTRIBUTE = "expertPvpBlockingVisualItemId"
+        private const val EXPERT_FIELD_OWNER_TARGETS_AT_CAST_ATTRIBUTE = "expertPvpOwnerTargetsAtCast"
+        private const val EXPERT_FIELD_OWNER_ATTACKERS_AT_CAST_ATTRIBUTE = "expertPvpOwnerAttackersAtCast"
+        private const val EXPERT_FIELD_OWNER_WAS_PLAYER_OR_SUMMON_ATTRIBUTE = "expertPvpOwnerWasPlayerOrSummon"
+
         /**
          * `Tile::nullptr_tile` (src/items/tile.cpp:30-31): the `StaticTile` at
          * `(0xFFFF, 0xFFFF, 0xFF)` every detached thing reports as its position.
