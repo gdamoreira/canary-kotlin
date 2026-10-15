@@ -14,6 +14,8 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.players.PlayerFrameSink
 import org.opentibia.canary.creatures.players.PlayerSendSink
+import org.opentibia.canary.creatures.players.vip.VipClient
+import org.opentibia.canary.creatures.players.vip.VipStatus
 import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
@@ -24,22 +26,28 @@ import org.opentibia.canary.network.protocol.container.ContainerItemWriter
 import org.opentibia.canary.network.protocol.creature.CreaturePacketWriter
 import org.opentibia.canary.network.protocol.map.TilePacketWriter
 import org.opentibia.canary.network.protocol.player.PlayerWindowWriter
+import org.opentibia.canary.network.protocol.vip.VipWindowWriter
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 
 /**
  * Per-player outbound `ProtocolGame` surface used by world state changes.
  *
  * The sink is the port's replacement for `Player::client` (`ProtocolGame*`,
- * player.hpp:1955): state owners (`Game`, `Player`, `Creature`, `Container`)
- * call the same senders Canary calls, and the sink serializes them through the
- * already-ported writers. A `null` [Player.protocolSink] models
+ * player.hpp:1955): state owners (`Game`, `Player`, `Creature`, `Container`,
+ * `PlayerVip`) call the same senders Canary calls, and the sink serializes them
+ * through the already-ported writers. A `null` [Player.protocolSink] models
  * `Player::client == nullptr`, exactly like the seam properties it feeds.
+ *
+ * [VipClient] is part of the surface because `PlayerVIP` calls
+ * `m_player.client->sendVIP`/`sendVIPGroups`/`sendUpdatedVIPStatus` directly
+ * (player_vip.cpp:50, 92, 181, 205, 224) rather than through a `Player::send*`
+ * member, so the attached sink is the component's live client.
  *
  * Implementations must be fire-and-forget: `NettyProtocolSink` queues the frame
  * on the channel's event loop, so sink writes never block the WorldCommit lane
  * (AGENTS.md 1.2) and never retain mutable world state.
  */
-interface ProtocolSink {
+interface ProtocolSink : VipClient {
 
     /** `ProtocolGame::sendTextMessage(TextMessage)` (0xB4, protocolgame.cpp:6070). */
     fun sendTextMessage(type: MessageClass, text: String)
@@ -252,6 +260,46 @@ abstract class ProtocolFrameSink(
 
     override fun sendRemoveContainerItem(cid: Int, slot: Int, lastItem: Item?) {
         emit { ContainerItemWriter.writeRemoveContainerItem(this, cid, slot, lastItem) }
+    }
+
+    // --- VIP sends ---------------------------------------------------------------
+
+    /**
+     * `ProtocolGame::sendVIP` (protocolgame.cpp:9374-9405) current-profile
+     * branch: the group ids come from the attached player's `PlayerVIP`
+     * (`player->vip().getGroupsIdGuidBelongs(guid)`).
+     */
+    override fun sendVip(guid: Long, name: String, description: String, icon: Int, notify: Boolean, status: VipStatus) {
+        val groups = player.features.vip.getGroupsIdGuidBelongs(guid)
+        emit {
+            SocialWindowWriter.writeVip(
+                this,
+                SocialWindowWriter.VipEntry(
+                    guid = guid,
+                    name = name,
+                    description = description,
+                    icon = icon.toLong(),
+                    notify = notify,
+                    status = status,
+                ),
+                groups,
+            )
+        }
+    }
+
+    /** `ProtocolGame::sendVIPGroups` (protocolgame.cpp:9407-9425) current-profile branch. */
+    override fun sendVipGroups() {
+        val vip = player.features.vip
+        val groups = vip.getGroups().map {
+            SocialWindowWriter.VipGroup(id = it.id, name = it.name, customizable = it.customizable)
+        }
+        val maxGroupEntries = vip.getMaxGroupEntries()
+        emit { SocialWindowWriter.writeVipGroups(this, groups, maxGroupEntries) }
+    }
+
+    /** `ProtocolGame::sendUpdatedVIPStatus` (protocolgame.cpp:9355-9372). */
+    override fun sendUpdatedVipStatus(guid: Long, newStatus: VipStatus) {
+        emit { VipWindowWriter.writeUpdatedVipStatus(this, guid, newStatus) }
     }
 
     /**
