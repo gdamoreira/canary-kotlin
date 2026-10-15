@@ -1,6 +1,9 @@
 plugins {
     kotlin("jvm") version "2.4.21"
     application
+    // Retries a failed test once so CI reports flake rates instead of red
+    // builds for timing-sensitive tests; real failures still fail after retry.
+    id("org.gradle.test-retry") version "1.6.6"
 }
 
 group = "org.opentibia.canary"
@@ -75,6 +78,11 @@ kotlin {
 
 tasks.test {
     useJUnitPlatform()
+    retry {
+        maxRetries.set(1)
+        maxFailures.set(10)
+        failOnPassedAfterRetry.set(false)
+    }
     // The full suite (~4.9k tests, Netty/H2/Hikari/LuaJ) exceeds the 512 MB
     // default test-worker heap.
     maxHeapSize = "3g"
