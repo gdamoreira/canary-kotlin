@@ -20,6 +20,16 @@ import org.opentibia.canary.map.Position
 class MonsterTypeState(
     /** `Monster::m_monsterType` (src/creatures/monsters/monster.hpp:363). */
     val monsterType: MonsterType? = null,
+    /**
+     * `g_creatureEvents().getEventByName(name, false)`
+     * (`CreatureEvents::getEventByName`, src/lua/creature/creatureevent.cpp:43-52)
+     * consulted by `Creature::registerCreatureEvent`
+     * (src/creatures/creature.cpp:1674-1681).
+     * The default accepts every name because the registry lives in
+     * `LuaEnvironment`; [MonsterPipelinesHost.register] passes the host's
+     * [MonsterPipelinesHost.creatureEventRegistered] lookup.
+     */
+    private val creatureEventRegistered: (String) -> Boolean = { true },
 ) {
     /** `Monster::forgeStack` (src/creatures/monsters/monster.hpp:406). */
     var forgeStack: Int = 0
@@ -62,24 +72,30 @@ class MonsterTypeState(
      * `mType->info.scripts` entry (monster.cpp:107-114) and
      * `MonsterTypeFunctions::luaMonsterTypeRegisterEvent` pushes late
      * registrations onto already-spawned monsters
-     * (monster_type_functions.cpp:1235-1242).
+     * (monster_type_functions.cpp:1235-1242). Each name is filtered through
+     * `Creature::registerCreatureEvent`'s registry lookup, so unknown names are
+     * never attached.
      *
-     * PARITY GAP: the set records the attachment only; the named
-     * `CreatureEvent` handlers are not dispatched per creature yet, because the
-     * port keeps the `g_creatureEvents()` registry in `LuaEnvironment` and
-     * `ScriptingDispatch` still fires every registered event (see
-     * ScriptingDispatch.kt).
+     * The attached set is the per-creature filter Canary applies when it walks
+     * `Creature::getCreatureEvents(type)`; the named `CreatureEvent` handlers are
+     * still dispatched by `ScriptingDispatch` without consulting it (PARITY GAP,
+     * see ScriptingDispatch.kt).
      */
     val creatureEvents: MutableSet<String> = linkedSetOf<String>().apply {
-        addAll(monsterType?.info?.scripts ?: emptySet())
+        addAll((monsterType?.info?.scripts ?: emptySet()).filter(creatureEventRegistered))
     }
 
     /**
      * `Creature::registerCreatureEvent` (`src/creatures/creature.cpp:1674-1693`):
-     * attaches [name] to the live monster; false when it was already attached
-     * (the C++ duplicate branch) or, in the C++, unknown to `g_creatureEvents()`.
+     * attaches [name] to the live monster; false when the registry does not know
+     * the name or it was already attached (the C++ duplicate branch).
      */
-    fun registerCreatureEvent(name: String): Boolean = creatureEvents.add(name)
+    fun registerCreatureEvent(name: String): Boolean {
+        if (!creatureEventRegistered(name)) {
+            return false
+        }
+        return creatureEvents.add(name)
+    }
 
     /** Whether [name] is attached to this live monster (`hasEventRegistered`). */
     fun hasCreatureEvent(name: String): Boolean = creatureEvents.contains(name)

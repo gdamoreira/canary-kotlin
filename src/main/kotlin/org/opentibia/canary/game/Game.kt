@@ -1279,12 +1279,68 @@ class Game(
     var getNpcSpeechBubble: (Npc) -> Int = { npc -> npc.npcType?.info?.speechBubble ?: NpcInfo.SPEECHBUBBLE_NORMAL }
 
     /**
-     * `Game::internalCreatureSay(speaker, type, text, ghostMode, spectators)`
-     * (game.cpp:7643) seam; the ported spectator/channel machinery lives in
-     * `ChatManager` and is injected by the host.
+     * `Game::internalCreatureSay(creature, type, text, ghostMode, spectatorsPtr)`
+     * (src/game/game.cpp:7618-7657). The default is the ported C++ body: empty
+     * text dispatches nothing; a missing or empty [spectators] list is resolved
+     * from the map (yells span ±18x/±14y across floors, every other type the
+     * same-floor ±8x/±6y client viewport); every player spectator is sent
+     * through [sendCreatureSayTo] unless [ghostMode] hides the speaker from
+     * them; then every spectator receives [onCreatureSayEvent]
+     * (`Creature::onCreatureSay`), which reaches `Monster::onCreatureSay`/
+     * `Npc::onCreatureSay`.
+     *
+     * Hosts may rebind the seam (the `ChatManager` speech machinery and tests
+     * capture it); the default is the production fanout. The C++ optional `pos`
+     * pointer is folded into the speaker position because the Kotlin senders
+     * carry no separate position.
      */
     var internalCreatureSay: (Creature, SpeakClasses, String, Boolean, List<Creature>) -> Unit =
-        { _, _, _, _, _ -> }
+        { speaker, type, text, ghostMode, spectators ->
+            if (text.isNotEmpty()) {
+                val resolved = if (spectators.isNotEmpty()) {
+                    spectators
+                } else if (type == SpeakClasses.TALKTYPE_YELL || type == SpeakClasses.TALKTYPE_MONSTER_YELL) {
+                    // `spectators.find<Creature>(*pos, true, (MAP_MAX_CLIENT_VIEW_PORT_X + 1) * 2, ...)`
+                    // (game.cpp:7635-7639).
+                    Spectators(map)
+                        .find<Creature>(
+                            speaker.position,
+                            multifloor = true,
+                            minRangeX = (Creature.MAP_MAX_CLIENT_VIEW_PORT_X + 1) * 2,
+                            maxRangeX = (Creature.MAP_MAX_CLIENT_VIEW_PORT_X + 1) * 2,
+                            minRangeY = (Creature.MAP_MAX_CLIENT_VIEW_PORT_Y + 1) * 2,
+                            maxRangeY = (Creature.MAP_MAX_CLIENT_VIEW_PORT_Y + 1) * 2,
+                        )
+                        .data()
+                } else {
+                    // `spectators.find<Creature>(*pos, false, MAP_MAX_CLIENT_VIEW_PORT_X, ...)`
+                    // (game.cpp:7631-7633).
+                    Spectators(map)
+                        .find<Creature>(
+                            speaker.position,
+                            multifloor = false,
+                            minRangeX = Creature.MAP_MAX_CLIENT_VIEW_PORT_X,
+                            maxRangeX = Creature.MAP_MAX_CLIENT_VIEW_PORT_X,
+                            minRangeY = Creature.MAP_MAX_CLIENT_VIEW_PORT_Y,
+                            maxRangeY = Creature.MAP_MAX_CLIENT_VIEW_PORT_Y,
+                        )
+                        .data()
+                }
+
+                // Send to client (`game.cpp:7643-7650`).
+                for (spectator in resolved) {
+                    val spectatorPlayer = spectator as? Player ?: continue
+                    if (!ghostMode || spectatorPlayer.canSeeCreature(speaker)) {
+                        sendCreatureSayTo(spectatorPlayer, speaker, type, text)
+                    }
+                }
+
+                // Event method (`game.cpp:7652-7655`).
+                for (spectator in resolved) {
+                    onCreatureSayEvent(spectator, speaker, type, text)
+                }
+            }
+        }
 
     /** `g_configManager().getBoolean(ONLY_INVITED_CAN_MOVE_HOUSE_ITEMS)` default (configmanager.cpp). */
     var onlyInvitedCanMoveHouseItems: Boolean = false
@@ -3240,19 +3296,20 @@ class Game(
     }
 
     /**
-     * `Game::playerWhisper` (src/game/game.cpp:7497): every viewport player
+     * `Game::playerWhisper` (src/game/game.cpp:7497-7515): every
+     * `MAP_MAX_CLIENT_VIEW_PORT_X`x`MAP_MAX_CLIENT_VIEW_PORT_Y` player
      * spectator outside the 1x1 radius receives `pspsps`, then the event hook
-     * runs on every spectator.
+     * runs on every player spectator.
      */
     fun playerWhisper(player: Player, text: String) {
         val spectators = Spectators(map)
             .find<Player>(
                 player.position,
                 multifloor = false,
-                minRangeX = Creature.MAP_MAX_VIEW_PORT_X,
-                maxRangeX = Creature.MAP_MAX_VIEW_PORT_X,
-                minRangeY = Creature.MAP_MAX_VIEW_PORT_Y,
-                maxRangeY = Creature.MAP_MAX_VIEW_PORT_Y,
+                minRangeX = Creature.MAP_MAX_CLIENT_VIEW_PORT_X,
+                maxRangeX = Creature.MAP_MAX_CLIENT_VIEW_PORT_X,
+                minRangeY = Creature.MAP_MAX_CLIENT_VIEW_PORT_Y,
+                maxRangeY = Creature.MAP_MAX_CLIENT_VIEW_PORT_Y,
             )
 
         for (spectator in spectators) {

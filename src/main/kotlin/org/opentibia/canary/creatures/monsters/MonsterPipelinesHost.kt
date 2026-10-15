@@ -184,6 +184,18 @@ class MonsterPipelinesHost(
         monster.direction = direction
     }
 
+    /**
+     * `g_creatureEvents().getEventByName(name, false)`
+     * (`CreatureEvents::getEventByName`, src/lua/creature/creatureevent.cpp:43-52)
+     * consulted by `Creature::registerCreatureEvent`
+     * (src/creatures/creature.cpp:1674-1681): unknown names are rejected and
+     * never attach. The registry lives in `LuaEnvironment` (AGENTS.md 1.4), so
+     * the composition root injects
+     * `luaEnvironment.creatureEvents.get(name) != null`; the unwired default
+     * accepts every name (PARITY GAP, CALL-SITE NEED on the boot wiring).
+     */
+    var creatureEventRegistered: (String) -> Boolean = { true }
+
     /** `Monster::say(text, yell)` (monster.cpp:2274-2294) sender seam. */
     var monsterSay: (Monster, String, Boolean) -> Unit = { _, _, _ -> }
 
@@ -258,9 +270,10 @@ class MonsterPipelinesHost(
     ) {
         /**
          * `Monster::onSpawn` is a creation-time event in C++ (called by the spawn
-         * engine and `Game::createMonster` after placement). The port fires it on
-         * the first self `onCreatureAppear` so a rejected placement cannot trigger
-         * it; the latch keeps a re-appear from firing it twice.
+         * engine and `Game::createMonster` after placement). [onSpawn] is the
+         * explicit entry; the first self `onCreatureAppear` still fires it as
+         * the fallback so a rejected placement cannot trigger it; the latch
+         * keeps a re-appear from firing it twice.
          */
         internal var spawnEventDispatched: Boolean = false
     }
@@ -308,7 +321,7 @@ class MonsterPipelinesHost(
     fun register(monster: Monster, monsterType: MonsterType? = null): MonsterAsyncPipelines {
         val targetState = MonsterTargetListState()
         val behaviorState = MonsterBehaviorState()
-        val typeState = MonsterTypeState(monsterType)
+        val typeState = MonsterTypeState(monsterType) { name -> creatureEventRegistered(name) }
         val host = MonsterAsyncHost()
         val pipeline = MonsterAsyncPipelines(
             monsterId = monster.id,
@@ -582,6 +595,31 @@ class MonsterPipelinesHost(
     }
 
     /**
+     * `Monster::onSpawn(position)` (src/creatures/monsters/monster.cpp:627-648):
+     * the spawn engine (`SpawnMonster::spawnMonster`, spawn_monster.cpp:220), the
+     * raid engine (raids.cpp:408) and the `Game.createMonster`/
+     * `Game.createSoulPitMonster` Lua bindings (game_functions.cpp:589, 641)
+     * dispatch it after a successful placement. Returns whether this call
+     * dispatched the event; the [Entry.spawnEventDispatched] latch makes a
+     * later first-self [onCreatureAppear] fallback a no-op.
+     *
+     * CALL-SITE NEED: the Kotlin spawn engine (`SpawnMonster`/
+     * `GameMonsterFactory` in the `creatures/spawns` package) does not call this
+     * entry yet, so the production spawn path still reaches `onSpawn` through
+     * the first self [onCreatureAppear] (PARITY GAP, different dispatch time,
+     * same payload).
+     */
+    fun onSpawn(monsterId: Long, position: Position): Boolean {
+        val entry = entries[monsterId] ?: return false
+        if (entry.spawnEventDispatched) {
+            return false
+        }
+        entry.spawnEventDispatched = true
+        entry.typeState.runSpawnEvent(entry.monster, position)
+        return true
+    }
+
+    /**
      * `Monster::onCreatureAppear` (monster.cpp:348-389) after the
      * `Creature::onCreatureAppear` base call: the Lua `creatureAppearEvent`
      * dispatch runs first and, when it handles the event, stops the default
@@ -599,10 +637,7 @@ class MonsterPipelinesHost(
                 requestUpdateTargetList(monsterId)
                 entry.host.updateIdleStatus()
             }
-            if (!entry.spawnEventDispatched) {
-                entry.spawnEventDispatched = true
-                entry.typeState.runSpawnEvent(entry.monster, entry.monster.position)
-            }
+            onSpawn(monsterId, entry.monster.position)
             return
         }
 
@@ -700,9 +735,12 @@ class MonsterPipelinesHost(
      * `MonsterTypeFunctions::luaMonsterTypeRegisterEvent`
      * (monster_type_functions.cpp:1235-1242) live-monster push: every monster
      * whose `Monster::m_monsterType` is [monsterType] receives the newly
-     * registered creature event (`Monster::registerCreatureEvent`). The port's
-     * live monsters are the registered host entries (`Game::internalPlaceCreature`
-     * registers each placed monster and `Game::removeCreature` unregisters it),
+     * registered creature event (`Monster::registerCreatureEvent`). A name the
+     * [creatureEventRegistered] lookup rejects is never attached, exactly like
+     * `Creature::registerCreatureEvent` (creature.cpp:1674-1693). The port's
+     * live monsters are the registered host entries
+     * (`Game::internalPlaceCreature` registers each placed monster and
+     * `Game::removeCreature` unregisters it),
      * so this walk has the `g_game().getMonsters()` set semantics. Returns
      * whether any live monster matched.
      */

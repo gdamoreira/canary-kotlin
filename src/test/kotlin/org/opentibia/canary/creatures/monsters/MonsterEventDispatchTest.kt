@@ -175,6 +175,39 @@ class MonsterEventDispatchTest {
     }
 
     @Test
+    fun `onSpawn dispatches once with the spawn position and latches the appear fallback`() {
+        env.loadChunk(
+            """
+            local mType = Game.createMonsterType("Rat")
+            spawnCount = 0
+            spawnX = 0
+            spawnY = 0
+            mType.onSpawn = function(monster, spawnPosition)
+                spawnCount = spawnCount + 1
+                spawnX = spawnPosition.x
+                spawnY = spawnPosition.y
+            end
+            """.trimIndent(),
+        )
+        val rat = registry.getMonsterType("rat")!!
+        val ratMonster = monster()
+        host.register(ratMonster, rat)
+
+        assertThat(host.onSpawn(ratMonster.id, Position(101, 102, 7))).isTrue()
+        assertThat(env.getGlobal("spawnCount").toint()).isEqualTo(1)
+        assertThat(env.getGlobal("spawnX").toint()).isEqualTo(101)
+        assertThat(env.getGlobal("spawnY").toint()).isEqualTo(102)
+
+        host.onCreatureAppear(ratMonster.id, ratMonster, false)
+        assertThat(env.getGlobal("spawnCount").toint()).isEqualTo(1)
+    }
+
+    @Test
+    fun `onSpawn ignores an unknown monster id`() {
+        assertThat(host.onSpawn(404, origin)).isFalse()
+    }
+
+    @Test
     fun `captured onDisappear fires when a creature is removed`() {
         env.loadChunk(
             """
