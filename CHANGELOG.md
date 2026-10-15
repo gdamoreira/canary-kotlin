@@ -689,8 +689,17 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 71: Wave 68 — Minor Seam Bindings (07:00 – 09:00)
+- **Event/modal/combat-state** — think/death Lua loops bound at the root, per-session modal windows (0xFA/0xF9 round trip), `attachCombat` production state/effects (8 tests).
+- **Combat/group/player** — wheel beam-mastery adapter (+ Lua decorator call site), `combatTargetOf` adopts the host state, `Player.hasFlag` reads `Group.flags`, login fills `Player.spells` (22 tests).
+- **Protocol** — sale-item-list frames, weapon-proficiency window (0xC4), self-appear add-creature branch (0x17) + stats/skills login continuation (9 tests).
+- **Persistence/guild** — `savePlayerSystems` (+ read-back), guild helper broadcasts via the repo seam (bound at the root), exiva guid uint32 wrap (11 tests).
+- **758 suites / 8091 tests, all green**; all commits ancestry-verified.
+
+---
+
 ### Current Status
-- **Automated Tests**: **748 test suites / 8041 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **758 test suites / 8091 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.

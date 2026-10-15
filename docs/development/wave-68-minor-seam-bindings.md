@@ -1,6 +1,6 @@
 # Wave 68 Plan — Minor Seam Bindings
 
-**Status:** In progress — dispatched
+**Status:** Completed (2026-10-15) — four workstreams merged; 758 suites / 8091 tests green
 **Baseline:** `main` @ `3f6d4d95`; 748 suites / 8041 tests green; zero Kotlin warnings
 **Source of scope:** `docs/development/implementation-status.md` §3 item 1 (remaining minor seam bindings).
 **Convention:** documents live directly in `docs/development/` (AGENTS.md §5/§6).
@@ -108,3 +108,14 @@ Update `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`
 
 Deferred list unchanged: differential harness; CipSoft860/old protocol;
 OpenTelemetry SDK/OStream; micro-seams.
+
+---
+
+## Completion (2026-10-15)
+
+event-modal-binding (`5e5296ee`), combat-group-tails (`a0a3ad67`),
+protocol-tails (`b6334fdc`), persistence-guild-tails (`0f3725a1`) merged (one
+GameHandler conflict resolved by dropping the superseded self-appear
+suppression; both agents' CALL-SITE NEEDs bound at the root afterwards).
+Integrated suite: **758 suites / 8091 tests, 0 failures, zero Kotlin
+warnings**; ancestry verified.
