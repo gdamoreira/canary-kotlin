@@ -54,6 +54,7 @@ import org.opentibia.canary.items.functions.ItemParseRegistry
 import org.opentibia.canary.items.functions.XmlAttribute
 import org.opentibia.canary.items.functions.XmlNode
 import org.opentibia.canary.lua.bindings.LootFunctions
+import org.opentibia.canary.lua.bindings.SpellBindings
 import org.opentibia.canary.lua.bindings.library.ConfigFunctions
 import org.opentibia.canary.lua.bindings.library.WorldConfigOperations
 import org.opentibia.canary.lua.loader.Scripts
@@ -549,6 +550,13 @@ private fun defaultScriptingBoot(config: ServerConfig): LuaEnvironment {
         loadLibs()
         loadScripts(Path.of(config.dataDir, "scripts"))
     }
+    // Wave 65 B3: record the datapack spell scripts into the compiled engine
+    // `g_spells()` registry before the monster scripts deserialize their
+    // `sb.spell` blocks (`Spells::registerInstantLuaEvent`/
+    // `registerRuneLuaEvent`, spells.cpp:181-222). The scripts stay Lua; the
+    // recorder only projects the registered state onto the engine actors.
+    val recorded = SpellBindings.recordRegisteredSpells()
+    logger.info { "Recorded $recorded compiled spells from the datapack scripts" }
     return environment
 }
 

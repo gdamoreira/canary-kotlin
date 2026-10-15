@@ -15,6 +15,8 @@ import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.spells.LuaVariant
 import org.opentibia.canary.spells.LuaVariantType
 import org.opentibia.canary.spells.MonsterRegisteredSpellRunner
+import org.opentibia.canary.spells.SpellRegistryBoot
+import org.opentibia.canary.spells.Spells as EngineSpells
 
 /**
  * Canonical owner of the `Spell` global and its metatable in the Kotlin port.
@@ -24,16 +26,23 @@ import org.opentibia.canary.spells.MonsterRegisteredSpellRunner
  * `LuaEventDispatcher` (both need the same [Spells] instance the constructor
  * registers into).
  *
- * It also holds the registry reference the `g_spells()` look-ups of the engine
- * resolve through, e.g. `Monsters::deserializeSpell` (monsters.cpp:77); Canary
- * reaches the process-wide singleton, the port keeps the [install]-created
- * instance. The same applies to the registry-backed monster spell `onCastSpell`
- * bridge ([monsterRegisteredSpellRunner]), which needs the environment the
- * bindings were installed into.
+ * It also owns the composed engine `g_spells()` registry ([EngineSpells],
+ * spells.hpp:28-79): the datapack spell scripts register through the Lua path
+ * and [recordRegisteredSpells] records their compiled `InstantSpell`/`RuneSpell`
+ * actors (spells.cpp:181-222) so the engine look-ups resolve, e.g.
+ * `Monsters::deserializeSpell` (monsters.cpp:77). Canary reaches the
+ * process-wide singleton, the port keeps the [install]-created instance. The
+ * same applies to the registry-backed monster spell `onCastSpell` bridge
+ * ([monsterRegisteredSpellRunner]), which needs the environment the bindings
+ * were installed into.
  */
 object SpellBindings {
     @Volatile
     private var registry: Spells? = null
+
+    /** The compiled engine registry the `g_spells()` look-ups resolve through. */
+    @Volatile
+    private var engineRegistry: EngineSpells = EngineSpells()
 
     @Volatile
     private var monsterSpellRunner: MonsterRegisteredSpellRunner =
@@ -43,18 +52,46 @@ object SpellBindings {
         val spells = Spells()
         SpellFunctions.install(env, spells, operations)
         registry = spells
+        engineRegistry = EngineSpells()
         monsterSpellRunner = LuaMonsterRegisteredSpellRunner(env)
         return spells
     }
 
     /**
-     * `Spells::getSpellByName` (`src/creatures/combat/spells.cpp:255-261`): the
-     * rune spell wins over an instant spell registered with the same name.
-     * Returns `null` before [install] has run or when the name is not
-     * registered.
+     * The composed engine `g_spells()` registry ([EngineSpells]). Canary
+     * resolves the process-wide singleton; per AGENTS.md 1.1 the port hands the
+     * [install]-created instance to the engine consumers instead (the wheel
+     * tables, the spell list and the rune/vocation look text).
      */
-    fun getSpellByName(name: String): LuaSpell? =
-        registry?.let { it.getRuneByName(name) ?: it.getInstantByName(name) }
+    fun spellRegistry(): EngineSpells = engineRegistry
+
+    /**
+     * Records every spell the Lua registration path registered into the engine
+     * registry ([SpellRegistryBoot.recordRegisteredSpells]) and returns the
+     * number of newly recorded actors. Idempotent, so the boot calls it after
+     * the datapack scripts load and [getSpellByName] keeps the registry current
+     * for later registrations (e.g. a script reload).
+     */
+    fun recordRegisteredSpells(): Int =
+        registry?.let { SpellRegistryBoot.recordRegisteredSpells(it, engineRegistry) } ?: 0
+
+    /**
+     * `Spells::getSpellByName` (`src/creatures/combat/spells.cpp:255-261`): the
+     * rune spell wins over an instant spell registered with the same name. The
+     * look-up resolves through the compiled engine registry — the monster
+     * `sb.spell` hit of `Monsters::deserializeSpell` (monsters.cpp:77-80) — and
+     * returns the registered [LuaSpell] script state the monster actor drives
+     * `onCastSpell` through. Returns `null` before [install] has run or when the
+     * name is not registered.
+     */
+    fun getSpellByName(name: String): LuaSpell? {
+        val spells = registry ?: return null
+        recordRegisteredSpells()
+        if (engineRegistry.getSpellByName(name) == null) {
+            return null
+        }
+        return spells.getRuneByName(name) ?: spells.getInstantByName(name)
+    }
 
     /**
      * The `onCastSpell` bridge for a registry-backed monster spell
