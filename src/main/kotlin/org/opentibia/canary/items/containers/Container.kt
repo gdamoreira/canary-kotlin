@@ -3,6 +3,8 @@ package org.opentibia.canary.items
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.WeaponType_t
+import org.opentibia.canary.creatures.players.postAddNotification
+import org.opentibia.canary.creatures.players.postRemoveNotification
 import org.opentibia.canary.game.CylinderFlags
 import org.opentibia.canary.io.PropStream
 import org.opentibia.canary.systems.rewardchest.ReturnValue
@@ -959,6 +961,15 @@ open class Container(
 
     /** `Container::postAddNotification` (container.cpp:1040-1052). */
     override fun postAddNotification(thing: Thing?, oldParent: Cylinder?, index: Int, link: CylinderLink) {
+        // The C++ `getTopParent()` reaches the holding `Player` because the
+        // player is a `Cylinder`; the port resolves the recorded holding link
+        // instead (`Item::getHoldingPlayer`, item.cpp:879) and routes the same
+        // `LINK_TOPPARENT` notification.
+        getHoldingPlayer()?.let { holder ->
+            holder.postAddNotification(thing, oldParent, index, CylinderLink.LINK_TOPPARENT)
+            return
+        }
+
         val topParent = getTopParent() ?: return
         if (topParent.getCreature() != null) {
             topParent.postAddNotification(thing, oldParent, index, CylinderLink.LINK_TOPPARENT)
@@ -972,6 +983,14 @@ open class Container(
 
     /** `Container::postRemoveNotification` (container.cpp:1054-1066). */
     override fun postRemoveNotification(thing: Thing?, newParent: Cylinder?, index: Int, link: CylinderLink) {
+        // See [postAddNotification]: the recorded holding link routes the
+        // `LINK_TOPPARENT` notification the C++ `getTopParent()` creature
+        // branch would.
+        getHoldingPlayer()?.let { holder ->
+            holder.postRemoveNotification(thing, newParent, index, CylinderLink.LINK_TOPPARENT)
+            return
+        }
+
         val topParent = getTopParent() ?: return
         if (topParent.getCreature() != null) {
             topParent.postRemoveNotification(thing, newParent, index, CylinderLink.LINK_TOPPARENT)

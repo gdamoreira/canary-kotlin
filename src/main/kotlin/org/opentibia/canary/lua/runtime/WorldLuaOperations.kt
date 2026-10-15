@@ -281,7 +281,9 @@ class WorldLuaOperations(
 
     val game: GameOperations = worldGame
 
-    val player: PlayerOperations = WorldPlayerOperations(itemIdsByName)
+    private val worldPlayer: WorldPlayerOperations = WorldPlayerOperations(itemIdsByName, itemTypes)
+
+    val player: PlayerOperations = worldPlayer
 
     val creature: CreatureOperations = WorldCreatureOperations()
 
@@ -317,6 +319,25 @@ class WorldLuaOperations(
         worldGame.attachMonsters(monsters)
         worldMonster.attachMonsters(monsters)
         worldMonsterType.attachMonsters(monsters)
+    }
+
+    /**
+     * Wires the booted `g_game()` player-insertion producers behind the Lua
+     * `player:addItem`/`player:addItemEx` entry points
+     * (`PlayerFunctions::luaPlayerAddItem` player_functions.cpp:2414 and
+     * `luaPlayerAddItemEx` player_functions.cpp:2473), mirroring [attachCombat]:
+     * `initState` registers the operations before the world exists, so a
+     * composition root binds the composed `Game::internalPlayerAddItem`
+     * (game.cpp:2981) and the `Game::internalAddItem` player branch
+     * (game.cpp:2698) when it does. Without the bind, the direct domain
+     * insertion is kept for embedded/test roots (PARITY GAP: no producers).
+     */
+    fun attachPlayerItems(
+        internalPlayerAddItem: (Player, Item, Boolean, Slots_t) -> ReturnValue,
+        internalAddItem: (Player, Item, Int, Int) -> ReturnValue,
+    ) {
+        worldPlayer.internalPlayerAddItem = internalPlayerAddItem
+        worldPlayer.internalAddItem = internalAddItem
     }
 
     /**
@@ -888,9 +909,31 @@ class WorldGameOperations(
  */
 class WorldPlayerOperations(
     private val itemIdsByName: Map<String, Int> = emptyMap(),
+    private val itemTypes: ItemTypeRegistry? = null,
 ) : PlayerOperations {
+    /**
+     * `g_game().internalPlayerAddItem(player, item, dropOnMap, slot)`
+     * (game.cpp:2981) seam bound by [WorldLuaOperations.attachPlayerItems]; the
+     * `null` default keeps the pre-world direct `Player::addItem` insertion
+     * (PARITY GAP: no `Player::postAddNotification` producers).
+     */
+    internal var internalPlayerAddItem: ((Player, Item, Boolean, Slots_t) -> ReturnValue)? = null
+
+    /**
+     * `g_game().internalAddItem(player, item, index, flags)` player branch
+     * (game.cpp:2698) seam bound by [WorldLuaOperations.attachPlayerItems]; the
+     * `null` default keeps the unported container-index routing
+     * (`RETURNVALUE_NOTPOSSIBLE`).
+     */
+    internal var internalAddItem: ((Player, Item, Int, Int) -> ReturnValue)? = null
+
     override fun itemIdByName(name: String): Int = itemIdsByName[name] ?: 0
 
+    /**
+     * `PlayerFunctions::luaPlayerAddItem` (player_functions.cpp:2346-2435):
+     * `Item::CreateItem(itemId, count)` then
+     * `g_game().internalPlayerAddItem(player, item, canDropOnMap, slot)`.
+     */
     override fun addItem(
         player: Any,
         itemId: Int,
@@ -901,9 +944,11 @@ class WorldPlayerOperations(
         tier: Int,
     ): List<Any> {
         val target = player as? Player ?: return emptyList()
-        val item = org.opentibia.canary.items.Item(itemId, count.coerceAtLeast(1))
-        val result = target.addItem(item)
-        return if (result == org.opentibia.canary.systems.rewardchest.ReturnValue.NOERROR) listOf(item) else emptyList()
+        val item = Item(itemId, count.coerceAtLeast(1), itemTypes?.get(itemId))
+        val resolvedSlot = Slots_t.fromValue(slot) ?: Slots_t.CONST_SLOT_WHEREEVER
+        val ret = internalPlayerAddItem?.invoke(target, item, canDropOnMap, resolvedSlot)
+            ?: target.addItem(item, resolvedSlot)
+        return if (ret == ReturnValue.NOERROR) listOf(item) else emptyList()
     }
 
     override fun removeItem(
@@ -1165,9 +1210,12 @@ class WorldPlayerOperations(
 
     /**
      * Mirrors `luaPlayerAddItemEx` (player_functions.cpp:2447-2485): the
-     * `canDropOnMap = true` branch routes through `Game::internalPlayerAddItem`. The
-     * `canDropOnMap = false` branch needs `Game::internalAddItem` container-index
-     * routing (unported) and returns `RETURNVALUE_NOTPOSSIBLE` (PARITY GAP).
+     * `canDropOnMap = true` branch routes through
+     * `Game::internalPlayerAddItem(player, item, true, slot)` and the
+     * `canDropOnMap = false` branch through the `Game::internalAddItem` player
+     * branch with the decoded index/flags. Without the attach seam the
+     * container-index routing is unported and returns `RETURNVALUE_NOTPOSSIBLE`
+     * (PARITY GAP).
      */
     override fun addItemEx(
         player: Any,
@@ -1178,11 +1226,16 @@ class WorldPlayerOperations(
     ): Int? {
         val target = player as? Player ?: return null
         val candidate = item as? Item ?: return ReturnValue.NOTPOSSIBLE.ordinal
-        if (!canDropOnMap) {
-            return ReturnValue.NOTPOSSIBLE.ordinal
+        if (canDropOnMap) {
+            val slot = Slots_t.fromValue(indexOrSlot) ?: return ReturnValue.NOTPOSSIBLE.ordinal
+            val ret = internalPlayerAddItem?.invoke(target, candidate, true, slot)
+                ?: return target.addItem(candidate, slot).ordinal
+            return ret.ordinal
         }
-        val slot = Slots_t.fromValue(indexOrSlot) ?: return ReturnValue.NOTPOSSIBLE.ordinal
-        return target.addItem(candidate, slot).ordinal
+
+        val ret = internalAddItem?.invoke(target, candidate, indexOrSlot, flags)
+            ?: return ReturnValue.NOTPOSSIBLE.ordinal
+        return ret.ordinal
     }
 
     override fun getSlotItem(player: Any, slot: Int): Any? {

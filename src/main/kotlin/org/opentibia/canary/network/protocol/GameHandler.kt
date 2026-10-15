@@ -275,9 +275,12 @@ class GameHandler(
         }
         // `Player::updateState()` (player.cpp:6056-6064): the inventory refresh
         // followed by the shop tail, which defers `Game::updatePlayerSaleItems`
-        // through the dispatcher when the session has an open shop window.
+        // through the dispatcher when the session has an open shop window. The
+        // `updateItemsLight` producer is composed over the world's per-player
+        // `PlayerLightState` (player.cpp:6284-6305).
         game.updateState = { target ->
             target.updateState(
+                updateItemsLight = { game.playerUpdateItemsLight(target) },
                 updateSaleShopList = { game.updateSaleShopList(target) },
                 hasShopOwner = { game.getShopOwner(target) != null },
             )
@@ -878,6 +881,11 @@ class GameHandler(
                         itemTypes = itemTypes,
                         clientVersionString = clientVersionString,
                         protocolProfile = sessionProfile,
+                        // `WeaponProficiency::proficiencies` (weapon_proficiency.cpp:79):
+                        // the boot registry loaded from `proficiencies.json` rides
+                        // the item registry (bootstrap `defaultItemBoot`) so the
+                        // `0xB3` action `0x03` selection validates against it.
+                        weaponProficiencyRegistry = itemTypes?.weaponProficiencyRegistry ?: emptyMap(),
                         // `IOLoginData::getGuidByName` behind the exiva
                         // player-whitelist apply (protocolgame.cpp:12227); a
                         // directly constructed handler without the loader

@@ -46,6 +46,7 @@ import org.opentibia.canary.creatures.players.WalkStartPolicy
 import org.opentibia.canary.creatures.players.getDodgeChance
 import org.opentibia.canary.creatures.players.postAddNotification
 import org.opentibia.canary.creatures.players.postRemoveNotification
+import org.opentibia.canary.creatures.players.queryRemove
 import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.creatures.appearance.outfit.Outfit as OutfitDefinition
 import org.opentibia.canary.creatures.appearance.effects.AttachedEffects
@@ -83,6 +84,7 @@ import org.opentibia.canary.creatures.monsters.MonsterTargeting
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.npcs.NpcInfo
 import org.opentibia.canary.creatures.players.PlayerTask
+import org.opentibia.canary.creatures.players.PlayerLightState
 import org.opentibia.canary.creatures.players.getHelpers
 import org.opentibia.canary.creatures.players.onKilledMonster
 import org.opentibia.canary.creatures.players.playerSendSink
@@ -1880,7 +1882,16 @@ class Game(
         { _, _, _, _, _, _, _ -> ReturnValue.DEPOTISFULL to 0 }
 
     /** `Player::removeItem(item, count)` (player.cpp:10251) seam; the default only removes inventory items. */
-    var removeItem: (Player, Item, Int) -> ReturnValue = { player, item, count -> player.removeItem(item, count) }
+    var removeItem: (Player, Item, Int) -> ReturnValue = { player, item, count ->
+        val ret = player.removeItem(item, count)
+        if (ret == ReturnValue.NOERROR) {
+            // The item left the player inventory: drop the recorded holding
+            // link (`Item::getHoldingPlayer`, item.cpp:879) so the container
+            // producers cannot route back to a stale holder.
+            item.setHoldingPlayer(null)
+        }
+        ret
+    }
 
     /** `Player::getAllSaleItemIdAndCount(inventoryMap)` (player.cpp) seam. */
     var getAllSaleItemIdAndCount: (Player, MutableMap<Int, Int>) -> Map<Int, Int> = { _, map -> map }
@@ -1982,6 +1993,16 @@ class Game(
         player.experienceFromPlayersProvider = ::configuredExperienceFromPlayers
         player.expFromPlayersLevelRangeProvider = ::configuredExpFromPlayersLevelRange
 
+        // `Player::internalAddThing` loads the persisted inventory without a
+        // parent link (Creature.kt PARITY GAP), so the world records the
+        // `Item::getHoldingPlayer` link of every loaded container here.
+        for (slot in Slots_t.entries) {
+            if (slot.value < Slots_t.FIRST || slot.value > Slots_t.LAST) {
+                continue
+            }
+            bindHoldingPlayer(player, player.getInventoryItem(slot))
+        }
+
         registerOnlinePlayer(player)
     }
 
@@ -2023,6 +2044,7 @@ class Game(
         if (player.name.isNotEmpty()) {
             wildcardTree.remove(player.name.lowercase())
         }
+        playerLightStates.remove(player)
         unregisterOnlinePlayer(player)
     }
 
@@ -2933,10 +2955,13 @@ class Game(
      * `count == -1` removes the whole stack, partial stackable counts decrement in
      * place and a full removal unlinks the item.
      *
-     * Parity gaps: `Item::canRemove`, map-loaded decay protection and the
-     * `FLAG_IGNORENOTMOVABLE`/`Item::isMovable` check cannot be evaluated because the
-     * Kotlin [ItemType] does not model movable/decay state; `Player::queryRemove`
-     * (player.cpp:5714+) is not ported, so the inventory branch has no gate.
+     * The `Item::canRemove` gate (game.cpp:2812) is evaluated on both branches and
+     * `force` bypasses the query/`canRemove` pair exactly like the C++ guards.
+     *
+     * Parity gaps: map-loaded decay protection and the
+     * `FLAG_IGNORENOTMOVABLE`/`Item::isMovable` check on the tile branch cannot be
+     * evaluated because the Kotlin [ItemType] does not model decay state, and the
+     * `Item::playerUpdateSupplyTracker`/quiver refresh tails are not modeled.
      */
     fun internalRemoveItem(
         item: Item?,
@@ -2948,7 +2973,7 @@ class Game(
         if (item == null) {
             return ReturnValue.NOTPOSSIBLE
         }
-        val tile = itemParents[item] ?: return internalRemoveInventoryItem(item, count, test)
+        val tile = itemParents[item] ?: return internalRemoveInventoryItem(item, count, test, flags, force)
 
         val removeCount = if (count == -1) item.count else count
         val ret = queryRemove(tile, item, removeCount, flags or CylinderFlags.FLAG_IGNORENOTMOVABLE)
@@ -2956,16 +2981,28 @@ class Game(
             return ret
         }
 
+        if (!force && !item.canRemove()) {
+            return ReturnValue.NOTPOSSIBLE
+        }
+
         if (!test) {
+            val index = tile.getThingIndex(item)
             removeThing(tile, item, removeCount)
+            if (item.isRemoved()) {
+                item.onRemoved()
+                item.stopDecaying()
+            }
+            tile.postRemoveNotification(item, null, index)
         }
         return ReturnValue.NOERROR
     }
 
     /**
      * Player-cylinder branch of `Game::internalRemoveItem` (game.cpp:2790-2838):
-     * the owning player is resolved through the inventory scan, the item leaves
-     * the slot through [Player.removeItem], and the removal is closed by
+     * the owning player is resolved through the inventory scan, the
+     * `Player::queryRemove` + `Item::canRemove` gates run like the C++
+     * `cylinder->queryRemove(...)`/`item->canRemove()` pair, the item leaves the
+     * slot through [Player.removeItem], and the removal is closed by
      * `Player::postRemoveNotification(item, nullptr, index)` so the inventory
      * change reaches `Player::updateState`'s refresh and the shop sale-list
      * tail.
@@ -2975,21 +3012,38 @@ class Game(
      * through the inventory scan of the online [players] and the notification
      * parent is `null`.
      */
-    private fun internalRemoveInventoryItem(item: Item, count: Int, test: Boolean): ReturnValue {
+    private fun internalRemoveInventoryItem(
+        item: Item,
+        count: Int,
+        test: Boolean,
+        flags: Int,
+        force: Boolean,
+    ): ReturnValue {
         val owner = players.values.firstOrNull { inventorySlotOf(it, item) != null }
             ?: return ReturnValue.NOTPOSSIBLE
         val index = inventorySlotOf(owner, item)?.value ?: return ReturnValue.NOTPOSSIBLE
         val removeCount = if (count == -1) item.count else count
+
+        val ret = owner.queryRemove(item, removeCount, flags or CylinderFlags.FLAG_IGNORENOTMOVABLE)
+        if (!force && ret != ReturnValue.NOERROR) {
+            return ret
+        }
+
+        if (!force && !item.canRemove()) {
+            return ReturnValue.NOTPOSSIBLE
+        }
 
         if (test) {
             return ReturnValue.NOERROR
         }
 
         owner.removeItem(item, removeCount)
+        item.setHoldingPlayer(null)
         owner.postRemoveNotification(
             item,
             null,
             index,
+            updateItemsLight = { playerUpdateItemsLight(owner) },
             getHoldingPlayer = containerHoldingPlayer,
             hasShopOwner = { getShopOwner(owner) != null },
             isSaleUpdateScheduled = { getScheduledSaleUpdate(owner) },
@@ -3316,6 +3370,58 @@ class Game(
      */
     var playerThingIndex: (Player, Item) -> Int = { player, item ->
         Slots_t.entries.firstOrNull { player.getInventoryItem(it) === item }?.value ?: -1
+    }
+
+    // --- player inventory-change producer state (player.cpp:8664-8760, 6284-6305) ---
+
+    /**
+     * Per-player `Player::itemsLight` composition (player.hpp:1794,
+     * player.cpp:6284-6305). The Kotlin [Player] lives in `creatures/Creature.kt`
+     * (outside this workstream), so the composed [PlayerLightState] lives with
+     * the world that drives it (AGENTS.md 1.1 DI) and is released by
+     * [removePlayer].
+     */
+    private val playerLightStates = IdentityHashMap<Player, PlayerLightState>()
+
+    /** The composed `PlayerLightState` of [player], created on first use. */
+    private fun lightStateOf(player: Player): PlayerLightState =
+        playerLightStates.getOrPut(player) {
+            PlayerLightState(
+                slotItems = { playerInventoryItems(player) },
+                // `Creature::internalLight` (creature.hpp:922): the Kotlin
+                // `Player::getCreatureLight` has no items half to fold yet
+                // (`creatures/Creature.kt` ownership), so it is the internal
+                // read this state merges with (player.cpp:6277-6282).
+                internalLight = { player.getCreatureLight() },
+                changeLight = { changeLight(player) },
+            )
+        }
+
+    /**
+     * `Player::updateItemsLight()` (player.cpp:6284-6305) over the composed
+     * state: the inventory-change producers (`Player::postAddNotification`/
+     * `postRemoveNotification`, `Player::updateState`) call this so a light
+     * change refreshes `itemsLight` and fans `Game::changeLight` out.
+     */
+    fun playerUpdateItemsLight(player: Player) {
+        lightStateOf(player).updateItemsLight()
+    }
+
+    /** The `CONST_SLOT_FIRST..CONST_SLOT_LAST` inventory items of [player]. */
+    private fun playerInventoryItems(player: Player): List<Item> =
+        Slots_t.entries
+            .filter { it.value in Slots_t.FIRST..Slots_t.LAST }
+            .mapNotNull { player.getInventoryItem(it) }
+
+    /**
+     * Records the `Item::getHoldingPlayer` link (item.cpp:879) of a container
+     * entering the player inventory. C++ parents the slot item to the player
+     * cylinder (`Player::internalAddThing`); the Kotlin [Player] is not a
+     * `Cylinder`, so the world records the relation the container producers
+     * read to route `LINK_TOPPARENT` notifications.
+     */
+    private fun bindHoldingPlayer(player: Player, item: Item?) {
+        (item as? Container)?.setHoldingPlayer(player)
     }
 
     // --- world-state updaters (game.cpp:7808-7831, 9326-9376, 9535-9590, 11825-11880, 12674-12760) ---
@@ -5182,9 +5288,14 @@ class Game(
      * `Player::addThing` insertion modelled by `Player::addItem`, closed by
      * `toCylinder->postAddNotification(item, nullptr, itemIndex)`
      * (game.cpp:2767-2785) so the inventory change reaches
-     * `Player::updateState`'s refresh and the shop sale-list tail.
+     * `Player::updateState`'s refresh and the shop sale-list tail. A valid
+     * [index] is the destination inventory slot (`Player::queryDestination`,
+     * player.cpp:4886); `INDEX_WHEREEVER`/0 keep the first-free-slot placement.
+     *
+     * A container destination records the `Item::getHoldingPlayer` link
+     * (item.cpp:879) so its notification producers route back to [toPlayer].
      */
-    private fun internalAddItem(
+    internal fun internalAddItem(
         toPlayer: Player,
         item: Item?,
         index: Int = INDEX_WHEREEVER,
@@ -5211,14 +5322,22 @@ class Game(
             return ReturnValue.NOERROR
         }
 
-        val ret = toPlayer.addItem(item)
+        val slot = if (index == INDEX_WHEREEVER) {
+            Slots_t.CONST_SLOT_WHEREEVER
+        } else {
+            Slots_t.fromValue(index) ?: Slots_t.CONST_SLOT_WHEREEVER
+        }
+
+        val ret = toPlayer.addItem(item, slot)
         if (ret == ReturnValue.NOERROR) {
+            bindHoldingPlayer(toPlayer, item)
             val itemIndex = playerThingIndex(toPlayer, item)
             if (itemIndex != -1) {
                 toPlayer.postAddNotification(
                     item,
                     null,
                     itemIndex,
+                    updateItemsLight = { playerUpdateItemsLight(toPlayer) },
                     getHoldingPlayer = containerHoldingPlayer,
                     hasShopOwner = { getShopOwner(toPlayer) != null },
                     isSaleUpdateScheduled = { getScheduledSaleUpdate(toPlayer) },
@@ -5252,11 +5371,15 @@ class Game(
      * Player-cylinder branch of `Game::internalMoveItem` (game.cpp:2436) used
      * by the trade transfer: the source tile removal path is the facade's
      * [queryRemove]/[removeThing] pair, the destination is `Player::addItem`,
-     * and the add is closed by
+     * and the move is closed by the source
+     * `fromCylinder->postRemoveNotification(item, toCylinder, itemIndex)`
+     * (game.cpp:2659) plus
      * `toCylinder->postAddNotification(moveItem, fromCylinder, moveItemIndex)`
      * (game.cpp:2666-2671) so the inventory change reaches the player state
      * refresh (PARITY GAP: no auto-stack into the trade window, which
-     * `FLAG_IGNOREAUTOSTACK` also suppresses in Canary).
+     * `FLAG_IGNOREAUTOSTACK` also suppresses in Canary; `Player` is not a
+     * `Cylinder`, so the source tile notification carries `null` as its
+     * `newParent`).
      */
     private fun internalMoveItemToPlayer(fromTile: Tile?, toPlayer: Player, item: Item, count: Int, flags: Int): ReturnValue {
         if (fromTile == null) {
@@ -5276,17 +5399,23 @@ class Game(
             return ret
         }
 
+        val itemIndex = fromTile.getThingIndex(item)
         val movedItem = if (isStackable(item) && m < item.count) cloneItem(item, m) else item
         removeThing(fromTile, item, m)
 
         ret = toPlayer.addItem(movedItem)
         if (ret == ReturnValue.NOERROR) {
+            bindHoldingPlayer(toPlayer, movedItem)
+            if (itemIndex != -1) {
+                fromTile.postRemoveNotification(item, null, itemIndex)
+            }
             val moveItemIndex = playerThingIndex(toPlayer, movedItem)
             if (moveItemIndex != -1) {
                 toPlayer.postAddNotification(
                     movedItem,
                     fromTile,
                     moveItemIndex,
+                    updateItemsLight = { playerUpdateItemsLight(toPlayer) },
                     getHoldingPlayer = containerHoldingPlayer,
                     hasShopOwner = { getShopOwner(toPlayer) != null },
                     isSaleUpdateScheduled = { getScheduledSaleUpdate(toPlayer) },
@@ -6798,11 +6927,12 @@ class Game(
     var canDoAction: (Player) -> Boolean = { true }
 
     /**
-     * `Container::getHoldingPlayer()` (container.cpp) seam. `null` models the
-     * unported holding-player bookkeeping, so the `playerSetManagedContainer`
-     * ownership gate only rejects a resolved foreign holder.
+     * `Container::getHoldingPlayer()` (item.cpp:879) seam: the default resolves
+     * the `Item::getHoldingPlayer` link the world records for a container in a
+     * player inventory ([bindHoldingPlayer]); an unlinked container resolves
+     * `null` exactly like a container outside every player inventory.
      */
-    var containerHoldingPlayer: (Container) -> Player? = { null }
+    var containerHoldingPlayer: (Container) -> Player? = { container -> container.getHoldingPlayer() }
 
     /**
      * Facade storage for `Player::lastQuickLootNotification` (player.hpp:1876);
@@ -8288,10 +8418,10 @@ class Game(
         if (slot == Slots_t.CONST_SLOT_WHEREEVER) {
             ret = internalCollectManagedItems(player, item, getObjectCategory(item), false)
             if (ret != ReturnValue.NOERROR) {
-                ret = internalAddItem(player, item)
+                ret = internalAddItem(player, item, slot.value)
             }
         } else {
-            ret = internalAddItem(player, item)
+            ret = internalAddItem(player, item, slot.value)
         }
 
         if (ret != ReturnValue.NOERROR && dropOnMap) {
@@ -13874,14 +14004,17 @@ class Game(
      * `Player` facade: the item leaves its source container (or inventory slot)
      * and is placed through `Player::addItem`, restoring the container on
      * failure. The move is closed by the source
-     * `postRemoveNotification(item, ..., itemIndex)` and the destination
-     * `postAddNotification(item, ..., itemIndex)` (game.cpp:2661-2671) so an
-     * equip/unequip reaches `Player::updateState`'s refresh and the shop
-     * sale-list tail.
+     * `fromCylinder->postRemoveNotification(item, ..., itemIndex)` and the
+     * destination `postAddNotification(item, ..., itemIndex)`
+     * (game.cpp:2659-2671) so an equip/unequip reaches
+     * `Player::updateState`'s refresh and the shop sale-list tail. A container
+     * source routes its notification through `Container::postRemoveNotification`
+     * to the holding player.
      *
      * PARITY GAP: Canary passes the `Player` cylinder as the notification
      * parent; the Kotlin `Player` is not a `Cylinder`, so the inventory source
-     * and destination relation is modelled as `null`.
+     * and destination relation is modelled as `null` and the container source
+     * keeps the recorded holding-player link (`Item::getHoldingPlayer`).
      */
     private fun moveItemToPlayer(player: Player, item: Item, slot: Slots_t): ReturnValue {
         val source = item.getParent()?.getContainer()
@@ -13891,6 +14024,7 @@ class Game(
             if (ret != ReturnValue.NOERROR) {
                 return ret
             }
+            fromIndex = source.getThingIndex(item)
             source.removeThing(item, item.getItemCount())
         } else {
             val heldSlot = inventorySlotOf(player, item)
@@ -13905,12 +14039,17 @@ class Game(
             source.addThing(item)
         }
         if (add == ReturnValue.NOERROR) {
+            bindHoldingPlayer(player, item)
             val newIndex = playerThingIndex(player, item)
-            if (fromIndex != -1) {
+            if (source != null && fromIndex != -1) {
+                source.postRemoveNotification(item, null, fromIndex)
+            } else if (fromIndex != -1) {
+                item.setHoldingPlayer(null)
                 player.postRemoveNotification(
                     item,
                     null,
                     fromIndex,
+                    updateItemsLight = { playerUpdateItemsLight(player) },
                     getHoldingPlayer = containerHoldingPlayer,
                     hasShopOwner = { getShopOwner(player) != null },
                     isSaleUpdateScheduled = { getScheduledSaleUpdate(player) },
@@ -13922,6 +14061,7 @@ class Game(
                     item,
                     source,
                     newIndex,
+                    updateItemsLight = { playerUpdateItemsLight(player) },
                     getHoldingPlayer = containerHoldingPlayer,
                     hasShopOwner = { getShopOwner(player) != null },
                     isSaleUpdateScheduled = { getScheduledSaleUpdate(player) },

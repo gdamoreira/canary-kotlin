@@ -1,6 +1,7 @@
 package org.opentibia.canary.network.protocol
 
 import io.netty.buffer.ByteBuf
+import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.map.Position
 
 /**
@@ -101,5 +102,23 @@ object ContainerBrowsePacketHandler {
         val index = buffer.readUnsignedShortLE()
         val primaryType = buffer.readUnsignedByte().toInt()
         return SeekInContainerCommand(containerId = containerId, index = index, primaryType = primaryType)
+    }
+
+    /**
+     * `ProtocolGame::resendLivestreamViewerContainer` (protocolgame.cpp:12448-12462):
+     * the requested container id resolves one of the viewer's open containers
+     * and re-sends it through the session sink, or closes the window when the
+     * id is not open.
+     */
+    fun applyLivestreamViewerContainer(player: Player, command: LivestreamViewerContainerCommand) {
+        val sink = player.protocolSink ?: return
+        val open = player.getOpenContainers()[command.containerId]
+        val container = open?.container
+        if (container == null) {
+            sink.sendCloseContainer(command.containerId)
+            return
+        }
+
+        sink.sendContainer(command.containerId, container, container.hasParent(), open.index)
     }
 }

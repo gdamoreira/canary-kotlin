@@ -655,6 +655,19 @@ class ServerBootstrap(
             )
             world.getShopOwner = { player -> worldOperations?.shopOwnerOf(player) }
             world.closeShopWindow = { player -> worldOperations?.closeShopOwner(player) }
+            // Wave 71 H3: bind the booted `Game::internalPlayerAddItem` /
+            // `Game::internalAddItem` player branch behind the Lua
+            // `player:addItem`/`player:addItemEx` entry points
+            // (player_functions.cpp:2414/2473), so the Lua insertion fires
+            // `Player::postAddNotification` instead of the raw domain bypass.
+            worldOperations?.attachPlayerItems(
+                internalPlayerAddItem = { player, item, dropOnMap, slot ->
+                    world.internalPlayerAddItem(player, item, dropOnMap, slot)
+                },
+                internalAddItem = { player, item, index, flags ->
+                    world.internalAddItem(player, item, index, flags)
+                },
+            )
             // Wave 70 G3: bind the production `Monster::createMonster` /
             // `Game::placeCreature` / `Monster::onSpawn` chain behind the Lua
             // `Game.createMonster`/`Game.createSoulPitMonster` entry points
@@ -719,10 +732,14 @@ private fun defaultScriptingBoot(config: ServerConfig): LuaEnvironment {
  */
 private fun defaultItemBoot(config: ServerConfig, appearances: Appearances): Items {
     val items = Items()
-    val knownProficiencyIds = WeaponProficiencyLoader.loadFromFile(
+    val proficiencies = WeaponProficiencyLoader.loadFromFile(
         Path.of(config.coreDir, "items", "proficiencies.json")
-    ).keys
-    items.loadFromProtobuf(appearances, knownProficiencyIds = knownProficiencyIds)
+    )
+    items.loadFromProtobuf(appearances, knownProficiencyIds = proficiencies.keys)
+    // `WeaponProficiency::proficiencies` (weapon_proficiency.cpp:79): the boot
+    // registry rides the item registry so every session packet context resolves
+    // the `0xB3` perk selection against the same boot data.
+    items.weaponProficiencyRegistry = proficiencies
 
     val itemParse = ItemParse(registry = ItemsParseRegistry(items))
     val xml = Files.readString(Path.of(config.coreDir, "items", "items.xml"))
