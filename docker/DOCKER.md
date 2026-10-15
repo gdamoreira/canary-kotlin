@@ -39,6 +39,9 @@ The server image itself is built from the **repository-root `Dockerfile`**
 | --- | --- | --- | --- |
 | `db` | `postgres:16-alpine` | Game database (Flyway migrates on boot) | `${CANARY_DB_PORT:-5432}` |
 | `server` | root `Dockerfile` | Login/status + game world | `7171`, `7172`, metrics `9464` |
+| `mariadb` | `mariadb:11.4` | Database for the upstream components below (MySQL-only) | internal |
+| `myaac` | `quickstart/myaac/Dockerfile` | Upstream website/admin (MyAAC 2.x, reads `mariadb`) | `${MYAAC_HTTP_PORT:-8080}` |
+| `login-server` | `opentibiabr/login-server` | Upstream client login webservice (reads `mariadb`) | `8088`, `9090` |
 
 Game data is bind-mounted read-only into the server container:
 
@@ -172,24 +175,25 @@ The Prometheus exporter is optional; enable it with
 
 ---
 
-## Upstream quickstart extras (NOT ported)
+## Upstream quickstart components (ported, MySQL-backed)
 
-Upstream Canary's quickstart also ships two components that do not apply to
-this port:
+Upstream Canary's quickstart ships two components that are **MySQL-only**; this
+stack includes them exactly like upstream, backed by its own `mariadb` service:
 
-- **MyAAC website/admin** — PHP/MySQL only (`pdo_mysql`, `mysql:` DSNs). The
-  Kotlin stack runs on PostgreSQL, so MyAAC cannot read its database. The
-  upstream reference files are kept in `quickstart/myaac/` with a README; they
-  are not wired into the compose stack.
-- **`opentibiabr/login-server`** — the upstream client login webservice reads a
-  MySQL database. This port logs in natively on `CANARY_LOGIN_PORT` (7171), so
-  no separate login webservice is needed.
+- **MyAAC website/admin** (PHP, `pdo_mysql`) — builds from
+  `quickstart/myaac/Dockerfile` (upstream files) and reads the `mariadb`
+  service. Default admin credentials come from the `MYAAC_*` variables; the
+  site is served at `http://localhost:${MYAAC_HTTP_PORT:-8080}`.
+- **`opentibiabr/login-server`** — the upstream client login webservice for
+  modern clients, exposed at `${LOGIN_HTTP_PORT:-8088}` (HTTP) and
+  `${LOGIN_GRPC_PORT:-9090}` (gRPC), reading the `mariadb` service.
 
-`docker/config.sh`, `docker/data/`, the guarded `up` scripts and the Dockerfile
-variants are the parts of the upstream docker folder that were ported and
-adapted.
-
----
+**Important:** the Kotlin game server keeps its own **PostgreSQL** `db`
+service (Flyway schema V1–V22); MyAAC and login-server cannot read it. They
+serve upstream-C++ deployments and read the `mariadb` service, so seed that
+database with the game data (upstream MariaDB dumps or an upstream C++ server)
+if you want the website and webservice to show real accounts. The Kotlin
+server's native login remains on `CANARY_LOGIN_PORT` (7171).
 
 ## Troubleshooting
 
@@ -202,3 +206,5 @@ adapted.
 | Rebuild after code changes | `docker compose build server && docker compose up -d server`. |
 | Stale database schema | Flyway migrates automatically on boot; never edit applied migrations (see `AGENTS.md` §2.1). |
 | Metrics endpoint unreachable | Set `CANARY_METRICS_ENABLE_PROMETHEUS=true` and restart; the exporter only binds when enabled. |
+| MyAAC/login-server show no accounts | They read the `mariadb` service, not the Kotlin PostgreSQL game DB — seed `mariadb` with your game data (see above). |
+| MyAAC build takes long the first time | It builds MyAAC 2.x from source (PHP extensions + composer); subsequent builds use the layer cache. |
