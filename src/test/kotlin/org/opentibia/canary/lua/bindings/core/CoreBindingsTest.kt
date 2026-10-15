@@ -182,6 +182,10 @@ class CoreBindingsTest {
             (creature as FakeCreature).direction = direction
             return true
         }
+
+        override fun registerEvent(creature: Any, name: String): Boolean? = null
+
+        override fun unregisterEvent(creature: Any, name: String): Boolean? = null
     }
 
     private class FakeItemOps : ItemOperations {

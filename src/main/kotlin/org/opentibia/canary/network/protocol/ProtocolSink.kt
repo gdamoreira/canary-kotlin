@@ -17,14 +17,17 @@ import org.opentibia.canary.creatures.players.PlayerSendSink
 import org.opentibia.canary.creatures.players.vip.VipClient
 import org.opentibia.canary.creatures.players.vip.VipStatus
 import org.opentibia.canary.creatures.skills_t
+import org.opentibia.canary.game.modal.ModalWindow
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
+import org.opentibia.canary.lua.bindings.SpellBindings
 import org.opentibia.canary.lua.bindings.core.returnMessage
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.network.protocol.container.ContainerItemWriter
 import org.opentibia.canary.network.protocol.creature.CreaturePacketWriter
 import org.opentibia.canary.network.protocol.map.TilePacketWriter
+import org.opentibia.canary.network.protocol.misc.MiscDataWriter
 import org.opentibia.canary.network.protocol.player.PlayerWindowWriter
 import org.opentibia.canary.network.protocol.vip.VipWindowWriter
 import org.opentibia.canary.systems.rewardchest.ReturnValue
@@ -106,6 +109,12 @@ interface ProtocolSink : VipClient {
 
     /** `Player::sendRemoveContainerItem(container, slot)` (player.cpp:9110). */
     fun sendRemoveContainerItem(cid: Int, slot: Int, lastItem: Item?)
+
+    /**
+     * `Player::sendModalWindow(const ModalWindow&)` (player.cpp:9021-9028) ->
+     * `ProtocolGame::sendModalWindow` (0xFA, protocolgame.cpp:9630-9659).
+     */
+    fun sendModalWindow(modalWindow: ModalWindow)
 }
 
 /**
@@ -260,6 +269,28 @@ abstract class ProtocolFrameSink(
 
     override fun sendRemoveContainerItem(cid: Int, slot: Int, lastItem: Item?) {
         emit { ContainerItemWriter.writeRemoveContainerItem(this, cid, slot, lastItem) }
+    }
+
+    override fun sendModalWindow(modalWindow: ModalWindow) {
+        emit {
+            SocialWindowWriter.writeModalWindow(
+                this,
+                SocialWindowWriter.ModalWindowFrame(
+                    id = modalWindow.id,
+                    title = modalWindow.title,
+                    message = modalWindow.message,
+                    buttons = modalWindow.buttons.map { (label, id) ->
+                        SocialWindowWriter.ModalWindowButton(id = id, label = label)
+                    },
+                    choices = modalWindow.choices.map { (label, id) ->
+                        SocialWindowWriter.ModalWindowButton(id = id, label = label)
+                    },
+                    defaultEscapeButton = modalWindow.defaultEscapeButton,
+                    defaultEnterButton = modalWindow.defaultEnterButton,
+                    priority = modalWindow.priority,
+                ),
+            )
+        }
     }
 
     // --- VIP sends ---------------------------------------------------------------
@@ -498,6 +529,10 @@ abstract class ProtocolFrameSink(
  * with `writeAndFlush`; the caller never blocks and the channel's pipeline
  * (XTEA/checksum encoder) owns encryption. A closed channel releases the frame
  * and drops the write.
+ *
+ * The `sendBasicData` spell list resolves through the session's attached
+ * `g_spells()` registry ([basicDataSpellsOf]), exactly like the spell-registry
+ * consumers of the login/window senders.
  */
 class NettyProtocolSink(
     channel: Channel,
@@ -516,5 +551,29 @@ class NettyProtocolSink(
             frame.release()
         }
     },
+    basicDataSpells = { basicDataSpellsOf(player) },
     creatureById = creatureById,
 )
+
+/**
+ * `ProtocolGame::sendBasicData`'s valid spell list (protocolgame.cpp:5851-5883):
+ * `g_spells().getSpellsByVocation(vocationId)` re-resolved through
+ * `getInstantSpellById` and filtered to `spellId > 0`. The registry resolves
+ * through the player's attached `Player::g_spells()` seam when present,
+ * otherwise the booted engine registry ([SpellBindings.spellRegistry]) the
+ * datapack spell scripts registered into.
+ */
+internal fun basicDataSpellsOf(player: Player): List<MiscDataWriter.BasicDataSpell> {
+    val registry = player.spells ?: SpellBindings.spellRegistry()
+    return registry.getSpellsByVocation(player.getVocationId())
+        .mapNotNull { registry.getInstantSpellById(it) }
+        .filter { it.spellId > 0 }
+        .map { spell ->
+            MiscDataWriter.BasicDataSpell(
+                spellId = spell.spellId,
+                learnable = spell.isLearnable(),
+                learned = player.hasLearnedInstantSpell(spell.name),
+                wheelGrade = player.features.wheel.getSpellUpgrade(spell.name).value,
+            )
+        }
+}
