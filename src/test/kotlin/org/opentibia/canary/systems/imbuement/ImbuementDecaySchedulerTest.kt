@@ -21,6 +21,12 @@ import java.util.concurrent.TimeUnit
  */
 class ImbuementDecaySchedulerTest {
 
+    /**
+     * Injected clock read from the dispatcher worker thread. `@Volatile` so a
+     * clock advance is visible to the next promotion pass even when the worker
+     * is woken by the scheduled-event timeout instead of [GameDispatcher.wake].
+     */
+    @Volatile
     private var now = 1_000L
     private lateinit var dispatcher: GameDispatcher
 
@@ -37,13 +43,12 @@ class ImbuementDecaySchedulerTest {
 
     private fun newDecay(): ImbuementDecay = ImbuementDecay(imbuements, dispatcher, { now })
 
-    private fun newItem(duration: Int): ImbuementItem {
+    private fun newItem(duration: Int, player: ImbuementPlayer = FakeImbuementPlayer()): ImbuementItem {
         val item = ImbuementItem(
             id = 2400,
             imbuementSlot = 1,
             imbuementTypes = mapOf(ImbuementTypes_t.IMBUEMENT_CRITICAL_HIT to 3)
         )
-        val player = FakeImbuementPlayer()
         item.parent = player
         item.holdingPlayer = player
         item.setImbuement(0, strike.id, duration)
@@ -64,7 +69,13 @@ class ImbuementDecaySchedulerTest {
         fail<Unit>(message)
     }
 
-    /** Runs a no-op on the world lane so any in-flight maintenance tick has completed. */
+    /**
+     * Runs a no-op on the world lane so any in-flight maintenance tick has
+     * completed — including its re-arm. Use it as the barrier before reading
+     * scheduler state from the test thread and, critically, before advancing
+     * [now]: a tick that re-arms after the advance would compute its deadline
+     * from the already-advanced clock and never fire again.
+     */
     private fun awaitLane() {
         val ran = CountDownLatch(1)
         dispatcher.dispatch { ran.countDown() }
@@ -90,6 +101,7 @@ class ImbuementDecaySchedulerTest {
             dispatcher.wake()
 
             awaitUntil("imbuement did not decay") { durationOf(item) == 95 }
+            awaitLane()
             assertThat(decay.hasScheduledCheck).isTrue()
         } finally {
             dispatcher.shutdown()
@@ -131,6 +143,7 @@ class ImbuementDecaySchedulerTest {
             dispatcher.wake()
 
             awaitUntil("imbuement did not expire") { engine.getImbuementInfo(item, 0) == null }
+            awaitLane()
             assertThat(player.skillBonuses[Skill.SKILL_CRITICAL_HIT_DAMAGE]).isEqualTo(0)
             assertThat(player.skillBonuses[Skill.SKILL_CRITICAL_HIT_CHANCE]).isEqualTo(0)
         } finally {
@@ -143,12 +156,20 @@ class ImbuementDecaySchedulerTest {
         dispatcher = startDispatcher()
         try {
             val decay = newDecay()
-            val item = newItem(duration = 10)
+            val player = SlowTrackerPlayer(FakeImbuementPlayer())
+            val item = newItem(duration = 10, player = player)
             decay.startImbuementDecay(item)
+            val firstGeneration = decay.scheduledGeneration
 
             now += 10_000
             dispatcher.wake()
             awaitUntil("imbuement did not expire") { item.getImbuementAttribute(0) == 0L }
+
+            // Barrier: the first tick (visible through the cleared attribute
+            // above) must fully complete before the clock moves again, so its
+            // re-arm is computed from the pre-advance clock.
+            awaitLane()
+            assertThat(decay.scheduledGeneration).isNotEqualTo(firstGeneration)
 
             now += 1_000
             dispatcher.wake()
@@ -263,6 +284,7 @@ class ImbuementDecaySchedulerTest {
             dispatcher.wake()
 
             awaitUntil("imbuement did not expire") { durationOf(item) == null }
+            awaitLane()
         } finally {
             dispatcher.shutdown()
         }
@@ -315,6 +337,27 @@ class ImbuementDecaySchedulerTest {
             Thread.sleep(10)
         }
         return owner.get() == null
+    }
+}
+
+/**
+ * Widens the tick's window between the decay write (`Item::decayImbuementTime`,
+ * visible to the test thread) and the re-arm (`scheduleCheck`, which reads the
+ * injected clock): `checkImbuementDecay` calls the tracker update in between, so
+ * stalling here makes the test thread's clock advance land while the tick is
+ * still in flight. The `awaitLane()` barrier before that advance is what keeps
+ * the re-armed check reachable; this player keeps that discipline enforced.
+ */
+private class SlowTrackerPlayer(
+    private val delegate: FakeImbuementPlayer,
+) : ImbuementPlayer by delegate {
+    override fun updateImbuementTrackerStats() {
+        Thread.sleep(TRACKER_WINDOW_MS)
+        delegate.updateImbuementTrackerStats()
+    }
+
+    companion object {
+        private const val TRACKER_WINDOW_MS = 500L
     }
 }
 
