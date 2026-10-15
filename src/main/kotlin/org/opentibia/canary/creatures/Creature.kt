@@ -31,8 +31,6 @@ import org.opentibia.canary.creatures.players.PlayerTownState
 import org.opentibia.canary.creatures.players.PlayerWalkState
 import org.opentibia.canary.creatures.players.WalkStartPolicy
 import org.opentibia.canary.creatures.players.components.CyclopediaPlayer
-import org.opentibia.canary.creatures.players.components.InMemoryKV
-import org.opentibia.canary.creatures.players.components.KV
 import org.opentibia.canary.creatures.players.components.PlayerAsyncTask
 import org.opentibia.canary.creatures.players.components.PlayerCyclopedia
 import org.opentibia.canary.creatures.players.components.PlayerSex_t
@@ -59,6 +57,8 @@ import org.opentibia.canary.items.Thing
 import org.opentibia.canary.items.containers.Inbox
 import org.opentibia.canary.items.containers.depot.DepotChest
 import org.opentibia.canary.items.containers.depot.DepotLocker
+import org.opentibia.canary.kv.KV
+import org.opentibia.canary.kv.KVMemory
 import org.opentibia.canary.creatures.vocations.Vocation
 import org.opentibia.canary.creatures.vocations.VocationRequirementsAdapter
 import org.opentibia.canary.creatures.vocations.Vocations
@@ -2894,8 +2894,17 @@ class Player(
 
     // --- blessings (player.hpp:1818, player.cpp:2422-2440, 10544-10579, 12993) ----
 
-    /** `Player::kv()` (player.cpp:1398-1400); in-memory per AGENTS.md 1.1. */
-    var kv: KV = InMemoryKV()
+    /**
+     * `Player::kv()` (player.cpp:1398-1400): the full
+     * `g_kv().scoped("player").scoped(guid)` `ValueWrapper` store. The default
+     * is the per-player in-memory store (AGENTS.md 1.1); the composition root
+     * rebinds it to the SQL-backed root scope so every component
+     * ([PlayerFeatures.achievement]/[PlayerFeatures.badge]/
+     * [PlayerFeatures.title]/[PlayerFeatures.attachedEffects]) and the
+     * `loadPlayerExivaRestrictions` / `savePlayerExivaRestrictions` pair share
+     * the persisted keys.
+     */
+    var kv: KV = KVMemory()
 
     /**
      * `g_configManager().getNumber(DEATH_LOSE_PERCENT)` (configmanager.cpp:245),
@@ -2966,7 +2975,7 @@ class Player(
             return 0
         }
         val amount = kv.scoped("summary").scoped("blessings").scoped("$index").get("amount") ?: return 0
-        return amount.toInt() and 0xFF
+        return amount.getNumber().toInt() and 0xFF
     }
 
     /**

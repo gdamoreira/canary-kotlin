@@ -2,6 +2,9 @@ package org.opentibia.canary.creatures.players.components
 
 import org.opentibia.canary.account.Account
 import org.opentibia.canary.creatures.vocations.Vocation
+import org.opentibia.canary.kv.KV
+import org.opentibia.canary.kv.KVMemory
+import org.opentibia.canary.kv.ValueWrapper
 
 /**
  * `enum class CyclopediaBadge_t : uint8_t`
@@ -137,7 +140,7 @@ interface BadgePlayer {
 class PlayerBadge(
     private val player: BadgePlayer,
     /** `m_player.kv()` — the per-player KV root (player_badge.cpp:104). */
-    private val kv: KV = InMemoryKV(),
+    private val kv: KV = KVMemory(),
     /** `g_game().getBadgeById/getBadgeByName/getBadges` (player_badge.cpp:42, 55, 90). */
     private val registry: BadgeRegistry = InMemoryBadgeRegistry(),
     /** Account character query seam (player_badge.cpp:119-149, 152). */
@@ -177,7 +180,7 @@ class PlayerBadge(
         }
 
         val toSaveTimestamp = if (timestamp != 0L) timestamp else now()
-        getUnlockedKV().set(badge.name, toSaveTimestamp)
+        getUnlockedKV().set(badge.name, ValueWrapper(toSaveTimestamp.toInt()))
         badgesUnlocked.add(badge to toSaveTimestamp)
         return true
     }
@@ -239,7 +242,7 @@ class PlayerBadge(
             }
 
             logDebug("[loadUnlockedBadges] - Badge ${badge.name} found for player ${player.getName()}.")
-            badgesUnlocked.add(badge to (getUnlockedKV().get(badgeName) ?: 0L))
+            badgesUnlocked.add(badge to (getUnlockedKV().get(badgeName)?.getNumber()?.toLong() ?: 0L))
         }
     }
 

@@ -1,5 +1,8 @@
 package org.opentibia.canary.creatures.players.components
 
+import org.opentibia.canary.kv.KV
+import org.opentibia.canary.kv.ValueWrapper
+
 /**
  * `Summary_t` (`src/enums/player_cyclopedia.hpp:40-48`) and the
  * `m_summaryCategories` keys (`game.cpp:735-742`).
@@ -165,8 +168,10 @@ interface CyclopediaPlayer {
  * `g_database()`/`g_databaseTasks()` and the loggers replace `g_logger()`.
  *
  * PARITY NOTES:
- *  - `KV` values are `Long`; the `uint16_t` amount/`int16_t` count narrowings
- *    are applied at the exact C++ cast sites.
+ *  - The `summary` scope values are `ValueWrapper::getNumber()` reads and
+ *    `ValueWrapper(int)` writes exactly like the C++ (`player_cyclopedia.cpp:
+ *    211-254`); the `uint16_t` amount narrowings are applied at the C++ cast
+ *    sites.
  *  - The `std::istringstream` participant parser is transcribed with an
  *    index-backed line cursor that reproduces `seekg` on a malformed entry.
  *  - `std::stoll` throwing on a non-numeric id is hardened into an error log
@@ -206,7 +211,7 @@ class PlayerCyclopedia(
         )
         val kvScoped = summaryScope(SummaryCategory.HIRELINGS)
         if (result != null && kvScoped.get("amount") == null) {
-            kvScoped.set("amount", result.getNumber("count").toShort().toLong())
+            kvScoped.set("amount", ValueWrapper(result.getNumber("count").toShort().toInt()))
         }
     }
 
@@ -338,14 +343,14 @@ class PlayerCyclopedia(
 
     /** `PlayerCyclopedia::getAmount` (player_cyclopedia.cpp:221-224). */
     fun getAmount(type: SummaryCategory): Int {
-        val value = summaryScope(type).get("amount") ?: return 0
-        return (value and 0xFFFF).toInt()
+        val value = summaryScope(type).get("amount")?.getNumber() ?: return 0
+        return value.toInt() and 0xFFFF
     }
 
     /** `PlayerCyclopedia::updateAmount` (player_cyclopedia.cpp:226-229). */
     fun updateAmount(type: SummaryCategory, amount: Int) {
         val oldAmount = getAmount(type)
-        summaryScope(type).set("amount", (oldAmount + amount).toLong())
+        summaryScope(type).set("amount", ValueWrapper(oldAmount + amount))
     }
 
     /** `PlayerCyclopedia::getResult` (player_cyclopedia.cpp:231-245). */
@@ -366,8 +371,8 @@ class PlayerCyclopedia(
                 continue
             }
 
-            val amount = kvScope.scoped(id).get("amount")
-            result[(numericId and 0xFFFF).toInt()] = ((amount ?: 0L) and 0xFFFF).toInt()
+            val amount = kvScope.scoped(id).get("amount")?.getNumber()?.toInt() ?: 0
+            result[(numericId and 0xFFFF).toInt()] = amount and 0xFFFF
         }
         return result
     }
@@ -383,7 +388,7 @@ class PlayerCyclopedia(
         val result = getResult(type)
         val oldAmount = result[(numericId and 0xFFFF).toInt()] ?: 0
         val newAmount = oldAmount + amount
-        summaryScope(type).scoped(id).set("amount", newAmount.toLong())
+        summaryScope(type).scoped(id).set("amount", ValueWrapper(newAmount))
         logDebug(
             "[insertValue] type: ${type.value}, id: $id, old amount: $oldAmount, added amount: $amount, new amount: $newAmount",
         )

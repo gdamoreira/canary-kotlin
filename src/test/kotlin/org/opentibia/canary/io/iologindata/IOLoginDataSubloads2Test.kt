@@ -9,6 +9,7 @@ import org.opentibia.canary.creatures.CyclopediaMonsterTrackerClient
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.monsters.MonsterType
+import org.opentibia.canary.creatures.monsters.Monsters
 import org.opentibia.canary.database.DatabaseConnectionFactory
 import org.opentibia.canary.database.JdbcAccountRepository
 import org.opentibia.canary.database.JdbcFeatureStateRepository
@@ -177,6 +178,37 @@ class IOLoginDataSubloads2Test {
         assertThat(loginData.loadPlayerById(player, 101L)).isTrue()
 
         assertThat(player.getCyclopediaMonsterTrackerSet(false)).containsExactly(monster)
+    }
+
+    @Test
+    fun `loadPlayerById resolves the tracker race ids through the composed Monsters registry`() {
+        bestiaryPersistence.saveBestiaryTracker(101L, listOf(42, 99))
+
+        val rat = MonsterType("Rat").apply { info.raceid = 42 }
+        val monsters = Monsters(bestiaryList = { mapOf(42 to "Rat") })
+        monsters.tryAddMonsterType("Rat", rat)
+
+        val loginDataWithRegistry = IOLoginData(
+            players = JdbcPlayerRepository(dataSource),
+            accounts = JdbcAccountRepository(dataSource),
+            vip = JdbcVipRepository(dataSource),
+            storageRepository = JdbcPlayerStorageRepository(dataSource),
+            spells = JdbcPlayerSpellsRepository(dataSource),
+            kills = JdbcPlayerKillsRepository(dataSource),
+            stash = JdbcPlayerStashRepository(dataSource),
+            rewards = JdbcPlayerRewardsRepository(dataSource),
+            features = JdbcFeatureStateRepository(dataSource),
+            items = JdbcPlayerItemsRepository(dataSource),
+            depots = JdbcPlayerDepotRepository(dataSource),
+            bestiaryPersistence = bestiaryPersistence,
+            monsters = monsters,
+        )
+        val player = newPlayer()
+        player.cyclopediaMonsterTrackerClient = RecordingTrackerClient()
+
+        assertThat(loginDataWithRegistry.loadPlayerById(player, 101L)).isTrue()
+
+        assertThat(player.getCyclopediaMonsterTrackerSet(false)).containsExactly(rat)
     }
 
     @Test

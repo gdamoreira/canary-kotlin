@@ -2,6 +2,8 @@ package org.opentibia.canary.creatures.players.components
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.kv.KVMemory
+import org.opentibia.canary.kv.ValueWrapper
 
 private val CASTLEMANIA = Achievement(
     id = 1,
@@ -66,7 +68,7 @@ class PlayerAchievementsTest {
         achievements: List<Achievement> = ALL_ACHIEVEMENTS,
     ) {
         val player = FakeAchievementPlayer()
-        val kv = InMemoryKV()
+        val kv = KVMemory()
         val registry = InMemoryAchievementRegistry(achievements)
         val debugLogs = mutableListOf<String>()
         val errorLogs = mutableListOf<String>()
@@ -103,7 +105,7 @@ class PlayerAchievementsTest {
 
         assertThat(f.achievement.isUnlocked(1)).isTrue()
         assertThat(f.achievement.getUnlockedAchievements()).containsExactly(1 to 1_700_000_000L)
-        assertThat(f.achievement.getUnlockedKV().get("Castlemania")).isEqualTo(1_700_000_000L)
+        assertThat(f.achievement.getUnlockedKV().get("Castlemania")!!.getInt().toLong()).isEqualTo(1_700_000_000L)
         assertThat(f.achievement.getPoints()).isEqualTo(5)
         assertThat(f.player.textMessages)
             .containsExactly("Congratulations! You earned the achievement Castlemania.")
@@ -125,19 +127,19 @@ class PlayerAchievementsTest {
 
         assertThat(f.achievement.add(1, timestamp = 77L)).isTrue()
 
-        assertThat(f.achievement.getUnlockedKV().get("Castlemania")).isEqualTo(77L)
+        assertThat(f.achievement.getUnlockedKV().get("Castlemania")!!.getInt().toLong()).isEqualTo(77L)
     }
 
     @Test
     fun `add refuses an already unlocked achievement`() {
         val f = Fixture()
         f.achievement.add(1)
-        f.achievement.getUnlockedKV().set("Castlemania", 999L)
+        f.achievement.getUnlockedKV().set("Castlemania", ValueWrapper(999))
 
         assertThat(f.achievement.add(1)).isFalse()
 
         assertThat(f.achievement.getPoints()).isEqualTo(5)
-        assertThat(f.achievement.getUnlockedKV().get("Castlemania")).isEqualTo(999L)
+        assertThat(f.achievement.getUnlockedKV().get("Castlemania")!!.getInt()).isEqualTo(999)
         assertThat(f.player.textMessages).hasSize(1)
     }
 
@@ -178,7 +180,7 @@ class PlayerAchievementsTest {
     @Test
     fun `getPoints narrows the stored value to uint16 like Canary`() {
         val f = Fixture()
-        f.kv.scoped("achievements").set("points", 70_000L)
+        f.kv.scoped("achievements").set("points", ValueWrapper(70_000))
 
         assertThat(f.achievement.getPoints()).isEqualTo(4_464)
     }
@@ -199,15 +201,15 @@ class PlayerAchievementsTest {
     fun `getUnlockedKV scopes the unlocked entries under achievements unlocked`() {
         val f = Fixture()
 
-        f.achievement.getUnlockedKV().set("Castlemania", 5L)
+        f.achievement.getUnlockedKV().set("Castlemania", ValueWrapper(5))
 
-        assertThat(f.kv.scoped("achievements").scoped("unlocked").get("Castlemania")).isEqualTo(5L)
+        assertThat(f.kv.scoped("achievements").scoped("unlocked").get("Castlemania")!!.getInt()).isEqualTo(5)
     }
 
     @Test
     fun `loadUnlockedAchievements resolves persisted names and logs`() {
         val f = Fixture()
-        f.achievement.getUnlockedKV().set("Castlemania", 111L)
+        f.achievement.getUnlockedKV().set("Castlemania", ValueWrapper(111))
 
         f.achievement.loadUnlockedAchievements()
 
@@ -221,7 +223,7 @@ class PlayerAchievementsTest {
     @Test
     fun `loadUnlockedAchievements skips unknown names and logs an error`() {
         val f = Fixture()
-        f.achievement.getUnlockedKV().set("Ghost Achievement", 111L)
+        f.achievement.getUnlockedKV().set("Ghost Achievement", ValueWrapper(111))
 
         f.achievement.loadUnlockedAchievements()
 
@@ -233,7 +235,7 @@ class PlayerAchievementsTest {
     @Test
     fun `loadUnlockedAchievements appends on every call, matching Canary's load-without-clear`() {
         val f = Fixture()
-        f.achievement.getUnlockedKV().set("Castlemania", 111L)
+        f.achievement.getUnlockedKV().set("Castlemania", ValueWrapper(111))
 
         f.achievement.loadUnlockedAchievements()
         f.achievement.loadUnlockedAchievements()

@@ -134,7 +134,7 @@ class PlayerVipTest {
             accountId = { accountId },
             groupMaxVipEntries = { groupMaxVipEntries },
             isPremium = { isPremium },
-            client = client,
+            client = { client },
             sendTextMessage = { textMessages.add(it) },
             sendCancelMessage = { cancelMessages.add(it) },
             sendVipLoginSound = { sounds.add("login") },

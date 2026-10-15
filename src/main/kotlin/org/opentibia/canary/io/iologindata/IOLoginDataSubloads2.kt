@@ -3,6 +3,7 @@ package org.opentibia.canary.io.iologindata
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.monsters.MonsterType
+import org.opentibia.canary.creatures.monsters.Monsters
 import org.opentibia.canary.io.IOBestiaryPersistence
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
@@ -66,11 +67,21 @@ class IOLoginDataSubloads2(
     /** `g_imbuements()` seam of the created store inbox item. */
     private val imbuements: Imbuements? = null,
     /**
+     * `g_monsters()` registry whose `getMonsterTypeByRaceId`
+     * (monsters.cpp:375-388) resolves the persisted tracker race ids. The
+     * composition root passes the booted registry; when only the lambda seam is
+     * supplied the registry stays unused.
+     */
+    private val monsters: Monsters? = null,
+    /**
      * `g_monsters().getMonsterTypeByRaceId` (monsters.cpp:375-388) resolution of
      * the persisted tracker race ids; an unresolved id is dropped exactly like
-     * the C++ `if (monsterType)` guard.
+     * the C++ `if (monsterType)` guard. Defaults to the injected [monsters]
+     * registry lookup.
      */
-    private val monsterTypeByRaceId: (raceId: Int, isBoss: Boolean) -> MonsterType? = { _, _ -> null },
+    private val monsterTypeByRaceId: (raceId: Int, isBoss: Boolean) -> MonsterType? = { raceId, isBoss ->
+        monsters?.getMonsterTypeByRaceId(raceId, isBoss)
+    },
 ) {
 
     /**

@@ -103,7 +103,9 @@ class IOLoginDataSubloadsTest {
         playerStorage = { storage },
         playerVip = { vipComponent },
         playerSocialState = { social },
-        playerKv = { kv },
+        // `Player::kv()` is the `g_kv().scoped("player").scoped(guid)` root
+        // (player.cpp:1398-1400); the loader scopes `exiva-restrictions` from it.
+        playerKv = { player -> kv.scoped("player").scoped(player.id.toString()) },
         getGuild = { registryGuild },
         addGuild = { addedGuilds.add(it) },
         now = { NOW },

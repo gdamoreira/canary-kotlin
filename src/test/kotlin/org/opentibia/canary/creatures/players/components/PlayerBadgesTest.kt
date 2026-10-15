@@ -2,6 +2,8 @@ package org.opentibia.canary.creatures.players.components
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.kv.KVMemory
+import org.opentibia.canary.kv.ValueWrapper
 import org.opentibia.canary.account.Account
 import org.opentibia.canary.creatures.vocations.Vocation
 
@@ -49,7 +51,7 @@ class PlayerBadgesTest {
         badges: List<Badge> = ALL_BADGES,
     ) {
         val player = FakeBadgePlayer()
-        val kv = InMemoryKV()
+        val kv = KVMemory()
         val registry = InMemoryBadgeRegistry(badges)
         val accountPlayers = mutableMapOf<Long, List<BadgeAccountPlayer>>()
         val debugLogs = mutableListOf<String>()
@@ -89,7 +91,7 @@ class PlayerBadgesTest {
         assertThat(f.badge.add(1)).isTrue()
 
         assertThat(f.badge.hasBadge(1)).isTrue()
-        assertThat(f.badge.getUnlockedKV().get("Fledegeling Hero")).isEqualTo(1_700_000_000L)
+        assertThat(f.badge.getUnlockedKV().get("Fledegeling Hero")!!.getInt().toLong()).isEqualTo(1_700_000_000L)
     }
 
     @Test
@@ -98,33 +100,33 @@ class PlayerBadgesTest {
 
         assertThat(f.badge.add(1, timestamp = 500L)).isTrue()
 
-        assertThat(f.badge.getUnlockedKV().get("Fledegeling Hero")).isEqualTo(500L)
+        assertThat(f.badge.getUnlockedKV().get("Fledegeling Hero")!!.getInt()).isEqualTo(500)
     }
 
     @Test
     fun `add refuses an already granted badge`() {
         val f = Fixture()
         f.badge.add(1)
-        f.badge.getUnlockedKV().set("Fledegeling Hero", 999L)
+        f.badge.getUnlockedKV().set("Fledegeling Hero", ValueWrapper(999))
 
         assertThat(f.badge.add(1)).isFalse()
 
-        assertThat(f.badge.getUnlockedKV().get("Fledegeling Hero")).isEqualTo(999L)
+        assertThat(f.badge.getUnlockedKV().get("Fledegeling Hero")!!.getInt()).isEqualTo(999)
     }
 
     @Test
     fun `getUnlockedKV scopes the unlocked entries under badges unlocked`() {
         val f = Fixture()
 
-        f.badge.getUnlockedKV().set("Veteran Hero", 5L)
+        f.badge.getUnlockedKV().set("Veteran Hero", ValueWrapper(5))
 
-        assertThat(f.kv.scoped("badges").scoped("unlocked").get("Veteran Hero")).isEqualTo(5L)
+        assertThat(f.kv.scoped("badges").scoped("unlocked").get("Veteran Hero")!!.getInt()).isEqualTo(5)
     }
 
     @Test
     fun `loadUnlockedBadges resolves persisted names and logs`() {
         val f = Fixture()
-        f.badge.getUnlockedKV().set("Fledegeling Hero", 111L)
+        f.badge.getUnlockedKV().set("Fledegeling Hero", ValueWrapper(111))
 
         f.badge.loadUnlockedBadges()
 
@@ -138,7 +140,7 @@ class PlayerBadgesTest {
     @Test
     fun `loadUnlockedBadges skips unknown names and logs an error`() {
         val f = Fixture()
-        f.badge.getUnlockedKV().set("Ghost Badge", 111L)
+        f.badge.getUnlockedKV().set("Ghost Badge", ValueWrapper(111))
 
         f.badge.loadUnlockedBadges()
 
@@ -275,7 +277,7 @@ class PlayerBadgesTest {
 
         f.badge.checkAndUpdateNewBadges()
 
-        assertThat(f.badge.getUnlockedKV().get("Fledegeling Hero")).isEqualTo(1_700_000_000L)
+        assertThat(f.badge.getUnlockedKV().get("Fledegeling Hero")!!.getInt().toLong()).isEqualTo(1_700_000_000L)
     }
 
     @Test

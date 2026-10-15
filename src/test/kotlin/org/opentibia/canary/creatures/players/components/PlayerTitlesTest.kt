@@ -2,6 +2,8 @@ package org.opentibia.canary.creatures.players.components
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.kv.KVMemory
+import org.opentibia.canary.kv.ValueWrapper
 import org.opentibia.canary.social.guild.GuildRank
 import org.opentibia.canary.systems.mount.Mount
 
@@ -164,7 +166,7 @@ class PlayerTitlesTest {
         titles: List<Title> = ALL_TITLES,
     ) {
         val player = FakeTitlePlayer()
-        val kv = InMemoryKV()
+        val kv = KVMemory()
         val registry = InMemoryTitleRegistry(titles)
         val mounts = mutableListOf<Mount>()
         val monsters = mutableMapOf<Pair<Int, Boolean>, MonsterTypeInfo>()
@@ -213,7 +215,7 @@ class PlayerTitlesTest {
 
         assertThat(f.title.isTitleUnlocked(GOLD_ID)).isTrue()
         assertThat(f.title.getUnlockedTitles()).containsExactly(GOLD_HOARDER to 1_700_000_000L)
-        assertThat(f.title.getUnlockedKV().get("Gold Hoarder")).isEqualTo(1_700_000_000L)
+        assertThat(f.title.getUnlockedKV().get("Gold Hoarder")!!.getInt().toLong()).isEqualTo(1_700_000_000L)
         assertThat(f.debugLogs).containsExactly("[manage] - Added title: Gold Hoarder")
     }
 
@@ -223,19 +225,19 @@ class PlayerTitlesTest {
 
         assertThat(f.title.manage(true, GOLD_ID, timestamp = 1_234L)).isTrue()
 
-        assertThat(f.title.getUnlockedKV().get("Gold Hoarder")).isEqualTo(1_234L)
+        assertThat(f.title.getUnlockedKV().get("Gold Hoarder")!!.getInt()).isEqualTo(1_234)
     }
 
     @Test
     fun `manage refuses a title that is already unlocked`() {
         val f = Fixture()
         f.title.manage(true, GOLD_ID)
-        f.kv.scoped("titles").scoped("unlocked").set("Gold Hoarder", 999L)
+        f.kv.scoped("titles").scoped("unlocked").set("Gold Hoarder", ValueWrapper(999))
 
         assertThat(f.title.manage(true, GOLD_ID)).isFalse()
 
         assertThat(f.title.getUnlockedTitles()).hasSize(1)
-        assertThat(f.title.getUnlockedKV().get("Gold Hoarder")).isEqualTo(999L)
+        assertThat(f.title.getUnlockedKV().get("Gold Hoarder")!!.getInt()).isEqualTo(999)
     }
 
     @Test
@@ -302,13 +304,13 @@ class PlayerTitlesTest {
         f.title.setCurrentTitle(GOLD_ID)
 
         assertThat(f.title.getCurrentTitle()).isEqualTo(GOLD_ID)
-        assertThat(f.kv.scoped("titles").get("current-title")).isEqualTo(GOLD_ID.toLong())
+        assertThat(f.kv.scoped("titles").get("current-title")!!.getInt()).isEqualTo(GOLD_ID)
     }
 
     @Test
     fun `setCurrentTitle rejects a locked or zero id and stores zero`() {
         val f = Fixture()
-        f.kv.scoped("titles").set("current-title", GOLD_ID.toLong())
+        f.kv.scoped("titles").set("current-title", ValueWrapper(GOLD_ID))
 
         f.title.setCurrentTitle(GOLD_ID)
         assertThat(f.title.getCurrentTitle()).isEqualTo(0)
@@ -352,7 +354,7 @@ class PlayerTitlesTest {
 
         assertThat(f.title.getCurrentTitleName()).isEmpty()
 
-        f.kv.scoped("titles").set("current-title", 200L)
+        f.kv.scoped("titles").set("current-title", ValueWrapper(200))
         assertThat(f.title.getCurrentTitleName()).isEmpty()
     }
 
@@ -366,7 +368,7 @@ class PlayerTitlesTest {
     @Test
     fun `loadUnlockedTitles resolves persisted names against the registry`() {
         val f = Fixture()
-        f.title.getUnlockedKV().set("Gold Hoarder", 111L)
+        f.title.getUnlockedKV().set("Gold Hoarder", ValueWrapper(111))
 
         f.title.loadUnlockedTitles()
 
@@ -377,7 +379,7 @@ class PlayerTitlesTest {
     @Test
     fun `loadUnlockedTitles skips unknown names and logs an error`() {
         val f = Fixture()
-        f.title.getUnlockedKV().set("Ghost Title", 111L)
+        f.title.getUnlockedKV().set("Ghost Title", ValueWrapper(111))
 
         f.title.loadUnlockedTitles()
 
@@ -388,7 +390,7 @@ class PlayerTitlesTest {
     @Test
     fun `loadUnlockedTitles appends on every call, matching Canary's load-without-clear`() {
         val f = Fixture()
-        f.title.getUnlockedKV().set("Gold Hoarder", 111L)
+        f.title.getUnlockedKV().set("Gold Hoarder", ValueWrapper(111))
 
         f.title.loadUnlockedTitles()
         f.title.loadUnlockedTitles()
@@ -403,9 +405,9 @@ class PlayerTitlesTest {
     fun `getUnlockedKV scopes the unlocked entries under titles unlocked`() {
         val f = Fixture()
 
-        f.title.getUnlockedKV().set("Gold Hoarder", 5L)
+        f.title.getUnlockedKV().set("Gold Hoarder", ValueWrapper(5))
 
-        assertThat(f.kv.scoped("titles").scoped("unlocked").get("Gold Hoarder")).isEqualTo(5L)
+        assertThat(f.kv.scoped("titles").scoped("unlocked").get("Gold Hoarder")!!.getInt()).isEqualTo(5)
     }
 
     @Test
@@ -509,12 +511,12 @@ class PlayerTitlesTest {
     @Test
     fun `checkLoginStreak reads the daily reward streak and truncates it to uint8`() {
         val f = Fixture()
-        f.kv.scoped("daily-reward").set("streak", 7L)
+        f.kv.scoped("daily-reward").set("streak", ValueWrapper(7))
 
         assertThat(f.title.checkLoginStreak(7)).isTrue()
         assertThat(f.title.checkLoginStreak(8)).isFalse()
 
-        f.kv.scoped("daily-reward").set("streak", 256L)
+        f.kv.scoped("daily-reward").set("streak", ValueWrapper(256))
         assertThat(f.title.checkLoginStreak(1)).isFalse()
     }
 
@@ -644,7 +646,7 @@ class PlayerTitlesTest {
         f.player.playerBankBalance = 1_000_000
         f.player.playerLevel = 50
         f.player.playerGuildRank = GuildRank.Leader
-        f.kv.scoped("daily-reward").set("streak", 7L)
+        f.kv.scoped("daily-reward").set("streak", ValueWrapper(7))
         f.player.playerTaskHuntingPoints = 160_000
         f.monsters[LYCANTHROPE_RACE to false] = MonsterTypeInfo(LYCANTHROPE_RACE, 100)
         f.player.bestiaryKillCounts[LYCANTHROPE_RACE] = 100

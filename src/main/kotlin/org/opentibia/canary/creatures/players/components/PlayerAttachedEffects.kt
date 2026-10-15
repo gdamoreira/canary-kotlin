@@ -10,6 +10,8 @@ import org.opentibia.canary.creatures.appearance.effects.Shader
 import org.opentibia.canary.creatures.appearance.effects.Wing
 import org.opentibia.canary.creatures.appearance.outfit.OutfitPlayer
 import org.opentibia.canary.creatures.appearance.outfit.Outfits
+import org.opentibia.canary.kv.KV
+import org.opentibia.canary.kv.ValueWrapper
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 
 /**
@@ -161,7 +163,7 @@ class PlayerAttachedEffects(
         if (value > 0) {
             return value and 0xFF
         }
-        val lastWing = player.kv().get("last-wing") ?: return 0
+        val lastWing = player.kv().get("last-wing")?.getNumber() ?: return 0
         return lastWing.toInt() and 0xFF
     }
 
@@ -235,7 +237,7 @@ class PlayerAttachedEffects(
             val currentWing = attachedEffects.getWingByID(currentWingId) ?: return false
             if (!hasWing(currentWing)) {
                 setCurrentWing(0)
-                player.kv().set("last-wing", 0L)
+                player.kv().set("last-wing", ValueWrapper(0))
                 player.sendOutfitWindow()
                 return false
             }
@@ -248,7 +250,7 @@ class PlayerAttachedEffects(
             defaultOutfit.lookWing = currentWing.id
             player.setDefaultOutfit(defaultOutfit)
             setCurrentWing(currentWing.id)
-            player.kv().set("last-wing", currentWing.id.toLong())
+            player.kv().set("last-wing", ValueWrapper(currentWing.id))
         } else {
             if (!isWinged()) {
                 return false
@@ -301,7 +303,7 @@ class PlayerAttachedEffects(
             }
 
             setCurrentWing(0)
-            player.kv().set("last-wing", 0L)
+            player.kv().set("last-wing", ValueWrapper(0))
         }
 
         return true
@@ -336,7 +338,7 @@ class PlayerAttachedEffects(
         if (value > 0) {
             return value and 0xFF
         }
-        val lastAura = player.kv().get("last-aura") ?: return 0
+        val lastAura = player.kv().get("last-aura")?.getNumber() ?: return 0
         return lastAura.toInt() and 0xFF
     }
 
@@ -410,7 +412,7 @@ class PlayerAttachedEffects(
             val currentAura = attachedEffects.getAuraByID(currentAuraId) ?: return false
             if (!hasAura(currentAura)) {
                 setCurrentAura(0)
-                player.kv().set("last-aura", 0L)
+                player.kv().set("last-aura", ValueWrapper(0))
                 player.sendOutfitWindow()
                 return false
             }
@@ -423,7 +425,7 @@ class PlayerAttachedEffects(
             defaultOutfit.lookAura = currentAura.id
             player.setDefaultOutfit(defaultOutfit)
             setCurrentAura(currentAura.id)
-            player.kv().set("last-aura", currentAura.id.toLong())
+            player.kv().set("last-aura", ValueWrapper(currentAura.id))
         } else {
             if (!isAuraed()) {
                 return false
@@ -476,7 +478,7 @@ class PlayerAttachedEffects(
             }
 
             setCurrentAura(0)
-            player.kv().set("last-aura", 0L)
+            player.kv().set("last-aura", ValueWrapper(0))
         }
 
         return true
@@ -510,7 +512,7 @@ class PlayerAttachedEffects(
         if (value > 0) {
             return value and 0xFF
         }
-        val lastEffect = player.kv().get("last-effect") ?: return 0
+        val lastEffect = player.kv().get("last-effect")?.getNumber() ?: return 0
         return lastEffect.toInt() and 0xFF
     }
 
@@ -584,7 +586,7 @@ class PlayerAttachedEffects(
             val currentEffect = attachedEffects.getEffectByID(currentEffectId) ?: return false
             if (!hasEffect(currentEffect)) {
                 setCurrentEffect(0)
-                player.kv().set("last-effect", 0L)
+                player.kv().set("last-effect", ValueWrapper(0))
                 player.sendOutfitWindow()
                 return false
             }
@@ -597,7 +599,7 @@ class PlayerAttachedEffects(
             defaultOutfit.lookEffect = currentEffect.id
             player.setDefaultOutfit(defaultOutfit)
             setCurrentEffect(currentEffect.id)
-            player.kv().set("last-effect", currentEffect.id.toLong())
+            player.kv().set("last-effect", ValueWrapper(currentEffect.id))
         } else {
             if (!isEffected()) {
                 return false
@@ -650,7 +652,7 @@ class PlayerAttachedEffects(
             }
 
             setCurrentEffect(0)
-            player.kv().set("last-effect", 0L)
+            player.kv().set("last-effect", ValueWrapper(0))
         }
 
         return true

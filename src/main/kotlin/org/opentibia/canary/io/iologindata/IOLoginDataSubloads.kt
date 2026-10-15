@@ -330,6 +330,13 @@ class DbGuildMembershipRepository(private val dataSource: DataSource) : GuildMem
  * constructor-injected seams per AGENTS.md 1.1; a `null` seam keeps that
  * sub-load inert exactly like the other unwired `IOLoginData` seams.
  *
+ * COMPOSED OWNERS (wave 64): `Player::vip()` is `Player.features.vip`
+ * (player.hpp:1965), `Player::kv()` is the composed `Player.kv` full
+ * `ValueWrapper` store (player.cpp:1398-1400) and `Player::storage()` is
+ * `Player.features.storage` (player.hpp:1968), so their seams default to the
+ * live player and the sub-loads run at login out of the box; only an explicit
+ * `null` keeps one inert.
+ *
  * PARITY GAPS (see the individual methods for details):
  *  - `loadPlayerConditions` decodes the base attributes, the regeneration/
  *    mana-shield/soul/damage/speed/outfit/light/charm payloads (including the
@@ -338,11 +345,9 @@ class DbGuildMembershipRepository(private val dataSource: DataSource) : GuildMem
  *    impossible (matching the C++ failure semantics). The condition classes
  *    expose the C++ `unserializeProp` writes as module-visible members because
  *    Kotlin has no friend classes.
- *  - `Player::vip()`, `Player::kv()` (full ValueWrapper store) and
- *    `Player::guildNick` are not composed into the Kotlin `Player` yet, so the
- *    sub-loads take their owners as seams. `Player::storage()` is composed
- *    (`Player.features.storage`, player.hpp:1968), so [playerStorage] defaults
- *    to it and only an explicit `null` keeps the sub-load inert.
+ *  - `Player::guildNick` is not composed into the Kotlin `Player` yet, so
+ *    [loadPlayerGuild] takes its owner as a seam (`null` leaves the nick
+ *    unset).
  */
 class IOLoginDataSubloads(
     /** The `players.conditions`/`skull`/`skulltime` reads and the `conditions` write. */
@@ -362,12 +367,18 @@ class IOLoginDataSubloads(
      * need the pre-wiring behavior.
      */
     private val playerStorage: ((Player) -> PlayerStorage?)? = { player -> player.features.storage },
-    /** `Player::vip()`; `null` models the un-composed component. */
-    private val playerVip: ((Player) -> PlayerVip?)? = null,
+    /** `Player::vip()` (player.hpp:1529-1530); defaults to the composed `PlayerVIP`. */
+    private val playerVip: ((Player) -> PlayerVip?)? = { player -> player.features.vip },
     /** `Player::guildNick` (`PlayerSocialState`); `null` leaves the nick unset. */
     private val playerSocialState: ((Player) -> PlayerSocialState?)? = null,
-    /** `Player::kv()` full ValueWrapper store; `null` leaves exiva unloaded. */
-    private val playerKv: ((Player) -> KV?)? = null,
+    /**
+     * `Player::kv()` (player.cpp:1398-1400), the full
+     * `g_kv().scoped("player").scoped(guid)` `ValueWrapper` store; defaults to
+     * the composed `Player.kv`, so the exiva scope loads at login. An explicit
+     * `null` keeps the sub-load inert for callers that need the pre-wiring
+     * behavior.
+     */
+    private val playerKv: ((Player) -> KV?)? = { player -> player.kv },
     /** `g_game().getGuild(guildId)` registry read. */
     private val getGuild: (Long) -> Guild? = { null },
     /** `g_game().addGuild(guild)` registry write. */
@@ -581,8 +592,9 @@ class IOLoginDataSubloads(
     /**
      * `IOLoginDataLoad::loadPlayerExivaRestrictions`
      * (iologindata_load_player.cpp:1042-1086): every stored flag and both
-     * whitelists of the `player.<guid>.exiva-restrictions` KV scope are copied
-     * into `Player::getExivaRestrictions()`.
+     * whitelists of the `exiva-restrictions` scope under `Player::kv()`
+     * (`player.<guid>.exiva-restrictions`) are copied into
+     * `Player::getExivaRestrictions()`.
      *
      * PARITY NOTE: Canary saves the six flags as `ValueWrapper(bool)` and the
      * loader reads them through `ValueWrapper::getNumber()`, which returns
@@ -590,8 +602,8 @@ class IOLoginDataSubloads(
      * `true` therefore loads as `false` here exactly like the C++ port.
      */
     fun loadPlayerExivaRestrictions(player: Player) {
-        val rootKv = playerKv?.invoke(player) ?: return
-        val scope = rootKv.scoped("player").scoped(player.id.toString()).scoped("exiva-restrictions")
+        val playerScopedKv = playerKv?.invoke(player) ?: return
+        val scope = playerScopedKv.scoped("exiva-restrictions")
 
         val restrictions = player.getExivaRestrictions()
 

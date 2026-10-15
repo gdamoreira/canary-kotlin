@@ -213,7 +213,7 @@ class PlayerFeaturesTest {
 
         assertThat(features.achiev().isUnlocked(1)).isTrue()
         assertThat(features.achiev().getPoints()).isEqualTo(5)
-        assertThat(player.kv.scoped("achievements").scoped("unlocked").get("Castlemania")).isEqualTo(77L)
+        assertThat(player.kv.scoped("achievements").scoped("unlocked").get("Castlemania")!!.getInt()).isEqualTo(77)
     }
 
     @Test

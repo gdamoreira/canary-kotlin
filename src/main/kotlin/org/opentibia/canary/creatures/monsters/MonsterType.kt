@@ -345,10 +345,25 @@ class MonsterType(name: String) {
  * [tryAddMonsterType]. [getReloadEpoch] is the generation the asynchronous target
  * pipeline checks (`src/creatures/monsters/monster.cpp:1773-1944`).
  *
- * `getMonsterTypeByRaceId`, `getMonstersByRace` and `getMonstersByBestiaryStars`
- * are not ported yet (PARITY GAPS): they need the bosstiary and bestiary stores.
+ * `getMonstersByRace` and `getMonstersByBestiaryStars` are not ported yet
+ * (PARITY GAPS): they need the bosstiary and bestiary stores.
  */
-class Monsters {
+class Monsters(
+    /**
+     * `g_game().getBestiaryList()` (game.hpp:459-461) race id -> monster name
+     * map read by [getMonsterTypeByRaceId] (monsters.cpp:381-386). Replaces the
+     * global with constructor injection (AGENTS.md 1.1); the composition root
+     * binds `Game::getBestiaryList`.
+     */
+    private val bestiaryList: () -> Map<Int, String> = { emptyMap() },
+    /**
+     * `g_ioBosstiary().getMonsterTypeByBossRaceId(raceId)`
+     * (io_bosstiary.cpp:157-171) boss-race override read by
+     * [getMonsterTypeByRaceId] (monsters.cpp:376). Injected as a lambda because
+     * `IOBosstiary` already holds the [Monsters] registry.
+     */
+    private val bossTypeByRaceId: (raceId: Int) -> MonsterType? = { null },
+) {
     private val monsterMap: MutableMap<String, MonsterType> = TreeMap()
 
     /**
@@ -384,6 +399,23 @@ class Monsters {
             logger.error { "[Monsters::getMonsterType] - Monster with name $lowerCaseName not exist" }
         }
         return null
+    }
+
+    /**
+     * `Monsters::getMonsterTypeByRaceId` (`src/creatures/monsters/monsters.cpp:375-388`):
+     * the bosstiary boss override ([bossTypeByRaceId]) is consulted first but
+     * returned only while [isBoss] is set; otherwise the
+     * `g_game().getBestiaryList()` race id resolves through [getMonsterType]
+     * and an unknown race id yields `nullptr`.
+     */
+    fun getMonsterTypeByRaceId(raceId: Int, isBoss: Boolean = false): MonsterType? {
+        val bossType = bossTypeByRaceId(raceId)
+        if (isBoss && bossType != null) {
+            return bossType
+        }
+
+        val monsterName = bestiaryList()[raceId] ?: return null
+        return getMonsterType(monsterName)
     }
 
     /** `Monsters::tryAddMonsterType` (`src/creatures/monsters/monsters.cpp:390-399`). */

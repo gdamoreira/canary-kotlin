@@ -4,6 +4,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.within
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.creatures.vocations.Vocations
+import org.opentibia.canary.kv.ValueWrapper
 import org.opentibia.canary.map.Position
 
 /**
@@ -151,7 +152,7 @@ class PlayerBlessingsTest {
     fun `getBlessingCount reads the store summary when requested`() {
         // player.cpp:10552-10554: kv().scoped("summary")->scoped("blessings")->scoped(index)->get("amount").
         val player = newPlayer()
-        player.kv.scoped("summary").scoped("blessings").scoped("2").set("amount", 3)
+        player.kv.scoped("summary").scoped("blessings").scoped("2").set("amount", ValueWrapper(3))
 
         assertThat(player.getBlessingCount(2, storeCount = true)).isEqualTo(3)
         assertThat(player.getBlessingCount(2)).isEqualTo(0)

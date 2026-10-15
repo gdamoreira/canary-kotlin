@@ -182,8 +182,12 @@ class PlayerVip(
     private val groupMaxVipEntries: () -> Long = { 0L },
     /** `Player::isPremium()` (player.cpp:7532). */
     private val isPremium: () -> Boolean = { false },
-    /** `m_player.client`; a `null` client skips every protocol send. */
-    private val client: VipClient? = null,
+    /**
+     * `m_player.client`; resolved per call exactly like the C++ member reads
+     * (`player_vip.cpp:42, 60, 88, 92`). A `null` result skips every protocol
+     * send and the message/sound block of [notifyStatusChange].
+     */
+    private val client: () -> VipClient? = { null },
     /** `Player::sendTextMessage(MESSAGE_FAILURE, ...)`. */
     private val sendTextMessage: (message: String) -> Unit = {},
     /** `Player::sendCancelMessage(...)`. */
@@ -235,7 +239,7 @@ class PlayerVip(
         vipStatus: VipStatus,
         message: Boolean = true,
     ) {
-        val vipClient = client ?: return
+        val vipClient = client() ?: return
         if (!exists(loginPlayerGuid)) {
             return
         }
@@ -284,7 +288,7 @@ class PlayerVip(
         vipEntries[vipGuid] = VipEntry(vipGuid, vipName, status = vipStatus)
 
         accountId()?.let { repository.addVipEntry(it, vipGuid, "", 0, false) }
-        client?.sendVip(vipGuid, vipName, "", 0, false, vipStatus)
+        client()?.sendVip(vipGuid, vipName, "", 0, false, vipStatus)
         return true
     }
 
@@ -389,7 +393,7 @@ class PlayerVip(
         }
 
         accountId()?.let { repository.removeVipGroupEntry(groupId, it) }
-        client?.sendVipGroups()
+        client()?.sendVipGroups()
     }
 
     /** `PlayerVIP::addGroup` (player_vip.cpp:185-207). */
@@ -409,7 +413,7 @@ class PlayerVip(
         vipGroups.add(vipGroup)
 
         accountId()?.let { repository.addVipGroupEntry(vipGroup.id, it, vipGroup.name, vipGroup.customizable) }
-        client?.sendVipGroups()
+        client()?.sendVipGroups()
     }
 
     /**
@@ -428,7 +432,7 @@ class PlayerVip(
         vipGroup.customizable = customizable
 
         accountId()?.let { repository.editVipGroupEntry(vipGroup.id, it, vipGroup.name, vipGroup.customizable) }
-        client?.sendVipGroups()
+        client()?.sendVipGroups()
     }
 
     /** `PlayerVIP::addGuidToGroupInternal` (player_vip.cpp:248-253). */

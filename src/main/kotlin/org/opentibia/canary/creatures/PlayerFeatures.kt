@@ -31,8 +31,6 @@ import org.opentibia.canary.creatures.players.components.AttachedEffectsPlayer
 import org.opentibia.canary.creatures.players.components.BadgePlayer
 import org.opentibia.canary.creatures.players.components.CyclopediaPlayer
 import org.opentibia.canary.creatures.players.components.InMemoryAchievementRegistry
-import org.opentibia.canary.creatures.players.components.InMemoryKV
-import org.opentibia.canary.creatures.players.components.KV
 import org.opentibia.canary.creatures.players.components.MutableBadgeRegistry
 import org.opentibia.canary.creatures.players.components.MutableTitleRegistry
 import org.opentibia.canary.creatures.players.components.PlayerAchievement
@@ -48,10 +46,18 @@ import org.opentibia.canary.creatures.players.components.RecentPvPKillEntry
 import org.opentibia.canary.creatures.players.components.StoragePlayer
 import org.opentibia.canary.creatures.players.components.TitlePlayer
 import org.opentibia.canary.creatures.players.getEquippedItems
+import org.opentibia.canary.creatures.players.vip.InMemoryVipRepository
+import org.opentibia.canary.creatures.players.vip.PlayerVip
+import org.opentibia.canary.creatures.players.vip.VipClient
+import org.opentibia.canary.creatures.players.vip.VipRepository
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
+import org.opentibia.canary.kv.KV
+import org.opentibia.canary.kv.KVMemory
 import org.opentibia.canary.network.protocol.MessageClass
+import org.opentibia.canary.network.protocol.SourceEffect
 import org.opentibia.canary.social.guild.GuildRank
+import org.opentibia.canary.spells.SoundEffect
 import org.opentibia.canary.systems.bestiary.PlayerBestiaryState
 import org.opentibia.canary.systems.concoction.PlayerConcoctions
 import org.opentibia.canary.systems.dailyreward.PlayerDailyReward
@@ -113,7 +119,8 @@ import org.opentibia.canary.creatures.vocations.Vocations
  * (`Player::achiev()`, player.cpp:12758), [animusMastery]
  * (`Player::animusMastery()`, player.cpp:12812), [outfits]
  * (`Player::outfits`/`Player::canWear`, player.hpp:1686, player.cpp:6783), the
- * [storage] `Player::m_storage` (player.hpp:1968) and [vitals]
+ * [storage] `Player::m_storage` (player.hpp:1968), [vip] (`PlayerVIP
+ * m_playerVIP`, player.hpp:1965) and [vitals]
  * (`Player::soul`/`staminaMinutes`/`bankBalance`, player.hpp:1726,1817,1848).
  * Their `Player`-backed seams ([getEquippedItems], [cannotBeMuted],
  * [addCondition], [sendTextMessage], [achievementKv], [getOutfitByLookType])
@@ -236,6 +243,23 @@ class PlayerFeatures(
     private val playerOnStorageUpdateCallback: (StoragePlayer, Int, Int, Int, Long) -> Unit = { _, _, _, _, _ -> },
     /** `g_logger().warn` (player_storage.cpp:71, player.cpp:6785) seam of [storage] and [outfits]. */
     private val logWarn: (String) -> Unit = {},
+    /** `g_logger().debug` (player_vip.cpp:152, 158) seam of [vip]. */
+    private val logDebug: (String) -> Unit = {},
+    /**
+     * `IOLoginData`'s VIP persistence (`account_viplist`, `account_vipgroups`,
+     * `account_vipgrouplist`; iologindata.cpp:383-497) used by [vip]
+     * (player_vip.cpp:69, 87, 112-123, 176, 200, 219). The composition root
+     * injects the JDBC repository; the in-memory default keeps a directly
+     * constructed player self-contained.
+     */
+    val vipRepository: VipRepository = InMemoryVipRepository(),
+    /**
+     * `m_player.client` (`player_vip.cpp:42, 60, 88, 92`) resolved per call by
+     * [vip]. The Kotlin `ProtocolSink` does not model the VIP senders yet, so
+     * the composition root binds this seam once the protocol layer exposes
+     * them (PARITY GAP); a `null` result keeps every VIP send inert.
+     */
+    private val vipClient: () -> VipClient? = { null },
     /**
      * `g_ioprey()` prey engine core (`src/io/ioprey.cpp`); Canary reaches it
      * through the global singleton and `Player::initializePrey` uses it, so it
@@ -416,6 +440,42 @@ class PlayerFeatures(
         logWarn = logWarn,
     )
 
+    /**
+     * `PlayerVIP m_playerVIP` (player.hpp:1965); accessor `Player::vip()`
+     * (player.hpp:1529-1530). Created lazily so the host's account, group and
+     * premium state are resolved after the `Player` finished constructing,
+     * exactly like the C++ member embeds the live player reference. The login
+     * VIP sub-load (`IOLoginDataLoad::loadPlayerVip`,
+     * iologindata_load_player.cpp:770-806) fills the account's list through
+     * [PlayerVip.addInternal] and its groups silently.
+     */
+    val vip: PlayerVip by lazy(LazyThreadSafetyMode.NONE) {
+        PlayerVip(
+            repository = vipRepository,
+            accountId = { wheelPlayer?.account?.id },
+            groupMaxVipEntries = { (wheelPlayer?.group?.maxVipEntries ?: 0).toLong() },
+            isPremium = { wheelPlayer?.isPremium() ?: false },
+            client = vipClient,
+            sendTextMessage = { message -> wheelPlayer?.sendTextMessageTyped(MessageClass.MESSAGE_FAILURE, message) },
+            sendCancelMessage = { message -> wheelPlayer?.sendCancelMessageText?.invoke(message) },
+            sendVipLoginSound = { sendVipSound(SoundEffect.ACTION_VIP_LOGIN) },
+            sendVipLogoutSound = { sendVipSound(SoundEffect.ACTION_VIP_LOGOUT) },
+            logDebug = logDebug,
+            logWarn = logWarn,
+        )
+    }
+
+    /**
+     * `m_player.sendSingleSoundEffect(m_player.getPosition(), sound,
+     * SourceEffect_t::OWN)` of `PlayerVIP::notifyStatusChange`
+     * (player_vip.cpp:48, 54).
+     */
+    private fun sendVipSound(sound: SoundEffect) {
+        wheelPlayer?.let { player ->
+            player.sendSingleSoundEffect(player.position, sound, SourceEffect.OWN)
+        }
+    }
+
     /** `Player` bestiary/charm state (player.hpp:1836-1841). */
     val bestiary: PlayerBestiaryState = PlayerBestiaryState()
 
@@ -548,7 +608,7 @@ class PlayerFeatures(
                 sendTextMessage,
                 sendCyclopediaCharacterAchievements,
             ),
-            kv = achievementKv ?: wheelPlayer?.kv ?: InMemoryKV(),
+            kv = achievementKv ?: wheelPlayer?.kv ?: KVMemory(),
             registry = achievementRegistry,
         )
     }
@@ -577,7 +637,7 @@ class PlayerFeatures(
     val badge: PlayerBadge by lazy(LazyThreadSafetyMode.NONE) {
         PlayerBadge(
             player = HostBadgePlayer(wheelPlayer) { loyalty?.getLoyaltyPoints() ?: 0L },
-            kv = wheelPlayer?.kv ?: InMemoryKV(),
+            kv = wheelPlayer?.kv ?: KVMemory(),
             registry = badgeRegistry,
         )
     }
@@ -590,7 +650,7 @@ class PlayerFeatures(
     val title: PlayerTitle by lazy(LazyThreadSafetyMode.NONE) {
         PlayerTitle(
             player = HostTitlePlayer(wheelPlayer, this),
-            kv = wheelPlayer?.kv ?: InMemoryKV(),
+            kv = wheelPlayer?.kv ?: KVMemory(),
             registry = titleRegistry,
             getMounts = { mountDefinitions.getMounts() },
         )
@@ -629,7 +689,7 @@ internal object UnwiredVocationRequirements : VocationRequirements {
  * the unwired configuration, where they are inert.
  */
 internal object NullCyclopediaPlayer : CyclopediaPlayer {
-    private val kv: KV = InMemoryKV()
+    private val kv: KV = KVMemory()
 
     override fun getGUID(): Long = 0
 
@@ -790,7 +850,7 @@ private class HostAttachedEffectsPlayer(
     private val storage: PlayerStorage,
 ) : AttachedEffectsPlayer {
 
-    private val fallbackKv: KV = InMemoryKV()
+    private val fallbackKv: KV = KVMemory()
 
     override fun getSex(): PlayerSex_t = player?.getSex() ?: PlayerSex_t.MALE
 

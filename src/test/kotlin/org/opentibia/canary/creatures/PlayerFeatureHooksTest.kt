@@ -261,7 +261,7 @@ class PlayerFeatureHooksTest {
         player.cyclopedia().updateAmount(SummaryCategory.PREY_CARDS, 5)
 
         assertThat(player.cyclopedia().getAmount(SummaryCategory.PREY_CARDS)).isEqualTo(5)
-        assertThat(player.kv.scoped("summary").scoped("prey-cards").get("amount")).isEqualTo(5L)
+        assertThat(player.kv.scoped("summary").scoped("prey-cards").get("amount")!!.getInt()).isEqualTo(5)
     }
 
     @Test

@@ -2,6 +2,9 @@ package org.opentibia.canary.creatures.players.components
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.kv.KV
+import org.opentibia.canary.kv.KVMemory
+import org.opentibia.canary.kv.ValueWrapper
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.Outfit
 import org.opentibia.canary.creatures.Creature
@@ -36,13 +39,13 @@ class PlayerAttachedEffectsTest {
     fun `getLastWing prefers the current-wing storage over kv and narrows to uint8`() {
         val f = fixture()
         f.player.storage[PlayerStorage.PSTRG_WING_CURRENTWING] = 5
-        f.player.kv.set("last-wing", 7L)
+        f.player.kv.set("last-wing", ValueWrapper(7))
         assertThat(f.effects.getLastWing()).isEqualTo(5)
 
         f.player.storage.remove(PlayerStorage.PSTRG_WING_CURRENTWING)
         assertThat(f.effects.getLastWing()).isEqualTo(7)
 
-        f.player.kv.set("last-wing", 300L)
+        f.player.kv.set("last-wing", ValueWrapper(300))
         assertThat(f.effects.getLastWing()).isEqualTo(44)
     }
 
@@ -54,7 +57,7 @@ class PlayerAttachedEffectsTest {
     @Test
     fun `getCurrentWing only reads the current-wing storage`() {
         val f = fixture()
-        f.player.kv.set("last-wing", 9L)
+        f.player.kv.set("last-wing", ValueWrapper(9))
         assertThat(f.effects.getCurrentWing()).isEqualTo(0)
 
         f.player.storage[PlayerStorage.PSTRG_WING_CURRENTWING] = 4
@@ -76,7 +79,7 @@ class PlayerAttachedEffectsTest {
         assertThat(f.effects.isWinged()).isFalse()
 
         f.effects.tameWing(3)
-        f.player.kv.set("last-wing", 3L)
+        f.player.kv.set("last-wing", ValueWrapper(3))
         assertThat(f.effects.toggleWing(true)).isTrue()
         assertThat(f.effects.isWinged()).isTrue()
     }
@@ -129,7 +132,7 @@ class PlayerAttachedEffectsTest {
     fun `untameWing clears the bit and only diswings the current wing`() {
         val f = fixture()
         f.effects.tameWing(3)
-        f.player.kv.set("last-wing", 3L)
+        f.player.kv.set("last-wing", ValueWrapper(3))
         f.effects.toggleWing(true)
         f.player.outfitChanges.clear()
 
@@ -137,7 +140,7 @@ class PlayerAttachedEffectsTest {
 
         assertThat(f.player.storage[PlayerStorage.PSTRG_WING_RANGE_START]).isEqualTo(0)
         assertThat(f.player.storage[PlayerStorage.PSTRG_WING_CURRENTWING]).isEqualTo(0)
-        assertThat(f.player.kv.get("last-wing")).isEqualTo(0L)
+        assertThat(f.player.kv.get("last-wing")!!.getInt()).isEqualTo(0)
         assertThat(f.player.outfit.lookWing).isEqualTo(0)
         assertThat(f.player.outfitChanges).hasSize(1)
     }
@@ -146,7 +149,7 @@ class PlayerAttachedEffectsTest {
     fun `toggleWing refuses inside the exhaustion window and allows the bypass flag`() {
         val f = fixture()
         f.effects.tameWing(3)
-        f.player.kv.set("last-wing", 3L)
+        f.player.kv.set("last-wing", ValueWrapper(3))
         f.player.nowMillis = 10_000L
         assertThat(f.effects.toggleWing(true)).isTrue()
 
@@ -164,7 +167,7 @@ class PlayerAttachedEffectsTest {
     fun `toggleWing requires the outfit look type to be registered`() {
         val f = fixture(outfitXml = "<outfits></outfits>")
         f.effects.tameWing(3)
-        f.player.kv.set("last-wing", 3L)
+        f.player.kv.set("last-wing", ValueWrapper(3))
 
         assertThat(f.effects.toggleWing(true)).isFalse()
     }
@@ -182,13 +185,13 @@ class PlayerAttachedEffectsTest {
     fun `toggleWing equips the last tamed wing and persists it`() {
         val f = fixture()
         f.effects.tameWing(3)
-        f.player.kv.set("last-wing", 3L)
+        f.player.kv.set("last-wing", ValueWrapper(3))
 
         assertThat(f.effects.toggleWing(true)).isTrue()
 
         assertThat(f.player.outfit.lookWing).isEqualTo(3)
         assertThat(f.player.storage[PlayerStorage.PSTRG_WING_CURRENTWING]).isEqualTo(3)
-        assertThat(f.player.kv.get("last-wing")).isEqualTo(3L)
+        assertThat(f.player.kv.get("last-wing")!!.getInt()).isEqualTo(3)
         assertThat(f.player.outfitChanges).hasSize(1)
         assertThat(f.player.cancels).isEmpty()
     }
@@ -198,7 +201,7 @@ class PlayerAttachedEffectsTest {
         val f = fixture()
         f.effects.tameWing(3)
         f.effects.tameWing(5)
-        f.player.kv.set("last-wing", 3L)
+        f.player.kv.set("last-wing", ValueWrapper(3))
         f.player.randomMounted = true
         f.nextRandom = 1
 
@@ -211,12 +214,12 @@ class PlayerAttachedEffectsTest {
     fun `toggleWing clears the state when the last wing is no longer tamed`() {
         val f = fixture()
         f.player.storage[PlayerStorage.PSTRG_WING_CURRENTWING] = 5
-        f.player.kv.set("last-wing", 5L)
+        f.player.kv.set("last-wing", ValueWrapper(5))
 
         assertThat(f.effects.toggleWing(true)).isFalse()
 
         assertThat(f.player.storage[PlayerStorage.PSTRG_WING_CURRENTWING]).isEqualTo(0)
-        assertThat(f.player.kv.get("last-wing")).isEqualTo(0L)
+        assertThat(f.player.kv.get("last-wing")!!.getInt()).isEqualTo(0)
         assertThat(f.player.outfitWindows).isEqualTo(1)
     }
 
@@ -224,7 +227,7 @@ class PlayerAttachedEffectsTest {
     fun `toggleWing refuses while the outfit condition is active`() {
         val f = fixture()
         f.effects.tameWing(3)
-        f.player.kv.set("last-wing", 3L)
+        f.player.kv.set("last-wing", ValueWrapper(3))
         f.player.outfitCondition = true
 
         assertThat(f.effects.toggleWing(true)).isFalse()
@@ -236,7 +239,7 @@ class PlayerAttachedEffectsTest {
     fun `toggleWing off diswings the player`() {
         val f = fixture()
         f.effects.tameWing(3)
-        f.player.kv.set("last-wing", 3L)
+        f.player.kv.set("last-wing", ValueWrapper(3))
         f.effects.toggleWing(true)
         f.player.outfitChanges.clear()
         f.player.nowMillis += 3000
@@ -265,13 +268,13 @@ class PlayerAttachedEffectsTest {
     fun `toggleAura equips the last tamed aura and persists it`() {
         val f = fixture()
         f.effects.tameAura(2)
-        f.player.kv.set("last-aura", 2L)
+        f.player.kv.set("last-aura", ValueWrapper(2))
 
         assertThat(f.effects.toggleAura(true)).isTrue()
 
         assertThat(f.player.outfit.lookAura).isEqualTo(2)
         assertThat(f.player.storage[PlayerStorage.PSTRG_AURA_CURRENTAURA]).isEqualTo(2)
-        assertThat(f.player.kv.get("last-aura")).isEqualTo(2L)
+        assertThat(f.player.kv.get("last-aura")!!.getInt()).isEqualTo(2)
     }
 
     @Test
@@ -294,12 +297,12 @@ class PlayerAttachedEffectsTest {
         assertThat(f.effects.hasEffect(EFFECT_A)).isTrue()
         assertThat(f.player.storage[PlayerStorage.PSTRG_EFFECT_RANGE_START]).isEqualTo(1 shl 3)
 
-        f.player.kv.set("last-effect", 4L)
+        f.player.kv.set("last-effect", ValueWrapper(4))
         assertThat(f.effects.toggleEffect(true)).isTrue()
 
         assertThat(f.player.outfit.lookEffect).isEqualTo(4)
         assertThat(f.player.storage[PlayerStorage.PSTRG_EFFECT_CURRENTEFFECT]).isEqualTo(4)
-        assertThat(f.player.kv.get("last-effect")).isEqualTo(4L)
+        assertThat(f.player.kv.get("last-effect")!!.getInt()).isEqualTo(4)
     }
 
     @Test
@@ -480,7 +483,7 @@ class PlayerAttachedEffectsTest {
         var nextRandom = 0
         var nowMillis = 10_000L
         val storage = mutableMapOf<Int, Int>()
-        val kvStorage: KV = InMemoryKV()
+        val kvStorage: KV = KVMemory()
         val cancels = mutableListOf<ReturnValue>()
         var outfitWindows = 0
         val outfitChanges = mutableListOf<Outfit>()

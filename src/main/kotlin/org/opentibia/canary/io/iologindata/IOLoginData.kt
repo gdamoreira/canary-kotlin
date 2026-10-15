@@ -10,6 +10,7 @@ import org.opentibia.canary.creatures.PlayerPronoun_t
 import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.creatures.monsters.MonsterType
+import org.opentibia.canary.creatures.monsters.Monsters
 import org.opentibia.canary.creatures.players.components.PlayerSex_t
 import org.opentibia.canary.creatures.players.components.PlayerStorage
 import org.opentibia.canary.creatures.players.pvp.Kill
@@ -225,15 +226,24 @@ class IOLoginData(
      */
     private val subloads: IOLoginDataSubloads? = null,
     /**
+     * `g_monsters()` registry whose `getMonsterTypeByRaceId`
+     * (monsters.cpp:375-388) resolves the persisted bestiary tracker race ids.
+     * The composition root passes the booted registry; when only the lambda
+     * seam is supplied the registry stays unused.
+     */
+    private val monsters: Monsters? = null,
+    /**
      * `g_monsters().getMonsterTypeByRaceId` (monsters.cpp:375-388) resolution of
      * the persisted bestiary tracker race ids that
      * `IOLoginDataLoad::loadPlayerBestiaryCharms`
      * (iologindata_load_player.cpp:508-519) re-adds through
      * `Player::addMonsterToCyclopediaTrackerList`; an unresolved id is dropped
-     * like the C++ `if (monsterType)` guard. `null` keeps the tracker
-     * resolution inert.
+     * like the C++ `if (monsterType)` guard. Defaults to the injected
+     * [monsters] registry lookup.
      */
-    private val monsterTypeByRaceId: (raceId: Int, isBoss: Boolean) -> MonsterType? = { _, _ -> null },
+    private val monsterTypeByRaceId: (raceId: Int, isBoss: Boolean) -> MonsterType? = { raceId, isBoss ->
+        monsters?.getMonsterTypeByRaceId(raceId, isBoss)
+    },
     /**
      * `IOLoginDataSave::savePlayerFirst` `players`.`conditions` write
      * (iologindata_save_player.cpp:279-291). `null` keeps the pre-wiring

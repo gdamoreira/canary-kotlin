@@ -1,5 +1,8 @@
 package org.opentibia.canary.creatures.players.components
 
+import org.opentibia.canary.kv.KV
+import org.opentibia.canary.kv.KVMemory
+import org.opentibia.canary.kv.ValueWrapper
 import org.opentibia.canary.social.guild.GuildRank
 import org.opentibia.canary.systems.mount.Mount
 
@@ -221,7 +224,7 @@ interface TitlePlayer {
 class PlayerTitle(
     private val player: TitlePlayer,
     /** `m_player.kv()` — the per-player KV root (player_title.cpp:89, 94, 176). */
-    private val kv: KV = InMemoryKV(),
+    private val kv: KV = KVMemory(),
     /** `g_game().getTitleById/getTitleByName/getTitles` (player_title.cpp:39, 103, 117, 164). */
     private val registry: TitleRegistry = InMemoryTitleRegistry(),
     /** `g_game().mounts->getMounts()` (player_title.cpp:189). */
@@ -272,7 +275,7 @@ class PlayerTitle(
         }
 
         val toSaveTimestamp = if (timestamp != 0L) timestamp else now()
-        getUnlockedKV().set(title.maleName, toSaveTimestamp)
+        getUnlockedKV().set(title.maleName, ValueWrapper(toSaveTimestamp.toInt()))
         titlesUnlocked.add(title to toSaveTimestamp)
         logDebug("[manage] - Added title: ${title.maleName}")
 
@@ -304,13 +307,16 @@ class PlayerTitle(
      * number is narrowed to `uint8_t` like the C++ `static_cast`.
      */
     fun getCurrentTitle(): Int {
-        val title = kv.scoped("titles").get("current-title") ?: return 0
-        return (title and 0xFF).toInt()
+        val title = kv.scoped("titles").get("current-title")?.getNumber() ?: return 0
+        return title.toInt() and 0xFF
     }
 
     /** `PlayerTitle::setCurrentTitle` (player_title.cpp:93-95). */
     fun setCurrentTitle(id: Int) {
-        kv.scoped("titles").set("current-title", if (id != 0 && isTitleUnlocked(id)) id.toLong() else 0L)
+        kv.scoped("titles").set(
+            "current-title",
+            ValueWrapper(if (id != 0 && isTitleUnlocked(id)) id else 0),
+        )
     }
 
     /** `PlayerTitle::getCurrentTitleName` (player_title.cpp:97-109). */
@@ -376,7 +382,7 @@ class PlayerTitle(
                 continue
             }
 
-            titlesUnlocked.add(title to (getUnlockedKV().get(titleName) ?: 0L))
+            titlesUnlocked.add(title to (getUnlockedKV().get(titleName)?.getNumber()?.toLong() ?: 0L))
         }
     }
 
@@ -435,8 +441,8 @@ class PlayerTitle(
      * number is narrowed to `uint8_t` like the C++ `static_cast`.
      */
     fun checkLoginStreak(amount: Long): Boolean {
-        val streak = kv.scoped("daily-reward").get("streak") ?: return false
-        return (streak and 0xFF) >= amount
+        val streak = kv.scoped("daily-reward").get("streak")?.getNumber() ?: return false
+        return (streak.toInt() and 0xFF) >= amount
     }
 
     /** `PlayerTitle::checkTask` (player_title.cpp:267-269). */

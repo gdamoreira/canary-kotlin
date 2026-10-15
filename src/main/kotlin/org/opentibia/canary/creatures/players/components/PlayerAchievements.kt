@@ -1,5 +1,9 @@
 package org.opentibia.canary.creatures.players.components
 
+import org.opentibia.canary.kv.KV
+import org.opentibia.canary.kv.KVMemory
+import org.opentibia.canary.kv.ValueWrapper
+
 /**
  * `struct Achievement` (`player_achievement.hpp:15-27`), registered through
  * `Game::registerAchievement` (game.cpp:12481-12491). `grade` and `points` are
@@ -122,7 +126,7 @@ interface AchievementPlayer {
 class PlayerAchievement(
     private val player: AchievementPlayer,
     /** `m_player.kv()` — the per-player KV root (player_achievement.cpp:81, 87, 92, 136). */
-    private val kv: KV = InMemoryKV(),
+    private val kv: KV = KVMemory(),
     /** `g_game().getAchievementById/getAchievementByName` (player_achievement.cpp:24, 46, 103, 119). */
     private val registry: AchievementRegistry = InMemoryAchievementRegistry(),
     /** `OTSYS_TIME() / 1000` (player_achievement.cpp:34). */
@@ -156,7 +160,7 @@ class PlayerAchievement(
 
         addPoints(achievement.points)
         val toSaveTimestamp = if (timestamp != 0L) timestamp else now()
-        getUnlockedKV().set(achievement.name, toSaveTimestamp)
+        getUnlockedKV().set(achievement.name, ValueWrapper(toSaveTimestamp.toInt()))
         achievementsUnlocked.add(achievement.id to toSaveTimestamp)
         return true
     }
@@ -197,20 +201,20 @@ class PlayerAchievement(
      * stored number is narrowed to `uint16_t` like the C++ `static_cast`.
      */
     fun getPoints(): Int {
-        val points = kv.scoped("achievements").get("points") ?: return 0
-        return (points and 0xFFFF).toInt()
+        val points = kv.scoped("achievements").get("points")?.getNumber() ?: return 0
+        return points.toInt() and 0xFFFF
     }
 
     /** `PlayerAchievement::addPoints` (player_achievement.cpp:85-88). */
     fun addPoints(toAddPoints: Int) {
         val oldPoints = getPoints()
-        kv.scoped("achievements").set("points", (oldPoints + toAddPoints).toLong())
+        kv.scoped("achievements").set("points", ValueWrapper(oldPoints + toAddPoints))
     }
 
     /** `PlayerAchievement::removePoints` (player_achievement.cpp:90-93). */
     fun removePoints(points: Int) {
         val oldPoints = getPoints()
-        kv.scoped("achievements").set("points", (oldPoints - minOf(oldPoints, points)).toLong())
+        kv.scoped("achievements").set("points", ValueWrapper(oldPoints - minOf(oldPoints, points)))
     }
 
     /** `PlayerAchievement::getUnlockedAchievements` (player_achievement.cpp:95-97). */
@@ -235,7 +239,9 @@ class PlayerAchievement(
             logDebug(
                 "[loadUnlockedAchievements] - Achievement $achievementName found for player ${player.getName()}.",
             )
-            achievementsUnlocked.add(achievement.id to (getUnlockedKV().get(achievementName) ?: 0L))
+            achievementsUnlocked.add(
+                achievement.id to (getUnlockedKV().get(achievementName)?.getNumber()?.toLong() ?: 0L),
+            )
         }
     }
 

@@ -2,6 +2,9 @@ package org.opentibia.canary.creatures.players.components
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.kv.KV
+import org.opentibia.canary.kv.KVMemory
+import org.opentibia.canary.kv.ValueWrapper
 
 /**
  * Transcript tests for the Canary `PlayerCyclopedia` component.
@@ -27,9 +30,9 @@ class PlayerCyclopediaTest {
     @Test
     fun `getSummary reads prey cards instant rewards and hirelings amounts`() {
         val f = fixture()
-        f.kv.scoped("summary").scoped("prey-cards").set("amount", 1L)
-        f.kv.scoped("summary").scoped("instant-rewards").set("amount", 2L)
-        f.kv.scoped("summary").scoped("hirelings").set("amount", 3L)
+        f.kv.scoped("summary").scoped("prey-cards").set("amount", ValueWrapper(1))
+        f.kv.scoped("summary").scoped("instant-rewards").set("amount", ValueWrapper(2))
+        f.kv.scoped("summary").scoped("hirelings").set("amount", ValueWrapper(3))
 
         assertThat(f.cyclopedia.getSummary()).isEqualTo(Summary(1, 2, 3))
     }
@@ -37,7 +40,7 @@ class PlayerCyclopediaTest {
     @Test
     fun `getAmount narrows the stored value to uint16`() {
         val f = fixture()
-        f.kv.scoped("summary").scoped("prey-cards").set("amount", 70_000L)
+        f.kv.scoped("summary").scoped("prey-cards").set("amount", ValueWrapper(70_000))
 
         assertThat(f.cyclopedia.getAmount(SummaryCategory.PREY_CARDS)).isEqualTo(4_464)
     }
@@ -61,7 +64,7 @@ class PlayerCyclopediaTest {
         f.cyclopedia.updateStoreSummary(SummaryCategory.HOUSE_ITEMS, 2, "123")
         f.cyclopedia.updateStoreSummary(SummaryCategory.HOUSE_ITEMS, 3, "123")
 
-        assertThat(f.kv.scoped("summary").scoped("house-items").scoped("123").get("amount")).isEqualTo(5L)
+        assertThat(f.kv.scoped("summary").scoped("house-items").scoped("123").get("amount")!!.getInt()).isEqualTo(5)
     }
 
     @Test
@@ -73,7 +76,7 @@ class PlayerCyclopediaTest {
         val blessings = f.kv.scoped("summary").scoped("blessings")
         assertThat(Blessings.entries).hasSize(8)
         for (blessing in Blessings.entries) {
-            assertThat(blessings.scoped(blessing.value.toString()).get("amount")).isEqualTo(3L)
+            assertThat(blessings.scoped(blessing.value.toString()).get("amount")!!.getInt()).isEqualTo(3)
         }
     }
 
@@ -90,9 +93,9 @@ class PlayerCyclopediaTest {
     fun `getResult reads the ids and amounts below the summary scope`() {
         val f = fixture()
         val scope = f.kv.scoped("summary").scoped("house-items")
-        scope.scoped("123").set("amount", 4L)
-        scope.scoped("45").set("amount", 9L)
-        scope.set("broken", 1L)
+        scope.scoped("123").set("amount", ValueWrapper(4))
+        scope.scoped("45").set("amount", ValueWrapper(9))
+        scope.set("broken", ValueWrapper(1))
 
         assertThat(f.cyclopedia.getResult(SummaryCategory.HOUSE_ITEMS)).containsExactlyInAnyOrderEntriesOf(
             mapOf(123 to 4, 45 to 9),
@@ -107,7 +110,7 @@ class PlayerCyclopediaTest {
         f.cyclopedia.insertValue(SummaryCategory.HOUSE_ITEMS, 2, "123")
         f.cyclopedia.insertValue(SummaryCategory.HOUSE_ITEMS, 3, "123")
 
-        assertThat(f.kv.scoped("summary").scoped("house-items").scoped("123").get("amount")).isEqualTo(5L)
+        assertThat(f.kv.scoped("summary").scoped("house-items").scoped("123").get("amount")!!.getInt()).isEqualTo(5)
     }
 
     // ---- loadSummaryData -------------------------------------------------------
@@ -122,18 +125,18 @@ class PlayerCyclopediaTest {
         assertThat(f.database.queries).containsExactly(
             "SELECT COUNT(*) as `count` FROM `player_hirelings` WHERE `player_id` = 42",
         )
-        assertThat(f.kv.scoped("summary").scoped("hirelings").get("amount")).isEqualTo(12L)
+        assertThat(f.kv.scoped("summary").scoped("hirelings").get("amount")!!.getInt()).isEqualTo(12)
     }
 
     @Test
     fun `loadSummaryData keeps an existing amount`() {
         val f = fixture()
-        f.kv.scoped("summary").scoped("hirelings").set("amount", 7L)
+        f.kv.scoped("summary").scoped("hirelings").set("amount", ValueWrapper(7))
         f.database.storeQueryResult = FakeQueryResult(listOf(mapOf("count" to 12)))
 
         f.cyclopedia.loadSummaryData()
 
-        assertThat(f.kv.scoped("summary").scoped("hirelings").get("amount")).isEqualTo(7L)
+        assertThat(f.kv.scoped("summary").scoped("hirelings").get("amount")!!.getInt()).isEqualTo(7)
     }
 
     @Test
@@ -143,7 +146,7 @@ class PlayerCyclopediaTest {
 
         f.cyclopedia.loadSummaryData()
 
-        assertThat(f.kv.scoped("summary").scoped("hirelings").get("amount")).isEqualTo(4_464L)
+        assertThat(f.kv.scoped("summary").scoped("hirelings").get("amount")!!.getInt()).isEqualTo(4_464)
     }
 
     // ---- loadDeathHistory ------------------------------------------------------
@@ -331,7 +334,7 @@ class PlayerCyclopediaTest {
 
     private class Fixture {
         val player = FakeCyclopediaPlayer()
-        val kv = InMemoryKV()
+        val kv = KVMemory()
         val database = FakeDatabase()
         val tasks = RecordingDatabaseTasks()
         val errorLogs = mutableListOf<String>()
@@ -356,7 +359,7 @@ class PlayerCyclopediaTest {
 
     private class FakeCyclopediaPlayer : CyclopediaPlayer {
         var playerName = "Knight"
-        var kv: KV = InMemoryKV()
+        var kv: KV = KVMemory()
         val deathSends = mutableListOf<DeathSend>()
         val pvpKillSends = mutableListOf<PvpKillSend>()
         val addedAsyncTasks = mutableListOf<PlayerAsyncTask>()
