@@ -287,7 +287,7 @@ class OpcodeApplicationMarketRouterTest {
 
     @Test
     fun `market accept offer opcode 0xF8 pays the seller and delivers the items to the buyer`() {
-        insertAccountAndPlayerRow(2, 3, "Seller")
+        insertAccountAndPlayerRow(42, 3, "Seller")
         val buyer = hero(id = 1, name = "Buyer")
         hero(id = 3, name = "Seller")
         balances[buyer.id] = 10_000

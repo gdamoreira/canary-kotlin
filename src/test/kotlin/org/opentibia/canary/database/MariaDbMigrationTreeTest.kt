@@ -27,7 +27,7 @@ class MariaDbMigrationTreeTest {
         assertThat(mariadbNames).containsExactlyElementsOf(postgresNames)
 
         val versions = mariadbNames.map(::versionOf).sorted()
-        assertThat(versions).containsExactlyElementsOf((1..14) + (16..22))
+        assertThat(versions).containsExactlyElementsOf((1..14) + (16..23))
     }
 
     @Test
@@ -57,7 +57,7 @@ class MariaDbMigrationTreeTest {
         val guarded = migrationFiles(mariadbTree()).filter { Files.readString(it).contains("WHERE NOT EXISTS") }
 
         assertThat(guarded.map { it.fileName.toString() })
-            .containsExactly("V13__bestiary_bosstiary_persistence.sql", "V2__seed_test_accounts.sql")
+            .containsExactly("V13__bestiary_bosstiary_persistence.sql", "V23__seed_god_account.sql", "V2__seed_test_accounts.sql")
 
         guarded.forEach { file ->
             val sql = Files.readString(file)

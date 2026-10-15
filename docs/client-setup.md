@@ -41,6 +41,12 @@ docker compose -f docker-compose.yml -f docker/docker-compose.mariadb.yml up -d 
 `docker/data/` are PostgreSQL-format; in MariaDB mode seed with the upstream
 MariaDB dumps (`../canary/docker/data/*.sql`) if you want the 100+ accounts.
 
+**God account (from upstream `schema.sql:869-884`):** Flyway `V23` seeds
+account **`god` / password `god`** (account type 6) with the **`GOD`** player in
+group 6 (access), in both migration trees. For an existing database, apply
+[`scripts/create-god-account.sql`](../scripts/create-god-account.sql) (MariaDB
+and PostgreSQL variants).
+
 ### Split mode (optional)
 
 `docker/docker-compose.split.yml` runs `login` and `game` as separate services

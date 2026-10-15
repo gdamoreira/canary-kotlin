@@ -90,7 +90,13 @@ class JdbcAccountRepository(private val dataSource: DataSource) : AccountLoginRe
 
     override fun authenticate(name: String, password: String): Account? {
         val account = findByAccountName(name) ?: return null
-        val matches = org.opentibia.canary.network.crypto.Argon2Security.verifyPassword(password, account.passwordHash)
+        // `Account::authenticatePassword` (src/account/account.cpp:302-313): the
+        // argon2id hash wins, then the legacy `transformToSHA1` comparison.
+        // The port additionally accepts a stored plaintext value (the Flyway
+        // seed and local test accounts), which `Argon2Security.verifyPassword`
+        // falls back to for non-argon2 hashes.
+        val matches = org.opentibia.canary.network.crypto.Argon2Security.verifyPassword(password, account.passwordHash) ||
+            Tools.transformToSHA1(password) == account.passwordHash
         return if (matches) account else null
     }
 

@@ -771,8 +771,16 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 81: God Account Seed & Schema Coverage Audit (03:00 – 04:00)
+- **God account** — Flyway `V23` seeds upstream's god account (`god`/`god`, type 6, player `GOD` in group 6) into both migration trees; `scripts/create-god-account.sql` covers existing databases (MariaDB + PostgreSQL).
+- **Login auth parity** — the JDBC path now runs Canary's `Account::authenticatePassword` chain (argon2id → SHA-1) alongside the port's plaintext seed fallback, so upstream-format (SHA-1) accounts authenticate.
+- **Schema coverage audit** — documented: upstream `schema.sql` has 48 tables; 13 have no port table (listed in `implementation-status.md` §3), 14 are port-side normalized designs.
+- **821 suites / 8467 tests, all green.**
+
+---
+
 ### Current Status
-- **Automated Tests**: **820 test suites / 8464 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **821 test suites / 8467 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.
