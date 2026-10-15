@@ -1,6 +1,7 @@
 package org.opentibia.canary.config
 
 import org.opentibia.canary.database.DatabaseConfig
+import org.opentibia.canary.database.DatabaseEngine
 
 /**
  * Command-line overrides resolved from `main`'s arguments. `null` means "not supplied",
@@ -69,7 +70,7 @@ object ServerCli {
     }
 
     /**
-     * Resolves the external PostgreSQL settings (CLI > `CANARY_DB_*` > defaults).
+     * Resolves the external database settings (CLI > `CANARY_DB_*` > defaults).
      * Returns `null` when no host is configured, which selects Canary's zero-config
      * H2 in-memory database in PostgreSQL mode.
      */
@@ -77,6 +78,7 @@ object ServerCli {
         environment: Map<String, String> = System.getenv(),
         options: CliOptions = CliOptions()
     ): DatabaseConfig? {
+        val engine = engineFrom(environment)
         val environmentHost = environment["CANARY_DB_HOST"]?.takeIf { it.isNotBlank() }
         val cliConfigured = options.dbHost != null || options.dbPort != null || options.dbName != null ||
             options.dbUser != null || options.dbPassword != null
@@ -86,10 +88,23 @@ object ServerCli {
 
         return DatabaseConfig(
             host = options.dbHost ?: environmentHost ?: "127.0.0.1",
-            port = options.dbPort ?: environment["CANARY_DB_PORT"]?.toIntOrNull() ?: 5432,
+            port = options.dbPort ?: environment["CANARY_DB_PORT"]?.toIntOrNull() ?: engine.defaultPort,
             database = options.dbName ?: environment["CANARY_DB_NAME"] ?: "canary",
             user = options.dbUser ?: environment["CANARY_DB_USER"] ?: "canary",
-            password = options.dbPassword ?: environment["CANARY_DB_PASSWORD"] ?: "canary"
+            password = options.dbPassword ?: environment["CANARY_DB_PASSWORD"] ?: "canary",
+            engine = engine
         )
     }
+
+    /**
+     * `CANARY_DB_ENGINE` engine selector: `postgres`/`postgresql` ->
+     * [DatabaseEngine.POSTGRESQL] (default), `maria`/`mariadb`/`mysql` ->
+     * [DatabaseEngine.MARIADB]. An unknown value fails fast naming the variable.
+     */
+    private fun engineFrom(environment: Map<String, String>): DatabaseEngine =
+        when (val value = environment["CANARY_DB_ENGINE"]?.takeIf { it.isNotBlank() }?.lowercase()) {
+            null, "postgres", "postgresql" -> DatabaseEngine.POSTGRESQL
+            "maria", "mariadb", "mysql" -> DatabaseEngine.MARIADB
+            else -> throw IllegalArgumentException("Invalid CANARY_DB_ENGINE value: $value")
+        }
 }

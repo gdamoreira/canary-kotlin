@@ -3,6 +3,7 @@ package org.opentibia.canary.config
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.database.DatabaseEngine
 
 class ServerCliTest {
 
@@ -127,5 +128,73 @@ class ServerCliTest {
         assertThat(config).isNotNull
         assertThat(config?.host).isEqualTo("127.0.0.1")
         assertThat(config?.port).isEqualTo(5433)
+    }
+
+    @Test
+    fun `database config defaults to the PostgreSQL engine on port 5432`() {
+        val config = ServerCli.databaseConfig(mapOf("CANARY_DB_HOST" to "env-host"), CliOptions())
+
+        assertThat(config?.engine).isEqualTo(DatabaseEngine.POSTGRESQL)
+        assertThat(config?.port).isEqualTo(5432)
+    }
+
+    @Test
+    fun `database config reads the MariaDB engine and its default port`() {
+        val environment = mapOf(
+            "CANARY_DB_HOST" to "env-host",
+            "CANARY_DB_ENGINE" to "mariadb"
+        )
+
+        val config = ServerCli.databaseConfig(environment, CliOptions())
+
+        assertThat(config?.engine).isEqualTo(DatabaseEngine.MARIADB)
+        assertThat(config?.port).isEqualTo(3306)
+    }
+
+    @Test
+    fun `database config accepts every engine alias`() {
+        listOf("postgres", "postgresql").forEach { alias ->
+            val config = ServerCli.databaseConfig(
+                mapOf("CANARY_DB_HOST" to "env-host", "CANARY_DB_ENGINE" to alias),
+                CliOptions()
+            )
+
+            assertThat(config?.engine).describedAs("alias %s", alias).isEqualTo(DatabaseEngine.POSTGRESQL)
+        }
+
+        listOf("maria", "mariadb", "mysql").forEach { alias ->
+            val config = ServerCli.databaseConfig(
+                mapOf("CANARY_DB_HOST" to "env-host", "CANARY_DB_ENGINE" to alias),
+                CliOptions()
+            )
+
+            assertThat(config?.engine).describedAs("alias %s", alias).isEqualTo(DatabaseEngine.MARIADB)
+        }
+    }
+
+    @Test
+    fun `an explicit database port wins over the engine default`() {
+        val environment = mapOf(
+            "CANARY_DB_HOST" to "env-host",
+            "CANARY_DB_ENGINE" to "maria",
+            "CANARY_DB_PORT" to "3307"
+        )
+
+        val config = ServerCli.databaseConfig(environment, CliOptions())
+
+        assertThat(config?.engine).isEqualTo(DatabaseEngine.MARIADB)
+        assertThat(config?.port).isEqualTo(3307)
+    }
+
+    @Test
+    fun `an unknown engine value fails fast naming the variable`() {
+        val environment = mapOf(
+            "CANARY_DB_HOST" to "env-host",
+            "CANARY_DB_ENGINE" to "oracle"
+        )
+
+        assertThatThrownBy { ServerCli.databaseConfig(environment, CliOptions()) }
+            .isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining("CANARY_DB_ENGINE")
     }
 }

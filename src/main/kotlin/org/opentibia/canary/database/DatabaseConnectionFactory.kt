@@ -10,6 +10,16 @@ import javax.sql.DataSource
 
 private val logger = KotlinLogging.logger {}
 
+/**
+ * Relational engine the server can target. PostgreSQL 16+ stays the default;
+ * [MARIADB] mirrors upstream Canary's MySQL deployment (`Database::connect`,
+ * src/database/database.cpp:61) and MariaDB 11.4 compatibility.
+ */
+enum class DatabaseEngine(val defaultPort: Int) {
+    POSTGRESQL(5432),
+    MARIADB(3306),
+}
+
 data class DatabaseConfig(
     val host: String = "127.0.0.1",
     val port: Int = 5432,
@@ -17,13 +27,23 @@ data class DatabaseConfig(
     val user: String = "canary",
     val password: String = "canary",
     val poolSize: Int = 10,
-    val jdbcUrlOverride: String? = null
+    val jdbcUrlOverride: String? = null,
+    val engine: DatabaseEngine = DatabaseEngine.POSTGRESQL
 ) {
     val jdbcUrl: String
-        get() = jdbcUrlOverride ?: "jdbc:postgresql://$host:$port/$database"
+        get() = jdbcUrlOverride ?: when (engine) {
+            DatabaseEngine.POSTGRESQL -> "jdbc:postgresql://$host:$port/$database"
+            DatabaseEngine.MARIADB -> "jdbc:mariadb://$host:$port/$database"
+        }
 }
 
 object DatabaseConnectionFactory {
+
+    /** Flyway migration tree of the PostgreSQL/H2 schema. */
+    const val POSTGRES_MIGRATIONS_LOCATION: String = "classpath:db/migration/postgres"
+
+    /** Flyway migration tree of the MariaDB/MySQL schema. */
+    const val MARIADB_MIGRATIONS_LOCATION: String = "classpath:db/migration/mariadb"
 
     /** Retry budget of `Database::executeQuery` (`src/database/database.cpp:255`). */
     const val QUERY_RETRIES: Int = 10
@@ -59,6 +79,7 @@ object DatabaseConnectionFactory {
     fun createDataSource(config: DatabaseConfig): HikariDataSource {
         val hikariConfig = HikariConfig().apply {
             jdbcUrl = config.jdbcUrl
+            driverClassNameForUrl(config.jdbcUrl)?.let { driverClassName = it }
             username = config.user
             password = config.password
             maximumPoolSize = config.poolSize
@@ -74,6 +95,18 @@ object DatabaseConnectionFactory {
             keepaliveTime = 30000
         }
         return HikariDataSource(hikariConfig)
+    }
+
+    /**
+     * Hikari driver pinned to the engine the [jdbcUrl] addresses, so an
+     * external PostgreSQL/MariaDB pool never depends on driver auto-detection.
+     * An explicit override URL (the H2 in-memory test mode) keeps Hikari's
+     * URL-based detection, since the engine field does not describe it.
+     */
+    internal fun driverClassNameForUrl(jdbcUrl: String): String? = when {
+        jdbcUrl.startsWith("jdbc:postgresql:") -> "org.postgresql.Driver"
+        jdbcUrl.startsWith("jdbc:mariadb:") -> "org.mariadb.jdbc.Driver"
+        else -> null
     }
 
     /**
@@ -256,13 +289,41 @@ object DatabaseConnectionFactory {
     }
 
     /**
-     * Executes database migrations using Flyway.
+     * Flyway migration tree of [engine]: the PostgreSQL tree also serves the H2
+     * PostgreSQL-mode test engine.
      */
-    fun migrate(dataSource: DataSource, locations: Array<String> = arrayOf("classpath:db/migration")): Int {
-        logger.info { "Running database migrations via Flyway..." }
+    fun migrationsLocationFor(engine: DatabaseEngine): String = when (engine) {
+        DatabaseEngine.POSTGRESQL -> POSTGRES_MIGRATIONS_LOCATION
+        DatabaseEngine.MARIADB -> MARIADB_MIGRATIONS_LOCATION
+    }
+
+    /**
+     * Flyway migration tree matching the JDBC product name reported by the
+     * connection metadata: H2/PostgreSQL run the PostgreSQL tree,
+     * MariaDB/MySQL the MariaDB tree. An unsupported engine fails fast rather
+     * than migrating the wrong tree.
+     */
+    fun migrationsLocationForProductName(productName: String): String =
+        when (productName.lowercase()) {
+            "postgresql", "h2" -> POSTGRES_MIGRATIONS_LOCATION
+            "mariadb", "mysql" -> MARIADB_MIGRATIONS_LOCATION
+            else -> throw IllegalArgumentException(
+                "Unsupported database product '$productName': expected H2/PostgreSQL or MariaDB/MySQL"
+            )
+        }
+
+    /**
+     * Executes database migrations using Flyway. [locations] defaults to the
+     * tree selected from the connection's product name; an explicit array
+     * overrides the detection.
+     */
+    fun migrate(dataSource: DataSource, locations: Array<String>? = null): Int {
+        val resolvedLocations = locations
+            ?: arrayOf(migrationsLocationForProductName(databaseProductName(dataSource)))
+        logger.info { "Running database migrations via Flyway from ${resolvedLocations.joinToString(", ")}..." }
         val flyway = Flyway.configure()
             .dataSource(dataSource)
-            .locations(*locations)
+            .locations(*resolvedLocations)
             .baselineOnMigrate(true)
             .load()
 
@@ -270,4 +331,7 @@ object DatabaseConnectionFactory {
         logger.info { "Flyway migrations finished. Applied ${result.migrationsExecuted} migrations." }
         return result.migrationsExecuted
     }
+
+    private fun databaseProductName(dataSource: DataSource): String =
+        dataSource.connection.use { connection -> connection.metaData.databaseProductName }
 }

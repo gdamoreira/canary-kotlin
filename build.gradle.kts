@@ -21,15 +21,17 @@ dependencies {
     implementation("ch.qos.logback:logback-classic:1.5.16")
     implementation("io.github.oshai:kotlin-logging-jvm:7.0.3")
 
-    // PostgreSQL, SQLite & H2 In-Memory JDBC
+    // PostgreSQL, MariaDB, SQLite & H2 In-Memory JDBC
     implementation("org.postgresql:postgresql:42.7.5")
+    implementation("org.mariadb.jdbc:mariadb-java-client:3.5.2")
     implementation("com.h2database:h2:2.3.232")
     implementation("org.xerial:sqlite-jdbc:3.48.0.0")
     implementation("com.zaxxer:HikariCP:6.2.1")
 
-    // Database Migrations (Flyway)
+    // Database Migrations (Flyway); Flyway's MariaDB support ships in flyway-mysql
     implementation("org.flywaydb:flyway-core:11.2.0")
     implementation("org.flywaydb:flyway-database-postgresql:11.2.0")
+    implementation("org.flywaydb:flyway-mysql:11.2.0")
 
     // Security (Argon2 / Bouncy Castle)
     implementation("org.bouncycastle:bcprov-jdk18on:1.80")
@@ -42,6 +44,10 @@ dependencies {
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
     testImplementation("io.mockk:mockk:1.13.14")
     testImplementation("org.assertj:assertj-core:3.27.3")
+
+    // Integration testing against throwaway MariaDB containers (round 2)
+    testImplementation("org.testcontainers:testcontainers:1.20.4")
+    testImplementation("org.testcontainers:mariadb:1.20.4")
 }
 
 application {
