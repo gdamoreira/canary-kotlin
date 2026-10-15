@@ -20,6 +20,7 @@ aggregated implementation history — and any new document an agent creates.
 | Document | Purpose |
 | --- | --- |
 | `architecture-and-roadmap.md` | Architectural mapping, parity validation strategy and sequential roadmap (aggregated from the former `plan/000-*` documents) |
+| `scaling-and-multi-world.md` | Scaling analysis: login/game service split, horizontal scaling, Redis role, multi-world plan |
 | `feature-history.md` | All 64 feature specifications (001–064), aggregated from the former `done/` folder |
 | `wave-history.md` | All wave plans (20–60), aggregated from the former `done/` folder |
 | `implementation-status.md` | Per-subsystem parity inventory and ranked remaining work |

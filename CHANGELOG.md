@@ -698,6 +698,11 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 72: Scaling & Multi-World Analysis (09:00 – 10:00)
+- **Analysis document** — `docs/development/scaling-and-multi-world.md`: login/game service split, horizontal scaling ladder (one-world-per-instance vs zone sharding), the role of Redis (coordination, not world state), and the multi-world plan (schema, routing, alternatives). No code changes.
+
+---
+
 ### Current Status
 - **Automated Tests**: **758 test suites / 8091 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.

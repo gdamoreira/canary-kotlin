@@ -279,6 +279,7 @@ The documentation hub is [`docs/README.md`](docs/README.md). Highlights:
 | [`docs/operations.md`](docs/operations.md) | Deployment, monitoring, backups |
 | [`docs/docker/quickstart-for-beginners.md`](docs/docker/quickstart-for-beginners.md) | Docker quickstart |
 | [`docs/development/implementation-status.md`](docs/development/implementation-status.md) | Parity inventory, gameplay matrix, audit and improvement tracker |
+| [`docs/development/scaling-and-multi-world.md`](docs/development/scaling-and-multi-world.md) | Scaling and multi-world architecture analysis |
 
 ---
 
