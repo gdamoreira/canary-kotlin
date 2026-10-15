@@ -20,6 +20,7 @@ For a beginner walkthrough see
 | --- | --- |
 | `docker-compose.yml` | Canonical stack: PostgreSQL 16 + server (built from the root `Dockerfile`). |
 | `docker-compose.mariadb.yml` | Override: run the whole stack on MariaDB (see [Database engines](#database-engines)). |
+| `docker-compose.split.yml` | Override: run the login and game roles as separate services (see [Split login/game mode](#split-logingame-mode-scaling-phase-1)). |
 | `.env.dist` | Environment template; copy to `.env` at the repository root. |
 | `DOCKER.md` | This guide. |
 | `config.sh` | Substitutes `CANARY_*` values into `config.lua` and `.env`. |
@@ -41,6 +42,7 @@ The server image itself is built from the **repository-root `Dockerfile`**
 | --- | --- | --- | --- |
 | `db` | `postgres:16-alpine` | Game database in the default mode (Flyway migrates on boot) | `${CANARY_DB_PORT:-5432}` |
 | `server` | root `Dockerfile` | Login/status + game world (`CANARY_DB_ENGINE` selects the engine) | `7171`, `7172`, metrics `9464` |
+| `login` / `game` | root `Dockerfile` | Split-stack roles (`CANARY_ROLE`): login/status, or game world only | `7171` / `7172`, metrics `9464` (game) |
 | `mariadb` | `mariadb:11.4` | Database for MyAAC/login-server; in MariaDB single-DB mode also the game database | internal |
 | `myaac` | `quickstart/myaac/Dockerfile` | Upstream website/admin (MyAAC 2.x, reads `mariadb`) | `${MYAAC_HTTP_PORT:-8080}` |
 | `login-server` | `opentibiabr/login-server` | Upstream client login webservice (reads `mariadb`) | `8088`, `9090` |
@@ -106,11 +108,77 @@ What changes in this mode:
 - The PostgreSQL `db` service stays in the merged model (Compose overrides
   cannot delete services) and `up` still starts it; the server no longer uses
   it. Stop it with the same `-f` pair plus `stop db` if you want it down.
+- The split stack's `login`/`game` roles inherit the same pins through this
+  override (the entries are gated behind the `split` profile); see
+  [Split login/game mode](#split-logingame-mode-scaling-phase-1).
 - Data is not migrated between engines: `db-volume` and `mariadb-volume` are
   separate; each engine keeps its own Flyway history and seed.
 
 Switch back with the plain `docker compose up -d --build` and set
 `CANARY_DB_ENGINE` to `postgres` (or remove it) in `.env`.
+
+---
+
+## Split login/game mode (scaling phase 1)
+
+The server can run the login protocol and the game world as separate roles of
+the same image: `CANARY_ROLE=login` binds the login/status listeners only,
+`CANARY_ROLE=game` boots the world and binds the game listener only, and the
+default `all` keeps today's single process. The session handoff is
+DB-mediated, so the roles only need to share one database.
+
+`docker/docker-compose.split.yml` provides the two role services on top of the
+base stack. Run it from the repository root, naming the services explicitly:
+
+```bash
+docker compose -f docker-compose.yml -f docker/docker-compose.split.yml up -d --build login game
+```
+
+What changes in this mode:
+
+- `login` publishes `${CANARY_LOGIN_PORT:-7171}` (login + status) and `game`
+  publishes `${CANARY_GAME_PORT:-7172}` (game world) plus the optional
+  Prometheus exporter on `9464`. The game role is the metrics owner; login
+  replicas cannot share one fixed host metrics port.
+- Both roles share the same database (`db` by default; `mariadb` when combined
+  with the MariaDB override) and the read-only game-data mounts.
+- Compose overrides cannot delete the base `server` service, so it stays in
+  the merged model: always name `login game` on `up`, otherwise the `server`
+  container starts too and collides on the host ports. Use either the base
+  `server` or the split pair, never both — stop one before starting the other
+  (`docker compose stop server` / `docker compose stop login game`).
+- The `mariadb` override carries its database pins to both roles, so the
+  three-file combination works unchanged:
+
+```bash
+docker compose -f docker-compose.yml -f docker/docker-compose.split.yml -f docker/docker-compose.mariadb.yml up -d --build login game
+```
+
+In the MariaDB combination, stop the roles by naming them (the override gates
+them behind the `split` profile): `... down login game`, or add
+`--profile split` to `down`.
+
+### Scaling the login role behind a TCP load balancer
+
+Login instances are connection-stateless (the RSA/XTEA handshake state lives
+in the connection) and scale by replica count (`--scale login=N`). In
+production, put an L4 (TCP) load balancer in front of the login role: it
+terminates nothing, passes the raw TCP stream through to the replicas on the
+compose network — reachable at the `login` service name (`login:7171`) — and
+health-checks the port.
+
+The published host port in the shipped file covers the single-instance case:
+Docker cannot bind one host port for several replicas, so a scaled deployment
+drops the `login` port publication and lets the L4 load balancer own the
+public port. The game role is one world per instance: run a single `game`
+service and scale by adding worlds, not by cloning it.
+
+**Follow-up (not implemented yet):** with more than one login instance, per-IP
+rate limiting and account-lockout counters remain per-process, so each
+instance enforces its own limits. They need a shared store (Redis or a
+database table) before multi-instance login is exposed to untrusted traffic —
+tracked as the closing item of scaling Phase 1
+([`docs/development/scaling-and-multi-world.md`](../docs/development/scaling-and-multi-world.md)).
 
 ---
 
@@ -159,6 +227,7 @@ for the full list with defaults.
 | `CANARY_IP` | `127.0.0.1` | Public IP advertised to clients. |
 | `CANARY_LOGIN_PORT` / `CANARY_GAME_PORT` | `7171` / `7172` | Must match the client. |
 | `CANARY_STATUS_PORT` | `7171` | Status shares the login port in this port. |
+| `CANARY_ROLE` | `all` | `all` / `login` / `game`; the base stack runs `all`, the [split override](#split-logingame-mode-scaling-phase-1) pins the role per service. |
 | `CANARY_RSA_P` / `CANARY_RSA_Q` | built-in pair | Optional RSA override; both or neither. |
 | `CANARY_METRICS_ENABLE_PROMETHEUS` | `false` | Enables the `/metrics` exporter. |
 | `CANARY_METRICS_PROMETHEUS_ADDRESS` | `0.0.0.0:9464` | Exporter bind address. |
@@ -269,6 +338,8 @@ without extra seeding. The Kotlin server's native login remains on
 | --- | --- |
 | Server exits during boot | `docker compose logs server` — most often the database was still starting; the compose healthcheck handles this, retry with `docker compose up -d`. |
 | `address already in use` | Another server/container holds `7171`/`7172`/`9464`; stop it or override the port variables in `.env`. |
+| Split mode starts `server` too (port clash) | Name the role services (`up ... login game`); a bare `up` also starts the base `server` because overrides cannot delete it. See [Split login/game mode](#split-logingame-mode-scaling-phase-1). |
+| Scaled `login` replicas fail with `port is already allocated` | Replicas cannot share one published host port; let the L4 load balancer reach `login:7171` on the compose network instead of publishing the port. |
 | Client cannot reach the game world | `CANARY_IP` must be the address the client dials; for LAN play run `LAN=true sh docker/up.sh` or set it manually. |
 | Map download fails | Allow outbound HTTPS or provide a local map; see the log line from `MapDownload`. |
 | Rebuild after code changes | `docker compose build server && docker compose up -d server`. |

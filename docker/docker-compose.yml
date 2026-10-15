@@ -61,6 +61,9 @@ services:
     container_name: canary-kotlin-server
     restart: unless-stopped
     environment:
+      # Server role (all|login|game): all runs both listeners in one process;
+      # docker/docker-compose.split.yml runs login and game as separate services.
+      CANARY_ROLE: "${CANARY_ROLE:-all}"
       # Engine selector: postgres (default) or maria/mariadb/mysql. MariaDB
       # also needs docker/docker-compose.mariadb.yml (which repoints host/port);
       # setting only this variable on the base stack keeps CANARY_DB_HOST=db.
