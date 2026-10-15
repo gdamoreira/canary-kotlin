@@ -464,7 +464,8 @@ class ServerBootstrap(
 
         // `metricsEnablePrometheus` HTTP exporter over the in-process registry
         // (`metrics/README.md`); best-effort like the C++ boot.
-        prometheusEndpoint = PrometheusEndpoint.startIfEnabled(configManager, MetricsRegistry())
+        val metricsRegistry = MetricsRegistry()
+        prometheusEndpoint = PrometheusEndpoint.startIfEnabled(configManager, metricsRegistry)
 
         val source = databaseBoot.connect(databaseConfig)
         dataSource = source
@@ -679,6 +680,10 @@ class ServerBootstrap(
             (server as? CanaryServer)?.monsterSpawnPath?.let { spawnPath ->
                 worldOperations?.attachMonsterSpawn(spawnPath, monsterHost)
             }
+            // Wave 71 H2: the death-pipeline counters (`player_death`/
+            // `monster_death`) write through the world `Game` metrics seam over
+            // the same registry the Prometheus endpoint exposes.
+            world.metrics = metricsRegistry
             // Wave 69 F4: `Game::checkGiftOfLife`'s cooldown reduction
             // (player_wheel.cpp:3155-3170, `reduceAllSpellsCooldownTimer(60000)`)
             // drives the owner's wheel, so the world `Game` seam binds to

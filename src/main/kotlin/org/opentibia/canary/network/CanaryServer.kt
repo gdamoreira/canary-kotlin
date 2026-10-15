@@ -72,6 +72,9 @@ import java.util.concurrent.atomic.AtomicInteger
 
 private val logger = KotlinLogging.logger {}
 
+/** `CreatureEventType::KILL` wire value (`creatureevent.cpp`), mirroring `GameHandler`. */
+private const val KILL_EVENT_TYPE = "kill"
+
 /** Lifecycle seam for the network listeners (`CanaryServer::start`/`stop`). */
 interface ListenerBoot {
     fun start()
@@ -447,6 +450,14 @@ class CanaryServer(
                     mostDamageUnjustified,
                 )
             }
+        // `Creature::deprecatedOnKilledCreature`'s Lua `onKill` walk
+        // (creature.cpp:1290-1303): the killer's attached `kill` events run for
+        // every creature the world binds, monsters included.
+        creature.onKillEventsHost = { killer, target, lastHit ->
+            killer.getCreatureEvents()
+                .filter { name -> luaEnvironment.creatureEvents.get(name)?.eventType == KILL_EVENT_TYPE }
+                .forEach { name -> scriptingDispatch.creatureEventOnKill(name, killer, target, lastHit) }
+        }
     }
 
     init {
