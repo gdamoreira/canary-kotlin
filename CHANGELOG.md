@@ -748,8 +748,17 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 78: Wave 74 — Reduced-Model Tails (21:00 – 00:00)
+- **Condition target + MagicField** — production `ConditionTarget` behind `Creature.conditionTarget`; field instance creation with owner stamps, `conditionDamage` application, harmful-field gates (14 tests).
+- **World boot** — NPC spawns start (NpcSpawnPath/GameNpcFactory), chat boot composition, per-player mount definitions, players-record peak persistence (14 tests).
+- **Livestream + state arms** — broadcaster side wired (`setLivestreamViewers` → `canWatch`), `setGameState` SHUTDOWN/CLOSED arms, `loginRefusal` at the game-protocol gate (12 tests).
+- **Combat dispatch** — `Player::changeMana` broadcast, `CHARM_VOIDINVERSION` inversion, `onTargetCreatureGainHealth` virtual dispatch, movement-script hooks (17 tests).
+- **817 suites / 8445 tests, all green**; all commits ancestry-verified.
+
+---
+
 ### Current Status
-- **Automated Tests**: **807 test suites / 8388 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **817 test suites / 8445 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.

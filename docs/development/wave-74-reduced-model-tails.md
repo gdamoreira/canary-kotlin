@@ -1,6 +1,6 @@
 # Wave 74 Plan — Reduced-Model Tails
 
-**Status:** In progress — dispatched
+**Status:** Completed (2026-10-15) — four workstreams merged; 817 suites / 8445 tests green
 **Baseline:** `main` @ `8d75a740`; 807 suites / 8388 tests green; zero Kotlin warnings
 **Source of scope:** `docs/development/implementation-status.md` §3 item 2. **Scaling proposals excluded** (phase 1 is wave 75).
 **Convention:** documents live directly in `docs/development/` (AGENTS.md §5/§6).
@@ -87,3 +87,14 @@ this document in place.
 ## 5. Out of scope
 
 Structural `Player`-as-`Cylinder`; deferred list; scaling phase 1 (wave 75).
+
+---
+
+## Completion (2026-10-15)
+
+condition-field-model, world-boot-tails (`75e624bf`), livestream-state-arms
+(`5af2f334`), combat-dispatch-tails (`f6832e62`) merged (one union conflict in
+Game.kt resolved); the pending root bindings (move-event hooks, global-event
+save/shutdown, livestream Lua ops, login refusal, save seams) were applied at
+integration. Integrated suite: **817 suites / 8445 tests, 0 failures, zero
+Kotlin warnings**; ancestry verified.

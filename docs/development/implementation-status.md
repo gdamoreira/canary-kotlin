@@ -44,7 +44,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | Map engine (`map.cpp`) | — | — | **~85%** | sight/`canWalkTo`/pathing/caches/spectators/houses/towns (wave 38) |
 | Persistence (`iologindata*`, `iomapserialize`) | — | — | **~80%** | 24/24 iologindata, 10/10 iomapserialize, market/prey/bestiary/bosstiary/guild/storage (V10–V14) |
 | **Database engines** | PostgreSQL 16 / MariaDB 11.4 | **Both supported** | `CANARY_DB_ENGINE` selects the engine; mirrored Flyway trees (`db/migration/postgres|mariadb`) and a `SqlDialect` (H2/PostgreSQL/MariaDB) cover identifiers, upserts and the dialect-specific statements. H2 (PostgreSQL mode) remains the test engine; the MariaDB integration suite runs on CI (Docker). |
-| **Estimated full-parity completion** | — | — | **~99.9%** | tracked inventory complete; wave 72 closed the final reduced-port tails (drain credit, light fold, tile spectators, viewer login, corpse updates, GAME_STATE_INIT). What remains is the structural Player-as-Cylinder refactor, a small reduced-model list and the deferred-by-design program |
+| **Estimated full-parity completion** | — | — | **~99.95%** | tracked inventory complete; wave 72 closed the final reduced-port tails (drain credit, light fold, tile spectators, viewer login, corpse updates, GAME_STATE_INIT). What remains is the structural Player-as-Cylinder refactor, a small reduced-model list and the deferred-by-design program |
 
 #### 1.2 Module completion (by inventory rows in §2)
 
@@ -262,11 +262,11 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 ### 3. Highest-Impact Gaps (ranked, verified)
 
-**The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Waves 63–72 closed
+**The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Waves 63–74 closed
 every planned tail. What remains:
 
-1. **Structural (deliberate)** — the Kotlin `Player` is not a `Cylinder`: notification parents (`newParent`/`oldParent`) evaluate as null, so `requireListUpdate` always passes and source-cylinder notifications rely on explicit call sites. A real refactor, not a tail.
-2. **Reduced-model list** — production `ConditionTarget` implementation (`Creature.conditionTarget` unwired); the `MagicField` field model (no production instance creation, `ownerCreatureProvider` therefore inert); livestream broadcaster side (`setLivestreamViewers` inert, so `canWatch` rejects until wired); `map.spawnsNpc.startup()` + custom-map spawn loops; `ChatManager` boot composition (`g_chat().load()`); per-player mount definition copies unloaded (`PlayerFeatures`); players-record peak persistence; `setGameState` SHUTDOWN/CLOSED/maintain arms; `Player::changeMana` broadcast + `CHARM_VOIDINVERSION`; `Player::onTargetCreatureGainHealth` virtual dispatch; movement-script hooks (`onCreatureMove`/`onItemMove`).
+1. **Structural (deliberate)** — the Kotlin `Player` is not a `Cylinder` (notification parents evaluate null; source-cylinder notifications rely on explicit call sites).
+2. **Small reduced-model tails** — NPC type registry population from Lua (`npclib`/`data/npc` boot); NPC removal/respawn hook; the 50 custom-map spawn loops; `ChatManager` `ChatClient` sink + channel-opcode routing; offline-player mount definitions; `onStepInField`'s safe-wall/ExpertPvp branches; movement-engine walk path through the tile notifications; equip/de-equip slot-filtered move events; `combatChangeMana` defensive bestiary charm run; `PlayerSpellCaster`/`CreatureCombatTarget` mana clamp dedup; `Game.combatCanUseDefense` binding.
 3. **Deferred by design** — live differential harness (packet-capture A/B vs a running Canary); CipSoft860/old-protocol profile; OpenTelemetry SDK/OStream periodic reader; micro-seams (KV LRU ordering, `DEBUG_LOG`, daemon flags, `TransportCodec` tails).
 
 ---
