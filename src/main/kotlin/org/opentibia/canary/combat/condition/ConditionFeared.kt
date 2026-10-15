@@ -100,6 +100,8 @@ class ConditionFeared(
             endTime = this@ConditionFeared.endTime
             owner = this@ConditionFeared.owner
             drainBodyStage = this@ConditionFeared.drainBodyStage
+            tickSound = this@ConditionFeared.tickSound
+            addSound = this@ConditionFeared.addSound
             fleeingFromPos = this@ConditionFeared.fleeingFromPos
             fleeIndx = this@ConditionFeared.fleeIndx
         }

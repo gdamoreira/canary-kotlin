@@ -1,5 +1,7 @@
 package org.opentibia.canary.combat.condition
 
+import org.opentibia.canary.io.PropStream
+import org.opentibia.canary.io.PropWriteStream
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.random.Random
@@ -338,6 +340,63 @@ class ConditionDamage(
         return abs(result)
     }
 
+    /** `ConditionDamage::serialize` (`condition.cpp:1832-1848`). */
+    override fun serialize(stream: PropWriteStream) {
+        super.serialize(stream)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_DELAYED.value)
+        stream.writeU8(if (delayed) 1 else 0)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_PERIODDAMAGE.value)
+        stream.writeI32(periodDamage)
+
+        if (owner != 0) {
+            stream.writeU8(ConditionAttr.CONDITIONATTR_OWNER.value)
+            stream.writeU32(owner.toLong() and 0xFFFFFFFFL)
+        }
+
+        for (intervalInfo in damageList) {
+            stream.writeU8(ConditionAttr.CONDITIONATTR_INTERVALDATA.value)
+            stream.writeI32(intervalInfo.timeLeft)
+            stream.writeI32(intervalInfo.value)
+            stream.writeI32(intervalInfo.interval)
+        }
+    }
+
+    /**
+     * `ConditionDamage::unserializeProp` (`condition.cpp:1804-1830`): every
+     * stored round is re-appended with its own `timeLeft` and its interval is
+     * added back onto `ticks` for finite conditions.
+     */
+    override fun unserializeProp(attr: ConditionAttr, stream: PropStream): Boolean {
+        when (attr) {
+            ConditionAttr.CONDITIONATTR_DELAYED -> {
+                val value = stream.readU8() ?: return false
+                delayed = value != 0
+            }
+
+            ConditionAttr.CONDITIONATTR_PERIODDAMAGE ->
+                periodDamage = stream.readI32() ?: return false
+
+            ConditionAttr.CONDITIONATTR_OWNER ->
+                owner = stream.readU32()?.toInt() ?: return false
+
+            ConditionAttr.CONDITIONATTR_INTERVALDATA -> {
+                val timeLeft = stream.readI32() ?: return false
+                val value = stream.readI32() ?: return false
+                val interval = stream.readI32() ?: return false
+
+                damageList.add(IntervalInfo(timeLeft = timeLeft, value = value, interval = interval))
+                if (ticks != -1) {
+                    setTicks(ticks + interval)
+                }
+            }
+
+            else -> return super.unserializeProp(attr, stream)
+        }
+        return true
+    }
+
     /** `ConditionDamage::getIcons` (`condition.cpp:2095-2134`). */
     override fun getIcons(): Set<PlayerIcon> {
         val icons = super.getIcons().toMutableSet()
@@ -363,6 +422,8 @@ class ConditionDamage(
             endTime = this@ConditionDamage.endTime
             owner = this@ConditionDamage.owner
             drainBodyStage = this@ConditionDamage.drainBodyStage
+            tickSound = this@ConditionDamage.tickSound
+            addSound = this@ConditionDamage.addSound
             isPersistentFlag = this@ConditionDamage.isPersistentFlag
             maxDamage = this@ConditionDamage.maxDamage
             minDamage = this@ConditionDamage.minDamage

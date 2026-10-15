@@ -45,6 +45,8 @@ class ConditionSerene(
         copy.apply {
             endTime = this@ConditionSerene.endTime
             owner = this@ConditionSerene.owner
+            tickSound = this@ConditionSerene.tickSound
+            addSound = this@ConditionSerene.addSound
         }
         return copy
     }

@@ -1,5 +1,8 @@
 package org.opentibia.canary.combat.condition
 
+import org.opentibia.canary.io.PropStream
+import org.opentibia.canary.io.PropWriteStream
+
 /**
  * `ConditionSoul` (`src/creatures/combat/condition.cpp:1689-1755`,
  * `condition.hpp:266-285`).
@@ -71,12 +74,39 @@ class ConditionSoul(
         }
     }
 
+    /** `ConditionSoul::serialize` (`condition.cpp:1712-1720`). */
+    override fun serialize(stream: PropWriteStream) {
+        super.serialize(stream)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_SOULGAIN.value)
+        stream.writeU32(soulGain.toLong() and 0xFFFFFFFFL)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_SOULTICKS.value)
+        stream.writeU32(soulTicks.toLong() and 0xFFFFFFFFL)
+    }
+
+    /** `ConditionSoul::unserializeProp` (`condition.cpp:1703-1710`). */
+    override fun unserializeProp(attr: ConditionAttr, stream: PropStream): Boolean {
+        when (attr) {
+            ConditionAttr.CONDITIONATTR_SOULGAIN ->
+                soulGain = (stream.readU32()?.toInt() ?: return false)
+
+            ConditionAttr.CONDITIONATTR_SOULTICKS ->
+                soulTicks = (stream.readU32()?.toInt() ?: return false)
+
+            else -> return super.unserializeProp(attr, stream)
+        }
+        return true
+    }
+
     /** `ConditionSoul::clone` (`condition.cpp:1753-1755`). */
     override fun clone(): Condition {
         val copy = ConditionSoul(id, type, ticks, isBuff, subId, now)
         copy.apply {
             endTime = this@ConditionSoul.endTime
             owner = this@ConditionSoul.owner
+            tickSound = this@ConditionSoul.tickSound
+            addSound = this@ConditionSoul.addSound
             soulTicks = this@ConditionSoul.soulTicks
             soulGain = this@ConditionSoul.soulGain
         }

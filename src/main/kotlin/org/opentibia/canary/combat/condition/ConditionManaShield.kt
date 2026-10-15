@@ -1,5 +1,8 @@
 package org.opentibia.canary.combat.condition
 
+import org.opentibia.canary.io.PropStream
+import org.opentibia.canary.io.PropWriteStream
+
 /**
  * `ConditionManaShield` (`src/creatures/combat/condition.cpp:1604-1683`,
  * `condition.hpp:245-264`).
@@ -65,6 +68,25 @@ class ConditionManaShield(
         }
     }
 
+    /** `ConditionManaShield::serialize` (`condition.cpp:1652-1656`). */
+    override fun serialize(stream: PropWriteStream) {
+        super.serialize(stream)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_MANASHIELD.value)
+        stream.writeU32(manaShield.toLong() and 0xFFFFFFFFL)
+    }
+
+    /** `ConditionManaShield::unserializeProp` (`condition.cpp:1645-1650`). */
+    override fun unserializeProp(attr: ConditionAttr, stream: PropStream): Boolean {
+        when (attr) {
+            ConditionAttr.CONDITIONATTR_MANASHIELD ->
+                manaShield = (stream.readU32()?.toInt() ?: return false)
+
+            else -> return super.unserializeProp(attr, stream)
+        }
+        return true
+    }
+
     /** `ConditionManaShield::getIcons` (`condition.cpp:1675-1683`). */
     override fun getIcons(): Set<PlayerIcon> {
         val icons = super.getIcons().toMutableSet()
@@ -82,6 +104,8 @@ class ConditionManaShield(
         copy.apply {
             endTime = this@ConditionManaShield.endTime
             owner = this@ConditionManaShield.owner
+            tickSound = this@ConditionManaShield.tickSound
+            addSound = this@ConditionManaShield.addSound
             manaShield = this@ConditionManaShield.manaShield
         }
         return copy

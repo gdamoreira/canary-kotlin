@@ -1,5 +1,8 @@
 package org.opentibia.canary.combat.condition
 
+import org.opentibia.canary.io.PropStream
+import org.opentibia.canary.io.PropWriteStream
+
 /**
  * `ConditionRegeneration` (`src/creatures/combat/condition.cpp:1423-1598`,
  * `condition.hpp:215-243`).
@@ -148,6 +151,43 @@ class ConditionRegeneration(
         }
     }
 
+    /** `ConditionRegeneration::serialize` (`condition.cpp:1474-1488`). */
+    override fun serialize(stream: PropWriteStream) {
+        super.serialize(stream)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_HEALTHTICKS.value)
+        stream.writeU32(healthTicks.toLong() and 0xFFFFFFFFL)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_HEALTHGAIN.value)
+        stream.writeU32(healthGain.toLong() and 0xFFFFFFFFL)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_MANATICKS.value)
+        stream.writeU32(manaTicks.toLong() and 0xFFFFFFFFL)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_MANAGAIN.value)
+        stream.writeU32(manaGain.toLong() and 0xFFFFFFFFL)
+    }
+
+    /** `ConditionRegeneration::unserializeProp` (`condition.cpp:1461-1472`). */
+    override fun unserializeProp(attr: ConditionAttr, stream: PropStream): Boolean {
+        when (attr) {
+            ConditionAttr.CONDITIONATTR_HEALTHTICKS ->
+                healthTicks = (stream.readU32()?.toInt() ?: return false)
+
+            ConditionAttr.CONDITIONATTR_HEALTHGAIN ->
+                healthGain = (stream.readU32()?.toInt() ?: return false)
+
+            ConditionAttr.CONDITIONATTR_MANATICKS ->
+                manaTicks = (stream.readU32()?.toInt() ?: return false)
+
+            ConditionAttr.CONDITIONATTR_MANAGAIN ->
+                manaGain = (stream.readU32()?.toInt() ?: return false)
+
+            else -> return super.unserializeProp(attr, stream)
+        }
+        return true
+    }
+
     /** `ConditionRegeneration::getHealthTicks` (`condition.cpp:1576-1584`). */
     fun getHealthTicks(target: ConditionTarget): Int {
         if (target.player != null && isBuff) {
@@ -170,6 +210,8 @@ class ConditionRegeneration(
         copy.apply {
             endTime = this@ConditionRegeneration.endTime
             owner = this@ConditionRegeneration.owner
+            tickSound = this@ConditionRegeneration.tickSound
+            addSound = this@ConditionRegeneration.addSound
             healthTicks = this@ConditionRegeneration.healthTicks
             manaTicks = this@ConditionRegeneration.manaTicks
             healthGain = this@ConditionRegeneration.healthGain

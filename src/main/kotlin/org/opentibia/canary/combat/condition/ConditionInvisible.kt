@@ -40,6 +40,8 @@ class ConditionInvisible(
         copy.apply {
             endTime = this@ConditionInvisible.endTime
             owner = this@ConditionInvisible.owner
+            tickSound = this@ConditionInvisible.tickSound
+            addSound = this@ConditionInvisible.addSound
         }
         return copy
     }

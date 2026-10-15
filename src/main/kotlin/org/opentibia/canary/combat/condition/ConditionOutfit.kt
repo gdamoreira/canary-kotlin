@@ -1,5 +1,8 @@
 package org.opentibia.canary.combat.condition
 
+import org.opentibia.canary.io.PropStream
+import org.opentibia.canary.io.PropWriteStream
+
 /**
  * `ConditionOutfit` (`src/creatures/combat/condition.cpp:2667-2752`,
  * `condition.hpp:414-435`).
@@ -102,6 +105,68 @@ class ConditionOutfit(
         }
     }
 
+    /** `ConditionOutfit::serialize` (`condition.cpp:2682-2686`). */
+    override fun serialize(stream: PropWriteStream) {
+        super.serialize(stream)
+
+        stream.writeU8(ConditionAttr.CONDITIONATTR_OUTFIT.value)
+        writeOutfit(stream, outfit)
+    }
+
+    /** `ConditionOutfit::unserializeProp` (`condition.cpp:2675-2680`). */
+    override fun unserializeProp(attr: ConditionAttr, stream: PropStream): Boolean {
+        when (attr) {
+            ConditionAttr.CONDITIONATTR_OUTFIT -> outfit = readOutfit(stream) ?: return false
+            else -> return super.unserializeProp(attr, stream)
+        }
+        return true
+    }
+
+    /**
+     * `PropWriteStream::write<Outfit_t>` (creatures_definitions.hpp:1832-1850):
+     * 3 x `uint16_t`, 9 x `uint8_t`, 5 x `uint16_t` in declaration order.
+     */
+    private fun writeOutfit(stream: PropWriteStream, value: Outfit) {
+        stream.writeU16(value.lookType)
+        stream.writeU16(value.lookTypeEx)
+        stream.writeU16(value.lookMount)
+        stream.writeU8(value.lookHead)
+        stream.writeU8(value.lookBody)
+        stream.writeU8(value.lookLegs)
+        stream.writeU8(value.lookFeet)
+        stream.writeU8(value.lookAddons)
+        stream.writeU8(value.lookMountHead)
+        stream.writeU8(value.lookMountBody)
+        stream.writeU8(value.lookMountLegs)
+        stream.writeU8(value.lookMountFeet)
+        stream.writeU16(value.lookFamiliarsType)
+        stream.writeU16(value.lookWing)
+        stream.writeU16(value.lookAura)
+        stream.writeU16(value.lookEffect)
+        stream.writeU16(value.lookShader)
+    }
+
+    /** `PropStream::read<Outfit_t>` (creatures_definitions.hpp:1832-1850). */
+    private fun readOutfit(stream: PropStream): Outfit? = Outfit(
+        lookType = stream.readU16() ?: return null,
+        lookTypeEx = stream.readU16() ?: return null,
+        lookMount = stream.readU16() ?: return null,
+        lookHead = stream.readU8() ?: return null,
+        lookBody = stream.readU8() ?: return null,
+        lookLegs = stream.readU8() ?: return null,
+        lookFeet = stream.readU8() ?: return null,
+        lookAddons = stream.readU8() ?: return null,
+        lookMountHead = stream.readU8() ?: return null,
+        lookMountBody = stream.readU8() ?: return null,
+        lookMountLegs = stream.readU8() ?: return null,
+        lookMountFeet = stream.readU8() ?: return null,
+        lookFamiliarsType = stream.readU16() ?: return null,
+        lookWing = stream.readU16() ?: return null,
+        lookAura = stream.readU16() ?: return null,
+        lookEffect = stream.readU16() ?: return null,
+        lookShader = stream.readU16() ?: return null,
+    )
+
     /** `ConditionOutfit::clone` (`condition.cpp:2750-2752`). */
     override fun clone(): Condition {
         val copy = ConditionOutfit(
@@ -118,6 +183,8 @@ class ConditionOutfit(
         copy.apply {
             endTime = this@ConditionOutfit.endTime
             owner = this@ConditionOutfit.owner
+            tickSound = this@ConditionOutfit.tickSound
+            addSound = this@ConditionOutfit.addSound
             outfit = this@ConditionOutfit.outfit.copy()
             monsterName = this@ConditionOutfit.monsterName
         }
