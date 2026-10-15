@@ -19,12 +19,18 @@ import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.monsters.BaseSpell
 import org.opentibia.canary.creatures.monsters.MonsterCombatSpell
 import org.opentibia.canary.creatures.monsters.MonsterCombatSpellCombat
+import org.opentibia.canary.creatures.monsters.MonsterSpellCaster
 import org.opentibia.canary.creatures.monsters.SpellBlock
 import org.opentibia.canary.lua.bindings.core.luaFunction
 import org.opentibia.canary.lua.bindings.core.retrieveUserdata
 import org.opentibia.canary.lua.registry.LuaSpell
+import org.opentibia.canary.lua.registry.SpellType
 import org.opentibia.canary.lua.runtime.LuaEnvironment
+import org.opentibia.canary.spells.LuaVariant
+import org.opentibia.canary.spells.LuaVariantType
+import org.opentibia.canary.spells.MonsterRegisteredSpellRunner
 import org.opentibia.canary.spells.SoundEffect
+import org.opentibia.canary.spells.Spells
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -76,20 +82,81 @@ class MonsterSpellData {
  *
  * Canary stores the registered `InstantSpell`/`RuneSpell` (a `BaseSpell`)
  * directly in `spellBlock_t::spell` and casts it through the spell's Lua script
- * interface. The Kotlin port keeps the registered script state in the [LuaSpell]
+ * interface (`spellBlock.spell->castSpell(monster, target)`, monster.cpp:1979,
+ * 2220). The Kotlin port keeps the registered script state in the [LuaSpell]
  * mirror, so this actor carries the same registered object into the block the
- * attack/defense rules cast.
+ * attack/defense rules cast and drives the registered `onCastSpell` body
+ * through [MonsterRegisteredSpellRunner].
  *
- * PARITY GAP: the `onCastSpell` execution of a registry-backed spell is driven
- * by the Lua bridge (`LuaEventDispatcher`/`ScriptingDispatch`), which the actor
- * does not hold, so [castSpell] is inert — like a Canary spell whose
- * `m_spellScriptId` was never loaded.
+ * The variant construction transcribes `InstantSpell::castSpell(creature,
+ * target)`/`(creature)` (spells.cpp:1312-1348) and
+ * `RuneSpell::castSpell(creature, target)` (spells.cpp:1569-1575); the monster
+ * cast sites always use the two-argument overload.
  */
 class MonsterRegisteredSpell(
     /** `spellBlock_t::spell` target: the registered Lua `Spell` state. */
     val spell: LuaSpell,
+    /**
+     * Lua bridge override; null resolves the live [SpellBindings] runner at
+     * cast time so a re-initialized environment never keeps a stale reference
+     * (AGENTS.md deferred-callback lifetime safety).
+     */
+    private val runner: MonsterRegisteredSpellRunner? = null,
 ) : BaseSpell {
-    override fun castSpell(caster: Monster, target: Creature) = Unit
+
+    override fun castSpell(caster: Monster, target: Creature) {
+        val scripts = runner ?: SpellBindings.monsterRegisteredSpellRunner()
+        if (!spell.onCastSpell.isfunction()) {
+            return
+        }
+
+        when (spell.spellType) {
+            SpellType.RUNE -> castRune(caster, target, scripts)
+            SpellType.INSTANT -> castInstant(caster, target, scripts)
+        }
+    }
+
+    /** `RuneSpell::castSpell(creature, target)` (spells.cpp:1569-1575). */
+    private fun castRune(caster: Monster, target: Creature, scripts: MonsterRegisteredSpellRunner) {
+        val variant = LuaVariant()
+        variant.type = LuaVariantType.VARIANT_NUMBER
+        variant.number = target.id
+        variant.runeName = spell.name
+        scripts.executeCastSpell(caster, spell, variant, false)
+    }
+
+    /** `InstantSpell::castSpell(creature, target)` (spells.cpp:1341-1348). */
+    private fun castInstant(caster: Monster, target: Creature, scripts: MonsterRegisteredSpellRunner) {
+        if (spell.needTarget) {
+            val variant = LuaVariant()
+            variant.type = LuaVariantType.VARIANT_NUMBER
+            variant.number = target.id
+            scripts.executeCastSpell(caster, spell, variant, false)
+            return
+        }
+
+        // `InstantSpell::castSpell(creature)` (spells.cpp:1312-1339).
+        val variant = LuaVariant()
+        variant.instantName = spell.name
+
+        if (spell.needCasterTargetOrDirection) {
+            val attacked = caster.getAttackedCreature()
+            if (attacked == null || attacked.health <= 0) {
+                return
+            }
+            // PARITY GAP: `InstantSpell::canThrowSpell` (spells.cpp:1299-1310)
+            // needs the Game::canThrowObjectTo world seam.
+            variant.type = LuaVariantType.VARIANT_NUMBER
+            variant.number = attacked.id
+        } else if (spell.needDirection) {
+            variant.type = LuaVariantType.VARIANT_POSITION
+            variant.pos = Spells.getCasterPosition(MonsterSpellCaster(caster), caster.direction)
+        } else {
+            variant.type = LuaVariantType.VARIANT_POSITION
+            variant.pos = caster.position
+        }
+        scripts.executeCastSpell(caster, spell, variant, false)
+    }
 }
 
 /**

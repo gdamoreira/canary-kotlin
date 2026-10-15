@@ -4,6 +4,7 @@ import org.opentibia.canary.combat.condition.Buff
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionPlayer
 import org.opentibia.canary.combat.condition.ConditionType
+import org.opentibia.canary.creatures.Skulls_t
 
 /**
  * Injected view of the target `Creature` used by the combat dispatch layer.
@@ -114,6 +115,19 @@ interface CombatTarget {
      * (`combat.cpp:1088`).
      */
     fun getPlayer(): ConditionPlayer?
+
+    /**
+     * `Creature::getMonster()` (`combat.cpp:834`); non-null when this creature
+     * is a monster. `Combat::CombatHealthFunc` uses it to fire
+     * `Monster::onAttackedByPlayer` (combat.cpp:895-899).
+     */
+    fun getMonster(): CombatMonster? = null
+
+    /**
+     * `Creature::getSkull()` (`combat.cpp:989`), read by `CombatManaFunc`'s
+     * black-skull halving.
+     */
+    fun getSkull(): Skulls_t = Skulls_t.SKULL_NONE
 
     /** `Creature::isImmune(ConditionType_t)` (`src/creatures/creature.hpp:522`). */
     fun isImmune(conditionType: ConditionType): Boolean

@@ -13,6 +13,7 @@ import org.opentibia.canary.items.Item
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.network.protocol.MessageClass
 import org.opentibia.canary.systems.rewardchest.ReturnValue
+import org.opentibia.canary.utils.Tools
 import kotlin.math.abs
 
 /**
@@ -361,8 +362,7 @@ class SpellEngine(
     /**
      * `Spell::playerRuneSpellCheck` (`spells.cpp:656-728`).
      *
-     * PARITY GAPS: `Combat::canDoCombat(player, tile, aggressive)`
-     * (`spells.cpp:690`) and the secure-mode/expert-PvP target gates
+     * PARITY GAP: the secure-mode/expert-PvP target gates
      * (`spells.cpp:710-726`) belong to the PvP systems and are not modelled.
      */
     fun playerRuneSpellCheck(caster: SpellCaster, spell: Spell, toPos: Position): Boolean {
@@ -385,6 +385,13 @@ class SpellEngine(
 
         if (spell.range != -1 && !world.canThrowObjectTo(playerPos, toPos, true, spell.range)) {
             caster.sendCancelMessage(ReturnValue.DESTINATIONOUTOFREACH)
+            return false
+        }
+
+        // spells.cpp:690-694: `Combat::canDoCombat(player, tile, aggressive)`.
+        val tileCombat = world.canDoCombat(caster, toPos, spell.aggressive)
+        if (tileCombat != ReturnValue.NOERROR) {
+            caster.sendCancelMessage(tileCombat)
             return false
         }
 
@@ -515,10 +522,8 @@ class SpellEngine(
      * resolved; [castInstant] carries that value back for
      * [playerSaySpell]'s words echo.
      *
-     * PARITY GAPS: `applyInstantSpellDirection` cannot consult
-     * `getAimAtTargetSpells()` (unported wheel state) so the caster facing is
-     * kept; a failed wildcard lookup cancels with `NOTPOSSIBLE` instead of the
-     * exact `getPlayerByNameWildcard` return value.
+     * PARITY GAP: a failed wildcard lookup cancels with `NOTPOSSIBLE` instead
+     * of the exact `getPlayerByNameWildcard` return value.
      */
     fun playerCastInstant(caster: SpellCaster, spell: InstantSpell, param: String = ""): Boolean =
         castInstant(caster, spell, param).cast
@@ -620,7 +625,7 @@ class SpellEngine(
             variant.pos = caster.getPosition()
 
             if (spell.needDirection) {
-                applyInstantSpellDirection(caster, variant, variant.pos)
+                applyInstantSpellDirection(caster, variant, variant.pos, spell.spellId)
             }
 
             if (!playerInstantSpellCheck(caster, spell, variant.pos)) {
@@ -734,15 +739,28 @@ class SpellEngine(
     }
 
     /**
-     * `applyInstantSpellDirection` (`spells.cpp:47-59`). PARITY GAP: the
-     * `getAimAtTargetSpells()` refinement is not modelled, so an attacked
-     * creature only switches the variant to `VARIANT_TARGETPOSITION` while the
-     * facing stays the caster direction.
+     * `applyInstantSpellDirection` (`spells.cpp:47-59`): an attacked creature
+     * switches the variant to `VARIANT_TARGETPOSITION` and, when the spell is
+     * registered to aim at the target, the facing becomes the primary axis
+     * toward it (`getPrimaryDirection`, tools.cpp:2317-2326).
+     *
+     * PARITY GAP: the wheel state that populates `Player::getAimAtTargetSpells`
+     * (`player.cpp:13355-13367`) is not modelled; the [SpellCaster] seam
+     * supplies the set.
      */
-    private fun applyInstantSpellDirection(caster: SpellCaster, variant: LuaVariant, casterPos: Position) {
-        val direction = caster.getDirection()
-        if (caster.getAttackedCreature() != null) {
+    private fun applyInstantSpellDirection(
+        caster: SpellCaster,
+        variant: LuaVariant,
+        casterPos: Position,
+        spellId: Int,
+    ) {
+        var direction = caster.getDirection()
+        val target = caster.getAttackedCreature()
+        if (target != null) {
             variant.type = LuaVariantType.VARIANT_TARGETPOSITION
+            if (spellId in caster.getAimAtTargetSpells()) {
+                direction = Tools.getPrimaryDirection(casterPos, target.getPosition())
+            }
         }
 
         variant.pos = Spells.getCasterPosition(caster, direction)

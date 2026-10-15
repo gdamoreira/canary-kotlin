@@ -74,11 +74,17 @@ object Combat {
      * params type and an equipped weapon whose `elementalBond` is set uses the
      * bond as primary type.
      *
-     * PARITY GAPS: `params.valueCallback->getMinMaxValues` (the Lua min/max
-     * callback, combat.cpp:191-192), the Wheel of Destiny
-     * `getCombatDataSpell`/`getCombatDataAugment` and weapon-proficiency spell
-     * augments (combat.cpp:178-179, 224-227) stay in their owning systems;
-     * [combatValues] carries `getCombatValues` in their place.
+     * When the caster carries no combat values, the player branch resolves the
+     * damage through `params.valueCallback->getMinMaxValues` (combat.cpp:191-192)
+     * before the formula matrix; [valueCallback] carries the two numbers the Lua
+     * callback returned and [useCharges] is the `params.useCharges` argument.
+     *
+     * PARITY GAPS: the Wheel of Destiny `getCombatDataSpell`/`getCombatDataAugment`
+     * and weapon-proficiency spell augments (combat.cpp:178-179, 224-227) stay in
+     * their owning systems; [combatValues] carries `getCombatValues` in their
+     * place. The callback's `COMBAT_FORMULA_SKILL` operand calculation (the
+     * weapon `calculateSkillFormula` push, combat.cpp:2017-2027) is not modelled,
+     * so [valueCallback] is resolved for the level/magic callback contract.
      */
     fun getCombatDamage(
         formulaType: FormulaType,
@@ -99,6 +105,8 @@ object Combat {
         combatValues: Pair<Int, Int>? = null,
         casterVocation: Int = Vocation.VOCATION_NONE,
         weaponElementalBond: CombatType = CombatType.NONE,
+        valueCallback: CombatValueCallback? = null,
+        useCharges: Boolean = false,
     ): CombatDamage {
         val damage = CombatDamage()
         damage.origin = origin
@@ -121,6 +129,13 @@ object Combat {
             damage.primaryValue = normalRandom(mina.toInt(), maxa.toInt(), random)
         } else if (combatValues != null) {
             damage.primaryValue = normalRandom(combatValues.first, combatValues.second, random)
+        } else if (valueCallback != null) {
+            // combat.cpp:191-192: `params.valueCallback->getMinMaxValues(player, damage, params.useCharges)`;
+            // the callback branch sets the primary from `normal_random` and clears
+            // the secondary (combat.cpp:2048-2063).
+            valueCallback.getMinMaxValues(useCharges)?.let { (min, max) ->
+                damage.primaryValue = normalRandom(min, max, random)
+            }
         } else if (formulaType == FormulaType.LEVELMAGIC) {
             val min = (levelFormula * mina + minb).toInt()
             val max = (levelFormula * maxa + maxb).toInt()
@@ -192,6 +207,11 @@ object Combat {
      * through [CombatTarget] and applied by
      * [applyAbsorbDamageModifications] (`creature.cpp:924-942`).
      *
+     * `Combat::CombatHealthFunc`'s player-attacking-monster branch
+     * (combat.cpp:895-899) runs before the block/change stages: a player cast
+     * on a monster target fires `Monster::onAttackedByPlayer` even when the hit
+     * is fully blocked.
+     *
      * PARITY GAPS: `canDoCombatWithExpertPvp` is reduced to
      * `!params.aggressive || caster !== target` (combat.cpp:1650); the healing
      * summon/player/monster restrictions (combat.cpp:1660-1685),
@@ -210,6 +230,16 @@ object Combat {
     ) {
         if (params.aggressive && caster === target) {
             return
+        }
+
+        // combat.cpp:895-899: `if (attackerPlayer && targetMonster) targetMonster->onAttackedByPlayer(attackerPlayer)`,
+        // before the block/change stages. The player-heals-monster branch
+        // (combat.cpp:1668-1670) returns before `CombatHealthFunc` for the
+        // healing type.
+        val attackerPlayer = caster?.getPlayer()
+        val targetMonster = target.getMonster()
+        if (attackerPlayer != null && targetMonster != null && params.combatType != CombatType.HEALING) {
+            targetMonster.onAttackedByPlayer(attackerPlayer)
         }
 
         if (damage.primaryValue > 0) {
@@ -277,12 +307,14 @@ object Combat {
      * and secondary values go straight to `Creature::changeMana`
      * (`creature.cpp:869-875`), which clamps at 0 and `getMaxMana()`.
      *
-     * PARITY GAPS: the `CombatManaFunc` black-skull player halving
-     * (combat.cpp:984-996) needs the player/skull model; `applyExtensions`,
-     * leech and protocol effects stay in their owning systems, and the
-     * post-change condition/dispel call (combat.cpp:997-999) is not wired into
-     * this mana path. [random] is accepted for signature parity with
-     * [doCombatHealth].
+     * `CombatManaFunc`'s black-skull halving (combat.cpp:988-996) applies first:
+     * a negative primary drain from a player caster is halved unless the target
+     * is a black-skulled player.
+     *
+     * PARITY GAPS: `applyExtensions`, leech and protocol effects stay in their
+     * owning systems, and the post-change condition/dispel call
+     * (combat.cpp:997-999) is not wired into this mana path. [random] is
+     * accepted for signature parity with [doCombatHealth].
      */
     fun doCombatMana(
         caster: CombatTarget?,
@@ -293,6 +325,16 @@ object Combat {
     ) {
         if (params.aggressive && caster === target) {
             return
+        }
+
+        // combat.cpp:988-996: `if (damage.primary.value < 0) { if (caster && target && caster->getPlayer()
+        // && target->getSkull() != SKULL_BLACK && target->getPlayer()) damage.primary.value /= 2; }`
+        if (damage.primaryValue < 0 &&
+            caster?.getPlayer() != null &&
+            target.getSkull() != Skulls_t.SKULL_BLACK &&
+            target.getPlayer() != null
+        ) {
+            damage.primaryValue /= 2
         }
 
         target.changeMana(damage.primaryValue + damage.secondaryValue)
