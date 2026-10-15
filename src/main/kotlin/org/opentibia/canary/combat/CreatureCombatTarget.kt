@@ -143,6 +143,19 @@ class CreatureCombatTarget(
         return creature.health
     }
 
+    /**
+     * `Creature::drainHealth(attacker, damage)` (`creature.cpp:893-899`): the
+     * `changeHealth(-amount, false)` core plus the attacker credit over the
+     * live creature. The C++ attacker is the raw `std::shared_ptr<Creature>`;
+     * the [CombatTarget] view is unwrapped through this adapter (the game and
+     * Lua factories always produce it), so a seam-only attacker without a live
+     * creature records nothing.
+     */
+    override fun drainHealth(attacker: CombatTarget?, amount: Int): Int {
+        creature.drainHealth((attacker as? CreatureCombatTarget)?.creature, amount)
+        return creature.health
+    }
+
     /** `Creature::getMana()`. */
     override fun getMana(): Int = creature.mana
 

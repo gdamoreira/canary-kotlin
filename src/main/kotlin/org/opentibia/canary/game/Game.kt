@@ -12253,9 +12253,11 @@ class Game(
             damage.secondaryValue = minOf(damage.secondaryValue, targetHealth - damage.primaryValue)
         }
 
-        // `Creature::drainHealth(attacker, realDamage)`; the attacker's
-        // `onTargetCreatureLossHealth` hook is not modelled (PARITY GAP).
-        target.changeHealth(-realDamage)
+        // game.cpp:8735: `target->drainHealth(attacker, realDamage)` — the
+        // attacker `onAttackedCreatureDrainHealth` credit stamps the real
+        // damage in the target's damage map (creature.cpp:893-899,
+        // 1277-1283), so the death pipeline resolves combat kills.
+        target.drainHealth(attacker, realDamage)
 
         // PARITY GAP: `Monster::randomStepping` field-damage suppression.
 

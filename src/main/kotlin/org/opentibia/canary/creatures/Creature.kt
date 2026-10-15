@@ -754,13 +754,35 @@ abstract class Creature(
     }
 
     /**
-     * `Creature::drainHealth` (`creature.cpp:893-899`) health core:
-     * `changeHealth(-damage, false)`, so a killing drain still reaches
-     * [onDeath] while the caller owns the spectator broadcast. The attacker
-     * `onAttackedCreatureDrainHealth` hook is not modelled (PARITY GAP).
+     * `Creature::drainHealth` (`creature.cpp:893-899`) reduced to its
+     * `changeHealth(-damage, false)` core for the call sites that carry no
+     * attacker (the field/Lua/condition reductions). The full C++ sequence
+     * including the attacker credit is [drainHealth] with an attacker.
      */
     fun drainHealth(amount: Int) {
         changeHealth(-amount, false)
+    }
+
+    /**
+     * `Creature::drainHealth(attacker, damage)` (`creature.cpp:893-899`):
+     * `changeHealth(-damage, false)`, then the
+     * `attacker->onAttackedCreatureDrainHealth(this, damage)` credit that
+     * stamps the real damage in the target's damage map
+     * (`creature.cpp:1277-1283`), so the death pipeline's last-hit and
+     * most-damage resolution sees combat kills.
+     *
+     * ORDERING: Canary queues `onDeath` through the dispatcher
+     * (`creature.cpp:861-875`), so the credit lands before the death body reads
+     * the damage map. The port runs the death synchronously inside
+     * [changeHealth], so the credit must run first to keep the killing blow
+     * (and the last-hit stamp) observable to `Creature::onDeath`.
+     */
+    fun drainHealth(attacker: Creature?, damage: Int) {
+        if (attacker != null) {
+            attacker.onAttackedCreatureDrainHealth(this, damage)
+        }
+
+        changeHealth(-damage, false)
     }
 
     /**
@@ -1565,6 +1587,24 @@ abstract class Creature(
     /** `Creature::onTargetCreatureGainHealth` (creature.hpp:561). */
     open fun onTargetCreatureGainHealth(target: Creature?, points: Int) {
         onTargetCreatureGainHealthHandlers.toList().forEach { it(this, target, points) }
+    }
+
+    /**
+     * `Creature::onAttackedCreatureDrainHealth` (`creature.cpp:1277-1283`):
+     * records the drain on the target's damage map through [addDamagePoints],
+     * keyed by this creature's id, and stamps [lastHitCreatureId].
+     *
+     * `Player::onAttackedCreatureDrainHealth`'s party-tick override
+     * (player.cpp:6563-6575) is the `PlayerCombatHooksState.kt` extension seam;
+     * it is not hooked into this virtual dispatch (PARITY GAP, mirroring
+     * [onTargetCreatureGainHealth]).
+     */
+    open fun onAttackedCreatureDrainHealth(target: Creature?, points: Int) {
+        if (target == null || points <= 0) {
+            return
+        }
+
+        target.addDamagePoints(this, points)
     }
 
     /**

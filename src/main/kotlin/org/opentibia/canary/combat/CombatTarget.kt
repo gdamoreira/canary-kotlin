@@ -30,10 +30,23 @@ interface CombatTarget {
     fun addHealth(amount: Int): Int
 
     /**
-     * `Creature::drainHealth` (`creature.cpp:893-899`). Returns the health
-     * after the loss, clamped to 0.
+     * `Creature::drainHealth` (`creature.cpp:893-899`) reduced to its
+     * `changeHealth(-amount, false)` core. Returns the health after the loss,
+     * clamped to 0. The full C++ sequence including the attacker credit is
+     * [drainHealth] with an attacker.
      */
     fun drainHealth(amount: Int): Int
+
+    /**
+     * `Creature::drainHealth(attacker, damage)` (`creature.cpp:893-899`): the
+     * `changeHealth(-amount, false)` core plus the attacker
+     * `onAttackedCreatureDrainHealth` credit that stamps the real damage in the
+     * target's damage map (`creature.cpp:1277-1283`). [attacker] is the caster
+     * [CombatTarget] view (C++ passes the raw `std::shared_ptr<Creature>`); the
+     * default keeps the reduced [drainHealth] behavior for seam implementors
+     * without creature attribution.
+     */
+    fun drainHealth(attacker: CombatTarget?, amount: Int): Int = drainHealth(amount)
 
     /** `Creature::getMana()`. */
     fun getMana(): Int

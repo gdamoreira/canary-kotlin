@@ -288,6 +288,12 @@ object Combat {
      * through [CombatTarget] and applied by
      * [applyAbsorbDamageModifications] (`creature.cpp:924-942`).
      *
+     * The drain forwards the [caster] as the attacker
+     * (`target->drainHealth(attacker, realDamage)`, combat.cpp:911 ->
+     * game.cpp:8735), so the target damage map records the caster and the
+     * death pipeline resolves the last hit and the most damage of combat
+     * kills.
+     *
      * `Combat::CombatHealthFunc`'s player-attacking-monster branch
      * (combat.cpp:895-899) runs before the block/change stages: a player cast
      * on a monster target fires `Monster::onAttackedByPlayer` even when the hit
@@ -393,7 +399,7 @@ object Combat {
         if (realDamage == 0) {
             return
         }
-        target.drainHealth(realDamage)
+        target.drainHealth(caster, realDamage)
     }
 
     /**
