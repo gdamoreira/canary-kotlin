@@ -6,6 +6,8 @@ import org.opentibia.canary.chat.ChannelEvent
 import org.opentibia.canary.chat.SpeakClasses
 import org.opentibia.canary.combat.condition.PlayerIcon
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.database.DatabaseConnectionFactory
+import org.opentibia.canary.database.SqlDialect
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.network.protocol.MessageClass
 
@@ -88,6 +90,7 @@ class LivestreamTest {
         viewerLimit: Int = 0,
         premiumViewerLimit: Int = 0,
         minLevel: Int = 0,
+        dialect: () -> SqlDialect = { SqlDialect.MARIADB },
     ) {
         var now = 1_000_000L
         var tableExists = false
@@ -105,6 +108,7 @@ class LivestreamTest {
             casterMinLevel = { minLevel },
             tableExists = { tableExists },
             executeDatabaseTask = { databaseTasks.add(it) },
+            sqlDialect = dialect,
         )
 
         fun caster(
@@ -1069,6 +1073,63 @@ class LivestreamTest {
         fixture.manager.updateViewerStorage(null)
 
         assertThat(fixture.databaseTasks).isEmpty()
+    }
+
+    @Test
+    fun `updateViewerStorage writes the portable statement on PostgreSQL and H2`() {
+        for (dialect in listOf(SqlDialect.POSTGRESQL, SqlDialect.H2)) {
+            val fixture = Fixture(dialect = { dialect })
+            val caster = fixture.caster()
+            fixture.ownerFor(caster)
+            fixture.startBroadcast(caster)
+            fixture.manager.addViewer(caster, RecordingClient(ip = 1))
+            fixture.tableExists = true
+
+            fixture.manager.updateViewerStorage(caster)
+
+            assertThat(fixture.databaseTasks).containsExactly(
+                "UPDATE active_livestream_casters SET livestream_viewers = 1 WHERE caster_id = 1",
+            )
+        }
+    }
+
+    @Test
+    fun `updateViewerStorage executes the portable statement on H2`() {
+        val dataSource = DatabaseConnectionFactory.createInMemoryDataSource("livestream_dialect_${System.nanoTime()}")
+        try {
+            dataSource.connection.use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.execute("CREATE TABLE active_livestream_casters (caster_id BIGINT, livestream_viewers INT)")
+                    statement.execute("INSERT INTO active_livestream_casters VALUES (1, 0)")
+                }
+            }
+            val fixture = Fixture(dialect = { SqlDialect.H2 })
+            val caster = fixture.caster()
+            fixture.ownerFor(caster)
+            fixture.startBroadcast(caster)
+            fixture.manager.addViewer(caster, RecordingClient(ip = 1))
+            fixture.manager.addViewer(caster, RecordingClient(ip = 2))
+            fixture.tableExists = true
+
+            fixture.manager.updateViewerStorage(caster)
+            dataSource.connection.use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.execute(fixture.databaseTasks.single())
+                }
+            }
+
+            dataSource.connection.use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.executeQuery("SELECT livestream_viewers FROM active_livestream_casters WHERE caster_id = 1")
+                        .use { result ->
+                            assertThat(result.next()).isTrue()
+                            assertThat(result.getInt("livestream_viewers")).isEqualTo(2)
+                        }
+                }
+            }
+        } finally {
+            dataSource.close()
+        }
     }
 
     @Test

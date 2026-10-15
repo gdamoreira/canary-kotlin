@@ -15,6 +15,7 @@ import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.players.components.PlayerAsyncTask
 import org.opentibia.canary.database.Database
 import org.opentibia.canary.database.DatabaseConnectionFactory
+import org.opentibia.canary.database.SqlDialect
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.map.GameMap
@@ -151,6 +152,98 @@ class GameLastSevenTest {
                     "`looktype` = 35,`lookfeet` = 4,`looklegs` = 3,`lookhead` = 1,`lookbody` = 2," +
                     "`lookaddons` = 5,`lookmount` = 6,`raceid` = '2'",
             )
+        } finally {
+            dataSource.close()
+        }
+    }
+
+    @Test
+    fun `loadBoostedCreature writes the portable form on PostgreSQL`() {
+        val game = Game(GameMap(), GameDispatcher(), sqlDialect = { SqlDialect.POSTGRESQL })
+        game.getTimeNow = { 1_700_000_000L }
+        val today = Calendar.getInstance().also { it.timeInMillis = 1_700_000_000L * 1000 }.get(Calendar.DAY_OF_MONTH)
+        game.storeBoostedCreature = {
+            BoostedCreatureRecord(today - 1, "rat", 1, 21, 1, 2, 3, 4, 5, 6)
+        }
+        game.addBestiaryList(1, "rat")
+        game.addBestiaryList(2, "demon")
+        game.normalRandom = { min, _ -> min }
+        val monsterType = MonsterType("demon").also {
+            it.info.outfit.lookType = 35
+            it.info.outfit.lookHead = 1
+            it.info.outfit.lookBody = 2
+            it.info.outfit.lookLegs = 3
+            it.info.outfit.lookFeet = 4
+            it.info.outfit.lookAddons = 5
+            it.info.outfit.lookMount = 6
+        }
+        game.getMonsterTypeByName = { monsterType }
+        val updates = mutableListOf<String>()
+        game.updateBoostedCreature = { updates.add(it); true }
+
+        game.loadBoostedCreature()
+
+        assertThat(updates).singleElement().isEqualTo(
+            "UPDATE boosted_creature SET \"date\" = '$today',boostname = 'demon'," +
+                "looktype = 35,lookfeet = 4,looklegs = 3,lookhead = 1,lookbody = 2," +
+                "lookaddons = 5,lookmount = 6,raceid = '2'",
+        )
+    }
+
+    @Test
+    fun `loadBoostedCreature persists the portable statement on H2`() {
+        val dataSource = DatabaseConnectionFactory.createInMemoryDataSource("boosted_portable_${System.nanoTime()}")
+        try {
+            dataSource.connection.use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.execute(
+                        "CREATE TABLE boosted_creature (\"date\" INT, boostname VARCHAR(255), looktype INT, " +
+                            "lookfeet INT, looklegs INT, lookhead INT, lookbody INT, lookaddons INT, " +
+                            "lookmount INT, raceid INT)",
+                    )
+                    statement.execute(
+                        "INSERT INTO boosted_creature VALUES (1, 'rat', 21, 1, 2, 3, 4, 5, 6, 1)",
+                    )
+                }
+            }
+            val game = Game(
+                GameMap(),
+                GameDispatcher(),
+                database = Database(dataSource),
+                sqlDialect = { SqlDialect.H2 },
+            )
+            game.getTimeNow = { 1_700_000_000L }
+            val today = Calendar.getInstance().also { it.timeInMillis = 1_700_000_000L * 1000 }.get(Calendar.DAY_OF_MONTH)
+            game.storeBoostedCreature = {
+                BoostedCreatureRecord(today - 1, "rat", 1, 21, 1, 2, 3, 4, 5, 6)
+            }
+            game.addBestiaryList(1, "rat")
+            game.addBestiaryList(2, "demon")
+            game.normalRandom = { min, _ -> min }
+            val monsterType = MonsterType("demon").also {
+                it.info.outfit.lookType = 35
+                it.info.outfit.lookHead = 1
+                it.info.outfit.lookBody = 2
+                it.info.outfit.lookLegs = 3
+                it.info.outfit.lookFeet = 4
+                it.info.outfit.lookAddons = 5
+                it.info.outfit.lookMount = 6
+            }
+            game.getMonsterTypeByName = { monsterType }
+
+            game.loadBoostedCreature()
+
+            assertThat(game.getBoostedMonsterName()).isEqualTo("demon")
+            dataSource.connection.use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.executeQuery("SELECT boostname, looktype, raceid FROM boosted_creature").use { result ->
+                        assertThat(result.next()).isTrue()
+                        assertThat(result.getString("boostname")).isEqualTo("demon")
+                        assertThat(result.getInt("looktype")).isEqualTo(35)
+                        assertThat(result.getInt("raceid")).isEqualTo(2)
+                    }
+                }
+            }
         } finally {
             dataSource.close()
         }

@@ -4,6 +4,7 @@ import org.opentibia.canary.chat.ChannelEvent
 import org.opentibia.canary.chat.SpeakClasses
 import org.opentibia.canary.combat.condition.PlayerIcon
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.database.SqlDialect
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.network.protocol.MessageClass
 import java.lang.ref.WeakReference
@@ -177,6 +178,14 @@ class LivestreamManager(
     private val tableExists: (String) -> Boolean = { false },
     /** `g_databaseTasks().execute` (livestream.cpp:534). */
     private val executeDatabaseTask: (String) -> Unit = {},
+    /**
+     * Runtime SQL dialect of the `active_livestream_casters` update
+     * (livestream.cpp:534): MariaDB keeps the upstream backtick statement,
+     * PostgreSQL/H2 get it unquoted. Defaults to upstream's MariaDB until the
+     * composition root wires the detected dialect (`SqlDialect.from`, wave 73
+     * K3).
+     */
+    private val sqlDialect: () -> SqlDialect = { SqlDialect.MARIADB },
 ) {
 
     /** `LivestreamManager::Session` (livestream.hpp:60-72). */
@@ -561,11 +570,22 @@ class LivestreamManager(
             return
         }
 
-        executeDatabaseTask(
-            "UPDATE `active_livestream_casters` SET `livestream_viewers` = " +
-                "${session.viewers.size} WHERE `caster_id` = ${caster.getGUID()}",
-        )
+        executeDatabaseTask(viewerStorageUpdateSql(session.viewers.size, caster.getGUID()))
     }
+
+    /**
+     * `UPDATE active_livestream_casters` (livestream.cpp:534) per
+     * [SqlDialect]: MariaDB keeps the upstream backtick statement,
+     * PostgreSQL/H2 get the unquoted form.
+     */
+    private fun viewerStorageUpdateSql(viewers: Int, casterGuid: Long): String =
+        if (sqlDialect() == SqlDialect.MARIADB) {
+            "UPDATE `active_livestream_casters` SET `livestream_viewers` = " +
+                "$viewers WHERE `caster_id` = $casterGuid"
+        } else {
+            "UPDATE active_livestream_casters SET livestream_viewers = " +
+                "$viewers WHERE caster_id = $casterGuid"
+        }
 
     /** `LivestreamManager::isMapRefreshPacket` (livestream.cpp:537-539). */
     private fun isMapRefreshPacket(opcode: Int): Boolean = opcode == 0x64

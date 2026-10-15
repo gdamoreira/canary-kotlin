@@ -103,6 +103,7 @@ import org.opentibia.canary.creatures.vocations.Vocation
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.database.Database
 import org.opentibia.canary.database.PlayerLoginRepository
+import org.opentibia.canary.database.SqlDialect
 import org.opentibia.canary.economy.market.MarketOfferType
 import org.opentibia.canary.game.death.CreatureDeathPipeline
 import org.opentibia.canary.game.modal.ModalWindow
@@ -368,6 +369,67 @@ data class BoostedCreatureRecord(
 )
 
 /**
+ * `server_config` UPDATE builder for `Game::saveMotdNum` (game.cpp:9613):
+ * upstream Canary's backtick-quoted MySQL statement on MariaDB, the unquoted
+ * PostgreSQL/H2 form otherwise (`value` is a keyword on both portable engines,
+ * so it stays double-quoted).
+ */
+internal fun serverConfigUpdateSql(dialect: SqlDialect, config: String, value: String): String =
+    if (dialect == SqlDialect.MARIADB) {
+        "UPDATE `server_config` SET `value` = '$value' WHERE `config` = '$config'"
+    } else {
+        "UPDATE server_config SET \"value\" = '$value' WHERE config = '$config'"
+    }
+
+/**
+ * `server_config` INSERT builder for `Game::loadMotdNum` (game.cpp:9594-9610):
+ * MariaDB keeps the upstream backtick form, PostgreSQL/H2 quote `value`.
+ */
+internal fun serverConfigInsertSql(dialect: SqlDialect, config: String, value: String): String =
+    if (dialect == SqlDialect.MARIADB) {
+        "INSERT INTO `server_config` (`config`, `value`) VALUES ('$config', '$value')"
+    } else {
+        "INSERT INTO server_config (config, \"value\") VALUES ('$config', '$value')"
+    }
+
+/**
+ * `Game::loadBoostedCreature` UPDATE builder (game.cpp:846-857): MariaDB keeps
+ * the upstream backtick form; PostgreSQL/H2 quote the `date` column because
+ * `DATE` is a keyword on both portable engines.
+ */
+internal fun boostedCreatureUpdateSql(
+    dialect: SqlDialect,
+    day: Int,
+    escapedName: String,
+    outfit: Outfit,
+    raceId: Int,
+): String = if (dialect == SqlDialect.MARIADB) {
+    "UPDATE `boosted_creature` SET " +
+        "`date` = '$day'," +
+        "`boostname` = $escapedName," +
+        "`looktype` = ${outfit.lookType}," +
+        "`lookfeet` = ${outfit.lookFeet}," +
+        "`looklegs` = ${outfit.lookLegs}," +
+        "`lookhead` = ${outfit.lookHead}," +
+        "`lookbody` = ${outfit.lookBody}," +
+        "`lookaddons` = ${outfit.lookAddons}," +
+        "`lookmount` = ${outfit.lookMount}," +
+        "`raceid` = '$raceId'"
+} else {
+    "UPDATE boosted_creature SET " +
+        "\"date\" = '$day'," +
+        "boostname = $escapedName," +
+        "looktype = ${outfit.lookType}," +
+        "lookfeet = ${outfit.lookFeet}," +
+        "looklegs = ${outfit.lookLegs}," +
+        "lookhead = ${outfit.lookHead}," +
+        "lookbody = ${outfit.lookBody}," +
+        "lookaddons = ${outfit.lookAddons}," +
+        "lookmount = ${outfit.lookMount}," +
+        "raceid = '$raceId'"
+}
+
+/**
  * Faithful facade over the Kotlin world model mirroring Canary's `Game`
  * (src/game/game.hpp:95). Every method transcribes an existing `Game::` member;
  * globals (`g_game()`) are replaced by constructor injection of the [GameMap] and
@@ -588,6 +650,15 @@ class Game(
     private val database: Database? = null,
     /** `g_databaseTasks()` (game.cpp:10152) seam for the async highscore query. */
     private val databaseTasks: CyclopediaDatabaseTasks = NullCyclopediaDatabaseTasks(),
+    /**
+     * Runtime SQL dialect behind the engine-specific statements of this facade
+     * (highscore ranking, `server_config` MOTD rows and the boosted creature
+     * update): MariaDB keeps upstream Canary's MySQL forms, PostgreSQL/H2 get
+     * the portable equivalents. Defaults to upstream's MariaDB until the
+     * composition root wires the dialect detected from the live connection
+     * (`SqlDialect.from`, wave 73 K3).
+     */
+    private val sqlDialect: () -> SqlDialect = { SqlDialect.MARIADB },
     /** `g_vocations()` (game.cpp:9968, 10021) seam for the highscore queries. */
     private val vocations: Vocations? = null,
     /** `IOLoginData::loadPlayerById` (game.cpp:1436, 12378) seam. */
@@ -6574,6 +6645,7 @@ class Game(
                 page,
                 entriesPerPage,
                 Tools.getVocationIdFromClientId(vocation),
+                sqlDialect(),
             )
 
             HighscoreType_t.HIGHSCORE_OURRANK -> generateHighscoreOrGetCachedQueryForOurRank(
@@ -6581,6 +6653,7 @@ class Game(
                 entriesPerPage,
                 player.getGUID(),
                 Tools.getVocationIdFromClientId(vocation),
+                sqlDialect(),
             )
         }
         if (query.isEmpty()) {
@@ -6624,6 +6697,7 @@ class Game(
         entriesPerPage: Int,
         vocation: Long,
         playerGUID: Long = 0,
+        dialect: SqlDialect = SqlDialect.MARIADB,
     ): String {
         if (categoryName.isEmpty()) {
             logger.error { "Category name cannot be empty." }
@@ -6634,6 +6708,25 @@ class Game(
             return ""
         }
 
+        return when (dialect) {
+            SqlDialect.MARIADB -> mariadbHighscoreQuery(categoryName, page, entriesPerPage, vocation, playerGUID)
+            SqlDialect.POSTGRESQL, SqlDialect.H2 ->
+                portableHighscoreQuery(categoryName, page, entriesPerPage, vocation, playerGUID)
+        }
+    }
+
+    /**
+     * Upstream Canary's MySQL ranking form (game.cpp:9890-9966): `@curRank` /
+     * `@prevRank` user variables implement the dense rank and `IF()` the row
+     * bookkeeping. MariaDB runs this form verbatim.
+     */
+    private fun mariadbHighscoreQuery(
+        categoryName: String,
+        page: Int,
+        entriesPerPage: Int,
+        vocation: Long,
+        playerGUID: Long,
+    ): String {
         val startPage = ((page - 1).toLong() * entriesPerPage) and 0xFFFFFFFFL
         val endPage = (startPage + entriesPerPage) and 0xFFFFFFFFL
         val entriesStr = entriesPerPage.toString()
@@ -6678,18 +6771,95 @@ class Game(
         return query
     }
 
-    /** `Game::generateVocationConditionHighscore` (src/game/game.cpp:9968). */
-    fun generateVocationConditionHighscore(vocation: Long, conditionPrefix: String = ""): String {
+    /**
+     * PostgreSQL/H2 equivalent of [mariadbHighscoreQuery]: `DENSE_RANK()` /
+     * `ROW_NUMBER()` window functions reproduce the `@curRank` / `@row`
+     * semantics and `COALESCE(MAX(rw) OVER (), 0)` the `@ourRow` bookkeeping
+     * (including the `0` fallback that keeps a player outside the ranking on
+     * the first page). H2 in PostgreSQL mode parses this form unchanged, so
+     * local tests exercise the exact PostgreSQL statement.
+     *
+     * The vocation filter moves into the inner `WHERE` (the MariaDB form
+     * appends it after the derived table alias, a position PostgreSQL does not
+     * accept) with the same condition shape as the `total` count subquery.
+     */
+    private fun portableHighscoreQuery(
+        categoryName: String,
+        page: Int,
+        entriesPerPage: Int,
+        vocation: Long,
+        playerGUID: Long,
+    ): String {
+        val startPage = ((page - 1).toLong() * entriesPerPage) and 0xFFFFFFFFL
+        val endPage = (startPage + entriesPerPage) and 0xFFFFFFFFL
+        val entriesStr = entriesPerPage.toString()
+
+        val countVocationCondition =
+            if (vocation != 0xFFFFFFFFL) {
+                generateVocationConditionHighscore(vocation, " AND ", SqlDialect.POSTGRESQL)
+            } else {
+                ""
+            }
+
+        var query = "SELECT id, name, level, vocation, points, rank, rn AS entries, " +
+            "(SELECT COUNT(*) FROM players WHERE group_id < $GROUP_TYPE_GAMEMASTER$countVocationCondition) AS total, "
+
+        query += if (playerGUID != 0L) {
+            "((ourRow - 1) / $entriesStr) + 1 AS page FROM ("
+        } else {
+            "$page AS page FROM ("
+        }
+
+        if (playerGUID != 0L) {
+            query += "SELECT T.*, COALESCE(MAX(T.rw) OVER (), 0) AS ourRow FROM ("
+        }
+
+        query += "SELECT id, name, level, vocation, $categoryName AS points, " +
+            "DENSE_RANK() OVER (ORDER BY $categoryName DESC) AS rank, " +
+            "ROW_NUMBER() OVER (ORDER BY $categoryName DESC) AS rn"
+
+        if (playerGUID != 0L) {
+            query += ", CASE WHEN id = $playerGUID THEN ROW_NUMBER() OVER (ORDER BY $categoryName DESC) END AS rw"
+        }
+
+        query += " FROM players WHERE group_id < $GROUP_TYPE_GAMEMASTER$countVocationCondition) T"
+
+        if (playerGUID != 0L) {
+            query += " ) U"
+        }
+
+        query += " WHERE "
+
+        query += if (playerGUID != 0L) {
+            "rn > ((ourRow - 1) / $entriesStr) * $entriesStr AND rn <= (((ourRow - 1) / $entriesStr) * $entriesStr) + $entriesStr"
+        } else {
+            "rn > $startPage AND rn <= $endPage"
+        }
+
+        return query
+    }
+
+    /**
+     * `Game::generateVocationConditionHighscore` (src/game/game.cpp:9968).
+     * MariaDB keeps the upstream backtick-quoted `vocation` column; the
+     * PostgreSQL/H2 form emits it unquoted ([dialect]).
+     */
+    fun generateVocationConditionHighscore(
+        vocation: Long,
+        conditionPrefix: String = "",
+        dialect: SqlDialect = SqlDialect.MARIADB,
+    ): String {
         val queryPart = StringBuilder()
         var firstVocation = true
+        val quote = if (dialect == SqlDialect.MARIADB) "`" else ""
 
         for (voc in vocations?.getVocations()?.values ?: emptyList()) {
             if (voc.getFromVocation().toLong() == vocation) {
                 if (firstVocation) {
-                    queryPart.append(conditionPrefix).append("(`vocation` = ").append(voc.getId())
+                    queryPart.append(conditionPrefix).append("(${quote}vocation$quote = ").append(voc.getId())
                     firstVocation = false
                 } else {
-                    queryPart.append(" OR `vocation` = ").append(voc.getId())
+                    queryPart.append(" OR ${quote}vocation$quote = ").append(voc.getId())
                 }
             }
         }
@@ -6712,6 +6882,7 @@ class Game(
         page: Int,
         entriesPerPage: Int,
         vocation: Long,
+        dialect: SqlDialect = SqlDialect.MARIADB,
     ): String {
         val cacheKey = "Entries_${categoryName}_${page}_${entriesPerPage}_$vocation"
         queryCache[cacheKey]?.let { cached ->
@@ -6720,7 +6891,7 @@ class Game(
             }
         }
 
-        val newQuery = generateHighscoreQuery(categoryName, page, entriesPerPage, vocation)
+        val newQuery = generateHighscoreQuery(categoryName, page, entriesPerPage, vocation, dialect = dialect)
         if (newQuery.isNotEmpty()) {
             cacheQueryHighscore(cacheKey, newQuery, page.toLong(), entriesPerPage)
         }
@@ -6734,6 +6905,7 @@ class Game(
         entriesPerPage: Int,
         playerGUID: Long,
         vocation: Long,
+        dialect: SqlDialect = SqlDialect.MARIADB,
     ): String {
         val cacheKey = "OurRank_${categoryName}_${entriesPerPage}_${playerGUID}_$vocation"
         queryCache[cacheKey]?.let { cached ->
@@ -6742,7 +6914,7 @@ class Game(
             }
         }
 
-        val newQuery = generateHighscoreQuery(categoryName, 0, entriesPerPage, vocation, playerGUID)
+        val newQuery = generateHighscoreQuery(categoryName, 0, entriesPerPage, vocation, playerGUID, dialect)
         if (newQuery.isNotEmpty()) {
             cacheQueryHighscore(cacheKey, newQuery, entriesPerPage.toLong(), entriesPerPage)
         }
@@ -6812,9 +6984,9 @@ class Game(
     fun saveMotdNum() {
         val db = database ?: return
 
-        db.executeQuery("UPDATE `server_config` SET `value` = '$motdNum' WHERE `config` = 'motd_num'")
+        db.executeQuery(serverConfigUpdateSql(sqlDialect(), "motd_num", motdNum.toString()))
         db.executeQuery(
-            "UPDATE `server_config` SET `value` = '${Tools.transformToSHA1(serverMotd)}' WHERE `config` = 'motd_hash'",
+            serverConfigUpdateSql(sqlDialect(), "motd_hash", Tools.transformToSHA1(serverMotd)),
         )
     }
 
@@ -14531,7 +14703,7 @@ class Game(
         if (value != null) {
             motdNum = value
         } else {
-            database?.executeQuery("INSERT INTO `server_config` (`config`, `value`) VALUES ('motd_num', '0')")
+            database?.executeQuery(serverConfigInsertSql(sqlDialect(), "motd_num", "0"))
         }
 
         val hash = loadMotdHashValue()
@@ -14541,7 +14713,7 @@ class Game(
                 motdNum++
             }
         } else {
-            database?.executeQuery("INSERT INTO `server_config` (`config`, `value`) VALUES ('motd_hash', '')")
+            database?.executeQuery(serverConfigInsertSql(sqlDialect(), "motd_hash", ""))
         }
     }
 
@@ -15094,17 +15266,13 @@ class Game(
         setBoostedName(selectedName)
 
         val escapedName = database?.escapeString(selectedName) ?: "'$selectedName'"
-        val query = "UPDATE `boosted_creature` SET " +
-            "`date` = '${ltm.get(Calendar.DAY_OF_MONTH)}'," +
-            "`boostname` = $escapedName," +
-            "`looktype` = ${monsterType.info.outfit.lookType}," +
-            "`lookfeet` = ${monsterType.info.outfit.lookFeet}," +
-            "`looklegs` = ${monsterType.info.outfit.lookLegs}," +
-            "`lookhead` = ${monsterType.info.outfit.lookHead}," +
-            "`lookbody` = ${monsterType.info.outfit.lookBody}," +
-            "`lookaddons` = ${monsterType.info.outfit.lookAddons}," +
-            "`lookmount` = ${monsterType.info.outfit.lookMount}," +
-            "`raceid` = '$selectedRaceId'"
+        val query = boostedCreatureUpdateSql(
+            sqlDialect(),
+            ltm.get(Calendar.DAY_OF_MONTH),
+            escapedName,
+            monsterType.info.outfit,
+            selectedRaceId,
+        )
 
         if (!updateBoostedCreature(query)) {
             logger.warn { "[Game::loadBoostedCreature] - Failed to detect boosted creature database. (CODE 02)" }

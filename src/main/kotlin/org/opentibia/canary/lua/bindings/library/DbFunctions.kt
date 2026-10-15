@@ -4,6 +4,7 @@ import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
 import org.opentibia.canary.database.Database
 import org.opentibia.canary.database.DatabaseTasks
+import org.opentibia.canary.database.SqlDialect
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import java.sql.SQLException
 import javax.sql.DataSource
@@ -73,6 +74,24 @@ object UnwiredDbOperations : DbOperations {
 }
 
 /**
+ * `DatabaseManager::tableExists` lookup (`src/database/databasemanager.cpp:58-64`)
+ * per [SqlDialect]: MariaDB keeps the backtick-quoted
+ * `information_schema`.`TABLES` statement, while PostgreSQL/H2 read the
+ * lowercase `information_schema.tables` catalog.
+ */
+internal fun tableExistsQuery(dialect: SqlDialect, schemaName: String, tableName: String): String {
+    val escapedSchema = schemaName.replace("'", "''")
+    val escapedTable = tableName.replace("'", "''")
+    return if (dialect == SqlDialect.MARIADB) {
+        "SELECT `TABLE_NAME` FROM `information_schema`.`TABLES` " +
+            "WHERE `TABLE_SCHEMA` = '$escapedSchema' AND `TABLE_NAME` = '$escapedTable';"
+    } else {
+        "SELECT table_name FROM information_schema.tables " +
+            "WHERE table_schema = '$escapedSchema' AND table_name = '$escapedTable' LIMIT 1"
+    }
+}
+
+/**
  * `Database`-backed [DbOperations]: uses the ported [Database] for execute/escape and
  * buffers result sets into [LuaResult] rows (the role of `DBResult`).
  *
@@ -125,11 +144,12 @@ class DatabaseLuaOperations(
 
     /** `DatabaseManager::tableExists` (`src/database/databasemanager.cpp:107-125`). */
     override fun tableExists(tableName: String): Boolean {
-        val escapedSchema = schemaName.replace("'", "''")
-        val escapedTable = tableName.replace("'", "''")
-        val query = "SELECT `TABLE_NAME` FROM `information_schema`.`TABLES` " +
-            "WHERE `TABLE_SCHEMA` = '$escapedSchema' AND `TABLE_NAME` = '$escapedTable';"
-        return storeQuery(query) != null
+        val dialect = try {
+            dataSource.connection.use { connection -> SqlDialect.from(connection) }
+        } catch (e: SQLException) {
+            return false
+        }
+        return storeQuery(tableExistsQuery(dialect, schemaName, tableName)) != null
     }
 
     /**
