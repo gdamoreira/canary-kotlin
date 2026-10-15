@@ -4,19 +4,28 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import org.opentibia.canary.combat.CombatType
 import org.opentibia.canary.combat.condition.LightInfo
 import org.opentibia.canary.combat.condition.ConditionDamage
+import org.opentibia.canary.combat.condition.ConditionType
+import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.WeaponType_t
+import org.opentibia.canary.creatures.skills_t
+import org.opentibia.canary.creatures.vocations.Vocation
+import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.game.movement.Teleport
 import org.opentibia.canary.io.PropStream
 import org.opentibia.canary.io.PropWriteStream
 import org.opentibia.canary.map.Tile
 import org.opentibia.canary.map.house.Door
+import org.opentibia.canary.spells.Spells
+import org.opentibia.canary.systems.imbuement.ImbuementInfo
 import org.opentibia.canary.systems.imbuement.ImbuementTypes_t
 import org.opentibia.canary.systems.imbuement.Imbuements
 import org.opentibia.canary.systems.rewardchest.ReturnValue
+import org.opentibia.canary.utils.Tools
 import java.lang.ref.WeakReference
+import java.util.Locale
 
 /** `DIRECTION_NONE` (`src/game/movement/position.hpp:23`). */
 const val DIRECTION_NONE = 8
@@ -541,6 +550,9 @@ data class ItemType(
 
     fun getAbilities(): Abilities = abilities ?: Abilities().also { abilities = it }
 
+    /** `ItemType::getSkill` (src/items/items.hpp:231). */
+    fun getSkill(skill: skills_t): Int = abilities?.skills?.getOrNull(skill.value) ?: 0
+
     /** `ItemType::setImbuementType` (src/items/items.cpp:123-125). */
     fun setImbuementType(imbuementType: ImbuementTypes_t, slotMaxTier: Int) {
         imbuementTypes[imbuementType] = minOf(IMBUEMENT_MAX_TIER, slotMaxTier)
@@ -888,7 +900,13 @@ open class Item(
         }
     }
 
-    override fun getDescription(lookDistance: Int): String = ""
+    /**
+     * `Item::getDescription(int32_t)` (src/items/item.cpp:3358-3360): renders
+     * the registered [type] (an empty type for an unregistered id) with the
+     * default unwired composition seams.
+     */
+    override fun getDescription(lookDistance: Int): String =
+        getDescription(type ?: ItemType(id, ""), lookDistance, this)
 
     /**
      * `Item::getTopParent` (src/items/item.cpp:832-847): walks up the parent
@@ -1159,6 +1177,23 @@ open class Item(
         }
         return Math.round((type?.weight ?: 0.0) * 100.0).toInt()
     }
+
+    /**
+     * `Item::getWeight` (src/items/item.cpp:1638-1644), in hundredths of an
+     * ounce; the [weight] property is the ounce view. The JVM name differs from
+     * the property accessor to avoid the platform declaration clash.
+     */
+    @JvmName("getWeightHundredths")
+    fun getWeight(): Int {
+        val baseWeight = getBaseWeight()
+        if (isStackable()) {
+            return baseWeight * maxOf(1, getItemCount())
+        }
+        return baseWeight
+    }
+
+    /** `Item::getSkill` (src/items/item.hpp:390-393). */
+    fun getSkill(skill: skills_t): Int = type?.getSkill(skill) ?: 0
 
     /** `Item::getTier` (src/items/item.cpp:605). */
     fun getTier(maxItemTier: Int = FORGE_MAX_ITEM_TIER_DEFAULT): Int {
@@ -1538,6 +1573,18 @@ open class Item(
      */
     fun getImbuementAttribute(slot: Int): Long? =
         getCustomAttribute("${ITEM_IMBUEMENT_SLOT + slot}")?.getInteger()?.and(0xFFFFFFFFL)
+
+    /**
+     * `Item::getImbuementInfo` (src/items/item.cpp:472-483): the packed slot's
+     * duration and `g_imbuements().getImbuement(value & 0xFF)`, or `null` when
+     * either the duration is zero or the id does not resolve.
+     */
+    fun getImbuementInfo(slot: Int): ImbuementInfo? {
+        val packed = getImbuementAttribute(slot) ?: return null
+        val duration = (packed ushr 8).toInt()
+        val imbuement = imbuementRegistry?.getImbuement((packed and 0xFF).toInt())
+        return if (duration != 0 && imbuement != null) ImbuementInfo(imbuement, duration) else null
+    }
 
     /** `Item::setImbuement` (src/items/item.cpp:485): `(duration << 8) | imbuementId`, 0 for an empty slot. */
     fun setImbuement(slot: Int, imbuementId: Int, duration: Int) {
@@ -2123,6 +2170,535 @@ open class Item(
             else -> Item(id, count = count, type = itemType)
         }
 
+        /**
+         * `Item::getDescription(const ItemType &, int32_t, const std::shared_ptr<Item> &, int32_t, bool)`
+         * (src/items/item.cpp:2554-3353).
+         *
+         * The C++ globals (`Item::items`, `g_spells()`, `g_vocations()`,
+         * `g_game().getObjectCategory`) are injected alongside the exact C++
+         * parameters; when a seam is `null` the matching global lookup is
+         * absent and the C++ branch behaves as if the lookup returned nothing.
+         */
+        fun getDescription(
+            it: ItemType,
+            lookDistance: Int,
+            item: Item? = null,
+            subType: Int = -1,
+            addArticle: Boolean = true,
+            items: Items? = null,
+            spells: Spells? = null,
+            vocations: Vocations? = null,
+            objectCategory: ((Item) -> ObjectCategory_t)? = null,
+        ): String {
+            var text = ""
+
+            val s = StringBuilder()
+            s.append(getNameDescription(it, item, subType, addArticle))
+
+            var currentSubType = subType
+            if (item != null) {
+                currentSubType = item.getSubType()
+            }
+
+            if (it.isRune()) {
+                if (it.runeLevel > 0 || it.runeMagLevel > 0) {
+                    val rune = spells?.getRuneSpell(it.id)
+                    if (rune != null) {
+                        var runeSubType = currentSubType
+                        if (item != null) {
+                            runeSubType = item.getSubType()
+                        }
+                        s.append(" (\"").append(it.runeSpellName).append("\"). ")
+                            .append(if (it.isStackable && runeSubType > 1) "They" else "It")
+                            .append(" can only be used by ")
+
+                        // `VocSpellMap` is a `std::map<uint16_t, bool>`, so the
+                        // displayed vocations follow ascending vocation id.
+                        val showVocMap = mutableListOf<Vocation>()
+                        for ((vocationId, show) in rune.vocSpellMap.entries.sortedBy { entry -> entry.key }) {
+                            if (show) {
+                                vocations?.getVocation(vocationId)?.let { showVocMap.add(it) }
+                            }
+                        }
+
+                        if (showVocMap.isNotEmpty()) {
+                            for (index in 0 until showVocMap.size - 1) {
+                                s.append(Tools.asLowerCaseString(showVocMap[index].getVocName())).append('s')
+                                if (index + 1 == showVocMap.size - 1) {
+                                    s.append(" and ")
+                                } else {
+                                    s.append(", ")
+                                }
+                            }
+                            s.append(Tools.asLowerCaseString(showVocMap.last().getVocName())).append('s')
+                        } else {
+                            s.append("players")
+                        }
+
+                        s.append(" with")
+
+                        if (it.runeLevel > 0) {
+                            s.append(" level ").append(it.runeLevel)
+                        }
+
+                        if (it.runeMagLevel > 0) {
+                            if (it.runeLevel > 0) {
+                                s.append(" and")
+                            }
+                            s.append(" magic level ").append(it.runeMagLevel)
+                        }
+
+                        s.append(" or higher")
+                    }
+                }
+            } else if (it.weaponType != WeaponType_t.WEAPON_NONE) {
+                if (it.weaponType == WeaponType_t.WEAPON_DISTANCE && it.ammoType != Ammo_t.AMMO_NONE.value) {
+                    var begin = false
+                    s.append(" (Range: ").append(if (item != null) item.getShootRange() else it.shootRange)
+
+                    val attack = item?.getAttack() ?: it.attack
+                    val hitChance = item?.getHitChance() ?: it.hitChance
+
+                    if (attack != 0) {
+                        s.append(", Atk ").append(showPos(attack))
+                    }
+
+                    if (hitChance != 0) {
+                        s.append(", Hit% ").append(showPos(hitChance))
+                    }
+
+                    val abilities = it.abilities
+                    if (abilities != null) {
+                        for (i in skills_t.FIRST..skills_t.SKILL_FISHING.value) {
+                            if (i == skills_t.SKILL_MANA_LEECH_CHANCE.value || i == skills_t.SKILL_LIFE_LEECH_CHANCE.value) {
+                                continue
+                            }
+                            if (abilities.skills[i] == 0) {
+                                continue
+                            }
+                            begin = appendAttributeSeparator(s, begin)
+                            s.append(Tools.getSkillName(i)).append(' ').append(showPos(abilities.skills[i]))
+                        }
+
+                        if (abilities.stats[Stat.STAT_MAGICPOINTS.value] != 0) {
+                            begin = appendAttributeSeparator(s, begin)
+                            s.append("magic level ").append(showPos(abilities.stats[Stat.STAT_MAGICPOINTS.value]))
+                        }
+
+                        for (i in 1..11) {
+                            if (abilities.specializedMagicLevel[i] != 0) {
+                                begin = appendAttributeSeparator(s, begin)
+                                s.append(combatTypeName(i)).append(" magic level ")
+                                    .append(showPos(abilities.specializedMagicLevel[i]))
+                            }
+                        }
+
+                        for (i in skills_t.SKILL_CRITICAL_HIT_CHANCE.value..skills_t.LAST) {
+                            if (i == skills_t.SKILL_MANA_LEECH_CHANCE.value || i == skills_t.SKILL_LIFE_LEECH_CHANCE.value) {
+                                continue
+                            }
+                            val skill = if (item != null) {
+                                item.getSkill(skills_t.fromValue(i)!!)
+                            } else {
+                                it.getSkill(skills_t.fromValue(i)!!)
+                            }
+                            if (skill == 0) {
+                                continue
+                            }
+                            begin = appendAttributeSeparator(s, begin)
+                            s.append(Tools.getSkillName(i)).append(' ')
+                            if (i != skills_t.SKILL_CRITICAL_HIT_CHANCE.value) {
+                                s.append(showPosFloat(skill))
+                            } else {
+                                s.append(plainFloat(skill))
+                            }
+                            s.append('%')
+                        }
+
+                        if (abilities.magicShieldCapacityFlat != 0 || abilities.magicShieldCapacityPercent != 0) {
+                            begin = appendAttributeSeparator(s, begin)
+                            s.append("magic shield capacity ").append(showPos(abilities.magicShieldCapacityFlat))
+                                .append(" and ").append(abilities.magicShieldCapacityPercent).append('%')
+                        }
+
+                        if (abilities.perfectShotRange != 0) {
+                            begin = appendAttributeSeparator(s, begin)
+                            s.append("perfect shot ").append(showPos(abilities.perfectShotDamage))
+                                .append(" at range ").append(abilities.perfectShotRange)
+                        }
+
+                        if (abilities.reflectFlat[Tools.combatTypeToIndex(CombatType.PHYSICALDAMAGE)] != 0) {
+                            begin = appendAttributeSeparator(s, begin)
+                            s.append("damage reflection ")
+                                .append(showPos(abilities.reflectFlat[Tools.combatTypeToIndex(CombatType.PHYSICALDAMAGE)]))
+                        }
+
+                        begin = appendAbsorbProtection(s, abilities.absorbPercent, abilities.absorbPercent, begin, "protection all ", "")
+                        begin = appendAbsorbProtection(s, abilities.fieldAbsorbPercent, abilities.absorbPercent, begin, "protection all fields ", "field")
+
+                        if (abilities.speed != 0) {
+                            val (speedText, speedBegin) = parseShowDurationSpeed(abilities.speed, begin)
+                            s.append(speedText)
+                            begin = speedBegin
+                        }
+
+                        if (abilities.cleavePercent != 0) {
+                            begin = appendAttributeSeparator(s, begin)
+                            s.append("cleave ").append(showPos(abilities.cleavePercent)).append('%')
+                        }
+                    }
+
+                    if (!begin) {
+                        s.append(')')
+                    }
+                    // This block refers to the look of the weapons.
+                } else if (it.weaponType != WeaponType_t.WEAPON_AMMO) {
+                    var begin = true
+
+                    val attack = item?.getAttack() ?: it.attack
+                    val defense = item?.getDefense() ?: it.defense
+                    val extraDefense = item?.getExtraDefense() ?: it.extraDefense
+
+                    if (it.isContainer || (item != null && item.getContainer() != null)) {
+                        var volume = 0
+
+                        if (item == null || !item.hasAttribute(ItemAttribute.UNIQUEID)) {
+                            if (it.isContainer) {
+                                volume = it.maxItems
+                            } else if (item != null) {
+                                volume = item.getContainer()?.capacity ?: 0
+                            }
+                        }
+
+                        if (volume != 0) {
+                            begin = appendAttributeSeparator(s, begin)
+                            s.append("Vol:").append(volume)
+                        }
+                    }
+
+                    if (attack != 0) {
+                        begin = false
+                        s.append(" (Atk:").append(attack)
+                    }
+
+                    val abilities = it.abilities
+                    if (abilities != null && abilities.elementType != CombatType.NONE &&
+                        abilities.elementDamage != 0 && !begin
+                    ) {
+                        s.append(" physical + ").append(abilities.elementDamage).append(' ')
+                            .append(Tools.getCombatName(abilities.elementType))
+                    } else if (abilities != null && abilities.elementType != CombatType.NONE &&
+                        abilities.elementDamage != 0 && begin
+                    ) {
+                        begin = false
+                        s.append(" (").append(abilities.elementDamage).append(' ')
+                            .append(Tools.getCombatName(abilities.elementType))
+                    }
+
+                    if (defense != 0 || extraDefense != 0 || it.isMissile()) {
+                        begin = appendAttributeSeparator(s, begin)
+                        s.append("Def:").append(defense)
+                        if (extraDefense != 0) {
+                            s.append(' ').append(showPos(extraDefense))
+                        }
+                    }
+
+                    if (abilities != null) {
+                        for (i in skills_t.FIRST..skills_t.SKILL_FISHING.value) {
+                            if (i == skills_t.SKILL_MANA_LEECH_CHANCE.value || i == skills_t.SKILL_LIFE_LEECH_CHANCE.value) {
+                                continue
+                            }
+                            if (abilities.skills[i] == 0) {
+                                continue
+                            }
+                            begin = appendAttributeSeparator(s, begin)
+                            s.append(Tools.getSkillName(i)).append(' ').append(showPos(abilities.skills[i]))
+                        }
+
+                        if (abilities.stats[Stat.STAT_MAGICPOINTS.value] != 0) {
+                            begin = appendAttributeSeparator(s, begin)
+                            s.append("magic level ").append(showPos(abilities.stats[Stat.STAT_MAGICPOINTS.value]))
+                        }
+
+                        for (i in 1..11) {
+                            if (abilities.specializedMagicLevel[i] != 0) {
+                                begin = appendAttributeSeparator(s, begin)
+                                s.append(combatTypeName(i)).append(" magic level ")
+                                    .append(showPos(abilities.specializedMagicLevel[i]))
+                            }
+                        }
+
+                        for (i in skills_t.SKILL_CRITICAL_HIT_CHANCE.value..skills_t.LAST) {
+                            if (i == skills_t.SKILL_MANA_LEECH_CHANCE.value || i == skills_t.SKILL_LIFE_LEECH_CHANCE.value) {
+                                continue
+                            }
+                            val skill = if (item != null) {
+                                item.getSkill(skills_t.fromValue(i)!!)
+                            } else {
+                                it.getSkill(skills_t.fromValue(i)!!)
+                            }
+                            if (skill == 0) {
+                                continue
+                            }
+                            begin = appendAttributeSeparator(s, begin)
+                            s.append(Tools.getSkillName(i)).append(' ')
+                            if (i != skills_t.SKILL_CRITICAL_HIT_CHANCE.value) {
+                                s.append(showPosFloat(skill))
+                            } else {
+                                s.append(plainFloat(skill))
+                            }
+                            s.append('%')
+                        }
+
+                        if (abilities.regeneration) {
+                            begin = appendAttributeSeparator(s, begin)
+                            s.append("faster regeneration")
+                        }
+
+                        if (abilities.magicShieldCapacityFlat != 0 || abilities.magicShieldCapacityPercent != 0) {
+                            begin = appendAttributeSeparator(s, begin)
+                            s.append("magic shield capacity ").append(showPos(abilities.magicShieldCapacityFlat))
+                                .append(" and ").append(abilities.magicShieldCapacityPercent).append('%')
+                        }
+
+                        if (abilities.perfectShotRange != 0) {
+                            begin = appendAttributeSeparator(s, begin)
+                            s.append("perfect shot ").append(showPos(abilities.perfectShotDamage))
+                                .append(" at range ").append(abilities.perfectShotRange)
+                        }
+
+                        if (abilities.reflectFlat[Tools.combatTypeToIndex(CombatType.PHYSICALDAMAGE)] != 0) {
+                            begin = appendAttributeSeparator(s, begin)
+                            s.append("damage reflection ")
+                                .append(showPos(abilities.reflectFlat[Tools.combatTypeToIndex(CombatType.PHYSICALDAMAGE)]))
+                        }
+
+                        begin = appendAbsorbProtection(s, abilities.absorbPercent, abilities.absorbPercent, begin, "protection all ", "")
+                        begin = appendAbsorbProtection(s, abilities.fieldAbsorbPercent, abilities.absorbPercent, begin, "protection all fields ", "field")
+
+                        if (abilities.speed != 0) {
+                            val (speedText, speedBegin) = parseShowDurationSpeed(abilities.speed, begin)
+                            s.append(speedText)
+                            begin = speedBegin
+                        }
+
+                        if (abilities.cleavePercent != 0) {
+                            begin = appendAttributeSeparator(s, begin)
+                            s.append("Cleave ").append(showPos(abilities.cleavePercent)).append('%')
+                        }
+                    }
+
+                    if (!begin) {
+                        s.append(')')
+                    }
+                }
+            } else if (it.isContainer || (item != null && item.getContainer() != null)) {
+                var volume = 0
+                if (item == null || !item.hasAttribute(ItemAttribute.UNIQUEID)) {
+                    if (it.isContainer) {
+                        volume = it.maxItems
+                    } else if (item != null) {
+                        volume = item.getContainer()?.capacity ?: 0
+                    }
+                }
+
+                if (volume != 0 && !it.isQuiver()) {
+                    s.append(" (Vol:").append(volume).append(')')
+                } else if (volume != 0 && it.isQuiver()) {
+                    s.append(" (Vol:").append(volume)
+                }
+            } else {
+                var found = true
+
+                val abilities = it.abilities
+                if (abilities != null && it.slotPosition and SLOTP_RING != 0) {
+                    if (abilities.speed > 0) {
+                        val (speedText, _) = parseShowDurationSpeed(abilities.speed, true)
+                        s.append(speedText).append(')').append(parseShowDuration(item))
+                    } else if (abilities.conditionSuppressions[ConditionType.CONDITION_DRUNK.value] != 0) {
+                        s.append(" (hard drinking)")
+                    } else if (abilities.invisible) {
+                        s.append(" (invisibility)")
+                    } else if (abilities.regeneration) {
+                        s.append(" (faster regeneration)")
+                    } else if (abilities.manaShield) {
+                        s.append(" (mana shield)")
+                    } else {
+                        found = false
+                    }
+                } else {
+                    found = false
+                }
+
+                if (!found) {
+                    if (it.isKey()) {
+                        s.append(" (Key:").append(String.format(Locale.US, "%04d", item?.getActionId() ?: 0)).append(')')
+                    } else if (it.isFluidContainer) {
+                        if (currentSubType > 0) {
+                            val itemName = items?.getItemType(currentSubType)?.name ?: ""
+                            s.append(" of ").append(if (itemName.isNotEmpty()) itemName else "unknown")
+                        } else {
+                            s.append(". It is empty")
+                        }
+                    } else if (it.isSplash) {
+                        s.append(" of ")
+
+                        val itemName = if (currentSubType > 0) items?.getItemType(currentSubType)?.name ?: "" else ""
+                        if (currentSubType > 0 && itemName.isNotEmpty()) {
+                            s.append(itemName)
+                        } else {
+                            s.append("unknown")
+                        }
+                    } else if (it.allowDistRead && (it.id < 7369 || it.id > 7371)) {
+                        s.append('.').append('\n')
+
+                        if (lookDistance <= 4) {
+                            if (item != null) {
+                                text = item.getAttribute(ItemAttribute.TEXT) as? String ?: ""
+                                if (text.isNotEmpty()) {
+                                    val writer = item.getAttribute(ItemAttribute.WRITER) as? String ?: ""
+                                    if (writer.isNotEmpty()) {
+                                        s.append(writer).append(" wrote")
+                                        val date = (item.getAttribute(ItemAttribute.DATE) as? Number)?.toLong() ?: 0L
+                                        if (date != 0L) {
+                                            s.append(" on ").append(Tools.formatDateShort(date))
+                                        }
+                                        s.append(": ")
+                                    } else {
+                                        s.append("You read: ")
+                                    }
+                                    s.append(text)
+                                } else {
+                                    s.append("Nothing is written on it")
+                                }
+                            } else {
+                                s.append("Nothing is written on it")
+                            }
+                        } else {
+                            s.append("You are too far away to read it")
+                        }
+                    } else if (it.levelDoor != 0L && item != null) {
+                        val actionId = item.getActionId()
+                        if (actionId >= it.levelDoor) {
+                            s.append(" for level ").append(actionId - it.levelDoor)
+                        }
+                    }
+                }
+            }
+
+            if (it.transformEquipTo != 0) {
+                s.append(parseShowAttributesDescription(item, it.transformEquipTo, items))
+            } else {
+                s.append(parseShowAttributesDescription(item, it.id, items))
+            }
+
+            if (it.showCharges) {
+                if (currentSubType == 0) {
+                    s.append(" that has ").append(it.charges).append(" charge")
+                        .append(if (currentSubType != 1) "s" else "").append(" left")
+                } else {
+                    s.append(" that has ").append(currentSubType).append(" charge")
+                        .append(if (currentSubType != 1) "s" else "").append(" left")
+                }
+            }
+
+            if (it.showDuration) {
+                s.append(parseShowDuration(item))
+            }
+
+            if (!it.allowDistRead || it.id in 7369..7371) {
+                s.append('.')
+            } else {
+                if (text.isEmpty() && item != null) {
+                    text = item.getAttribute(ItemAttribute.TEXT) as? String ?: ""
+                }
+
+                if (text.isEmpty()) {
+                    s.append('.')
+                }
+            }
+
+            if (it.wieldInfo != 0L) {
+                s.append('\n')
+                    .append("It can only be wielded properly by ")
+
+                if (it.wieldInfo and WIELDINFO_PREMIUM.toLong() != 0L) {
+                    s.append("premium ")
+                }
+
+                if (it.vocationString.isNotEmpty()) {
+                    s.append(it.vocationString)
+                } else {
+                    s.append("players")
+                }
+
+                if (it.wieldInfo and WIELDINFO_LEVEL.toLong() != 0L) {
+                    s.append(" of level ").append(it.minReqLevel).append(" or higher")
+                }
+
+                if (it.wieldInfo and WIELDINFO_MAGLV.toLong() != 0L) {
+                    if (it.wieldInfo and WIELDINFO_LEVEL.toLong() != 0L) {
+                        s.append(" and")
+                    } else {
+                        s.append(" of")
+                    }
+
+                    s.append(" magic level ").append(it.minReqMagicLevel).append(" or higher")
+                }
+
+                s.append('.')
+            }
+
+            s.append(parseAugmentDescription(item, items = items))
+
+            s.append(parseImbuementDescription(item))
+
+            s.append(parseClassificationDescription(item, objectCategory))
+
+            if (lookDistance <= 1) {
+                if (item != null) {
+                    val weight = item.getWeight()
+                    if (weight != 0 && it.isPickupable) {
+                        s.append('\n')
+                            .append(getWeightDescription(it, weight, item.getItemCount()))
+                    }
+                } else if (it.weight != 0.0 && it.isPickupable) {
+                    s.append('\n')
+                        .append(getWeightDescription(it, Math.round(it.weight * 100.0).toInt(), 1))
+                }
+            }
+
+            if (item != null) {
+                val specialDescription = item.getAttribute(ItemAttribute.DESCRIPTION) as? String ?: ""
+                if (specialDescription.isNotEmpty()) {
+                    s.append('\n')
+                        .append(specialDescription)
+                } else if (lookDistance <= 1 && it.description.isNotEmpty()) {
+                    s.append('\n')
+                        .append(it.description)
+                }
+            } else if (lookDistance <= 1 && it.description.isNotEmpty()) {
+                s.append('\n')
+                    .append(it.description)
+            }
+
+            if (it.elementalBond != CombatType.NONE) {
+                s.append("\nElemental Bond: ").append(Tools.toPascalCase(Tools.getCombatName(it.elementalBond))).append('.')
+            }
+
+            if (it.allowDistRead && it.id in 7369..7371) {
+                if (text.isEmpty() && item != null) {
+                    text = item.getAttribute(ItemAttribute.TEXT) as? String ?: ""
+                }
+
+                if (text.isNotEmpty()) {
+                    s.append('\n')
+                        .append(text)
+                }
+            }
+            return s.toString()
+        }
+
         /** `Item::getNameDescription` (src/items/item.cpp:3357). */
         fun getNameDescription(
             it: ItemType,
@@ -2227,6 +2803,406 @@ open class Item(
             }
 
             return description.toString()
+        }
+
+        /**
+         * `Item::parseShowAttributesDescription` (src/items/item.cpp:2497-2552).
+         *
+         * The C++ `Item::items[itemId]` lookup is the optional [items] registry;
+         * without it the type falls back to [item]'s own type when the id
+         * matches (an unregistered transform target renders no attributes).
+         */
+        fun parseShowAttributesDescription(item: Item?, itemId: Int, items: Items? = null): String {
+            val itemDescription = StringBuilder()
+            val itemType = items?.getItemType(itemId)
+                ?: item?.type?.takeIf { type -> type.id == itemId }
+                ?: ItemType(itemId, "")
+
+            if (itemType.armor != 0 || (item != null && item.getArmor() != 0) || itemType.showAttributes) {
+                var begin = !itemType.isQuiver()
+
+                val armor = item?.getArmor() ?: itemType.armor
+                if (armor != 0) {
+                    if (begin) {
+                        itemDescription.append(" (Arm:").append(armor)
+                        begin = false
+                    } else {
+                        itemDescription.append(", Arm:").append(armor)
+                    }
+                }
+
+                val mantra = item?.getMantra() ?: itemType.mantra
+                if (mantra != 0) {
+                    if (begin) {
+                        itemDescription.append(" (Mantra:").append(mantra)
+                        begin = false
+                    } else {
+                        itemDescription.append(", Mantra:").append(mantra)
+                    }
+                }
+
+                val abilities = itemType.abilities
+                if (abilities != null) {
+                    begin = appendShowAttributesSkills(itemType, item, itemDescription, begin)
+                    begin = appendShowAttributesAbilities(itemType, itemDescription, begin)
+                    begin = appendShowAttributesProtection(itemType, itemDescription, begin)
+                    begin = appendShowAttributesFieldProtection(itemType, itemDescription, begin)
+
+                    if (abilities.speed != 0) {
+                        val (speedText, speedBegin) = parseShowDurationSpeed(abilities.speed, begin)
+                        itemDescription.append(speedText)
+                        begin = speedBegin
+                    }
+
+                    if (abilities.cleavePercent != 0) {
+                        begin = appendAttributeSeparator(itemDescription, begin)
+                        itemDescription.append("Cleave ").append(showPos(abilities.cleavePercent)).append('%')
+                    }
+                }
+
+                if (!begin) {
+                    itemDescription.append(')')
+                }
+            }
+
+            return itemDescription.toString()
+        }
+
+        /** `Item::parseImbuementDescription` (src/items/item.cpp:2300-2330). */
+        fun parseImbuementDescription(item: Item?): String {
+            val s = StringBuilder()
+            if (item != null && item.getImbuementSlot() >= 1) {
+                s.append('\n').append("Imbuements: (")
+
+                for (slotid in 0 until item.getImbuementSlot()) {
+                    if (slotid >= 1) {
+                        s.append(", ")
+                    }
+
+                    val imbuementInfo = item.getImbuementInfo(slotid)
+                    if (imbuementInfo == null) {
+                        s.append("Empty Slot")
+                        continue
+                    }
+
+                    val baseImbuement = item.imbuementRegistry?.getBaseByID(imbuementInfo.imbuement.baseId)
+                    if (baseImbuement == null) {
+                        continue
+                    }
+
+                    val minutes = imbuementInfo.duration / 60
+                    val hours = minutes / 60
+                    s.append(baseImbuement.name).append(' ').append(imbuementInfo.imbuement.name).append(' ')
+                        .append(String.format(Locale.US, "%02d:%02d", hours, minutes % 60)).append('h')
+                }
+
+                s.append(").")
+            }
+
+            return s.toString()
+        }
+
+        /** `Item::parseClassificationDescription` (src/items/item.cpp:2399-2403). */
+        fun parseClassificationDescription(item: Item?, objectCategory: ((Item) -> ObjectCategory_t)? = null): String =
+            if (item != null && item.getClassification() >= 1) {
+                "\nClassification: ${item.getClassification()} Tier: ${getTierEffectDescription(item, objectCategory)}."
+            } else {
+                ""
+            }
+
+        /**
+         * `Item::getTierEffectDescription` (src/items/item.cpp:2406-2437).
+         *
+         * `g_game().getObjectCategory(item)` is the [objectCategory] seam; a
+         * `null` seam renders no category effect, like a category outside the
+         * C++ `switch`.
+         */
+        fun getTierEffectDescription(item: Item?, objectCategory: ((Item) -> ObjectCategory_t)? = null): String {
+            if (item == null) {
+                return ""
+            }
+
+            val itemTier = item.getTier()
+            if (itemTier == 0) {
+                return "0"
+            }
+
+            var effectDescription = ""
+            if ((item.type?.weaponType ?: WeaponType_t.WEAPON_NONE) != WeaponType_t.WEAPON_NONE) {
+                effectDescription = String.format(Locale.US, " (%.2f%% Onslaught)", item.getFatalChance())
+            } else {
+                when (objectCategory?.invoke(item)) {
+                    ObjectCategory_t.OBJECTCATEGORY_HELMETS ->
+                        effectDescription = String.format(Locale.US, " (%.2f%% Momentum)", item.getMomentumChance())
+
+                    ObjectCategory_t.OBJECTCATEGORY_ARMORS ->
+                        effectDescription = String.format(Locale.US, " (%.2f%% Ruse)", item.getDodgeChance())
+
+                    ObjectCategory_t.OBJECTCATEGORY_LEGS ->
+                        effectDescription = String.format(Locale.US, " (%.2f%% Transcendence)", item.getTranscendenceChance())
+
+                    ObjectCategory_t.OBJECTCATEGORY_BOOTS ->
+                        effectDescription = String.format(Locale.US, " (%.2f%% Amplification)", item.getAmplificationChance())
+
+                    else -> Unit
+                }
+            }
+
+            return "$itemTier$effectDescription"
+        }
+
+        /** `Item::parseAugmentDescription` (src/items/item.hpp:295-300). */
+        fun parseAugmentDescription(item: Item?, inspect: Boolean = false, items: Items? = null): String {
+            if (item == null) {
+                return ""
+            }
+
+            val itemType = items?.getItemType(item.id) ?: item.type ?: return ""
+            return itemType.parseAugmentDescription(inspect)
+        }
+
+        private fun appendAttributeSeparator(s: StringBuilder, begin: Boolean): Boolean {
+            if (begin) {
+                s.append(" (")
+                return false
+            }
+
+            s.append(", ")
+            return false
+        }
+
+        private fun appendShowAttributesSkills(itemType: ItemType, item: Item?, s: StringBuilder, begin: Boolean): Boolean {
+            var current = begin
+            val abilities = itemType.abilities ?: return current
+
+            for (i in skills_t.FIRST..skills_t.SKILL_FISHING.value) {
+                if (i == skills_t.SKILL_MANA_LEECH_CHANCE.value || i == skills_t.SKILL_LIFE_LEECH_CHANCE.value) {
+                    continue
+                }
+
+                if (abilities.skills[i] == 0) {
+                    continue
+                }
+
+                current = appendAttributeSeparator(s, current)
+                s.append(Tools.getSkillName(i)).append(' ').append(showPos(abilities.skills[i]))
+            }
+
+            if (abilities.stats[Stat.STAT_MAGICPOINTS.value] != 0) {
+                current = appendAttributeSeparator(s, current)
+                s.append("magic level ").append(showPos(abilities.stats[Stat.STAT_MAGICPOINTS.value]))
+            }
+
+            for (i in 1..11) {
+                if (abilities.specializedMagicLevel[i] != 0) {
+                    current = appendAttributeSeparator(s, current)
+                    s.append(combatTypeName(i)).append(" magic level ").append(showPos(abilities.specializedMagicLevel[i]))
+                }
+            }
+
+            for (i in skills_t.SKILL_CRITICAL_HIT_CHANCE.value..skills_t.LAST) {
+                if (i == skills_t.SKILL_MANA_LEECH_CHANCE.value || i == skills_t.SKILL_LIFE_LEECH_CHANCE.value) {
+                    continue
+                }
+
+                val skill = if (item != null) {
+                    item.getSkill(skills_t.fromValue(i)!!)
+                } else {
+                    itemType.getSkill(skills_t.fromValue(i)!!)
+                }
+                if (skill == 0) {
+                    continue
+                }
+
+                current = appendAttributeSeparator(s, current)
+                s.append(Tools.getSkillName(i)).append(' ')
+                if (i != skills_t.SKILL_CRITICAL_HIT_CHANCE.value) {
+                    s.append(showPosFloat(skill))
+                } else {
+                    s.append(plainFloat(skill))
+                }
+                s.append('%')
+            }
+
+            return current
+        }
+
+        private fun appendShowAttributesAbilities(itemType: ItemType, s: StringBuilder, begin: Boolean): Boolean {
+            var current = begin
+            val abilities = itemType.abilities ?: return current
+
+            if (abilities.magicShieldCapacityFlat != 0 || abilities.magicShieldCapacityPercent != 0) {
+                current = appendAttributeSeparator(s, current)
+                s.append("Magic Shield Capacity ").append(showPos(abilities.magicShieldCapacityFlat))
+                    .append(" and ").append(abilities.magicShieldCapacityPercent).append('%')
+            }
+
+            if (abilities.perfectShotRange != 0) {
+                current = appendAttributeSeparator(s, current)
+                s.append("perfect shot ").append(showPos(abilities.perfectShotDamage))
+                    .append(" at range ").append(abilities.perfectShotRange)
+            }
+
+            val reflectPhysical = abilities.reflectFlat[Tools.combatTypeToIndex(CombatType.PHYSICALDAMAGE)]
+            if (reflectPhysical != 0) {
+                current = appendAttributeSeparator(s, current)
+                s.append("damage reflection ").append(showPos(reflectPhysical))
+            }
+
+            return current
+        }
+
+        private fun appendShowAttributesProtection(itemType: ItemType, s: StringBuilder, begin: Boolean): Boolean {
+            var current = begin
+            val abilities = itemType.abilities ?: return current
+            val absorb = abilities.absorbPercent
+
+            var show = absorb[0]
+            if (show != 0.toShort()) {
+                for (i in 1 until CombatType.COUNT.value) {
+                    if (absorb[i] != show) {
+                        show = 0
+                        break
+                    }
+                }
+            }
+
+            if (show == 0.toShort()) {
+                var protectionBegin = true
+
+                for (i in 0 until CombatType.COUNT.value) {
+                    if (absorb[i] == 0.toShort()) {
+                        continue
+                    }
+
+                    if (protectionBegin) {
+                        protectionBegin = false
+                        current = appendAttributeSeparator(s, current)
+                        s.append("protection ")
+                    } else {
+                        s.append(", ")
+                    }
+
+                    s.append(combatTypeName(i)).append(' ').append(showPos(absorb[i].toInt())).append('%')
+                }
+            } else {
+                current = appendAttributeSeparator(s, current)
+                s.append("protection all ").append(showPos(show.toInt())).append('%')
+            }
+
+            return current
+        }
+
+        private fun appendShowAttributesFieldProtection(itemType: ItemType, s: StringBuilder, begin: Boolean): Boolean {
+            var current = begin
+            val abilities = itemType.abilities ?: return current
+            val fieldAbsorb = abilities.fieldAbsorbPercent
+            val absorb = abilities.absorbPercent
+
+            // Canary compares `absorbPercent` while probing `fieldAbsorbPercent[0]`.
+            var show = fieldAbsorb[0]
+            if (show != 0.toShort()) {
+                for (i in 1 until CombatType.COUNT.value) {
+                    if (absorb[i] != show) {
+                        show = 0
+                        break
+                    }
+                }
+            }
+
+            if (show == 0.toShort()) {
+                var fieldProtectionBegin = true
+
+                for (i in 0 until CombatType.COUNT.value) {
+                    if (fieldAbsorb[i] == 0.toShort()) {
+                        continue
+                    }
+
+                    if (fieldProtectionBegin) {
+                        fieldProtectionBegin = false
+                        current = appendAttributeSeparator(s, current)
+                        s.append("field protection ")
+                    } else {
+                        s.append(", ")
+                    }
+
+                    s.append(combatTypeName(i)).append(' ').append(showPos(fieldAbsorb[i].toInt())).append('%')
+                }
+            } else {
+                current = appendAttributeSeparator(s, current)
+                s.append("field protection all ").append(showPos(show.toInt())).append('%')
+            }
+
+            return current
+        }
+
+        /**
+         * The `protection` / field-protection listing shared by the distance and
+         * melee weapon look blocks (src/items/item.cpp:2750-2837, 3043-3130):
+         * `values` is the displayed array, `compareValues` the array Canary
+         * probes for the "all equal" fast path.
+         */
+        private fun appendAbsorbProtection(
+            s: StringBuilder,
+            values: ShortArray,
+            compareValues: ShortArray,
+            begin: Boolean,
+            allLabel: String,
+            fieldSuffix: String,
+        ): Boolean {
+            var current = begin
+
+            var show = values[0]
+            if (show != 0.toShort()) {
+                for (i in 1 until CombatType.COUNT.value) {
+                    if (compareValues[i] != show) {
+                        show = 0
+                        break
+                    }
+                }
+            }
+
+            if (show == 0.toShort()) {
+                var first = true
+
+                for (i in 0 until CombatType.COUNT.value) {
+                    if (values[i] == 0.toShort()) {
+                        continue
+                    }
+
+                    if (first) {
+                        first = false
+                        current = appendAttributeSeparator(s, current)
+                        s.append("protection ")
+                    } else {
+                        s.append(", ")
+                    }
+
+                    s.append(combatTypeName(i))
+                        .append(if (fieldSuffix.isEmpty()) "" else " $fieldSuffix")
+                        .append(' ').append(showPos(values[i].toInt())).append('%')
+                }
+            } else {
+                current = appendAttributeSeparator(s, current)
+                s.append(allLabel).append(showPos(show.toInt())).append('%')
+            }
+
+            return current
+        }
+
+        private fun combatTypeName(index: Int): String =
+            Tools.getCombatName(Tools.indexToCombatType(index) ?: CombatType.NONE)
+
+        private fun showPos(value: Int): String = if (value >= 0) "+$value" else value.toString()
+
+        private fun showPosFloat(skill: Int): String {
+            val formatted = plainFloat(skill)
+            return if (formatted.startsWith("-")) formatted else "+$formatted"
+        }
+
+        private fun plainFloat(skill: Int): String {
+            val value = skill / 100.0
+            return if (value == value.toLong().toDouble()) value.toLong().toString() else value.toString()
         }
 
         private fun appendWeight(description: StringBuilder, weight: Int) {

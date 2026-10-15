@@ -8,10 +8,9 @@ import org.junit.jupiter.api.Test
  * (src/items/item.cpp:3357-3426, 2441-2495): `getNameDescription`,
  * `getWeightDescription`, `parseShowDurationSpeed` and `parseShowDuration`.
  *
- * The composite look renderer (`Item::getDescription`/`Item::getDescriptions`)
- * depends on abilities, augments, imbuement text, spells/vocations and
- * `Game::getObjectCategory`; those parts remain unported and are listed in the
- * wave report as parity gaps.
+ * The composite look renderer (`Item::getDescription`) is covered by
+ * [ItemGetDescriptionTest]; `Item::getDescriptions` (the plural inspection
+ * variant) remains unported and is listed in the wave report as a parity gap.
  */
 class ItemDescriptionTest {
 
