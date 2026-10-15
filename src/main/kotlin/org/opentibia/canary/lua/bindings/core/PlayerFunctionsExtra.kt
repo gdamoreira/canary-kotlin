@@ -13,6 +13,8 @@ import org.opentibia.canary.creatures.players.components.MutableBadgeRegistry
 import org.opentibia.canary.creatures.players.components.MutableTitleRegistry
 import org.opentibia.canary.creatures.players.components.PlayerTitle
 import org.opentibia.canary.creatures.players.components.TitleRegistry
+import org.opentibia.canary.creatures.players.livestream.LivestreamClient
+import org.opentibia.canary.creatures.players.livestream.LivestreamManager
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.systems.wheel.WheelOnThink
 import java.util.WeakHashMap
@@ -967,8 +969,11 @@ object PlayerFunctionsExtra {
  * - `Player::getBossBonus` needs `g_ioBosstiary().calculateLootBonus`; 0 until wired.
  * - `Player::weaponProficiency` has no `Player` accessor yet; the call is acknowledged
  *   without applying experience.
- * - Livestream state is kept per player with a zero viewer count; `g_livestream()`
- *   registration is not wired into this operations object.
+ * - The livestream primitives delegate to the injected `g_livestream()`
+ *   ([WorldPlayerExtraOperations]'s `livestream` seam); without a bound manager the
+ *   per-player ledger fallback keeps the Lua surface coherent. The production
+ *   composition (`PlayerFunctionsExtra.install(env)`'s default operations) is not
+ *   bound to the world `Game::livestream` registry yet (PARITY GAP).
  * - Sound sends, forge window sends, market entry, market/UI sends, refresh/screenshot
  *   sends and `reloadData` are protocol writes with no Kotlin client sink; they succeed
  *   without transmitting, matching the client-less C++ behavior.
@@ -983,6 +988,18 @@ class WorldPlayerExtraOperations(
     private val vipSystemEnabled: Boolean = false,
     private val badgeRegistry: BadgeRegistry = InMemoryBadgeRegistry(),
     private val titleRegistry: TitleRegistry = InMemoryTitleRegistry(),
+    /**
+     * `g_livestream()` (livestream.hpp:35-95) seam behind the four livestream
+     * primitives (player_functions.cpp:5634-5749); `null` (an unbooted root)
+     * keeps the documented per-player ledger instead of a live broadcaster
+     * session.
+     */
+    private val livestream: () -> LivestreamManager? = { null },
+    /**
+     * `Player::getClient()` (`player.hpp`) seam behind `player:isLivestreamViewer`;
+     * defaults to the [Player.protocolSink] `ProtocolGame` projection.
+     */
+    private val livestreamClientOf: (Player) -> LivestreamClient? = { it.protocolSink },
 ) : PlayerExtraOperations {
     private val badgeAdopter = BadgeRegistryAdopter(badgeRegistry)
     private val titleAdopter = TitleRegistryAdopter(titleRegistry)
@@ -1457,14 +1474,52 @@ class WorldPlayerExtraOperations(
     override fun addWeaponExperience(player: Any, experience: Int, itemId: Int): Boolean? =
         (player as? Player)?.let { experience == 0 || itemId >= 0 }
 
-    override fun getLivestreamViewersCount(player: Any): Int? = playerId(player)?.let { 0 }
-
-    override fun getLivestreamViewers(player: Any): LuaLivestreamViewers? = playerId(player)?.let {
-        livestreamStates[it] ?: EMPTY_LIVESTREAM
+    /** `g_livestream().getViewerCount(player)` (player_functions.cpp:5643). */
+    override fun getLivestreamViewersCount(player: Any): Int? {
+        val target = player as? Player ?: return null
+        return livestream()?.getViewerCount(target) ?: 0
     }
 
+    /**
+     * `g_livestream().getState(player)` projected onto the Lua payload
+     * (player_functions.cpp:5656-5666). `kick` stays empty because
+     * `LivestreamManager::getState` leaves it at its default (livestream.cpp:163-186).
+     */
+    override fun getLivestreamViewers(player: Any): LuaLivestreamViewers? {
+        val target = player as? Player ?: return null
+        val manager = livestream() ?: return livestreamStates[target.id] ?: EMPTY_LIVESTREAM
+        val state = manager.getState(target)
+        return LuaLivestreamViewers(
+            description = state.description,
+            broadcast = state.broadcast,
+            password = state.password,
+            names = state.names.toList(),
+            mutes = state.mutes.toList(),
+            bans = state.bans.toList(),
+            kick = state.kick.toList(),
+        )
+    }
+
+    /**
+     * `luaPlayerSetLivestreamViewers` (player_functions.cpp:5669-5736): starts
+     * from `g_livestream().getState(player)`, applies the present table fields
+     * (the C++ `hasField` checks) and runs `g_livestream().applyState(player, state)`.
+     */
     override fun setLivestreamViewers(player: Any, viewers: LuaLivestreamOverrides): Boolean? {
         val target = player as? Player ?: return null
+        val manager = livestream()
+        if (manager != null) {
+            val state = manager.getState(target)
+            viewers.description?.let { state.description = it }
+            viewers.broadcast?.let { state.broadcast = it }
+            viewers.password?.let { state.password = it }
+            viewers.mutes?.let { state.mutes = it.toMutableList() }
+            viewers.bans?.let { state.bans = it.toMutableList() }
+            viewers.kick?.let { state.kick = it.toMutableList() }
+            manager.applyState(target, state)
+            return true
+        }
+
         val current = livestreamStates[target.id] ?: EMPTY_LIVESTREAM
         livestreamStates[target.id] = current.copy(
             description = viewers.description ?: current.description,
@@ -1477,7 +1532,12 @@ class WorldPlayerExtraOperations(
         return true
     }
 
-    override fun isLivestreamViewer(player: Any): Boolean? = playerId(player)?.let { it in livestreamViewers }
+    /** `g_livestream().isViewer(player->getClient())` (player_functions.cpp:5748). */
+    override fun isLivestreamViewer(player: Any): Boolean? {
+        val target = player as? Player ?: return null
+        val manager = livestream() ?: return target.id in livestreamViewers
+        return manager.isViewer(livestreamClientOf(target))
+    }
 
     override fun getMapShader(player: Any): String? =
         (player as? Player)?.features?.attachedEffects?.getMapShader()
