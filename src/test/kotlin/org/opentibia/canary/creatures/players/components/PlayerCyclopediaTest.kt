@@ -2,6 +2,7 @@ package org.opentibia.canary.creatures.players.components
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.database.SqlDialect
 import org.opentibia.canary.kv.KV
 import org.opentibia.canary.kv.KVMemory
 import org.opentibia.canary.kv.ValueWrapper
@@ -330,9 +331,79 @@ class PlayerCyclopediaTest {
         assertThat(f.player.addedAsyncTasks).containsExactly(PlayerAsyncTask.RecentPvPKills)
     }
 
+    // ---- dialect selection -----------------------------------------------------
+
+    @Test
+    fun `loadSummaryData keeps the upstream backtick query on MariaDB`() {
+        val f = fixture()
+
+        f.cyclopedia.loadSummaryData()
+
+        assertThat(f.database.queries.single())
+            .isEqualTo("SELECT COUNT(*) as `count` FROM `player_hirelings` WHERE `player_id` = 42")
+    }
+
+    @Test
+    fun `loadSummaryData uses the portable query on PostgreSQL and H2`() {
+        for (dialect in listOf(SqlDialect.POSTGRESQL, SqlDialect.H2)) {
+            val f = fixture { dialect }
+
+            f.cyclopedia.loadSummaryData()
+
+            assertThat(f.database.queries.single())
+                .isEqualTo("SELECT COUNT(*) AS count FROM player_hirelings WHERE player_id = 42")
+        }
+    }
+
+    @Test
+    fun `loadDeathHistory keeps the MariaDB date functions by default`() {
+        val f = fixture()
+
+        f.cyclopedia.loadDeathHistory(1, 10)
+
+        assertThat(f.tasks.queries.single())
+            .contains("UNIX_TIMESTAMP(DATE_SUB(NOW(), INTERVAL 30 DAY))")
+            .contains("ORDER BY `time` DESC LIMIT 0, 10")
+            .contains("FROM `player_deaths` WHERE `player_id` = 42")
+    }
+
+    @Test
+    fun `loadDeathHistory uses the portable date functions for PostgreSQL and H2`() {
+        for (dialect in listOf(SqlDialect.POSTGRESQL, SqlDialect.H2)) {
+            val f = fixture { dialect }
+
+            f.cyclopedia.loadDeathHistory(2, 10)
+
+            assertThat(f.tasks.queries.single())
+                .contains("EXTRACT(EPOCH FROM NOW() - INTERVAL '30' DAY)")
+                .contains("FROM player_deaths WHERE player_id = 42")
+                .contains("ORDER BY \"time\" DESC LIMIT 10 OFFSET 10")
+                .doesNotContain("UNIX_TIMESTAMP")
+                .doesNotContain("DATE_SUB")
+                .doesNotContain("`")
+        }
+    }
+
+    @Test
+    fun `loadRecentKills uses the portable date functions for PostgreSQL and H2`() {
+        for (dialect in listOf(SqlDialect.POSTGRESQL, SqlDialect.H2)) {
+            val f = fixture { dialect }
+            f.player.playerName = "Hero"
+
+            f.cyclopedia.loadRecentKills(1, 10)
+
+            assertThat(f.tasks.queries.single())
+                .contains("FROM player_deaths AS d INNER JOIN players AS p ON d.player_id = p.id")
+                .contains("EXTRACT(EPOCH FROM NOW() - INTERVAL '70' DAY)")
+                .contains("ORDER BY \"time\" DESC LIMIT 10 OFFSET 0")
+                .doesNotContain("UNIX_TIMESTAMP")
+                .doesNotContain("`")
+        }
+    }
+
     // ---- fixture ---------------------------------------------------------------
 
-    private class Fixture {
+    private class Fixture(dialect: () -> SqlDialect = { SqlDialect.MARIADB }) {
         val player = FakeCyclopediaPlayer()
         val kv = KVMemory()
         val database = FakeDatabase()
@@ -340,12 +411,14 @@ class PlayerCyclopediaTest {
         val errorLogs = mutableListOf<String>()
         val warnLogs = mutableListOf<String>()
         var playersByID: (Int) -> CyclopediaPlayer? = { player }
+        var sqlDialect: () -> SqlDialect = dialect
 
         val cyclopedia = PlayerCyclopedia(
             player = player,
             database = database,
             databaseTasks = tasks,
             playersByID = { playersByID(it) },
+            sqlDialect = { sqlDialect() },
             logError = { errorLogs.add(it) },
             logWarn = { warnLogs.add(it) },
         )
@@ -355,7 +428,7 @@ class PlayerCyclopediaTest {
         }
     }
 
-    private fun fixture(): Fixture = Fixture()
+    private fun fixture(dialect: () -> SqlDialect = { SqlDialect.MARIADB }): Fixture = Fixture(dialect)
 
     private class FakeCyclopediaPlayer : CyclopediaPlayer {
         var playerName = "Knight"

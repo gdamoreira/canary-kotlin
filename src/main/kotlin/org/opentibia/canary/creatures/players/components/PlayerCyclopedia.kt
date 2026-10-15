@@ -1,5 +1,6 @@
 package org.opentibia.canary.creatures.players.components
 
+import org.opentibia.canary.database.SqlDialect
 import org.opentibia.canary.kv.KV
 import org.opentibia.canary.kv.ValueWrapper
 
@@ -183,6 +184,15 @@ class PlayerCyclopedia(
     private val database: CyclopediaDatabase = NullCyclopediaDatabase(),
     /** `g_databaseTasks()` (`player_cyclopedia.cpp:146, 198`). */
     private val databaseTasks: CyclopediaDatabaseTasks = NullCyclopediaDatabaseTasks(),
+    /**
+     * Runtime SQL dialect of the cyclopedia statements: MariaDB keeps upstream
+     * Canary's backtick queries with `UNIX_TIMESTAMP(DATE_SUB(NOW(), ...))` and
+     * `LIMIT offset, count`, while PostgreSQL/H2 get the portable equivalents
+     * (`EXTRACT(EPOCH FROM ...)`, `LIMIT count OFFSET offset`). Defaults to
+     * upstream's MariaDB until the composition root wires the detected dialect
+     * (`SqlDialect.from`, wave 73 K3).
+     */
+    private val sqlDialect: () -> SqlDialect = { SqlDialect.MARIADB },
     /** `g_game().getPlayerByID(playerID)` (`player_cyclopedia.cpp:43, 161`). */
     private val playersByID: (Int) -> CyclopediaPlayer? = { null },
     /** `g_game().getSummaryKeyByType(type)` (`player_cyclopedia.cpp:30, 222, 228, 232, 252`). */
@@ -206,24 +216,76 @@ class PlayerCyclopedia(
 
     /** `PlayerCyclopedia::loadSummaryData` (player_cyclopedia.cpp:28-34). */
     fun loadSummaryData() {
-        val result = database.storeQuery(
-            "SELECT COUNT(*) as `count` FROM `player_hirelings` WHERE `player_id` = ${player.getGUID()}",
-        )
+        val result = database.storeQuery(summaryQuery())
         val kvScoped = summaryScope(SummaryCategory.HIRELINGS)
         if (result != null && kvScoped.get("amount") == null) {
             kvScoped.set("amount", ValueWrapper(result.getNumber("count").toShort().toInt()))
         }
     }
 
+    /** `SELECT COUNT(*) ... player_hirelings` (player_cyclopedia.cpp:29) per [SqlDialect]. */
+    private fun summaryQuery(): String =
+        if (sqlDialect() == SqlDialect.MARIADB) {
+            "SELECT COUNT(*) as `count` FROM `player_hirelings` WHERE `player_id` = ${player.getGUID()}"
+        } else {
+            "SELECT COUNT(*) AS count FROM player_hirelings WHERE player_id = ${player.getGUID()}"
+        }
+
+    /**
+     * The 30-day recent-deaths window (player_cyclopedia.cpp:39) per
+     * [SqlDialect]: MariaDB keeps `UNIX_TIMESTAMP(DATE_SUB(NOW(), INTERVAL 30
+     * DAY))` and `LIMIT offset, count`; PostgreSQL/H2 use `EXTRACT(EPOCH FROM
+     * NOW() - INTERVAL '30' DAY)` and `LIMIT count OFFSET offset`.
+     */
+    private fun deathHistoryQuery(offset: Int, entriesPerPage: Int): String =
+        if (sqlDialect() == SqlDialect.MARIADB) {
+            "SELECT `time`, `level`, `killed_by`, `mostdamage_by`, `participants`, " +
+                "(select count(*) FROM `player_deaths` WHERE `player_id` = ${player.getGUID()} AND " +
+                "`time` >= UNIX_TIMESTAMP(DATE_SUB(NOW(), INTERVAL 30 DAY))) as `entries` " +
+                "FROM `player_deaths` WHERE `player_id` = ${player.getGUID()} AND " +
+                "`time` >= UNIX_TIMESTAMP(DATE_SUB(NOW(), INTERVAL 30 DAY)) " +
+                "ORDER BY `time` DESC LIMIT $offset, $entriesPerPage"
+        } else {
+            "SELECT \"time\", level, killed_by, mostdamage_by, participants, " +
+                "(SELECT COUNT(*) FROM player_deaths WHERE player_id = ${player.getGUID()} AND " +
+                "\"time\" >= EXTRACT(EPOCH FROM NOW() - INTERVAL '30' DAY)) AS entries " +
+                "FROM player_deaths WHERE player_id = ${player.getGUID()} AND " +
+                "\"time\" >= EXTRACT(EPOCH FROM NOW() - INTERVAL '30' DAY) " +
+                "ORDER BY \"time\" DESC LIMIT $entriesPerPage OFFSET $offset"
+        }
+
+    /**
+     * The 70-day recent-kills window (player_cyclopedia.cpp:158) per
+     * [SqlDialect], with the same function/pagination substitutions as
+     * [deathHistoryQuery].
+     */
+    private fun recentKillsQuery(escapedName: String, offset: Int, entriesPerPage: Int): String =
+        if (sqlDialect() == SqlDialect.MARIADB) {
+            "SELECT `d`.`time`, `d`.`killed_by`, `d`.`mostdamage_by`, `d`.`unjustified`, " +
+                "`d`.`mostdamage_unjustified`, `p`.`name`, " +
+                "(select count(*) FROM `player_deaths` WHERE ((`killed_by` = $escapedName AND `is_player` = 1) OR " +
+                "(`mostdamage_by` = $escapedName AND `mostdamage_is_player` = 1))) as `entries` " +
+                "FROM `player_deaths` AS `d` INNER JOIN `players` AS `p` ON `d`.`player_id` = `p`.`id` " +
+                "WHERE ((`d`.`killed_by` = $escapedName AND `d`.`is_player` = 1) OR " +
+                "(`d`.`mostdamage_by` = $escapedName AND `d`.`mostdamage_is_player` = 1)) AND " +
+                "`time` >= UNIX_TIMESTAMP(DATE_SUB(NOW(), INTERVAL 70 DAY)) " +
+                "ORDER BY `time` DESC LIMIT $offset, $entriesPerPage"
+        } else {
+            "SELECT d.\"time\", d.killed_by, d.mostdamage_by, d.unjustified, " +
+                "d.mostdamage_unjustified, p.name, " +
+                "(SELECT COUNT(*) FROM player_deaths WHERE ((killed_by = $escapedName AND is_player = 1) OR " +
+                "(mostdamage_by = $escapedName AND mostdamage_is_player = 1))) AS entries " +
+                "FROM player_deaths AS d INNER JOIN players AS p ON d.player_id = p.id " +
+                "WHERE ((d.killed_by = $escapedName AND d.is_player = 1) OR " +
+                "(d.mostdamage_by = $escapedName AND d.mostdamage_is_player = 1)) AND " +
+                "\"time\" >= EXTRACT(EPOCH FROM NOW() - INTERVAL '70' DAY) " +
+                "ORDER BY \"time\" DESC LIMIT $entriesPerPage OFFSET $offset"
+        }
+
     /** `PlayerCyclopedia::loadDeathHistory` (player_cyclopedia.cpp:36-150). */
     fun loadDeathHistory(page: Int, entriesPerPage: Int) {
         val offset = (page - 1) * entriesPerPage
-        val query = "SELECT `time`, `level`, `killed_by`, `mostdamage_by`, `participants`, " +
-            "(select count(*) FROM `player_deaths` WHERE `player_id` = ${player.getGUID()} AND " +
-            "`time` >= UNIX_TIMESTAMP(DATE_SUB(NOW(), INTERVAL 30 DAY))) as `entries` " +
-            "FROM `player_deaths` WHERE `player_id` = ${player.getGUID()} AND " +
-            "`time` >= UNIX_TIMESTAMP(DATE_SUB(NOW(), INTERVAL 30 DAY)) " +
-            "ORDER BY `time` DESC LIMIT $offset, $entriesPerPage"
+        val query = deathHistoryQuery(offset, entriesPerPage)
 
         val playerID = player.getID()
         val callback: (CyclopediaQueryResult?, Boolean) -> Unit = { result, _ ->
@@ -275,15 +337,7 @@ class PlayerCyclopedia(
     fun loadRecentKills(page: Int, entriesPerPage: Int) {
         val escapedName = database.escapeString(player.getName())
         val offset = (page - 1) * entriesPerPage
-        val query = "SELECT `d`.`time`, `d`.`killed_by`, `d`.`mostdamage_by`, `d`.`unjustified`, " +
-            "`d`.`mostdamage_unjustified`, `p`.`name`, " +
-            "(select count(*) FROM `player_deaths` WHERE ((`killed_by` = $escapedName AND `is_player` = 1) OR " +
-            "(`mostdamage_by` = $escapedName AND `mostdamage_is_player` = 1))) as `entries` " +
-            "FROM `player_deaths` AS `d` INNER JOIN `players` AS `p` ON `d`.`player_id` = `p`.`id` " +
-            "WHERE ((`d`.`killed_by` = $escapedName AND `d`.`is_player` = 1) OR " +
-            "(`d`.`mostdamage_by` = $escapedName AND `d`.`mostdamage_is_player` = 1)) AND " +
-            "`time` >= UNIX_TIMESTAMP(DATE_SUB(NOW(), INTERVAL 70 DAY)) " +
-            "ORDER BY `time` DESC LIMIT $offset, $entriesPerPage"
+        val query = recentKillsQuery(escapedName, offset, entriesPerPage)
 
         val playerID = player.getID()
         val callback: (CyclopediaQueryResult?, Boolean) -> Unit = { result, _ ->
