@@ -4,22 +4,73 @@ import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionType
 
 /**
- * `ValueCallback` script callback (`src/creatures/combat/combat.hpp:26-40`),
- * reduced to the resolved output of `ValueCallback::getMinMaxValues`
- * (combat.cpp:1982-2068): the Lua function registered through
- * `combat:setCallback` receives the player and the formula operands and
- * returns the two integers the damage core feeds to `normal_random`.
- *
- * The callback scripts stay Lua (AGENTS.md 1.4); the bridge resolves the two
- * returned numbers.
+ * `TileCallback` (src/creatures/combat/combat.hpp:42-49), reduced to the
+ * resolved `onTileCombat(creature, tile)` Lua call
+ * (`Combat::combatTileEffects`, combat.cpp:1242-1244). The callback scripts
+ * stay Lua (AGENTS.md 1.4); the bridge resolves the call.
  */
-fun interface CombatValueCallback {
+fun interface CombatTileCallback {
+    /** `TileCallback::onTileCombat(creature, tile)` (`combat.cpp:2077-2103`). */
+    fun onTileCombat(caster: CombatActor?, tile: CombatTile)
+}
+
+/**
+ * `TargetCallback` (src/creatures/combat/combat.hpp:51-58), reduced to the
+ * resolved `onTargetCombat(creature, target)` Lua call fired per affected
+ * target (`Combat::CombatFunc` combat.cpp:1630-1632, `Combat::doCombatHealth`
+ * combat.cpp:1699-1701). The callback scripts stay Lua (AGENTS.md 1.4); the
+ * bridge resolves the call.
+ */
+fun interface CombatTargetCallback {
+    /** `TargetCallback::onTargetCombat(creature, target)` (`combat.cpp:2105-2132`). */
+    fun onTargetCombat(caster: CombatActor?, target: CombatActor)
+}
+
+/**
+ * The numeric operands Canary pushes after the `player` userdata into the
+ * `onGetPlayerMinMaxValues` Lua call of `ValueCallback::getMinMaxValues`
+ * (src/creatures/combat/combat.cpp:2001-2028).
+ */
+sealed interface CombatCallbackOperands {
+    /**
+     * `COMBAT_FORMULA_LEVELMAGIC` case (combat.cpp:2001-2006):
+     * `(player->getLevel(), ValueCallback::getMagicLevelSkill(player, damage))`.
+     */
+    data class LevelMagic(val level: Int, val magicLevelSkill: Int) : CombatCallbackOperands
+
+    /**
+     * `COMBAT_FORMULA_SKILL` case (combat.cpp:2016-2028):
+     * `(attackSkill, attackValue, attackFactor)` after
+     * `Weapon::calculateSkillFormula` resolved them (`attackValue` stays the
+     * C++ `7` default when no weapon resolved).
+     */
+    data class Skill(val attackSkill: Int, val attackValue: Int, val attackFactor: Float) : CombatCallbackOperands
+}
+
+/**
+ * `ValueCallback` (`src/creatures/combat/combat.hpp:26-40`), reduced to the
+ * resolved Lua `onGetPlayerMinMaxValues` call (combat.cpp:1982-2068).
+ *
+ * The scripts stay Lua (AGENTS.md 1.4); the bridge resolves the two returned
+ * numbers. Canary pushes the player and the formula operands into the call;
+ * [getMinMaxValues] receives those operands ([operands]) so the bridge can
+ * forward them exactly.
+ */
+interface CombatValueCallback {
+    /**
+     * `ValueCallback::type` (combat.hpp:38), set by `Combat::setCallback`
+     * (combat.cpp:672-688) independently of the `Combat` formula type; it
+     * selects the operand shape and the secondary-damage split
+     * (combat.cpp:2046-2063).
+     */
+    val type: FormulaType
+
     /**
      * The two `onGetPlayerMinMaxValues` numbers under the callback's formula
      * type, or null when the C++ `reserveScriptEnv`/`setCallbackId` early
      * return (combat.cpp:1983-1993) leaves the damage at 0.
      */
-    fun getMinMaxValues(useCharges: Boolean): Pair<Int, Int>?
+    fun getMinMaxValues(useCharges: Boolean, operands: CombatCallbackOperands): Pair<Int, Int>?
 }
 
 /**
@@ -31,10 +82,11 @@ fun interface CombatValueCallback {
  * (the gates that decide whether `Game::combatBlockHit` calls
  * `Creature::blockHit` with defense/armor checks).
  *
- * PARITY GAP: the `tileCallback`, `targetCallback`, `chainCallback` and
- * `chainPickerCallback` callbacks are dependency-injection seams into the
- * map/spell/chain systems and are not part of this dispatch layer;
- * [valueCallback] carries the resolved min/max values.
+ * PARITY GAP: the `chainCallback` and `chainPickerCallback` callbacks are
+ * dependency-injection seams into the chain system and are not part of this
+ * dispatch layer; [tileCallback]/[targetCallback] carry the resolved
+ * `onTileCombat`/`onTargetCombat` Lua calls and [valueCallback] the resolved
+ * min/max values.
  */
 class CombatParams(
     /** `conditionList` (combat.hpp:83). */
@@ -84,4 +136,10 @@ class CombatParams(
 
     /** `valueCallback` (combat.hpp:84); null when no callback was registered. */
     var valueCallback: CombatValueCallback? = null,
+
+    /** `tileCallback` (combat.hpp:85); null when no callback was registered. */
+    var tileCallback: CombatTileCallback? = null,
+
+    /** `targetCallback` (combat.hpp:86); null when no callback was registered. */
+    var targetCallback: CombatTargetCallback? = null,
 )

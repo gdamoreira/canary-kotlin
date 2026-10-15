@@ -7,6 +7,7 @@ import org.opentibia.canary.creatures.monsters.Faction
 import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.game.zones.ZoneType
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.systems.rewardchest.ReturnValue
 
 /**
  * Injected views of the `Creature`/`Player`/`Monster`/`Tile`/`GameMap` state
@@ -54,6 +55,16 @@ interface CombatTile {
 
     /** The `Tile::getItemList()` item ids (`combat.cpp:384-391`, magic wall check). */
     fun getItemIds(): List<Int>
+
+    /**
+     * `Tile::getCreatures()` (`combat.cpp:1536`, `1610`): the tile's creature
+     * list consumed by `Combat::CombatFunc`. Defaults to empty so area-less
+     * seams keep working.
+     */
+    fun getCreatures(): List<CombatActor> = emptyList()
+
+    /** `Tile::getTopCreature()` (`combat.cpp:1537`, `1612`); empty tiles yield `null`. */
+    fun getTopCreature(): CombatActor? = getCreatures().firstOrNull()
 }
 
 /**
@@ -135,4 +146,58 @@ interface CombatPlayer : CombatActor {
 
     /** `Player::getVocationId()` (combat.cpp:438). */
     fun getVocationId(): Int
+
+    /**
+     * `Player::isFirstOnStack()` (`combat.cpp:1525`): the no-PvP world gate of
+     * `Combat::CombatFunc` refuses a caster that is not the bottom player of its
+     * tile. Defaults to true so non-player seams keep the gate inert.
+     */
+    fun isFirstOnStack(): Boolean = true
+
+    /** `Player::sendCancelMessage(RETURNVALUE_NOTPOSSIBLE)` (`combat.cpp:1527`). */
+    fun sendCancelMessage(ret: ReturnValue) {}
+
+    /** `Player::sendMagicEffect(origin, CONST_ME_POFF)` (`combat.cpp:1528`). */
+    fun sendMagicEffect(position: Position, effect: Int) {}
+
+    /**
+     * `Player::addInFightTicks()` (`combat.cpp:1221`): a PvP damaging field or
+     * legacy blocking wall arms the caster's fight ticks.
+     */
+    fun addInFightTicks() {}
+}
+
+/**
+ * Injected view of the `g_game()` calls the `Combat::CombatFunc` consumption
+ * tail performs (`combat.cpp:1254-1262`, `1277-1310`): the magic/distance
+ * effects, the double/single sound fanout and the field-item creation of
+ * `Combat::combatTileEffects`.
+ *
+ * Every method transcribes the exact `g_game()`/`Item::CreateItem` call of the
+ * C++ tail; the default is the inert no-op so a partial host keeps the pure
+ * target enumeration working.
+ */
+interface CombatEffects {
+    /**
+     * `g_game().addMagicEffect(position, effect, caster)` (`combat.cpp:1157`,
+     * `1254`). PARITY GAP: `Combat::sendCombatEffect`'s Monk elemental-bond
+     * effect swap (`combat.cpp:1143-1152`) stays with the weapons subsystem.
+     */
+    fun addMagicEffect(caster: CombatActor?, position: Position, effect: Int) {}
+
+    /** `g_game().sendDoubleSoundEffect(position, cast, impact, caster)` (`combat.cpp:1260`, `1291`). */
+    fun sendDoubleSoundEffect(position: Position, castEffect: Int, impactEffect: Int, caster: CombatActor?) {}
+
+    /** `g_game().sendSingleSoundEffect(position, effect, caster)` (`combat.cpp:1262`, `1293`). */
+    fun sendSingleSoundEffect(position: Position, effect: Int, caster: CombatActor?) {}
+
+    /** `Combat::addDistanceEffect(caster, fromPos, toPos, effect)` (`combat.cpp:1265-1275`, `1277-1310`). */
+    fun addDistanceEffect(caster: CombatActor, fromPos: Position, toPos: Position, effect: Int) {}
+
+    /**
+     * `Combat::combatTileEffects`'s field branch (`combat.cpp:1230-1240`):
+     * `Item::CreateItem(itemId)`, the caster owner stamp, the
+     * `g_game().internalAddItem(tile, item)` placement and `startDecaying`.
+     */
+    fun createFieldItem(caster: CombatActor?, tile: CombatTile, itemId: Int) {}
 }

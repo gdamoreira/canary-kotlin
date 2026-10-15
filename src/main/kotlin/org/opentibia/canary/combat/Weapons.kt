@@ -72,3 +72,44 @@ object Weapons {
         return -normalRandom(minValue, maxValue, random)
     }
 }
+
+/**
+ * Resolved out-parameters of `Weapon::calculateSkillFormula`
+ * (src/items/weapons/weapons.cpp:450-485), the operand resolution
+ * `ValueCallback::getMinMaxValues` performs for `COMBAT_FORMULA_SKILL`
+ * (src/creatures/combat/combat.cpp:2016-2028).
+ *
+ * The weapon/item lookups (`player->getWeapon()`, `g_weapons().getWeapon(tool)`,
+ * `Item::getAttack`/`getWeaponType`/`getElementType`/`getElementDamageValue`,
+ * `Player::getWeaponSkill`/`getAttackFactor` and the `useCharges` transform)
+ * stay in the weapons subsystem; the seam returns the resolved values.
+ */
+data class SkillFormulaValues(
+    /** `attackSkill` out-parameter (`weapons.cpp:482`, `Player::getWeaponSkill`). */
+    val attackSkill: Int,
+    /** `attackValue` out-parameter (`weapons.cpp:457-472`), already including ammo and element. */
+    val attackValue: Int,
+    /** `attackFactor` out-parameter (`weapons.cpp:483`, `Player::getAttackFactor`). */
+    val attackFactor: Float,
+    /** `elementAttack` out-parameter (`weapons.cpp:470`, the elemental damage value). */
+    val elementAttack: Int,
+    /** `damage.secondary.type = getElementType()` (`weapons.cpp:465-466`). */
+    val elementType: CombatType,
+    /** The bool return: `elementType != COMBAT_NONE` (`weapons.cpp:468-473`). */
+    val shouldCalculateSecondaryDamage: Boolean,
+)
+
+/**
+ * `Weapon::calculateSkillFormula` (src/items/weapons/weapons.cpp:450-485)
+ * reached from `ValueCallback::getMinMaxValues` for the
+ * `COMBAT_FORMULA_SKILL` callback type (combat.cpp:2019-2021).
+ *
+ * Returns null when `g_weapons().getWeapon(tool)` resolves no weapon, i.e. the
+ * C++ `if (weapon)` guard keeps `attackSkill = 0`, `attackValue = 7` and
+ * `attackFactor = 0` (combat.cpp:2017-2027). The `useCharges`
+ * `g_game().transformItem(tool, id, charges - 1)` side effect stays with the
+ * seam provider (`weapons.cpp:475-480`).
+ */
+fun interface CombatSkillFormula {
+    fun calculateSkillFormula(useCharges: Boolean): SkillFormulaValues?
+}

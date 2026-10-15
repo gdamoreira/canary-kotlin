@@ -17,7 +17,10 @@ import org.opentibia.canary.combat.Combat
 import org.opentibia.canary.combat.CombatDamage
 import org.opentibia.canary.combat.CombatOrigin
 import org.opentibia.canary.combat.CombatParams
+import org.opentibia.canary.combat.CombatTarget
+import org.opentibia.canary.combat.CombatTargetState
 import org.opentibia.canary.combat.CombatType
+import org.opentibia.canary.combat.CreatureCombatTarget
 import org.opentibia.canary.combat.condition.Buff
 import org.opentibia.canary.combat.condition.Condition
 import org.opentibia.canary.combat.condition.ConditionId
@@ -14807,14 +14810,62 @@ class Game(
 
     /**
      * `Combat::applyMantraAbsorb(targetPlayer, type, value)` (combat.cpp:739)
-     * seam (game.cpp:7932, 8007). The default is the inert identity because
-     * `Player::getMantra` (player.cpp:671) is not modelled yet; hosts can bind
-     * the ported [Combat.applyMantraAbsorb] over their `CombatTarget` adapter.
+     * seam (game.cpp:7932, 8007). The default binds the ported
+     * [Combat.applyMantraAbsorb] over the production [CreatureCombatTarget]
+     * adapter; `Player::getMantra` (player.cpp:671) still resolves through the
+     * [CombatTargetState.getMantra] default and `varBuffs[BUFF_MANTRA]` starts
+     * at 100, so the ported identity holds until the mantra state is wired.
      */
-    var combatApplyMantraAbsorb: (Player?, CombatType, Int) -> Int = { _, _, value -> value }
+    var combatApplyMantraAbsorb: (Player?, CombatType, Int) -> Int = { player, combatType, value ->
+        Combat.applyMantraAbsorb(player?.let { combatTargetOf(it) }, combatType, value)
+    }
 
     /** `Combat::doCombatHealth(target, attacker, damageReflected, params)` (game.cpp:8064) seam. */
     var combatDoCombatHealth: (Creature, Creature, CombatDamage, CombatParams) -> Unit = { _, _, _, _ -> }
+
+    /**
+     * Production [CombatTarget] adapter over a live [Creature].
+     *
+     * C++ passes the raw `std::shared_ptr<Creature>` into
+     * `Combat::doCombatHealth`/`doCombatMana`; the port replaces it with the
+     * [CombatTarget] seam, so world hosts construct the view through this
+     * factory. The [CombatTargetState] binds the game-owned state seams above
+     * and routes `Monster::onAttackedByPlayer` (combat.cpp:895-899) into
+     * [monsterHost], so a player spell hit on a monster fires the captured
+     * `onPlayerAttack` event in production.
+     */
+    fun combatTargetOf(creature: Creature): CombatTarget = CreatureCombatTarget(creature, gameCombatTargetState)
+
+    /** The [CombatTargetState] binding the game facade's combat seams. */
+    private val gameCombatTargetState: CombatTargetState = object : CombatTargetState {
+        override fun isAttackable(creature: Creature): Boolean = this@Game.isAttackable(creature)
+
+        override fun isImmune(creature: Creature, combatType: CombatType): Boolean =
+            this@Game.combatIsImmune(creature, combatType)
+
+        override fun getDefense(creature: Creature): Int = this@Game.getDefense(creature)
+
+        override fun getArmor(creature: Creature): Int = this@Game.getArmor(creature)
+
+        override fun hasDefense(creature: Creature): Boolean = this@Game.combatHasDefense(creature)
+
+        override fun canUseDefense(creature: Creature): Boolean = this@Game.combatCanUseDefense(creature)
+
+        override fun getMitigation(creature: Creature): Double = this@Game.getMitigation(creature)
+
+        override fun getAbsorbPercent(creature: Creature, combatType: CombatType): Int =
+            this@Game.getAbsorbPercent(creature, combatType)
+
+        override fun getAbsorbFlat(creature: Creature, combatType: CombatType): Int =
+            this@Game.getAbsorbFlat(creature, combatType)
+
+        override fun getIncreasePercent(creature: Creature, combatType: CombatType): Int =
+            this@Game.getIncreasePercent(creature, combatType)
+
+        override fun onAttackedByPlayer(monster: Monster, attackerPlayer: Player) {
+            monsterHost?.onAttackedByPlayer(monster, attackerPlayer)
+        }
+    }
 
     /** `uniform_random` generator of `Creature::blockHit` (creature.cpp:968, 979). */
     var combatRandom: JavaRandom = JavaRandom()
