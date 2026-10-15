@@ -757,8 +757,16 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 79: Wave 75 — Login/Game Protocol Split (Scaling Phase 1) (00:00 – 02:00)
+- **Roles** — `--role` / `CANARY_ROLE=all|login|game`: login instances boot config + DB + account repositories and bind login/status only (no world); game instances bind the game listener only; `all` unchanged (19 tests).
+- **Split delivery** — `docker/docker-compose.split.yml` (`login`/`game` services, LB-ready replicas, shared DB), `.env.dist`, `DOCKER.md` split-mode guide, CI validation of the split pair; scaling document Phase 1 marked delivered.
+- **Login advertisement** — the character list now advertises the configured world name/IP/game port so clients reach the game instance (or its LB).
+- **820 suites / 8464 tests, all green**.
+
+---
+
 ### Current Status
-- **Automated Tests**: **817 test suites / 8445 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **820 test suites / 8464 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.

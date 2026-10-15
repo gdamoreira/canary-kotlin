@@ -1,6 +1,6 @@
 # Wave 75 Plan — Scaling Phase 1: Login/Game Protocol Split
 
-**Status:** In progress — dispatched
+**Status:** Completed (2026-10-15) — both workstreams merged; 820 suites / 8464 tests green
 **Baseline:** `main` @ `1149cb26`; 817 suites / 8445 tests green; zero Kotlin warnings
 **Source of scope:** `docs/development/scaling-and-multi-world.md` Phase 1 (login/game service split only). No multi-world, no Redis, no zone sharding.
 **Convention:** documents live directly in `docs/development/` (AGENTS.md §5/§6).
@@ -81,3 +81,13 @@ this document in place.
 Multi-world (Phase 2), Redis coordination, zone sharding (Phase 3);
 shared rate-limit store for multi-login-instance deployments (documented
 follow-up).
+
+---
+
+## Completion (2026-10-15)
+
+role-core (`91316125`) and split-delivery-docs (`ceadfc2e`) merged; the login
+advertisement fix (configured world name/IP/game port) was applied at
+integration. Integrated suite: **820 suites / 8464 tests, 0 failures, zero
+Kotlin warnings**; ancestry verified. Phase 1 of the scaling program is
+delivered; phases 2–3 remain deferred by decision.

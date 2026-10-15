@@ -267,7 +267,8 @@ every planned tail. What remains:
 
 1. **Structural (deliberate)** — the Kotlin `Player` is not a `Cylinder` (notification parents evaluate null; source-cylinder notifications rely on explicit call sites).
 2. **Small reduced-model tails** — NPC type registry population from Lua (`npclib`/`data/npc` boot); NPC removal/respawn hook; the 50 custom-map spawn loops; `ChatManager` `ChatClient` sink + channel-opcode routing; offline-player mount definitions; `onStepInField`'s safe-wall/ExpertPvp branches; movement-engine walk path through the tile notifications; equip/de-equip slot-filtered move events; `combatChangeMana` defensive bestiary charm run; `PlayerSpellCaster`/`CreatureCombatTarget` mana clamp dedup; `Game.combatCanUseDefense` binding.
-3. **Deferred by design** — live differential harness (packet-capture A/B vs a running Canary); CipSoft860/old-protocol profile; OpenTelemetry SDK/OStream periodic reader; micro-seams (KV LRU ordering, `DEBUG_LOG`, daemon flags, `TransportCodec` tails).
+3. **Scaling phases 2–3 (deferred by decision)** — multi-world fleet (`worlds` registry + `players.world_id` + routing) and zone sharding/Redis coordination, per `scaling-and-multi-world.md`; phase 1 (login/game split) is delivered.
+4. **Deferred by design** — live differential harness (packet-capture A/B vs a running Canary); CipSoft860/old-protocol profile; OpenTelemetry SDK/OStream periodic reader; micro-seams (KV LRU ordering, `DEBUG_LOG`, daemon flags, `TransportCodec` tails).
 
 ---
 
