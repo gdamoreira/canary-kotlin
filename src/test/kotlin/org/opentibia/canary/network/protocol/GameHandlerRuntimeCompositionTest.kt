@@ -83,6 +83,9 @@ class GameHandlerRuntimeCompositionTest {
         ioMarket = IOMarket(dataSource = dataSource)
         dispatcher = GameDispatcher().apply { start() }
         gameMap = GameMap()
+        // `ProtocolGame::login` places the session player (protocolgame.cpp:1056):
+        // the stub login position needs a tile for the placement to succeed.
+        gameMap.getOrCreateTile(Position(1000, 1000, 7)).ground = Item(id = 106)
         items = marketItems()
         imbuements = Imbuements().apply { assertThat(loadFromXml(IMBUEMENT_XML)).isTrue() }
         handler = GameHandler(

@@ -14,6 +14,7 @@ import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.players.playerSendSink
 import org.opentibia.canary.creatures.players.sendPartyCreatureHealth
 import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.items.Item
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.network.crypto.Adler32Checksum
@@ -59,6 +60,9 @@ class GameHandlerSinkTransportTest {
     @BeforeEach
     fun setUp() {
         gameMap = GameMap()
+        // `ProtocolGame::login` places the session player (protocolgame.cpp:1056):
+        // the stub login position needs a tile for the placement to succeed.
+        gameMap.getOrCreateTile(Position(1000, 1000, 7)).ground = Item(id = 106)
         dispatcher = GameDispatcher().apply { start() }
     }
 

@@ -38,6 +38,7 @@ import org.opentibia.canary.io.appearances.Appearances
 import org.opentibia.canary.io.iologindata.IOLoginData
 import org.opentibia.canary.io.iologindata.PlayerSavePath
 import org.opentibia.canary.io.iologindata.PlayerSaveTransaction
+import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.Items
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
@@ -152,10 +153,15 @@ class CanaryServerCompositionSeamsTest {
                 players = JdbcPlayerRepository(databaseBoot.dataSource),
             ),
         )
+        // `ProtocolGame::login` places the session player (protocolgame.cpp:1056):
+        // the seeded `Knight Hero` login position needs a tile for the placement
+        // to succeed.
+        val gameMap = GameMap()
+        gameMap.getOrCreateTile(Position(1000, 1000, 7)).ground = Item(id = 106)
         val server = defaultListenerFactory(rsaCipher).create(
             ServerConfig(loginPort = 0, gamePort = 0),
             JdbcAccountRepository(databaseBoot.dataSource),
-            GameMap(),
+            gameMap,
             dispatcher,
             luaEnvironment,
             composition,

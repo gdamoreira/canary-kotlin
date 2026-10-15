@@ -13,8 +13,10 @@ import org.opentibia.canary.account.CharacterEntry
 import org.opentibia.canary.database.FeatureStateRepository
 import org.opentibia.canary.database.PlayerFeatureState
 import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.items.Item
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
+import org.opentibia.canary.map.Position
 import org.opentibia.canary.network.codec.TibiaFrameDecoder
 import org.opentibia.canary.network.codec.TibiaMessageEncoder
 import org.opentibia.canary.network.crypto.Adler32Checksum
@@ -70,6 +72,9 @@ class GameHandlerLoginFlowTest {
     @BeforeEach
     fun setUp() {
         gameMap = GameMap()
+        // `ProtocolGame::login` places the session player (protocolgame.cpp:1056):
+        // the stub login position needs a tile for the placement to succeed.
+        gameMap.getOrCreateTile(Position(1000, 1000, 7)).ground = Item(id = 106)
         dispatcher = GameDispatcher().apply { start() }
     }
 

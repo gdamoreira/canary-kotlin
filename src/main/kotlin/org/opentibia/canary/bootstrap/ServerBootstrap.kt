@@ -13,6 +13,7 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.monsters.LootBlock
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.monsters.Monsters
+import org.opentibia.canary.creatures.players.grouping.Groups
 import org.opentibia.canary.creatures.players.vip.VipRepository
 import org.opentibia.canary.creatures.vocations.VocationRates
 import org.opentibia.canary.creatures.vocations.Vocations
@@ -69,6 +70,7 @@ import org.opentibia.canary.network.ListenerBoot
 import org.opentibia.canary.monitoring.MetricsRegistry
 import org.opentibia.canary.monitoring.PrometheusEndpoint
 import org.opentibia.canary.network.crypto.RsaCipher
+import org.opentibia.canary.social.guild.GuildRepository
 import org.opentibia.canary.social.guild.JdbcGuildRepository
 import org.opentibia.canary.systems.imbuement.Imbuements
 import org.opentibia.canary.systems.prey.IOPreyPersistence
@@ -218,6 +220,17 @@ fun interface VocationsBoot {
 }
 
 /**
+ * Loads `g_game().groups` (`Groups::load`, src/creatures/players/grouping/groups.cpp:78)
+ * over `{CORE_DIRECTORY}/XML/groups.xml`. The registry backs the
+ * `IOLoginDataLoad::loadPlayerBasicInfo` group resolution
+ * (iologindata_load_player.cpp:140-145) and every group-gated accessor
+ * (`Player::isAccessPlayer`, player.cpp:7524).
+ */
+fun interface GroupsBoot {
+    fun load(config: ServerConfig): Groups
+}
+
+/**
  * Booted services shared by every game connection (`g_game()`, `Item::items`,
  * `g_imbuements()`, `g_monsters()`, `g_vocations()`, `IOMarket::getInstance()`,
  * `g_configManager()`, `g_monsterComputeService()`): created by [ServerBootstrap]
@@ -285,6 +298,14 @@ class GameComposition(
      * `PlayerFeatures` so the account VIP list, groups and memberships persist.
      */
     val vipRepository: VipRepository? = null,
+    /**
+     * `IOGuild::loadGuild` / `getGuildIdByName` (src/io/ioguild.cpp:15-58)
+     * backing the `Game::getGuild`/`getGuildByName` `allowOffline` fallback
+     * (game.cpp:11727-11748). The root builds it over the shared save
+     * transaction so the offline guild load reads the same rows the online
+     * registry saves.
+     */
+    val guildRepository: GuildRepository? = null,
 )
 
 /** Creates the network listener (`CanaryServer`) from the booted services. */
@@ -328,6 +349,7 @@ internal fun defaultListenerFactory(rsaCipher: RsaCipher = RsaCipher.fromEnviron
             saveManager = composition.saveManager,
             kvStore = composition.keyValueStore,
             vipRepository = composition.vipRepository,
+            guildRepository = composition.guildRepository,
         ).also { server ->
             // `Player::isOffline()` (player.hpp:481): the world seams
             // (`Game.playerAcceptMarketOffer`, game.cpp:10919/10943) read the
@@ -389,6 +411,8 @@ class ServerBootstrap(
     private val monsterBoot: MonsterBoot = MonsterBoot(::defaultMonsterBoot),
     /** `g_vocations()` loader (defaults to `{CORE_DIRECTORY}/XML/vocations.xml`). */
     private val vocationsBoot: VocationsBoot = VocationsBoot(::defaultVocationsBoot),
+    /** `g_game().groups` loader (defaults to `{CORE_DIRECTORY}/XML/groups.xml`). */
+    private val groupsBoot: GroupsBoot = GroupsBoot(::defaultGroupsBoot),
     private val listenerFactory: ListenerFactory = defaultListenerFactory(),
     /**
      * `g_dispatcher()` (`Dispatcher::init`, dispatcher.cpp:114-131): the booted
@@ -447,6 +471,10 @@ class ServerBootstrap(
         val itemTypes = itemBoot.load(config, appearances)
         val monsters = monsterBoot.load(config, luaEnvironment, configManager, itemTypes)
         val vocations = vocationsBoot.load(config, itemTypes, configManager)
+        // `g_game().groups` (`Groups::load`, groups.cpp:78): the registry backs
+        // the `IOLoginDataLoad::loadPlayerBasicInfo` group resolution
+        // (iologindata_load_player.cpp:140-145).
+        val groups = groupsBoot.load(config)
 
         // `g_monsterComputeService().start(monsterComputeConfig)` after
         // `loadMaps` (src/canary_server.cpp:212-216); the dispatcher is
@@ -488,13 +516,14 @@ class ServerBootstrap(
         // (guild.cpp:29-31) is installed on every guild `IOGuild::loadGuild`
         // materializes; the world reference stays late-bound like the registry
         // seams above so an emptied guild leaves `Game::guilds` and flushes
-        // through the save manager.
-        val ioGuild = IOGuild(
-            JdbcGuildRepository(
-                saveTransaction,
-                removeGuild = { guildId -> worldGame.get()?.removeGuild(guildId) },
-            ),
+        // through the save manager. The same repository backs the world
+        // `Game::getGuild`/`getGuildByName` offline fallback
+        // (game.cpp:11727-11748) through the listener.
+        val guildRepository = JdbcGuildRepository(
+            saveTransaction,
+            removeGuild = { guildId -> worldGame.get()?.removeGuild(guildId) },
         )
+        val ioGuild = IOGuild(guildRepository)
         val subloads = IOLoginDataSubloads(
             subloadRepository = subloadRepository,
             storageRepository = DbPlayerStorageRepository(saveTransaction),
@@ -523,6 +552,11 @@ class ServerBootstrap(
                 itemTypes = itemTypes,
                 imbuements = imbuements,
                 vocations = vocations,
+                // `g_game().groups.getGroup(id)` (groups.cpp:103-110): the
+                // persisted `players.group_id` resolves through the booted
+                // registry in `loadPlayerBasicInfo`
+                // (iologindata_load_player.cpp:140-145).
+                groups = { id -> groups.getGroup(id) },
                 saveTransaction = saveTransaction,
                 depotChests = { player -> player.getDepotChests() },
                 bestiaryPersistence = IOBestiaryPersistence(saveTransaction),
@@ -575,6 +609,7 @@ class ServerBootstrap(
                 saveManager,
                 keyValueStore = kvStore,
                 vipRepository = vipRepository,
+                guildRepository = guildRepository,
             ),
         )
         listener = server
@@ -829,6 +864,28 @@ internal fun defaultVocationsBoot(config: ServerConfig, itemTypes: Items, config
     }
     if (!registry.loadFromXml(xml)) {
         logger.warn { "[defaultVocationsBoot] - Failed to load $path" }
+    }
+    return registry
+}
+
+/**
+ * Production [GroupsBoot]: `Groups::load` (groups.cpp:78-101) over
+ * `{CORE_DIRECTORY}/XML/groups.xml`; a missing or malformed document keeps the
+ * registry empty and warns, like the `printXMLError` + `false` path
+ * (groups.cpp:84-88), so the boot still reaches the login with the group
+ * defaults.
+ */
+internal fun defaultGroupsBoot(config: ServerConfig): Groups {
+    val registry = Groups()
+    val path = Path.of(config.coreDir, "XML", "groups.xml")
+    val xml = try {
+        Files.readString(path)
+    } catch (exception: Exception) {
+        logger.warn(exception) { "[defaultGroupsBoot] - Failed to read $path; g_game().groups stays empty" }
+        return registry
+    }
+    if (!registry.load(xml)) {
+        logger.warn { "[defaultGroupsBoot] - Failed to load $path" }
     }
     return registry
 }

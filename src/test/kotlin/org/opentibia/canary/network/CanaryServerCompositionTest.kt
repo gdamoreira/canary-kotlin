@@ -84,6 +84,9 @@ class CanaryServerCompositionTest {
         assertThat(DatabaseConnectionFactory.migrate(dataSource)).isGreaterThanOrEqualTo(10)
         dispatcher = GameDispatcher().apply { start() }
         gameMap = GameMap()
+        // `ProtocolGame::login` places the session player (protocolgame.cpp:1056):
+        // the stub login position needs a tile for the placement to succeed.
+        gameMap.getOrCreateTile(Position(1000, 1000, 7)).ground = Item(id = 106)
         ioItems = marketItems()
         imbuements = Imbuements().apply { assertThat(loadFromXml(IMBUEMENT_XML)).isTrue() }
         server = CanaryServer(
