@@ -129,10 +129,11 @@ typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
  * only covers repositories constructed over the supplied [PlayerSaveTransaction]
  * (the composition root owns the wiring); with the default `null` every JDBC
  * repository still opens and commits its own connection, so the guard cannot be
- * rolled back as a whole; the Canary offline guard (`Player::isOffline`) has no
- * Kotlin equivalent yet, so [saveOnlyDataForOnlinePlayer] always flushes; the
- * `players.conditions` write of [savePlayerFirst] only runs when the
- * composition root supplies [subloadRepository]; the
+ * rolled back as a whole; the `players.conditions` write of [savePlayerFirst]
+ * only runs when the composition root supplies [subloadRepository]; the
+ * `Player::isOffline()` guard of [saveOnlyDataForOnlinePlayer] is an injected
+ * predicate the composition root binds to the session presence (a direct
+ * construction keeps the `{ false }` flush), and the
  * row-based overloads of the walks remain for callers that already hold the
  * persisted rows; [savePlayerStash(player)] applies the decay/ware filters only
  * when the `ItemTypeRegistry` seam is wired (an unknown item id stays unfiltered, exactly
@@ -229,6 +230,20 @@ class IOLoginData(
      * [PlayerSubloadRepository] it feeds to [IOLoginDataSubloads].
      */
     private val subloadRepository: PlayerSubloadRepository? = null,
+    /**
+     * `Player::isOffline()` (src/creatures/players/player.hpp:481) gate of
+     * `IOLoginData::saveOnlyDataForOnlinePlayer` (iologindata.cpp:269-273).
+     *
+     * Canary derives it from `getID() == 0`: a player object loaded off-line
+     * through `IOLoginData::loadPlayerById`/`loadPlayerByName` never receives
+     * the runtime creature id `Game::internalPlaceCreature` (game.cpp:1512)
+     * assigns through `Player::setID` (player.cpp:225-233). The port models the
+     * same presence through the session sink the listener installs on login and
+     * clears on disconnect (`Player::client`, `Player.protocolSink`); the
+     * composition root passes that predicate. The `{ false }` default keeps the
+     * online-only flush running for direct constructions and tests.
+     */
+    private val isOffline: (Player) -> Boolean = { false },
 ) {
 
     /** The `Condition::serialize` codec of [savePlayerFirst] (condition.cpp:277-301). */
@@ -545,10 +560,15 @@ class IOLoginData(
      * `IOLoginData::saveOnlyDataForOnlinePlayer` (src/io/iologindata.cpp:269-298):
      * the advanced feature state is flushed through [featureLoader] and the
      * `Player::storage()` delta through [savePlayerStorage] (iologindata.cpp:295).
-     * Canary's `player->isOffline()` early return has no Kotlin equivalent yet,
-     * so both flushes always run (PARITY GAP).
+     * The C++ `if (player->isOffline()) { return; }` guard (:270-272) is the
+     * injected [isOffline] seam, so a loaded off-line player keeps its unloaded
+     * feature/storage state instead of overwriting the persisted rows.
      */
     fun saveOnlyDataForOnlinePlayer(player: Player): Boolean {
+        if (isOffline(player)) {
+            return true
+        }
+
         featureLoader?.save(player.id, player.features)
         return savePlayerStorage(player, player.features.storage)
     }

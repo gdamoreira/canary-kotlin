@@ -100,6 +100,7 @@ class IOLoginDataSaveGuardTest {
         depotChests: ((Player) -> Map<Int, Container>)? = null,
         transaction: PlayerSaveTransaction? = null,
         spells: PlayerSpellsRepository? = null,
+        isOffline: (Player) -> Boolean = { false },
     ): IOLoginData {
         val repositoryDataSource = transaction ?: dataSource
         return IOLoginData(
@@ -118,6 +119,7 @@ class IOLoginDataSaveGuardTest {
             itemTypes = itemTypes,
             depotChests = depotChests,
             saveTransaction = transaction,
+            isOffline = isOffline,
         )
     }
 
@@ -400,6 +402,31 @@ class IOLoginDataSaveGuardTest {
         )
         assertThat(player.features.storage.getModifiedKeys()).isEmpty()
         assertThat(player.features.storage.getRemovedKeys()).isEmpty()
+    }
+
+    @Test
+    fun `saveOnlyDataForOnlinePlayer keeps the storage flush for an online player`() {
+        val player = newPlayer()
+        player.features.storage.add(100, 7)
+
+        assertThat(loginData.saveOnlyDataForOnlinePlayer(player)).isTrue()
+
+        assertThat(JdbcPlayerStorageRepository(dataSource).load(101L)).containsExactly(
+            PlayerStorageRow(key = 100, value = 7),
+        )
+        assertThat(player.features.storage.getModifiedKeys()).isEmpty()
+    }
+
+    @Test
+    fun `saveOnlyDataForOnlinePlayer skips the flush for an offline player`() {
+        val offlineData = newLoginData(depotChests = { depotChests }, isOffline = { true })
+        val player = newPlayer()
+        player.features.storage.add(100, 7)
+
+        assertThat(offlineData.saveOnlyDataForOnlinePlayer(player)).isTrue()
+
+        assertThat(JdbcPlayerStorageRepository(dataSource).load(101L)).isEmpty()
+        assertThat(player.features.storage.getModifiedKeys()).containsExactly(100)
     }
 
     @Test

@@ -9,6 +9,7 @@ import org.opentibia.canary.config.AppPaths
 import org.opentibia.canary.config.ConfigSource
 import org.opentibia.canary.config.ServerConfig
 import org.opentibia.canary.config.configSourceOf
+import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.monsters.LootBlock
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.monsters.Monsters
@@ -32,9 +33,14 @@ import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.scheduling.MonsterComputeConfig
 import org.opentibia.canary.game.scheduling.MonsterComputeService
 import org.opentibia.canary.game.scheduling.SaveManager
+import org.opentibia.canary.io.DbPlayerStorageRepository
 import org.opentibia.canary.io.IOBestiaryPersistence
+import org.opentibia.canary.io.IOGuild
 import org.opentibia.canary.io.appearances.Appearances
+import org.opentibia.canary.io.iologindata.DbGuildMembershipRepository
+import org.opentibia.canary.io.iologindata.DbPlayerSubloadRepository
 import org.opentibia.canary.io.iologindata.IOLoginData
+import org.opentibia.canary.io.iologindata.IOLoginDataSubloads
 import org.opentibia.canary.io.iologindata.PlayerSavePath
 import org.opentibia.canary.io.iologindata.PlayerSaveTransaction
 import org.opentibia.canary.io.pipeline.MonsterPipelineService
@@ -58,6 +64,7 @@ import org.opentibia.canary.network.ListenerBoot
 import org.opentibia.canary.monitoring.MetricsRegistry
 import org.opentibia.canary.monitoring.PrometheusEndpoint
 import org.opentibia.canary.network.crypto.RsaCipher
+import org.opentibia.canary.social.guild.JdbcGuildRepository
 import org.opentibia.canary.systems.imbuement.Imbuements
 import org.opentibia.canary.systems.prey.IOPreyPersistence
 import org.opentibia.canary.systems.proficiency.WeaponProficiencyLoader
@@ -68,6 +75,22 @@ import java.util.concurrent.atomic.AtomicBoolean
 import javax.sql.DataSource
 
 private val logger = KotlinLogging.logger {}
+
+/**
+ * The port projection of `Player::isOffline()` (src/creatures/players/player.hpp:481),
+ * shared by the `IOLoginData::saveOnlyDataForOnlinePlayer` gate
+ * (src/io/iologindata.cpp:269-273) and the `Game` market seams.
+ *
+ * Canary derives it from `getID() == 0`: a player object loaded off-line
+ * through `IOLoginData::loadPlayerById`/`loadPlayerByName` stays at the
+ * constructed id `0`, while `Game::internalPlaceCreature` (game.cpp:1512)
+ * assigns the runtime id through `Player::setID` (player.cpp:225-233). The
+ * port models the same session presence through the per-session sink the
+ * listener installs on login and clears on disconnect (`Player::client`,
+ * GameHandler.kt:302/405), so a loaded off-line player resolves as offline and
+ * a live session player as online.
+ */
+private val sessionPlayerIsOffline: (Player) -> Boolean = { player -> player.protocolSink == null }
 
 /** Resolves the effective config (`ConfigManager` precedence: CLI > file > env > defaults). */
 fun interface ConfigBoot {
@@ -275,7 +298,12 @@ internal fun defaultListenerFactory(rsaCipher: RsaCipher = RsaCipher.fromEnviron
             monsters = composition.monsters,
             vocations = composition.vocations,
             ioLoginData = composition.playerSavePath.loginData,
-        )
+        ).also { server ->
+            // `Player::isOffline()` (player.hpp:481): the world seams
+            // (`Game.playerAcceptMarketOffer`, game.cpp:10919/10943) read the
+            // session presence the listener installs on every session.
+            server.game.isOffline = sessionPlayerIsOffline
+        }
     }
 
 /** JDBC/Hikari/Flyway implementation of [DatabaseBoot]; `null` config selects local H2. */
@@ -409,8 +437,23 @@ class ServerBootstrap(
         // shared `DBTransaction::executeWithinTransaction` scope
         // (src/database/database.hpp:233-256): every repository of the guard is
         // constructed over [saveTransaction] and `SaveManager` flushes through
-        // the resulting path.
+        // the resulting path. The wave-55 `IOLoginDataSubloads` half of
+        // `IOLoginData::loadPlayer` (src/io/iologindata.cpp:102-193) is
+        // composed over the same repositories so the conditions/skull/outfit/
+        // guild/storage/VIP/exiva sub-loads and the `players.conditions` write
+        // of `savePlayerFirst` (iologindata_save_player.cpp:279-291) run in
+        // production.
         val saveTransaction = PlayerSaveTransaction(source)
+        val subloadRepository = DbPlayerSubloadRepository(saveTransaction)
+        val subloads = IOLoginDataSubloads(
+            subloadRepository = subloadRepository,
+            storageRepository = DbPlayerStorageRepository(saveTransaction),
+            vip = JdbcVipRepository(saveTransaction),
+            guildMemberships = DbGuildMembershipRepository(saveTransaction),
+            ioGuild = IOGuild(JdbcGuildRepository(saveTransaction)),
+            warnUnsafeScripts = warnUnsafeScripts(configManager),
+            isLookTypeRegistered = { lookType -> appearances.outfits.containsKey(lookType) },
+        )
         val playerSavePath = PlayerSavePath(
             transaction = saveTransaction,
             loginData = IOLoginData(
@@ -432,6 +475,9 @@ class ServerBootstrap(
                 depotChests = { player -> player.getDepotChests() },
                 bestiaryPersistence = IOBestiaryPersistence(saveTransaction),
                 preyPersistence = IOPreyPersistence(saveTransaction),
+                subloads = subloads,
+                subloadRepository = subloadRepository,
+                isOffline = sessionPlayerIsOffline,
             ),
             players = JdbcPlayerRepository(saveTransaction),
         )
@@ -668,6 +714,17 @@ internal fun defaultVocationsBoot(config: ServerConfig, itemTypes: Items, config
         logger.warn { "[defaultVocationsBoot] - Failed to load $path" }
     }
     return registry
+}
+
+/**
+ * `g_configManager().getBoolean(WARN_UNSAFE_SCRIPTS)` (configmanager.cpp:169,
+ * default true) backing the unregistered-look-type guard of
+ * `IOLoginDataSubloads.loadPlayerDefaultOutfit`
+ * (iologindata_load_player.cpp:291-317) and the ported `Game` seams.
+ */
+private fun warnUnsafeScripts(configManager: ConfigManager): Boolean {
+    val key = ConfigKeys.byName("WARN_UNSAFE_SCRIPTS") ?: return true
+    return configManager.getBoolean(key, key.defaultValue as Boolean)
 }
 
 /** `g_configManager()` `RATE_*` reads backing the [VocationRates] seam. */
