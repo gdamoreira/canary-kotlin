@@ -44,6 +44,8 @@ import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.WeaponType_t
 import org.opentibia.canary.creatures.players.WalkStartPolicy
 import org.opentibia.canary.creatures.players.getDodgeChance
+import org.opentibia.canary.creatures.players.postAddNotification
+import org.opentibia.canary.creatures.players.postRemoveNotification
 import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.creatures.appearance.outfit.Outfit as OutfitDefinition
 import org.opentibia.canary.creatures.appearance.effects.AttachedEffects
@@ -1723,8 +1725,49 @@ class Game(
     /** `Player::sendSaleItemList(saleItemMap)` protocol seam (game.cpp:11600). */
     var sendSaleItemList: (Player, Map<Int, Int>) -> Unit = { _, _ -> }
 
-    /** `Player::setScheduledSaleUpdate(false)` (player.hpp) seam (game.cpp:11601). */
-    var setScheduledSaleUpdate: (Player, Boolean) -> Unit = { _, _ -> }
+    /**
+     * `Player::scheduledSaleUpdate` (player.hpp:1877) facade storage. The
+     * Kotlin [Player] does not carry the member (PARITY GAP), so the flag is
+     * kept here like the trade-state maps; [Game.updatePlayerSaleItems]
+     * clears it (game.cpp:11601).
+     */
+    private val scheduledSaleUpdates = IdentityHashMap<Player, Boolean>()
+
+    /** `Player::setScheduledSaleUpdate(scheduled)` (player.cpp:3160-3162). */
+    fun setScheduledSaleUpdate(player: Player, scheduled: Boolean) {
+        scheduledSaleUpdates[player] = scheduled
+    }
+
+    /** `Player::getScheduledSaleUpdate()` (player.cpp:3164-3166). */
+    fun getScheduledSaleUpdate(player: Player): Boolean = scheduledSaleUpdates[player] == true
+
+    /**
+     * The dispatcher-deferred `g_dispatcher().addEvent(updatePlayerSaleItems)`
+     * (player.cpp:6052, 6046) behind [updateSaleShopList]; the composition root
+     * binds it to `Game::updatePlayerSaleItems` on the WorldCommit lane.
+     */
+    var scheduleSaleUpdate: (Player) -> Unit = { _ -> }
+
+    /**
+     * `Player::updateSaleShopList()` (player.cpp:6051-6054): schedule the
+     * deferred sale-list update and latch the scheduled flag.
+     */
+    fun updateSaleShopList(player: Player) {
+        setScheduledSaleUpdate(player, true)
+        scheduleSaleUpdate(player)
+    }
+
+    /**
+     * `Player::updateSaleShopList(item)` (player.cpp:6037-6049): null or
+     * id-less items are ignored, otherwise [updateSaleShopList] schedules.
+     */
+    fun updateSaleShopList(player: Player, item: Item?) {
+        if (item == null || item.id == 0) {
+            return
+        }
+
+        updateSaleShopList(player)
+    }
 
     /**
      * `g_configManager().getString(STORE_IMAGES_URL)` (configmanager.cpp:410)
@@ -2697,12 +2740,16 @@ class Game(
     /**
      * `Game::internalRemoveItem` (src/game/game.cpp:2785). The parent `Cylinder` is
      * resolved from the item's tracked parent tile (the facade's `Item::getParent()`);
+     * an item held by a player inventory resolves through the player-cylinder branch
+     * ([internalRemoveInventoryItem]) and closes with
+     * `cylinder->postRemoveNotification(item, nullptr, index)` (game.cpp:2836).
      * `count == -1` removes the whole stack, partial stackable counts decrement in
      * place and a full removal unlinks the item.
      *
      * Parity gaps: `Item::canRemove`, map-loaded decay protection and the
      * `FLAG_IGNORENOTMOVABLE`/`Item::isMovable` check cannot be evaluated because the
-     * Kotlin [ItemType] does not model movable/decay state.
+     * Kotlin [ItemType] does not model movable/decay state; `Player::queryRemove`
+     * (player.cpp:5714+) is not ported, so the inventory branch has no gate.
      */
     fun internalRemoveItem(
         item: Item?,
@@ -2714,7 +2761,7 @@ class Game(
         if (item == null) {
             return ReturnValue.NOTPOSSIBLE
         }
-        val tile = itemParents[item] ?: return ReturnValue.NOTPOSSIBLE
+        val tile = itemParents[item] ?: return internalRemoveInventoryItem(item, count, test)
 
         val removeCount = if (count == -1) item.count else count
         val ret = queryRemove(tile, item, removeCount, flags or CylinderFlags.FLAG_IGNORENOTMOVABLE)
@@ -2725,6 +2772,42 @@ class Game(
         if (!test) {
             removeThing(tile, item, removeCount)
         }
+        return ReturnValue.NOERROR
+    }
+
+    /**
+     * Player-cylinder branch of `Game::internalRemoveItem` (game.cpp:2790-2838):
+     * the owning player is resolved through the inventory scan, the item leaves
+     * the slot through [Player.removeItem], and the removal is closed by
+     * `Player::postRemoveNotification(item, nullptr, index)` so the inventory
+     * change reaches `Player::updateState`'s refresh and the shop sale-list
+     * tail.
+     *
+     * PARITY GAP: Canary passes the `Player` cylinder as the item's parent; the
+     * Kotlin `Player` is not a `Cylinder`, so the owning player is resolved
+     * through the inventory scan of the online [players] and the notification
+     * parent is `null`.
+     */
+    private fun internalRemoveInventoryItem(item: Item, count: Int, test: Boolean): ReturnValue {
+        val owner = players.values.firstOrNull { inventorySlotOf(it, item) != null }
+            ?: return ReturnValue.NOTPOSSIBLE
+        val index = inventorySlotOf(owner, item)?.value ?: return ReturnValue.NOTPOSSIBLE
+        val removeCount = if (count == -1) item.count else count
+
+        if (test) {
+            return ReturnValue.NOERROR
+        }
+
+        owner.removeItem(item, removeCount)
+        owner.postRemoveNotification(
+            item,
+            null,
+            index,
+            getHoldingPlayer = containerHoldingPlayer,
+            hasShopOwner = { getShopOwner(owner) != null },
+            isSaleUpdateScheduled = { getScheduledSaleUpdate(owner) },
+            updateSaleShopList = { saleItem -> updateSaleShopList(owner, saleItem) },
+        )
         return ReturnValue.NOERROR
     }
 
@@ -4909,7 +4992,10 @@ class Game(
     /**
      * Player-cylinder branch of `Game::internalAddItem` (game.cpp:2693): the
      * `Player::queryAdd` ownership/pickupable/capacity gate plus the
-     * `Player::addThing` insertion modelled by `Player::addItem`.
+     * `Player::addThing` insertion modelled by `Player::addItem`, closed by
+     * `toCylinder->postAddNotification(item, nullptr, itemIndex)`
+     * (game.cpp:2767-2785) so the inventory change reaches
+     * `Player::updateState`'s refresh and the shop sale-list tail.
      */
     private fun internalAddItem(
         toPlayer: Player,
@@ -4937,7 +5023,23 @@ class Game(
         if (test) {
             return ReturnValue.NOERROR
         }
-        return toPlayer.addItem(item)
+
+        val ret = toPlayer.addItem(item)
+        if (ret == ReturnValue.NOERROR) {
+            val itemIndex = playerThingIndex(toPlayer, item)
+            if (itemIndex != -1) {
+                toPlayer.postAddNotification(
+                    item,
+                    null,
+                    itemIndex,
+                    getHoldingPlayer = containerHoldingPlayer,
+                    hasShopOwner = { getShopOwner(toPlayer) != null },
+                    isSaleUpdateScheduled = { getScheduledSaleUpdate(toPlayer) },
+                    updateSaleShopList = { saleItem -> updateSaleShopList(toPlayer, saleItem) },
+                )
+            }
+        }
+        return ret
     }
 
     /**
@@ -4962,8 +5064,11 @@ class Game(
     /**
      * Player-cylinder branch of `Game::internalMoveItem` (game.cpp:2436) used
      * by the trade transfer: the source tile removal path is the facade's
-     * [queryRemove]/[removeThing] pair and the destination is
-     * `Player::addItem` (PARITY GAP: no auto-stack into the trade window, which
+     * [queryRemove]/[removeThing] pair, the destination is `Player::addItem`,
+     * and the add is closed by
+     * `toCylinder->postAddNotification(moveItem, fromCylinder, moveItemIndex)`
+     * (game.cpp:2666-2671) so the inventory change reaches the player state
+     * refresh (PARITY GAP: no auto-stack into the trade window, which
      * `FLAG_IGNOREAUTOSTACK` also suppresses in Canary).
      */
     private fun internalMoveItemToPlayer(fromTile: Tile?, toPlayer: Player, item: Item, count: Int, flags: Int): ReturnValue {
@@ -4984,13 +5089,25 @@ class Game(
             return ret
         }
 
-        if (isStackable(item) && m < item.count) {
-            removeThing(fromTile, item, m)
-            return toPlayer.addItem(cloneItem(item, m))
-        }
-
+        val movedItem = if (isStackable(item) && m < item.count) cloneItem(item, m) else item
         removeThing(fromTile, item, m)
-        return toPlayer.addItem(item)
+
+        ret = toPlayer.addItem(movedItem)
+        if (ret == ReturnValue.NOERROR) {
+            val moveItemIndex = playerThingIndex(toPlayer, movedItem)
+            if (moveItemIndex != -1) {
+                toPlayer.postAddNotification(
+                    movedItem,
+                    fromTile,
+                    moveItemIndex,
+                    getHoldingPlayer = containerHoldingPlayer,
+                    hasShopOwner = { getShopOwner(toPlayer) != null },
+                    isSaleUpdateScheduled = { getScheduledSaleUpdate(toPlayer) },
+                    updateSaleShopList = { saleItem -> updateSaleShopList(toPlayer, saleItem) },
+                )
+            }
+        }
+        return ret
     }
 
     /**
@@ -13569,23 +13686,61 @@ class Game(
      * `Game::internalMoveItem(..., player, slot, ...)` reduced to the Kotlin
      * `Player` facade: the item leaves its source container (or inventory slot)
      * and is placed through `Player::addItem`, restoring the container on
-     * failure.
+     * failure. The move is closed by the source
+     * `postRemoveNotification(item, ..., itemIndex)` and the destination
+     * `postAddNotification(item, ..., itemIndex)` (game.cpp:2661-2671) so an
+     * equip/unequip reaches `Player::updateState`'s refresh and the shop
+     * sale-list tail.
+     *
+     * PARITY GAP: Canary passes the `Player` cylinder as the notification
+     * parent; the Kotlin `Player` is not a `Cylinder`, so the inventory source
+     * and destination relation is modelled as `null`.
      */
     private fun moveItemToPlayer(player: Player, item: Item, slot: Slots_t): ReturnValue {
         val source = item.getParent()?.getContainer()
+        var fromIndex = -1
         if (source != null) {
             val ret = source.queryRemove(item, item.getItemCount(), 0)
             if (ret != ReturnValue.NOERROR) {
                 return ret
             }
             source.removeThing(item, item.getItemCount())
-        } else if (inventorySlotOf(player, item) != null) {
-            player.removeItem(item, 0)
+        } else {
+            val heldSlot = inventorySlotOf(player, item)
+            if (heldSlot != null) {
+                fromIndex = heldSlot.value
+                player.removeItem(item, 0)
+            }
         }
 
         val add = player.addItem(item, slot)
         if (add != ReturnValue.NOERROR && source != null) {
             source.addThing(item)
+        }
+        if (add == ReturnValue.NOERROR) {
+            val newIndex = playerThingIndex(player, item)
+            if (fromIndex != -1) {
+                player.postRemoveNotification(
+                    item,
+                    null,
+                    fromIndex,
+                    getHoldingPlayer = containerHoldingPlayer,
+                    hasShopOwner = { getShopOwner(player) != null },
+                    isSaleUpdateScheduled = { getScheduledSaleUpdate(player) },
+                    updateSaleShopList = { saleItem -> updateSaleShopList(player, saleItem) },
+                )
+            }
+            if (newIndex != -1) {
+                player.postAddNotification(
+                    item,
+                    source,
+                    newIndex,
+                    getHoldingPlayer = containerHoldingPlayer,
+                    hasShopOwner = { getShopOwner(player) != null },
+                    isSaleUpdateScheduled = { getScheduledSaleUpdate(player) },
+                    updateSaleShopList = { saleItem -> updateSaleShopList(player, saleItem) },
+                )
+            }
         }
         return add
     }
