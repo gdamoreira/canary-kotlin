@@ -1,0 +1,7 @@
+# ai-memory project marker — https://github.com/akitaonrails/ai-memory
+#
+# Pins this checkout's memory scope so every checkout and worktree of
+# canary-kotlin routes to the same (workspace, project) pair instead of
+# deriving the name from the directory basename or remote heuristics.
+workspace = "default"
+project = "canary-kotlin"
