@@ -205,13 +205,12 @@ class GameMarketOffersTest {
         game.getAllSaleItemIdAndCount = { _, _ -> mapOf(2160 to 3) }
         val sent = mutableListOf<Map<Int, Int>>()
         game.sendSaleItemList = { _, items -> sent.add(items) }
-        val scheduled = mutableListOf<Boolean>()
-        game.setScheduledSaleUpdate = { _, value -> scheduled.add(value) }
+        game.setScheduledSaleUpdate(player, true)
 
         game.updatePlayerSaleItems(player.id)
 
         assertThat(sent).containsExactly(mapOf(2160 to 3))
-        assertThat(scheduled).containsExactly(false)
+        assertThat(game.getScheduledSaleUpdate(player)).isFalse()
     }
 
     // ----- playerCreateMarketOffer -----

@@ -244,16 +244,21 @@ class GameHandler(
         // shop-open/state sale-list refresh.
         game.getAllSaleItemIdAndCount = { player, countMap -> player.getAllSaleItemIdAndCount(countMap) }
         game.sendSaleItemList = { player, inventoryMap -> player.protocolSink?.sendSaleItemList(inventoryMap) }
+        // `Player::updateSaleShopList()` (player.cpp:6051-6054): every
+        // inventory-change producer (`Player::postAddNotification`/
+        // `postRemoveNotification`) that passes the shop gate lands here. The
+        // scheduled flag is latched by `Game.updateSaleShopList` and
+        // `Game::updatePlayerSaleItems` defers on the WorldCommit lane.
+        game.scheduleSaleUpdate = { target ->
+            val playerId = target.id
+            dispatcher.dispatch(DispatcherLane.WorldCommit) { game.updatePlayerSaleItems(playerId) }
+        }
         // `Player::updateState()` (player.cpp:6056-6064): the inventory refresh
         // followed by the shop tail, which defers `Game::updatePlayerSaleItems`
-        // through the dispatcher (`Player::updateSaleShopList`, player.cpp:6051-6054)
-        // when the session has an open shop window.
+        // through the dispatcher when the session has an open shop window.
         game.updateState = { target ->
             target.updateState(
-                updateSaleShopList = {
-                    val playerId = target.id
-                    dispatcher.dispatch(DispatcherLane.WorldCommit) { game.updatePlayerSaleItems(playerId) }
-                },
+                updateSaleShopList = { game.updateSaleShopList(target) },
                 hasShopOwner = { game.getShopOwner(target) != null },
             )
         }
