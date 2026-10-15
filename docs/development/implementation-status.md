@@ -43,7 +43,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | Monster engine (`monster.cpp`, 4,014 lines) | 198 unique `Monster::` methods | 89 name-matched + async pipelines + host + type state + barrier buckets | **~85%** | wave 51: barrier-parallel creature async buckets, budget/requeue/promotion/rollback |
 | Map engine (`map.cpp`) | — | — | **~85%** | sight/`canWalkTo`/pathing/caches/spectators/houses/towns (wave 38) |
 | Persistence (`iologindata*`, `iomapserialize`) | — | — | **~80%** | 24/24 iologindata, 10/10 iomapserialize, market/prey/bestiary/bosstiary/guild/storage (V10–V14) |
-| **Estimated full-parity completion** | — | — | **~99.9%** | tracked inventory complete; wave 65 bound the seams at the composition root (Monsters/VIP/kv/Tile/saveGuild/save-all savers), added the VIP protocol senders, booted the engine spell registry, routed the Lua spell entry points, and wired shop/inspection |
+| **Estimated full-parity completion** | — | — | **~99.9%** | tracked inventory complete; wave 66 closed the logout tail, exiva save, guild removal + map saver and the login group load |
 
 #### 1.2 Module completion (by inventory rows in §2)
 
@@ -261,12 +261,12 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 ### 3. Highest-Impact Gaps (ranked, verified)
 
-**The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Waves 63–65 closed
+**The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Waves 63–66 closed
 the previous tails; what remains:
 
-1. **Persistence save tails (wave 66)** — exiva save (`savePlayerExivaRestrictions`); the `onRemoveCreature(isLogout=true)` logout tail (guild `removeMember`, party leave, save-on-logout — a logged-out member stays in `membersOnline` and can duplicate on relog); guild removal callback (`removeGuild` on empty guild); `SaveManager.mapSaver`; `player.group` (`group_id`) still unset.
+1. **Login/boot bindings** — player placement at login (`ProtocolGame::login` → `placeCreature`); `SaveManager.savePlayer` production binding + `Game.playerVip` (VIP offline broadcast); `Groups::load` over `data/XML/groups.xml` + its bootstrap binding (group-gated logic keeps defaults until then); `CanaryServer` guild repository (offline guild loads); map/house load path so `mapSaver` persists instead of wiping `tile_store`.
 2. **Combat/monster depth (wave 67)** — ExpertPvp field swaps/fight-tick, wheel beam mastery, per-creature `getCombatDamage` override, `applyExtensions`; adapter stubs (`isImmuneCondition` bitset, `isEnemyFaction`, `getMantra`); `PlayerSpellCaster` inert side effects (mana progression, aggressive-action clock, cancel builder); `Monster::getCombatValues`; `Monster::isPushable`; `combatTileEffects` COMBAT_NONE path.
-3. **Remaining call sites** — Lua `player:registerEvent`; modal window sink (`sendModalWindow`) + the 0xF9 route; `IOBosstiary` boss race-id source; shop-owner composition; `WorldLuaOperations.attachCombat` boot call; spell-registry consumer re-binds (`WorldPlayerSocialOperations.canLearnSpell`/`getInstantSpells`, `PlayerWheel` default `Spells()`, basic-data spell list, look rune seam); login VIP burst; `creatureOnThink`/`creatureOnDeath` player loops; raid + `Game.createMonster` onSpawn; Lua `creature:isMoveLocked`.
+3. **Remaining call sites** — Lua `player:registerEvent`; modal window sink (`sendModalWindow`) + 0xF9 route; shop-owner composition; `WorldLuaOperations.attachCombat` boot call; spell-registry consumer re-binds (`WorldPlayerSocialOperations.canLearnSpell`/`getInstantSpells`, `PlayerWheel` default `Spells()`, basic-data spell list, look rune seam); login VIP burst; `creatureOnThink`/`creatureOnDeath` player loops; raid + `Game.createMonster` onSpawn; Lua `creature:isMoveLocked`; `savePlayerSystems`; load-side guid wrap.
 4. **Deferred (unchanged)** — live differential harness; CipSoft860/old-protocol branches; OpenTelemetry SDK/OStream; remaining micro-seams (KV LRU ordering, `DEBUG_LOG`, daemon flags, `TransportCodec` tails).
 
 ---

@@ -1,6 +1,6 @@
 # Wave 66 Plan — Persistence Save Tails
 
-**Status:** In progress — dispatched
+**Status:** Completed (2026-10-15) — four workstreams merged; 733 suites / 7979 tests green
 **Baseline:** `main` @ `ce1e82e4`; 729 suites / 7958 tests green; zero Kotlin warnings
 **Source of scope:** `docs/development/implementation-status.md` §3 item 1.
 **Convention:** documents live directly in `docs/development/` (AGENTS.md §5/§6).
@@ -105,3 +105,12 @@ Update `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`
 ## 6. Out of scope
 
 Combat/monster depth → wave 67; deferred list unchanged.
+
+---
+
+## Completion (2026-10-15)
+
+logout-tail (`9c6bb3ff`), exiva-save (`ecde5b95`), guild-removal-map-saver
+(`95762a71`), player-group (`a64bda5a`) — integrated suite **733 suites / 7979
+tests, 0 failures, zero Kotlin warnings**; ancestry verified. Remaining tails
+move to wave 67 (combat/monster depth + login/boot bindings).

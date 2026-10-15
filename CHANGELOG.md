@@ -671,8 +671,17 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 69: Wave 66 — Persistence Save Tails (03:00 – 05:00)
+- **Logout tail** — disconnect routes through `removeCreature(isLogout=true)`: guild `removeMember`, party leave, save-once; relogs no longer duplicate online members (8 tests).
+- **Exiva save** — `savePlayerExivaRestrictions` ported into `savePlayerFirst` (flags + whitelists, write-before-record ordering) (4 tests).
+- **Guild removal + map saver** — emptied guilds erase from `Game.guilds` via the repo-installed seam; `SaveManager.mapSaver` bound (5 tests).
+- **Player group** — `player.group` resolved from the account's `group_id` through the `groups` seam at login (4 tests).
+- **733 suites / 7979 tests, all green**; all four commits ancestry-verified.
+
+---
+
 ### Current Status
-- **Automated Tests**: **729 test suites / 7958 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **733 test suites / 7979 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.
