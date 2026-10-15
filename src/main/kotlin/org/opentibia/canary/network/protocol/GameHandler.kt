@@ -5,6 +5,7 @@ import io.netty.buffer.ByteBuf
 import io.netty.buffer.Unpooled
 import io.netty.channel.ChannelHandlerContext
 import io.netty.channel.SimpleChannelInboundHandler
+import org.opentibia.canary.account.Account
 import org.opentibia.canary.account.AccountRepository
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.Skill
@@ -12,6 +13,8 @@ import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.players.PlayerTask
+import org.opentibia.canary.creatures.players.vip.InMemoryVipRepository
+import org.opentibia.canary.creatures.players.vip.VipRepository
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.game.Game
 import org.opentibia.canary.game.scheduling.DispatcherLane
@@ -24,6 +27,7 @@ import org.opentibia.canary.io.MarketEscrowPlayer
 import org.opentibia.canary.io.iologindata.IOLoginData
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.Items
+import org.opentibia.canary.kv.KVStore
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.ScriptingDispatch
 import org.opentibia.canary.map.GameMap
@@ -121,6 +125,22 @@ class GameHandler(
      * death-loot type resolution (`Player::death`, player.cpp:4035).
      */
     private val monsterTypeProvider: (String) -> MonsterType? = { null },
+    /**
+     * `g_kv()` root (`KVStore::getInstance`, src/kv/kv.hpp:188) composed by the
+     * bootstrap: every session `Player.kv` is rebound to
+     * `g_kv().scoped("player").scoped(guid)` (player.cpp:1398-1400) before the
+     * persisted load, so the login exiva sub-load and the kv-backed components
+     * read and write the persisted scope. `null` keeps the per-player
+     * in-memory store.
+     */
+    private val kvStore: KVStore? = null,
+    /**
+     * `IOLoginData` VIP persistence (`account_viplist`/`account_vipgroups`/
+     * `account_vipgrouplist`, iologindata.cpp:383-497) injected into every
+     * session `PlayerFeatures` (player_vip.cpp:69-219). `null` keeps the
+     * per-player in-memory repository.
+     */
+    private val vipRepository: VipRepository? = null,
 ) : SimpleChannelInboundHandler<ByteBuf>() {
 
     private var player: Player? = null
@@ -283,7 +303,7 @@ class GameHandler(
         // `IOLoginData::loadPlayerById(..., false)` before the creature is
         // placed (protocolgame.cpp:1023). The injected loader drives the same
         // load; without one the handler keeps the stub shell.
-        val activePlayer = loadSessionPlayer(characterMatch.name)
+        val activePlayer = loadSessionPlayer(characterMatch.name, account)
         if (activePlayer == null) {
             sendDisconnect(ctx, "Your character could not be loaded, please contact an administrator.")
             return
@@ -346,8 +366,14 @@ class GameHandler(
      *
      * Without a loader the stub shell preserves the pre-wiring behavior of a
      * directly constructed handler.
+     *
+     * [account] is the authenticated account `IOLoginDataLoad::loadPlayerBasicInfo`
+     * resolves from the persisted `players.account_id`
+     * (iologindata_load_player.cpp:135-138): it is attached before the load so
+     * the VIP sub-load's premium cap and every `PlayerVIP` persistence call see
+     * the account id.
      */
-    private fun loadSessionPlayer(characterName: String): Player? {
+    private fun loadSessionPlayer(characterName: String, account: Account?): Player? {
         val loader = ioLoginData ?: return Player(
             id = 1L,
             name = characterName,
@@ -361,7 +387,8 @@ class GameHandler(
             // `g_game().transformItem` binding are shared across sessions.
             muteCountMap = muteCountMap,
             transformItemCharges = transformItemCharges,
-        ).also(::bindRegistries)
+            vipRepository = vipRepository ?: InMemoryVipRepository(),
+        ).also { it.account = account }.also(::bindRegistries)
 
         val guid = loader.getGuidByName(characterName)
         if (guid == 0L) {
@@ -379,7 +406,9 @@ class GameHandler(
             position = Position(1000, 1000, 7),
             muteCountMap = muteCountMap,
             transformItemCharges = transformItemCharges,
+            vipRepository = vipRepository ?: InMemoryVipRepository(),
         )
+        loaded.account = account
 
         // The registry/provider must be attached before the persisted load:
         // `IOLoginDataLoad::loadPlayerSkill` (iologindata_load_player.cpp:344)
@@ -398,10 +427,20 @@ class GameHandler(
      * registry backs `Player::getPlayerVocationEnum` (player.cpp:13030) and the
      * persisted skill load, the monster provider backs the death-loot type
      * resolution (`Player::death`, player.cpp:4035).
+     *
+     * It also binds the composition-injected `g_kv()` scope as the player's
+     * `Player::kv()` (player.cpp:1398-1400) and the
+     * `CreatureEvent` registry lookup `Creature::registerCreatureEvent` uses
+     * (creature.cpp:1674-1693), so the player-side `registerEvent` path
+     * validates names against the booted registry before the persisted load.
      */
     private fun bindRegistries(player: Player) {
         vocations?.let { player.vocations = it }
         player.monsterTypeProvider = monsterTypeProvider
+        player.creatureEventRegistered = { name -> luaEnvironment.creatureEvents.get(name) != null }
+        kvStore?.let { store ->
+            player.kv = store.scoped("player").scoped(player.id.toString())
+        }
     }
 
     override fun channelInactive(ctx: ChannelHandlerContext) {

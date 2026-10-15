@@ -15,16 +15,24 @@ import io.netty.util.concurrent.GlobalEventExecutor
 import javax.sql.DataSource
 import org.opentibia.canary.account.AccountRepository
 import org.opentibia.canary.account.InMemoryAccountRepository
+import org.opentibia.canary.combat.CombatType
 import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
 import org.opentibia.canary.creatures.Monster
+import org.opentibia.canary.creatures.monsters.MonsterBehavior
 import org.opentibia.canary.creatures.monsters.MonsterPipelinesHost
+import org.opentibia.canary.creatures.players.pvp.ExpertPvp
+import org.opentibia.canary.creatures.players.vip.VipRepository
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.creatures.monsters.Monsters
 import org.opentibia.canary.creatures.spawns.MonsterSpawnPath
 import org.opentibia.canary.creatures.spawns.dispatcherSpawnScheduler
 import org.opentibia.canary.game.Game
 import org.opentibia.canary.game.GameState_t
+import org.opentibia.canary.game.modal.ModalWindowManager
+import org.opentibia.canary.kv.KVStore
+import org.opentibia.canary.map.Tile
+import org.opentibia.canary.spells.WorldType
 import org.opentibia.canary.game.scheduling.CreatureAsyncTaskBuckets
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
@@ -145,9 +153,27 @@ class CanaryServer(
      * save rotation. When injected, the world session install/removal
      * (`Game::addPlayer`/`removePlayer`, game.cpp:11624/11631) feeds the
      * online set [SaveManager.saveAll] rotates, exactly like Canary's
-     * `SaveManager::saveAll` reads `g_game().getPlayers()` (:31-52).
+     * `SaveManager::saveAll` reads `g_game().getPlayers()` (:31-52). The
+     * `Game::removeGuild` seam (game.cpp:11757-11762) saves through the same
+     * manager ([SaveManager.saveGuild]).
      */
     private val saveManager: SaveManager? = null,
+    /**
+     * `g_kv()` root (`KVStore::getInstance`, src/kv/kv.hpp:188) composed by the
+     * bootstrap: every session `Player.kv` is rebound to
+     * `g_kv().scoped("player").scoped(guid)` (player.cpp:1398-1400) so the
+     * kv-backed components and the login exiva sub-load share the persisted
+     * keys. `null` keeps the per-player in-memory store.
+     */
+    private val kvStore: KVStore? = null,
+    /**
+     * `IOLoginData` VIP persistence (`account_viplist`/`account_vipgroups`/
+     * `account_vipgrouplist`, iologindata.cpp:383-497) composed by the
+     * bootstrap and injected into every session `PlayerFeatures`
+     * (player_vip.cpp:69-219). `null` keeps the per-player in-memory
+     * repository.
+     */
+    private val vipRepository: VipRepository? = null,
 ) : ListenerBoot {
     /**
      * `g_dispatcher()` (`CanaryServer::run`, src/canary_server.cpp:132): the
@@ -217,11 +243,37 @@ class CanaryServer(
     }
 
     /**
+     * World-confined Lua event caller. `creatureEventsOf` is
+     * `Creature::getCreatureEvents` (creature.hpp:952): a live monster resolves
+     * to its host entry's attached named events (registered by
+     * `Monster::Monster` and `MonsterTypeFunctions::luaMonsterTypeRegisterEvent`),
+     * every other creature to the events it attached through
+     * `Creature::registerCreatureEvent` (creature.cpp:1674-1693, fed by the
+     * player-side `registerEvent` path), so no family falls back to the
+     * permissive global walk anymore.
+     */
+    internal val scriptingDispatch = ScriptingDispatch(
+        luaEnvironment,
+        this.dispatcher,
+        creatureEventsOf = { creature ->
+            if (creature is Monster) {
+                monsterPipelinesHost?.typeStateOf(creature.id)?.creatureEvents
+            } else {
+                creature.getCreatureEvents()
+            }
+        },
+    )
+
+    /**
      * `g_game()` equivalent shared by every game connection served by this listener,
      * composed with the booted item/imbuement/vocation registries, market, config,
      * world-shared async buckets and the production [monsterPipelinesHost]. The
      * booted [monsters] registry backs the `g_monsters().getMonsterType` provider
-     * (`Monster::m_monsterType`, monster.hpp:363).
+     * (`Monster::m_monsterType`, monster.hpp:363). The `Game::removeGuild`
+     * persistence seam (game.cpp:11757-11762) routes through [saveManager] and
+     * the modal-window manager receives the world [scriptingDispatch] so
+     * `Game::playerAnswerModalWindow` (game.cpp:11144-11176) reaches the
+     * attached `modalwindow` creature events.
      */
     override val game: Game = suppliedGame ?: Game(
         gameMap,
@@ -234,6 +286,8 @@ class CanaryServer(
         creatureAsyncTaskBuckets = creatureAsyncTaskBuckets,
         monsterHost = monsterPipelinesHost,
         monsterTypeProvider = { name -> monsters?.getMonsterType(name) },
+        saveGuild = { guild -> saveManager?.saveGuild(guild) },
+        modalWindowManager = ModalWindowManager(scripting = scriptingDispatch),
     )
 
     init {
@@ -270,6 +324,86 @@ class CanaryServer(
                 isStartup = { game.getGameState() == GameState_t.GAME_STATE_STARTUP },
             )
         }
+    }
+
+    /** `g_configManager().getString(WORLD_TYPE)` (configmanager.cpp:413) resolved by the listener. */
+    private val configuredWorldType: String? =
+        ConfigKeys.byName("WORLD_TYPE")?.let { key ->
+            configManager?.getString(key, key.defaultValue as String)
+        }
+
+    init {
+        // `CanaryServer::setWorldType` (src/canary_server.cpp:319-333): the
+        // configured WORLD_TYPE maps onto `Game::setWorldType` (game.cpp:926).
+        // An unknown value keeps the WORLD_TYPE_PVP default and warns instead of
+        // the C++ boot failure (PARITY GAP, embedded/tooling roots pass no
+        // config).
+        configuredWorldType?.let { name ->
+            val worldType = when (name.lowercase()) {
+                "expert-pvp", "retro-pvp", "pvp" -> WorldType.PVP
+                "no-pvp" -> WorldType.NO_PVP
+                "pvp-enforced" -> WorldType.PVP_ENFORCED
+                else -> {
+                    logger.warn { "Unknown world type: $name; keeping ${game.getWorldType()}" }
+                    null
+                }
+            }
+            if (worldType != null) {
+                game.setWorldType(worldType)
+            }
+        }
+        game.expertPvpEnabled = configuredWorldType?.let(ExpertPvp::isEnabled) ?: false
+
+        // `Tile::queryAdd` environment (src/items/tile.cpp:691-964): every tile
+        // the map materializes receives the composed-world seams. The hook is
+        // installed before [start] materializes spawn/zone tiles; tiles the map
+        // already holds when this listener is composed keep the inert defaults.
+        gameMap.tileInitializer = ::bindTileSeams
+    }
+
+    /**
+     * `Tile::queryAdd` environment (src/items/tile.cpp:691-964): the C++
+     * `g_game()`/`g_configManager()`/`ExpertPvp` globals become the port's
+     * per-tile seams (AGENTS.md 1.1). The live monster facts resolve through
+     * [monsterPipelinesHost]'s host entries, the account/PZ limits and world
+     * type come from the booted config and the protocol/removal callbacks
+     * forward to the composed [game].
+     */
+    private fun bindTileSeams(tile: Tile) {
+        tile.monsterTypeProvider = { monster ->
+            monsterPipelinesHost?.typeStateOf(monster.id)?.monsterType
+        }
+        tile.ignoreFieldDamageProvider = { monster ->
+            monsterPipelinesHost?.entryOf(monster.id)?.behaviorState?.ignoreFieldDamage ?: false
+        }
+        tile.monsterIsImmuneProvider = { monster, combatType ->
+            val entry = monsterPipelinesHost?.entryOf(monster.id)
+            entry != null && MonsterBehavior.isImmune(
+                combatType = combatType,
+                immuneOverride = entry.behaviorState.immune,
+                damageImmunities = entry.typeState.monsterType?.info?.m_damageImmunities
+                    ?.map { CombatType.fromValue(it.value) }
+                    ?.toSet()
+                    ?: emptySet(),
+            )
+        }
+        tile.maxPlayersPerAccount = worldConfigNumber("MAX_PLAYERS_PER_ACCOUNT", tile.maxPlayersPerAccount)
+        tile.maxPlayersOutsidePzPerAccount =
+            worldConfigNumber("MAX_PLAYERS_OUTSIDE_PZ_PER_ACCOUNT", tile.maxPlayersOutsidePzPerAccount)
+        tile.playersByAccountProvider = { account -> game.getPlayersByAccount(account) }
+        tile.sendCreatureSay = { player, creature, type, text, _ ->
+            game.sendCreatureSayTo(player, creature, type, text)
+        }
+        tile.internalRemoveItem = { item, count -> game.internalRemoveItem(item, count) }
+        tile.expertPvpEnabled = configuredWorldType?.let(ExpertPvp::isEnabled) ?: false
+        tile.worldTypeProvider = { game.getWorldType() }
+        tile.playerByGuidProvider = { guid -> game.getPlayerByGUID(guid) }
+    }
+
+    /** `g_configManager().getNumber(...)` read backing the `Tile::queryAdd` account limits. */
+    private fun worldConfigNumber(name: String, fallback: Int): Int {
+        val key = ConfigKeys.byName(name) ?: return fallback
+        return configManager?.getNumber(key, key.defaultValue as Int) ?: fallback
     }
 
     // --- monster spawn path (`IOMap::loadMonsters` + `SpawnsMonster::startup`) ---
@@ -325,22 +459,6 @@ class CanaryServer(
      */
     internal val imbuementEngine: ImbuementEngine? =
         imbuements?.let { registry -> ImbuementEngine(registry, ImbuementDecay(registry, this.dispatcher)) }
-
-    /**
-     * World-confined Lua event caller. `creatureEventsOf` is
-     * `Creature::getCreatureEvents` (creature.hpp:952): a live monster resolves
-     * to its host entry's attached named events (registered by
-     * `Monster::Monster` and `MonsterTypeFunctions::luaMonsterTypeRegisterEvent`),
-     * every other creature keeps the permissive global walk until its
-     * `registerEvent` binding is wired.
-     */
-    private val scriptingDispatch = ScriptingDispatch(
-        luaEnvironment,
-        this.dispatcher,
-        creatureEventsOf = { creature ->
-            if (creature is Monster) monsterPipelinesHost?.typeStateOf(creature.id)?.creatureEvents else null
-        },
-    )
 
     /** `Game::playersOnline` equivalent; see [checkPlayersRecord]. */
     private val playersOnline = AtomicInteger(0)
@@ -455,6 +573,8 @@ class CanaryServer(
         ioLoginData = ioLoginData,
         vocations = vocations,
         monsterTypeProvider = { name -> monsters?.getMonsterType(name) },
+        kvStore = kvStore,
+        vipRepository = vipRepository,
     )
 
     /**

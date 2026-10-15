@@ -104,6 +104,15 @@ class GameMap(
         return (sz.toLong() shl 32) or ((sx.toLong() and 0xFFFFL) shl 16) or (sy.toLong() and 0xFFFFL)
     }
 
+    /**
+     * Tile-creation hook applied to every tile [getOrCreateTile] materializes:
+     * the composition root binds the `g_game()`/`g_configManager()`/`ExpertPvp`
+     * seams of `Tile::queryAdd` (src/items/tile.cpp:691-964) here once the world
+     * exists (AGENTS.md 1.1). Tiles created before the hook is installed (map
+     * load) keep the inert defaults.
+     */
+    var tileInitializer: (Tile) -> Unit = {}
+
     fun getOrCreateTile(position: Position): Tile {
         // `MapCache::setBasicTile` (mapcache.cpp:397-404): materializing a tile
         // creates and links its 16x16 spectator sector.
@@ -115,6 +124,7 @@ class GameMap(
         val sector = sectors.getOrPut(key) { MapSector(sx, sy, position.z) }
         val tile = sector.getOrCreateTile(position, position.x and 0x1F, position.y and 0x1F)
         tile.map = this
+        tileInitializer(tile)
         return tile
     }
 

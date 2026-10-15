@@ -168,7 +168,13 @@ class SaveManager(
         }
     }
 
-    private fun saveGuild(guild: Guild) {
+    /**
+     * `SaveManager::saveGuild` (save_manager.cpp:182-194): public like the C++
+     * method (save_manager.hpp:33) because `Game::removeGuild`
+     * (game.cpp:11757-11762) saves through it; the save-all rotation calls it
+     * per registered guild.
+     */
+    fun saveGuild(guild: Guild) {
         try {
             guildSaver?.invoke(guild)
         } catch (e: Exception) {

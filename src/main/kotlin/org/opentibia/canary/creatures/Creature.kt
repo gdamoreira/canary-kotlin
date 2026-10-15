@@ -40,6 +40,8 @@ import org.opentibia.canary.creatures.players.components.RecentPvPKillEntry
 import org.opentibia.canary.creatures.players.getCapacity
 import org.opentibia.canary.creatures.players.pvp.PlayerPvp
 import org.opentibia.canary.creatures.players.storages.Stash
+import org.opentibia.canary.creatures.players.vip.InMemoryVipRepository
+import org.opentibia.canary.creatures.players.vip.VipRepository
 import org.opentibia.canary.game.QuickLootFilter_t
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.game.scheduling.DispatcherLane
@@ -206,6 +208,57 @@ abstract class Creature(
     fun setMoveLocked(locked: Boolean) {
         moveLocked = locked
     }
+
+    /**
+     * `Creature::eventsList` (src/creatures/creature.hpp:842): the attached named
+     * creature events, in attachment order. `Monster` keeps its type-derived
+     * attachments in the world host's `MonsterTypeState.creatureEvents`
+     * (`Monster::Monster`, monster.cpp:107-114); this list carries the ones
+     * attached through [registerCreatureEvent] (players, NPCs and the
+     * `Creature:registerEvent` call path, creature_functions.cpp:151-162).
+     */
+    val creatureEvents: MutableSet<String> = linkedSetOf()
+
+    /**
+     * `g_creatureEvents().getEventByName(name)`
+     * (`CreatureEvents::getEventByName`, src/lua/creature/creatureevent.cpp:43-52)
+     * registry lookup consulted by [registerCreatureEvent]
+     * (src/creatures/creature.cpp:1674-1680). The registry lives in the Lua
+     * environment (AGENTS.md 1.4), so the composition root injects
+     * `luaEnvironment.creatureEvents.get(name) != null`; the unwired default
+     * rejects every name exactly like an empty registry.
+     */
+    var creatureEventRegistered: (String) -> Boolean = { false }
+
+    /**
+     * `Creature::registerCreatureEvent` (src/creatures/creature.cpp:1674-1693):
+     * attaches [name]; false when the registry does not know the name or it was
+     * already attached (the C++ duplicate branch).
+     */
+    fun registerCreatureEvent(name: String): Boolean {
+        if (!creatureEventRegistered(name) || creatureEvents.contains(name)) {
+            return false
+        }
+        creatureEvents.add(name)
+        return true
+    }
+
+    /**
+     * `Creature::unregisterCreatureEvent` (src/creatures/creature.cpp:1695-1724):
+     * detaches [name]; false when the registry does not know it. PARITY GAP: the
+     * C++ returns true when the event's type was attached even if the event
+     * itself was not (the `scriptEventsBitField` early-out); the port tracks
+     * names only, so an unknown attachment reports false.
+     */
+    fun unregisterCreatureEvent(name: String): Boolean {
+        if (!creatureEventRegistered(name)) {
+            return false
+        }
+        return creatureEvents.remove(name)
+    }
+
+    /** `Creature::getCreatureEvents()` (src/creatures/creature.hpp:952) over the attached list. */
+    fun getCreatureEvents(): Collection<String> = creatureEvents
 
     /** `Creature::getDescription(int32_t)` is implemented by Player/Monster/Npc; the base placeholder is a PARITY GAP. */
     override fun getDescription(lookDistance: Int): String = ""
@@ -1645,6 +1698,15 @@ class Player(
      * composition root binds the single world lambda over its `Game`.
      */
     val transformItemCharges: (Item) -> Unit = {},
+    /**
+     * `IOLoginData` VIP persistence (`account_viplist`, `account_vipgroups`,
+     * `account_vipgrouplist`; iologindata.cpp:383-497) forwarded to
+     * [PlayerFeatures.vipRepository]: the composition root injects the JDBC
+     * repository so the `PlayerVIP` mutators (player_vip.cpp:69-219) persist,
+     * while direct construction (tests/tooling) keeps a per-player in-memory
+     * default self-contained.
+     */
+    val vipRepository: VipRepository = InMemoryVipRepository(),
 ) : Creature(id, name, maxHealth, health, maxMana, mana, speed, position), BatchUpdateActor {
 
     /**
@@ -1702,6 +1764,7 @@ class Player(
         maxMessageBuffer = { maxMessageBuffer },
         muteCountMap = muteCountMap,
         transformItemCharges = transformItemCharges,
+        vipRepository = vipRepository,
     )
 
     /**

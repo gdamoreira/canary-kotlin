@@ -183,6 +183,18 @@ class MonsterTypeBootRegistrationTest {
     }
 
     @Test
+    fun `bestiary race ids resolve through the booted registry`() {
+        // `Game::addBestiaryList` (game.cpp:9510-9518) fed by the datapack's
+        // `monsterType:raceId(id)` setters: `Monsters::getMonsterTypeByRaceId`
+        // (monsters.cpp:375-388) resolves the persisted race id, an unknown id
+        // stays unresolved.
+        val dragon = type("dragon")
+        assertThat(dragon.info.raceid).isEqualTo(34)
+        assertThat(monsters.getMonsterTypeByRaceId(34)).isSameAs(dragon)
+        assertThat(monsters.getMonsterTypeByRaceId(99_999)).isNull()
+    }
+
+    @Test
     fun `datapack without monster scripts falls back to the XML definitions`() {
         val dataDir = java.nio.file.Files.createTempDirectory("canary_boot_xml_fallback")
         java.nio.file.Files.createDirectories(dataDir.resolve("monster"))

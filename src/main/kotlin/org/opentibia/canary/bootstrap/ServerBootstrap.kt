@@ -13,6 +13,7 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.monsters.LootBlock
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.monsters.Monsters
+import org.opentibia.canary.creatures.players.vip.VipRepository
 import org.opentibia.canary.creatures.vocations.VocationRates
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.database.DatabaseConfig
@@ -53,6 +54,8 @@ import org.opentibia.canary.items.functions.ItemParse
 import org.opentibia.canary.items.functions.ItemParseRegistry
 import org.opentibia.canary.items.functions.XmlAttribute
 import org.opentibia.canary.items.functions.XmlNode
+import org.opentibia.canary.kv.KVSQL
+import org.opentibia.canary.kv.KVStore
 import org.opentibia.canary.lua.bindings.LootFunctions
 import org.opentibia.canary.lua.bindings.library.ConfigFunctions
 import org.opentibia.canary.lua.bindings.library.WorldConfigOperations
@@ -267,6 +270,20 @@ class GameComposition(
      * to [SaveManager.registerOnlinePlayer]/[SaveManager.unregisterOnlinePlayer].
      */
     val saveManager: SaveManager? = null,
+    /**
+     * `g_kv()` root (`KVStore::getInstance`, src/kv/kv.hpp:188): the SQL-backed
+     * store the listener scopes per session as `Player::kv()`
+     * (`g_kv().scoped("player").scoped(guid)`, player.cpp:1398-1400). The same
+     * `KVStore` backs [SaveManager]'s `KVStore::saveAll` rotation
+     * (save_manager.cpp:104-110).
+     */
+    val keyValueStore: KVStore? = null,
+    /**
+     * `IOLoginData` VIP persistence (`PlayerVIP m_playerVIP` writes,
+     * player_vip.cpp:69-219) the root injects into every session
+     * `PlayerFeatures` so the account VIP list, groups and memberships persist.
+     */
+    val vipRepository: VipRepository? = null,
 )
 
 /** Creates the network listener (`CanaryServer`) from the booted services. */
@@ -308,6 +325,8 @@ internal fun defaultListenerFactory(rsaCipher: RsaCipher = RsaCipher.fromEnviron
             vocations = composition.vocations,
             ioLoginData = composition.playerSavePath.loginData,
             saveManager = composition.saveManager,
+            kvStore = composition.keyValueStore,
+            vipRepository = composition.vipRepository,
         ).also { server ->
             // `Player::isOffline()` (player.hpp:481): the world seams
             // (`Game.playerAcceptMarketOffer`, game.cpp:10919/10943) read the
@@ -460,12 +479,17 @@ class ServerBootstrap(
         // listener owns; it is created after this composition, so the world
         // reference is late-bound and read only from session loads.
         val worldGame = AtomicReference<Game?>(null)
+        // One `IOLoginData` VIP sink shared by the sub-loads, the save path and
+        // every session `PlayerFeatures`: the `PlayerVIP` mutators persist
+        // through the same repository the login VIP reads use.
+        val vipRepository = JdbcVipRepository(saveTransaction)
+        val ioGuild = IOGuild(JdbcGuildRepository(saveTransaction))
         val subloads = IOLoginDataSubloads(
             subloadRepository = subloadRepository,
             storageRepository = DbPlayerStorageRepository(saveTransaction),
-            vip = JdbcVipRepository(saveTransaction),
+            vip = vipRepository,
             guildMemberships = DbGuildMembershipRepository(saveTransaction),
-            ioGuild = IOGuild(JdbcGuildRepository(saveTransaction)),
+            ioGuild = ioGuild,
             getGuild = { id -> worldGame.get()?.getGuild(id) },
             addGuild = { guild -> worldGame.get()?.addGuild(guild) },
             warnUnsafeScripts = warnUnsafeScripts(configManager),
@@ -476,7 +500,7 @@ class ServerBootstrap(
             loginData = IOLoginData(
                 players = JdbcPlayerRepository(saveTransaction),
                 accounts = JdbcAccountRepository(saveTransaction),
-                vip = JdbcVipRepository(saveTransaction),
+                vip = vipRepository,
                 storageRepository = JdbcPlayerStorageRepository(saveTransaction),
                 items = JdbcPlayerItemsRepository(saveTransaction),
                 depots = JdbcPlayerDepotRepository(saveTransaction),
@@ -492,13 +516,27 @@ class ServerBootstrap(
                 depotChests = { player -> player.getDepotChests() },
                 bestiaryPersistence = IOBestiaryPersistence(saveTransaction),
                 preyPersistence = IOPreyPersistence(saveTransaction),
+                // `g_monsters()` so `IOLoginDataSubloads2` resolves the persisted
+                // bestiary tracker race ids through
+                // `Monsters::getMonsterTypeByRaceId` (monsters.cpp:375-388) in the
+                // production login path.
+                monsters = monsters,
                 subloads = subloads,
                 subloadRepository = subloadRepository,
                 isOffline = sessionPlayerIsOffline,
             ),
             players = JdbcPlayerRepository(saveTransaction),
         )
-        saveManager = SaveManager(playerSavePath)
+        // `g_kv()` (kv.hpp:188): one SQL-backed store for the session
+        // `Player.kv` scopes and the `SaveManager::saveKV` flush
+        // (save_manager.cpp:104-110).
+        val kvStore = KVSQL(saveTransaction)
+        saveManager = SaveManager(
+            playerSavePath,
+            guilds = { worldGame.get()?.getGuilds()?.values?.toList() ?: emptyList() },
+            guildSaver = { guild -> ioGuild.saveGuild(guild) },
+            keyValueSaver = { kvStore.saveAll() },
+        )
 
         runningDispatcher.start()
 
@@ -519,6 +557,8 @@ class ServerBootstrap(
                 computeService,
                 playerSavePath,
                 saveManager,
+                keyValueStore = kvStore,
+                vipRepository = vipRepository,
             ),
         )
         listener = server
@@ -609,6 +649,13 @@ private class ItemsParseRegistry(private val items: Items) : ItemParseRegistry {
  * `Item::items.getItemIdByName`. When no Lua state was booted (a test composition root
  * injecting a bare [LuaEnvironment]) the Lua half is skipped and the XML fallback alone
  * runs.
+ *
+ * The registry's `bestiaryList` (`Game::getBestiaryList`, game.hpp:459-461) is fed
+ * from the registered types' `monsterType:raceId(id)` values
+ * (monster_type_functions.cpp:685-688) after both load phases, so
+ * `Monsters::getMonsterTypeByRaceId` (monsters.cpp:375-388) resolves the persisted
+ * bestiary tracker race ids at login; first registration wins exactly like
+ * `Game::addBestiaryList` (game.cpp:9510-9518).
  */
 internal fun defaultMonsterBoot(
     config: ServerConfig,
@@ -616,10 +663,28 @@ internal fun defaultMonsterBoot(
     configManager: ConfigManager,
     itemTypes: Items,
 ): Monsters {
-    val registry = Monsters()
+    val bestiaryRaceIds = linkedMapOf<Int, String>()
+    val registry = Monsters(bestiaryList = { bestiaryRaceIds })
     loadMonsterTypesFromLua(config, luaEnvironment, configManager, itemTypes, registry)
     loadMonsterTypesFromXml(config, registry)
+    registerBestiaryRaceIds(registry, bestiaryRaceIds)
     return registry
+}
+
+/**
+ * `Game::addBestiaryList` (game.cpp:9510-9518) fed by the `monsterType:raceId(id)`
+ * setter (monster_type_functions.cpp:685-688): every registered type whose
+ * `info.raceid` is set joins the race-id -> name map the registry resolves
+ * through `getMonsterTypeByRaceId`; first registration wins like the C++
+ * `if (contains(raceid)) return;` guard.
+ */
+private fun registerBestiaryRaceIds(registry: Monsters, raceIds: MutableMap<Int, String>) {
+    for (type in registry.monsters.values) {
+        val raceId = type.info.raceid
+        if (raceId != 0 && !raceIds.containsKey(raceId)) {
+            raceIds[raceId] = type.name
+        }
+    }
 }
 
 /**
