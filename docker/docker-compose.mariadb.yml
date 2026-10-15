@@ -1,0 +1,17 @@
+---
+# MariaDB single-database mode for the Canary Kotlin stack: the game server,
+# MyAAC and login-server all share the `mariadb` service (the game database).
+#
+# Run from the repository root (see docker/DOCKER.md "Database engines"):
+#
+#   docker compose -f docker-compose.yml -f docker/docker-compose.mariadb.yml up -d --build
+#
+# Overrides cannot delete services, so the PostgreSQL `db` service stays
+# defined in the merged model and `up` still starts it; the server no longer
+# uses it. Stop it with the same -f pair plus `stop db` if you want it down.
+services:
+  server:
+    environment:
+      CANARY_DB_ENGINE: "mariadb"
+      CANARY_DB_HOST: "mariadb"
+      CANARY_DB_PORT: "3306"

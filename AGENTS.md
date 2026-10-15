@@ -36,12 +36,12 @@ This document records the binding architectural policies, lifetime safety rules,
 ## 2. Database & Persistence Directives
 
 ### 2.1 Database Compatibility & Migration Discipline
-- **Target Relational Database**: **PostgreSQL 16+**.
-- **Local Testing Mode**: Always provide zero-configuration local runs via **H2 In-Memory in PostgreSQL mode** (`MODE=PostgreSQL`).
-- **Flyway Migrations**:
+- **Target Relational Databases**: **PostgreSQL 16+** (default) **or MariaDB 11.4+**, selected with `CANARY_DB_ENGINE` (`postgres`/`postgresql` — default; `maria`/`mariadb`/`mysql` — MariaDB). An unknown value fails fast at boot.
+- **Local Testing Mode**: Always provide zero-configuration local runs via **H2 In-Memory in PostgreSQL mode** (`MODE=PostgreSQL`); the automated suite never requires a live database daemon.
+- **Flyway Migrations** (per-dialect trees):
   - Schema changes must NEVER be executed through ad-hoc manual SQL scripts.
-  - Every schema modification must be placed in `src/main/resources/db/migration/V<version>__<description>.sql`.
-  - Flyway runs automatically upon server boot before accepting network traffic.
+  - Every schema modification must be added to **both** dialect trees at the same version: `src/main/resources/db/migration/postgres/V<version>__<description>.sql` and `src/main/resources/db/migration/mariadb/V<version>__<description>.sql`.
+  - Flyway runs automatically upon server boot before accepting network traffic, selecting the tree from the detected connection engine.
 
 ---
 

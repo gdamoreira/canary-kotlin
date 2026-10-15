@@ -61,6 +61,10 @@ services:
     container_name: canary-kotlin-server
     restart: unless-stopped
     environment:
+      # Engine selector: postgres (default) or maria/mariadb/mysql. MariaDB
+      # also needs docker/docker-compose.mariadb.yml (which repoints host/port);
+      # setting only this variable on the base stack keeps CANARY_DB_HOST=db.
+      CANARY_DB_ENGINE: "${CANARY_DB_ENGINE:-postgres}"
       CANARY_DB_HOST: "db"
       CANARY_DB_PORT: "5432"
       CANARY_DB_NAME: "${CANARY_DB_NAME:-canary}"
