@@ -660,8 +660,19 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 68: Wave 65 — Composition Bindings (01:00 – 03:00)
+- **Composition bindings** — `Monsters` into the login path (bestiary race ids), VIP repository injection, `Player.kv` scoped-store rebind, Tile queryAdd seams, `Game.saveGuild`, save-all guild/KV savers, modal scripting, player-side event attachment (9 tests).
+- **VIP protocol** — `sendVIP`/`sendVIPGroups`/`sendUpdatedVIPStatus` on the sink (0xD2/0xD3/0xD4) with `PlayerVip` wired to the transport (9 tests).
+- **Spell registry boot** — engine `Spells` composed and populated from datapack scripts; `sb.spell` resolves compiled actors at boot (8 tests).
+- **Lua spell entry points** — `combat:execute`, `doTargetCombat*`, area registry and the `canThrowSpell` gate route through the wave-64 combat core (20 tests).
+- **Shop/inspection** — opcode `0x79` wired to `playerLookInShop`; `playerInspectItem` + the 0x76 inspection window consuming plural descriptions (8 tests).
+- **CI hardening** — `ImbuementDecaySchedulerTest` race fixed with a deterministic barrier; Actions upgraded to v5; `runs-on` pinned to `ubuntu-24.04`.
+- **729 suites / 7958 tests, all green**; all six commits ancestry-verified.
+
+---
+
 ### Current Status
-- **Automated Tests**: **718 test suites / 7905 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **729 test suites / 7958 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.

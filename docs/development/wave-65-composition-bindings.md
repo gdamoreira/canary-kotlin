@@ -1,6 +1,6 @@
 # Wave 65 Plan — Composition Bindings, VIP Protocol, Spell Boot, Lua Entry Points, Shop/Inspection, CI
 
-**Status:** In progress — dispatched
+**Status:** Completed (2026-10-15) — six workstreams merged; 729 suites / 7958 tests green
 **Baseline:** `main` @ `de9e9270`; 718 suites / 7905 tests green; zero Kotlin warnings
 **Source of scope:** `docs/development/implementation-status.md` §3 items 1–2 (composition bindings + protocol call sites).
 **Convention:** documents live directly in `docs/development/` (AGENTS.md §5/§6).
@@ -125,3 +125,13 @@ Update `docs/development/implementation-status.md` (§1 metrics, §3),
 Persistence save tails (logout tail, exiva save, save-all savers) → wave 66;
 combat depth + monster/map tails → wave 67; differential harness and old
 protocol/OTel stay deferred.
+
+---
+
+## Completion (2026-10-15)
+
+All six workstreams merged: composition-bindings (`ee238d19`), vip-protocol
+(`d5a5ea1b`), spells-boot (`af339310`), lua-spell-entrypoints (`4799ce1f`),
+shop-inspection (`45ed7e21`), ci-hardening (`6b6dbbc7`). Integrated suite:
+**729 suites / 7958 tests, 0 failures, zero Kotlin warnings**. Remaining tails
+move to waves 66 (persistence saves) and 67 (combat/monster depth).
