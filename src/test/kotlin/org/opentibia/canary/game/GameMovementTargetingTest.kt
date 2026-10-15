@@ -16,6 +16,7 @@ import org.opentibia.canary.items.Thing
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Tile
+import org.opentibia.canary.network.protocol.InMemoryProtocolSink
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 
 /**
@@ -134,6 +135,35 @@ class GameMovementTargetingTest {
 
         assertThat(creature.direction).isEqualTo(Direction.North)
         assertThat(turns).containsExactly(creature)
+    }
+
+    @Test
+    fun `internalCreatureTurn reaches the attached player sink with the turn frame`() {
+        // Game::internalCreatureTurn (game.cpp:7599) -> Player::sendCreatureTurn
+        // (player.cpp:8809-8827) -> ProtocolGame::sendCreatureTurn
+        // (protocolgame.cpp:7988-8004): the default seam binding delivers the
+        // 0x6B frame to the spectator player's client.
+        val map = GameMap()
+        val game = Game(map, GameDispatcher())
+        val spectator = player(id = 1, name = "Spectator", position = center)
+        game.placeCreatureOnTile(spectator)
+        val creature = testCreature(id = 2, position = Position(1001, 1000, 7))
+        game.placeCreatureOnTile(creature, creature.position)
+        val sink = InMemoryProtocolSink(spectator, map)
+        spectator.protocolSink = sink
+
+        assertThat(game.internalCreatureTurn(creature, Direction.East)).isTrue()
+
+        assertThat(sink.frames).containsExactly(
+            byteArrayOf(
+                0x6B, 0xE9.toByte(), 0x03, 0xE8.toByte(), 0x03, 0x07,
+                0x01,
+                0x63, 0x00,
+                0x02, 0x00, 0x00, 0x00,
+                0x01,
+                0x01,
+            ),
+        )
     }
 
     // ----- playerTurn -----

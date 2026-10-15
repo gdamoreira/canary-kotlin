@@ -122,6 +122,14 @@ class SpawnMonster(
     private val boostedMonsterName: String = "",
     private val eventsSpawnMonsterSchedule: Int = 100,
     private val addMagicEffect: (Position, Int) -> Unit = { _, _ -> },
+    /**
+     * `Monster::onSpawn(position)` (src/creatures/monsters/monster.cpp:627-648)
+     * dispatch seam for `monster->onSpawn(sb.pos)`
+     * (src/creatures/monsters/spawns/spawn_monster.cpp:220). The composition
+     * root binds the world host (`MonsterPipelinesHost.onSpawn`); the inert
+     * default keeps the engine world-free (embedded/test use).
+     */
+    private val onMonsterSpawn: (Monster, Position) -> Unit = { _, _ -> },
 ) {
     private var interval: Long = 30000
     private var checkSpawnMonsterEvent: SpawnTask? = null
@@ -334,6 +342,9 @@ class SpawnMonster(
         spawnedMonsterMap[spawnMonsterId] = monster
         sb.lastSpawn = now()
         bindSpawnOwner(monster)
+        // spawn_monster.cpp:220: `monster->onSpawn(sb.pos)` runs after the
+        // placement, direction, spawn-owner and master-position wiring.
+        onMonsterSpawn(monster, sb.pos)
         return true
     }
 

@@ -263,4 +263,62 @@ class SpawnMonsterTest {
         spawn.stopEvent()
         assertThat(scheduler.pendingCount).isEqualTo(0)
     }
+
+    @Test
+    fun `spawning dispatches onSpawn once per new monster with the block position`() {
+        // spawn_monster.cpp:220: `monster->onSpawn(sb.pos)` after the successful
+        // placement, direction and spawn-owner wiring.
+        val rat = MonsterType("Rat", isBlockable = true)
+        val pos = Position(100, 100, 7)
+        val spawned = mutableListOf<Pair<Monster, Position>>()
+        val spawn = SpawnMonster(
+            centerPos = pos,
+            radius = 3,
+            monsterTypeLookup = monsterTypeLookup(rat),
+            monsterFactory = factory,
+            scheduler = scheduler,
+            now = { now },
+            onMonsterSpawn = { monster, position -> spawned.add(monster to position) },
+        )
+        spawn.addMonster("Rat", pos, Direction.North, 2000L)
+
+        spawn.startup()
+
+        assertThat(spawned).containsExactly(factory.created.single() to pos)
+
+        val first = spawn.spawnedMonsterMap[1]!!
+        now = 500
+        first.setRemoved()
+        spawn.startSpawnMonsterCheck()
+        now = 2500
+        scheduler.runDue()
+        now = 4500
+        scheduler.runDue()
+
+        assertThat(spawned).hasSize(2)
+        assertThat(spawned[1].first).isSameAs(factory.created[1])
+        assertThat(spawned[1].second).isEqualTo(pos)
+    }
+
+    @Test
+    fun `a monster that cannot enter the world never dispatches onSpawn`() {
+        val rat = MonsterType("Rat", isBlockable = true)
+        val pos = Position(100, 100, 7)
+        val spawned = mutableListOf<Monster>()
+        val spawn = SpawnMonster(
+            centerPos = pos,
+            radius = 3,
+            monsterTypeLookup = monsterTypeLookup(rat),
+            monsterFactory = { _, _, _ -> null },
+            scheduler = scheduler,
+            now = { now },
+            onMonsterSpawn = { monster, _ -> spawned.add(monster) },
+        )
+        spawn.addMonster("Rat", pos, Direction.North, 2000L)
+
+        spawn.startup()
+
+        assertThat(spawned).isEmpty()
+        assertThat(spawn.spawnedMonsterMap).isEmpty()
+    }
 }

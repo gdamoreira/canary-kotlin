@@ -9,11 +9,15 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
+import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.monsters.Monsters
 import org.opentibia.canary.creatures.spawns.MONSTER_AUTO_ID_START
 import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.game.scheduling.MonsterComputeConfig
+import org.opentibia.canary.game.scheduling.MonsterComputeService
 import org.opentibia.canary.items.Item
+import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Spectators
@@ -111,6 +115,60 @@ class CanaryServerSpawnPathTest {
         val plain = CanaryServer(loginPort = 0, gamePort = 0, gameMap = GameMap(), dispatcher = dispatcher)
 
         assertThat(plain.monsterSpawnPath).isNull()
+    }
+
+    @Test
+    fun `boot injects the creature event registry lookup into the monster host`() {
+        // `Creature::registerCreatureEvent` (creature.cpp:1674-1693) validates
+        // the name through `g_creatureEvents().getEventByName` (creatureevent.cpp:43-52);
+        // the composition root injects the booted registry so `Monster::Monster`
+        // (monster.cpp:107-114) and `luaMonsterTypeRegisterEvent` reject unknown
+        // names in production.
+        val environment = LuaEnvironment().apply { initState() }
+        environment.loadChunk(
+            """
+            local known = CreatureEvent("BootKnown")
+            function known.onThink(creature, interval) end
+            known:register()
+            """.trimIndent(),
+        )
+        val registered = Monsters().apply {
+            tryAddMonsterType(
+                "Rat",
+                MonsterType("Rat").apply {
+                    info.isBlockable = true
+                    info.scripts += "BootGhost"
+                    info.scripts += "BootKnown"
+                },
+            )
+        }
+        val service = MonsterComputeService()
+        service.start(MonsterComputeConfig(configuredThreads = 0, capacity = 16, hardwareConcurrency = 1))
+        try {
+            val composed = CanaryServer(
+                loginPort = 0,
+                gamePort = 0,
+                gameMap = gameMap,
+                dispatcher = dispatcher,
+                luaEnvironment = environment,
+                monsters = registered,
+                monsterComputeService = service,
+            )
+            val host = composed.monsterPipelinesHost!!
+            assertThat(host.creatureEventRegistered("BootKnown")).isTrue()
+            assertThat(host.creatureEventRegistered("BootGhost")).isFalse()
+
+            val livePosition = Position(300, 300, 7)
+            gameMap.getOrCreateTile(livePosition).ground = Item(id = 100)
+            val monster = Monster(id = 777, name = "Rat", maxHealth = 100, health = 100, position = livePosition)
+            assertThat(composed.game.internalPlaceCreature(monster, livePosition)).isTrue()
+
+            val state = host.typeStateOf(777)!!
+            assertThat(state.hasCreatureEvent("BootKnown")).isTrue()
+            assertThat(state.hasCreatureEvent("BootGhost")).isFalse()
+        } finally {
+            service.shutdown()
+        }
     }
 
     private fun awaitLane() {

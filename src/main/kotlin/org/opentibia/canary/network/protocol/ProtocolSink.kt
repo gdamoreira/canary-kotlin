@@ -22,6 +22,7 @@ import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.network.protocol.container.ContainerItemWriter
 import org.opentibia.canary.network.protocol.creature.CreaturePacketWriter
+import org.opentibia.canary.network.protocol.map.TilePacketWriter
 import org.opentibia.canary.network.protocol.player.PlayerWindowWriter
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 
@@ -156,7 +157,11 @@ abstract class ProtocolFrameSink(
         val stackpos = tile.getClientIndexOfCreature(player, creature)
         if (stackpos < 0 || stackpos >= MAX_STACKPOS) {
             // `Player::sendCreatureAppear` falls back to `sendUpdateTile`
-            // (player.cpp:8793); the tile-update sender is not ported.
+            // (player.cpp:8793). The transports without the extended
+            // `PlayerSendSink.sendUpdateTile` sender refresh the viewport
+            // through the same ported tile-update frame instead of dropping the
+            // appear silently.
+            emit { TilePacketWriter.writeUpdateTile(this, player, tile, position) { appearanceOf(it) } }
             return
         }
         emit { GameWindowWriter.writeAddCreature(this, position, stackpos, appearanceOf(creature)) }

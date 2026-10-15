@@ -2,6 +2,7 @@ package org.opentibia.canary.creatures.spawns
 
 import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
+import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.creatures.monsters.Monsters
@@ -49,6 +50,13 @@ class MonsterSpawnPath(
     private val rateSpawn: Int = configNumber(config, "RATE_SPAWN", 1),
     private val eventsSpawnMonsterSchedule: Int = 100,
     monsterPerfTestForceActive: Boolean = configBoolean(config, "MONSTER_PERF_TEST_FORCE_ACTIVE", false),
+    /**
+     * `Monster::onSpawn(position)` dispatch seam threaded into every block
+     * engine (src/creatures/monsters/spawns/spawn_monster.cpp:220). The
+     * composition root binds the world host (`MonsterPipelinesHost.onSpawn`);
+     * the inert default keeps the path world-free (embedded/test use).
+     */
+    private val onMonsterSpawn: (Monster, Position) -> Unit = { _, _ -> },
 ) {
     private val monsterFactory = GameMonsterFactory(game, monsterTypes, monsterPerfTestForceActive)
 
@@ -97,6 +105,7 @@ class MonsterSpawnPath(
         boostedMonsterName = game.getBoostedMonsterName(),
         eventsSpawnMonsterSchedule = eventsSpawnMonsterSchedule,
         addMagicEffect = game::addMagicEffect,
+        onMonsterSpawn = onMonsterSpawn,
     )
 
     /**
