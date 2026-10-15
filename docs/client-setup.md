@@ -24,7 +24,15 @@ login path** for modern clients. This guide matches the current server profile
 
 ## 2. Server stack (Docker, recommended)
 
-Single-database MariaDB mode, so server + login-server share one database:
+Single-database MariaDB mode, so server + login-server share one database.
+One-command start (MariaDB + Canary Kotlin login+game + login-server, default
+ports, waits for readiness):
+
+```bash
+scripts/start.sh
+```
+
+Or by hand:
 
 ```bash
 cp docker/.env.dist .env            # optional; defaults work
