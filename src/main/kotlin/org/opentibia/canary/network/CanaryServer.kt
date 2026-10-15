@@ -44,6 +44,7 @@ import org.opentibia.canary.io.iologindata.IOLoginData
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.Items
+import org.opentibia.canary.lua.bindings.core.GameFunctions
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.ScriptingDispatch
 import org.opentibia.canary.map.GameMap
@@ -55,10 +56,16 @@ import org.opentibia.canary.network.protocol.GameHandler
 import org.opentibia.canary.network.protocol.GameMarketEscrow
 import org.opentibia.canary.network.protocol.LoginHandler
 import org.opentibia.canary.network.protocol.StatusHandler
+import org.opentibia.canary.network.webhook.HttpWebhookSender
+import org.opentibia.canary.network.webhook.Webhook
 import org.opentibia.canary.social.guild.GuildRepository
 import org.opentibia.canary.systems.imbuement.ImbuementDecay
 import org.opentibia.canary.systems.imbuement.ImbuementEngine
 import org.opentibia.canary.systems.imbuement.Imbuements
+import org.opentibia.canary.systems.raid.GameRaidSpawner
+import org.opentibia.canary.systems.raid.RaidGameOperations
+import org.opentibia.canary.systems.raid.Raids
+import org.opentibia.canary.systems.raid.WorldRaidEnvironment
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -93,6 +100,13 @@ class CanaryServer(
     private val gamePort: Int = 7172,
     private val accountRepository: AccountRepository = InMemoryAccountRepository(),
     private val gameMap: GameMap = GameMap(),
+    /**
+     * `g_configManager().getString(DATA_DIRECTORY)` resolved by the composition
+     * root: the datapack directory the legacy raid container loads
+     * `raids/raids.xml` from (`Raids::loadFromXml`, src/lua/creature/raids.cpp:29).
+     * `null` keeps the raid container uncomposed (embedded/test use).
+     */
+    private val dataDirectory: String? = null,
     /**
      * `g_dispatcher()` shared by the world. When absent the composition root
      * owns one composed with [configManager] (`getConfiguredDispatcherBudgets`,
@@ -492,6 +506,47 @@ class CanaryServer(
         return configManager?.getNumber(key, key.defaultValue as Int) ?: fallback
     }
 
+    /** `g_configManager().getString(...)` read for the composed world services. */
+    private fun worldConfigString(name: String, fallback: String): String {
+        val key = ConfigKeys.byName(name) ?: return fallback
+        return configManager?.getString(key, key.defaultValue as String) ?: fallback
+    }
+
+    /** `g_configManager().getBoolean(...)` read for the composed world services. */
+    private fun worldConfigBoolean(name: String, fallback: Boolean): Boolean {
+        val key = ConfigKeys.byName(name) ?: return fallback
+        return configManager?.getBoolean(key, key.defaultValue as Boolean) ?: fallback
+    }
+
+    // --- webhook (`g_webhook()`) ---------------------------------------------
+
+    /**
+     * `g_webhook()` (src/server/network/webhook/webhook.hpp:88): the Discord
+     * sink of `Game::shutdown` (game.cpp:9499) and
+     * `AnnounceEvent::executeEvent` (raids.cpp:347). The C++ constructor reads
+     * `SERVER_NAME`/`DISCORD_*` from `g_configManager()`; the same values are
+     * injected here, and the send loop is armed by [start]
+     * (`Webhook::run`, webhook.cpp:39-44) on the Maintenance lane. `null` when
+     * the root owns no config (embedded/test use), which degrades every send to
+     * the documented no-op.
+     */
+    internal val webhook: Webhook? = configManager?.let { manager ->
+        Webhook(
+            sender = HttpWebhookSender(),
+            serverName = worldConfigString("SERVER_NAME", ""),
+            webhookUrl = worldConfigString("DISCORD_WEBHOOK_URL", ""),
+            sendFooter = worldConfigBoolean("DISCORD_SEND_FOOTER", true),
+            delayMs = worldConfigNumber("DISCORD_WEBHOOK_DELAY_MS", 1000).toLong(),
+            dispatcher = this.dispatcher,
+        )
+    }
+
+    init {
+        // The `Game::shutdown` message (game.cpp:9499) drains through the same
+        // `g_webhook()` sink the raid announcer uses.
+        game.sendWebhook = { message -> webhook?.sendMessage(message) }
+    }
+
     // --- monster spawn path (`IOMap::loadMonsters` + `SpawnsMonster::startup`) ---
 
     /**
@@ -526,6 +581,53 @@ class CanaryServer(
         } else {
             null
         }
+
+    // --- raids (`Game::raids`) -------------------------------------------------
+
+    /**
+     * `Game::raids` (src/game/game.hpp) composed over the world. Canary owns the
+     * container on `Game` and runs its `GAME_STATE_INIT` half inside
+     * `Game::setGameState` (`raids.loadFromXml(); raids.startup()`,
+     * src/game/game.cpp:979-980); the port's root performs that half in [start]
+     * and drains it in [stop] (`Game::shutdown` -> `raids.clear()`,
+     * game.cpp:9504 through `Game.clearRaids`).
+     *
+     * The environment binds the production seams: the shared dispatcher on the
+     * Maintenance lane, the `Game`/`g_webhook()` announcer, the wave-70
+     * [GameRaidSpawner] over [monsterSpawnPath], the `OTSYS_TIME()` clock and
+     * the Lua `onRaid` script runner. Composed only when both the datapack
+     * directory and the world monster spawn path exist; embedded roots keep it
+     * uncomposed.
+     */
+    internal val raids: Raids? = dataDirectory?.let { directory ->
+        monsterSpawnPath?.let { spawnPath ->
+            Raids(
+                WorldRaidEnvironment(
+                    dataDirectory = directory,
+                    gameDispatcher = this.dispatcher,
+                    game = game,
+                    luaEnvironment = luaEnvironment,
+                    spawner = GameRaidSpawner(spawnPath, gameMap, monsterPipelinesHost),
+                    webhook = webhook,
+                ),
+                disableLegacyRaids = worldConfigBoolean("DISABLE_LEGACY_RAIDS", false),
+            ).also { container ->
+                game.clearRaids = { container.clear() }
+            }
+        }
+    }
+
+    init {
+        // `GameFunctions::luaGameStartRaid` (game_functions.cpp:752-772): the
+        // `Game` table the Lua environment installed keeps its documented
+        // `RETURNVALUE_NOSUCHRAIDEXISTS` default until the root composes the
+        // container, then `Game.startRaid(name)` resolves loaded raids over it.
+        raids?.let { container ->
+            luaEnvironment.worldOperations?.let { operations ->
+                GameFunctions.install(luaEnvironment, RaidGameOperations(operations.game, container))
+            }
+        }
+    }
 
     /**
      * `g_game().transformItem(item, item->getID(), charges - 1)` binding
@@ -639,6 +741,15 @@ class CanaryServer(
             }
         }
 
+        // `raids.loadFromXml(); raids.startup()` of
+        // `Game::setGameState(GAME_STATE_INIT)` (src/game/game.cpp:979-980):
+        // the definitions parse here and the check timer arms on the shared
+        // dispatcher for `CHECK_RAIDS_INTERVAL` later (raids.cpp:98-115).
+        raids?.let { container ->
+            container.loadFromXml()
+            container.startup()
+        }
+
         // Canary fires the `startup` global events during `GAME_STATE_INIT`
         // (g_globalEvents().startup(), src/game/game.cpp:988) before the world serves
         // players. Confined to the WorldCommit lane by ScriptingDispatch.
@@ -649,6 +760,11 @@ class CanaryServer(
         // once the listeners are bound. `Game::start` is one-shot, so a
         // repeated boot cannot double-arm the loop.
         game.start()
+
+        // `Webhook::run` (webhook.cpp:39-44): the send loop arms on the server
+        // lifecycle and reschedules itself on the Maintenance lane; the
+        // dispatcher drain cancels it at shutdown.
+        webhook?.run()
     }
 
     /** Builds the per-connection game handler wired to this server's record tracking. */
@@ -720,6 +836,10 @@ class CanaryServer(
         // so no callback can outlive its owner (AGENTS.md deferred-callback
         // lifetime safety).
         monsterSpawnPath?.shutdown()
+        // `Game::shutdown` -> `raids.clear()` (src/game/game.cpp:9504): cancel
+        // the pending raid check and every in-flight raid event while the
+        // dispatcher is still alive, then drop the loaded scripts.
+        raids?.clear()
         // Drain the shared decay engine before the listener/event-loop teardown;
         // the bootstrap shuts the dispatcher down after the listeners
         // (ShutdownDrain order), so no callback can outlive its owner.

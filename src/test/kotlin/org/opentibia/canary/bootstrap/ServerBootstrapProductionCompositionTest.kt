@@ -403,6 +403,44 @@ class ServerBootstrapProductionCompositionTest {
         }
     }
 
+    @Test
+    fun `default listener factory composes the raids from the configured data directory`() {
+        val databaseBoot = TestDatabaseBoot("bootstrap_prod_raids_${System.nanoTime()}")
+        databaseBoot.connect(null)
+        databaseBoot.migrate(databaseBoot.dataSource)
+        val service = inlineService()
+        val dispatcher = GameDispatcher(monsterComputeService = service)
+        val composition = GameComposition(
+            dataSource = databaseBoot.dataSource,
+            itemTypes = Items(),
+            imbuements = Imbuements(),
+            monsters = Monsters(),
+            vocations = Vocations(),
+            configManager = configManager(),
+            creatureAsyncTaskBuckets = CreatureAsyncTaskBuckets(dispatcher = { dispatcher }),
+            monsterComputeService = service,
+            playerSavePath = savePath(databaseBoot.dataSource),
+        )
+
+        try {
+            val server = defaultListenerFactory().create(
+                ServerConfig(loginPort = 0, gamePort = 0, dataDir = "data-canary"),
+                InMemoryAccountRepository(),
+                GameMap(),
+                dispatcher,
+                LuaEnvironment().apply { initState() },
+                composition,
+            ) as CanaryServer
+
+            // `Game::setGameState(GAME_STATE_INIT)` composes the container at
+            // boot; the definitions load on `CanaryServer.start`.
+            assertThat(server.raids).isNotNull
+        } finally {
+            service.shutdown()
+            databaseBoot.dataSource.close()
+        }
+    }
+
     private fun savePath(dataSource: DataSource): org.opentibia.canary.io.iologindata.PlayerSavePath {
         val transaction = org.opentibia.canary.io.iologindata.PlayerSaveTransaction(dataSource)
         val itemTypes = ItemTypeRegistry().apply { register(ItemType(2400, "magic sword", isMovable = true)) }

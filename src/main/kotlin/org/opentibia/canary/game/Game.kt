@@ -2455,8 +2455,9 @@ class Game(
     }
 
     /**
-     * `Game::shutdown` (src/game/game.cpp:9498). PARITY GAP: `raids.clear()`
-     * has no Kotlin owner.
+     * `Game::shutdown` (src/game/game.cpp:9498). The `raids.clear()` step
+     * (game.cpp:9504) routes through [clearRaids], which the world root binds
+     * once the raid container is composed.
      */
     fun shutdown() {
         sendWebhook(":red_circle: Server is shutting down...")
@@ -2464,6 +2465,7 @@ class Game(
         logger.info { "Shutting down..." }
         map.spawnsMonster.clear()
         map.spawnsNpc.clear()
+        clearRaids()
 
         stopServiceManager()
         closeAllConnections()
@@ -2486,6 +2488,13 @@ class Game(
 
     /** `g_webhook().sendMessage(message)` (game.cpp:9499) seam. */
     var sendWebhook: (String) -> Unit = { _ -> }
+
+    /**
+     * `raids.clear()` (game.cpp:9504) seam: the world root binds it to the
+     * `Raids` container it owns, since the port keeps raids out of `Game`
+     * (AGENTS.md 1.1).
+     */
+    var clearRaids: () -> Unit = {}
 
     /** `serviceManager->stop()` (game.cpp:9505) seam. */
     var stopServiceManager: () -> Unit = {}
@@ -11659,9 +11668,10 @@ class Game(
     /**
      * `Game::setGameState` (src/game/game.cpp:952). Reduced to the state
      * assignment and the two guard clauses: the `GAME_STATE_INIT` world
-     * bootstrap (map spawns, raids, mounts, MOTD/record load), the
-     * `GAME_STATE_SHUTDOWN` save/kick-all and the `GAME_STATE_CLOSED` kick of
-     * non-`CanAlwaysLogin` players are not wired (PARITY GAP).
+     * bootstrap runs inside `CanaryServer.start` (map spawns, raids, the global
+     * startup events), while the `GAME_STATE_SHUTDOWN` save/kick-all and the
+     * `GAME_STATE_CLOSED` kick of non-`CanAlwaysLogin` players are not wired
+     * (PARITY GAP).
      */
     fun setGameState(newState: GameState_t) {
         if (gameState == GameState_t.GAME_STATE_SHUTDOWN) {
