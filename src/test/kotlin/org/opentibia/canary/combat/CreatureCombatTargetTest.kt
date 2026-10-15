@@ -9,6 +9,7 @@ import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.monsters.Faction
 import org.opentibia.canary.creatures.monsters.MonsterPipelinesHost
 import org.opentibia.canary.creatures.monsters.MonsterType
@@ -18,6 +19,7 @@ import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.scheduling.MonsterComputeConfig
 import org.opentibia.canary.game.scheduling.MonsterComputeService
 import org.opentibia.canary.items.Item
+import org.opentibia.canary.items.ItemType
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.SpectatorMapAccess
@@ -180,6 +182,22 @@ class CreatureCombatTargetTest {
         // mantra = getMantra() + (getBuff(BUFF_MANTRA) - 100) = 100.
         assertThat(Combat.applyMantraAbsorb(adapter, CombatType.FIREDAMAGE, -50)).isEqualTo(0)
         assertThat(Combat.applyMantraAbsorb(adapter, CombatType.FIREDAMAGE, -10)).isEqualTo(0)
+        assertThat(Combat.applyMantraAbsorb(adapter, CombatType.PHYSICALDAMAGE, -50)).isEqualTo(-50)
+    }
+
+    @Test
+    fun `the adapter resolves the mantra from the equipped armor slots`() {
+        // `Player::getMantra` (player.cpp:671-694) sums the seven armor slots.
+        val target = Player(id = 2, name = "Target", maxHealth = 150, health = 150, position = center)
+        val ring = Item(id = 2400, type = ItemType(id = 2400, name = "mantra ring", mantra = 40))
+        target.internalAddThing(Slots_t.CONST_SLOT_RING.value, ring)
+        val adapter = CreatureCombatTarget(target)
+
+        assertThat(adapter.getMantra()).isEqualTo(40)
+        // `Combat::applyMantraAbsorb` (combat.cpp:739-759): value + min(mantra, -value).
+        assertThat(Combat.applyMantraAbsorb(adapter, CombatType.FIREDAMAGE, -50)).isEqualTo(-10)
+        assertThat(Combat.applyMantraAbsorb(adapter, CombatType.ICEDAMAGE, -30)).isEqualTo(0)
+        assertThat(Combat.applyMantraAbsorb(adapter, CombatType.EARTHDAMAGE, -10)).isEqualTo(0)
         assertThat(Combat.applyMantraAbsorb(adapter, CombatType.PHYSICALDAMAGE, -50)).isEqualTo(-50)
     }
 

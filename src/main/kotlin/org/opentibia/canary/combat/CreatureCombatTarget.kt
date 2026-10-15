@@ -13,6 +13,7 @@ import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.Skulls_t
 import org.opentibia.canary.creatures.monsters.Faction
+import org.opentibia.canary.creatures.players.getMantra
 import org.opentibia.canary.creatures.skills_t
 
 /**
@@ -38,8 +39,9 @@ interface CombatTargetState {
     /**
      * `Creature::isImmune(conditionType)` (`creature.hpp:522`); the monster
      * type's condition-immunity bitset (`Monster::isImmune`, monster.cpp:3535)
-     * is not exposed through the port's `Monster` yet (PARITY GAP), so hosts
-     * keep the inert default.
+     * lives on the host-owned `MonsterTypeState`, so the production resolution
+     * is `MonsterPipelinesHost.combatTargetState()`; hosts without it keep the
+     * inert default (an unregistered creature is never immune).
      */
     fun isImmuneCondition(creature: Creature, conditionType: ConditionType): Boolean = false
 
@@ -68,15 +70,18 @@ interface CombatTargetState {
     fun getIncreasePercent(creature: Creature, combatType: CombatType): Int = 0
 
     /**
-     * `Player::getMantra()` (`combat.cpp:748`); PARITY GAP: the mantra state is
-     * not modelled on the port's `Player`, so the default is 0.
+     * `Player::getMantra()` (`combat.cpp:748`) transcribed over the live
+     * [Player] (`Player::getMantra`, player.cpp:671-694, sums the seven armor
+     * slots through `PlayerEquipmentState.getMantra`); non-players contribute
+     * zero.
      */
-    fun getMantra(creature: Creature): Int = 0
+    fun getMantra(creature: Creature): Int = (creature as? Player)?.getMantra() ?: 0
 
     /**
-     * `Monster::isEnemyFaction(faction)` (`monster.cpp:267-273`); PARITY GAP:
-     * the port's `Monster` does not expose the type's enemy factions yet, so
-     * the default is false.
+     * `Monster::isEnemyFaction(faction)` (`monster.cpp:267-273`); the monster
+     * type's `enemyFactions` live on the host-owned `MonsterTypeState`, so the
+     * production resolution is `MonsterPipelinesHost.combatTargetState()`; hosts
+     * without it keep the inert default (no known enemies).
      */
     fun isEnemyFaction(monster: Monster, faction: Faction): Boolean = false
 

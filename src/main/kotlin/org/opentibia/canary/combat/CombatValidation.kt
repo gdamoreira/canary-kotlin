@@ -116,6 +116,22 @@ interface CombatActor {
 
     /** `Creature::getTile()` (combat.cpp:456, 480, 491). */
     fun getTile(): CombatTile?
+
+    /**
+     * `Creature::getCombatDamage()` (src/creatures/creature.cpp:2219-2221): the
+     * per-creature damage `Combat::applyExtensions` stages for area combat
+     * (combat.cpp:2771-2775) and `Combat::CombatFunc` consumes before falling
+     * back to the cast damage (combat.cpp:1619-1627). The default is the empty
+     * `CombatDamage`, exactly like a creature whose damage was never staged.
+     */
+    fun getCombatDamage(): CombatDamage = CombatDamage()
+
+    /**
+     * `Creature::setCombatDamage(damage)` (src/creatures/creature.cpp:2215-2217).
+     * `Combat::CombatFunc` resets the staged damage to the default after it was
+     * consumed (combat.cpp:1621).
+     */
+    fun setCombatDamage(damage: CombatDamage) {}
 }
 
 /**
@@ -165,6 +181,30 @@ interface CombatPlayer : CombatActor {
      * legacy blocking wall arms the caster's fight ticks.
      */
     fun addInFightTicks() {}
+
+    /**
+     * `PlayerWheel::getBeamAffectedTotal(tmpDamage)` (player_wheel.cpp:4037-4043):
+     * `3` while the cast's `instantSpellName` is a beam-mastery spell and the
+     * "Beam Mastery" instant is active, `0` otherwise. Read once per
+     * `Combat::CombatFunc` cast (combat.cpp:1579). The default is `0` so a host
+     * without the wheel keeps the damage untouched.
+     */
+    fun getBeamAffectedTotal(damage: CombatDamage): Int = 0
+
+    /**
+     * `PlayerWheel::updateBeamMasteryDamage(tmpDamage, beamAffectedTotal, beamAffectedCurrent)`
+     * (player_wheel.cpp:4045-4052): while the remaining beam counter is positive,
+     * `tmpDamage.damageMultiplier` grows by `checkBeamMasteryDamage()` and the
+     * cooldown reduction runs; the counter decrements and the current target
+     * count increments. C++ mutates both counters through references; the port
+     * returns the updated `(beamAffectedTotal, beamAffectedCurrent)` pair. The
+     * default is inert.
+     */
+    fun updateBeamMasteryDamage(
+        damage: CombatDamage,
+        beamAffectedTotal: Int,
+        beamAffectedCurrent: Int,
+    ): Pair<Int, Int> = beamAffectedTotal to beamAffectedCurrent
 }
 
 /**

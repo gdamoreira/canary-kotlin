@@ -10,6 +10,7 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.creatures.Skulls_t
 import org.opentibia.canary.creatures.WeaponType_t
+import org.opentibia.canary.creatures.players.PlayerAttackState
 import org.opentibia.canary.creatures.players.canExiva
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.game.zones.TileFlags
@@ -33,21 +34,33 @@ import org.opentibia.canary.systems.rewardchest.ReturnValue
  * `applyInstantSpellDirection` turns a marked direction spell toward the
  * attacked creature (spells.cpp:47-59).
  *
- * PARITY GAPS (documented seams, inert or reduced until the owning subsystem is
- * wired): `Player::addManaSpent`'s vocation magic-level progression,
- * `Player::updateLastAggressiveAction`'s attack-state clock and the
- * `Player::sendCancelMessage` message builder. `Player::changeMana`'s
- * `g_game().addPlayerMana`/`Player::sendStats` side effects are not dispatched.
+ * The `Spell::postCastSpell` side effects (spells.cpp:913-939) are live by
+ * default: [addManaSpent] transcribes `Player::addManaSpent`
+ * (player.cpp:3554-3606), [sendCancelMessage] routes the `ReturnValue` through
+ * `Player::sendCancelMessage` (player.cpp:2117-2119) and
+ * [updateLastAggressiveAction] writes the composed [PlayerAttackState] clock
+ * (`Player::lastAggressiveAction`, player.hpp:1880). `Player::changeMana`'s
+ * `g_game().addPlayerMana`/`Player::sendStats` side effects are not dispatched
+ * (player.cpp:6765-6771; PARITY GAP).
  */
 class PlayerSpellCaster(
     /** The wrapped player. */
     val player: Player,
-    /** `Player::addManaSpent(amount)` (`player.cpp:3554-3595`) progression seam. */
-    private val manaSpentProgression: (Player, Int) -> Unit = { _, _ -> },
-    /** `Player::updateLastAggressiveAction()` (`player.cpp:1186-1188`) clock seam. */
-    private val aggressiveActionClock: (Player) -> Unit = { _ -> },
+    /**
+     * `Player::lastAggressiveAction` state (`Player::updateLastAggressiveAction`,
+     * player.cpp:1186-1188) through the composed [PlayerAttackState]. The host
+     * player must inject the same instance it exposes to the transcendence gate
+     * (`Player::checkLastAggressiveActionWithin`, player.cpp:11201); without one
+     * the write stays inert (PARITY GAP, the port's `Player` does not own the
+     * attack state yet).
+     */
+    private val attackState: PlayerAttackState? = null,
+    /** `Player::addManaSpent(amount)` (`player.cpp:3554-3606`) progression seam. */
+    private val manaSpentProgression: (Player, Int) -> Unit = ::addManaSpentProgression,
     /** `Player::sendCancelMessage(ret)` (`player.cpp:2117-2119`) protocol seam. */
-    private val cancelMessageSink: (Player, ReturnValue) -> Unit = { _, _ -> },
+    private val cancelMessageSink: (Player, ReturnValue) -> Unit = { target, ret ->
+        target.sendCancelMessage.invoke(ret)
+    },
 ): SpellCaster {
     /** `Creature::getID()`. */
     override fun getID(): Long = player.id
@@ -177,7 +190,11 @@ class PlayerSpellCaster(
         cancelMessageSink(player, ret)
     }
 
-    /** PARITY GAP: `Player::addManaSpent` progression is the injected seam. */
+    /**
+     * `Player::addManaSpent(amount)` (player.cpp:3554-3606): the vocation
+     * magic-level progression. The default [manaSpentProgression] seam binds
+     * the ported transcription below.
+     */
     override fun addManaSpent(manaCost: Int) {
         manaSpentProgression(player, manaCost)
     }
@@ -209,9 +226,70 @@ class PlayerSpellCaster(
         player.addInFightTicks()
     }
 
-    /** PARITY GAP: `Player::updateLastAggressiveAction` clock is the injected seam. */
+    /** `Player::updateLastAggressiveAction()` (`player.cpp:1186-1188`). */
     override fun updateLastAggressiveAction() {
-        aggressiveActionClock(player)
+        attackState?.updateLastAggressiveAction()
+    }
+}
+
+/**
+ * `Player::addManaSpent(amount)` (src/creatures/players/player.cpp:3554-3606)
+ * transcribed over the public `Player` state: the `NotGainMana` early return,
+ * the vocation requirement table (`Vocation::getReqMana`, vocation.cpp:295),
+ * the magic-level loop with its advance message, and the trailing
+ * `sendStats()`/`sendSkills()` refresh.
+ *
+ * PARITY GAPS: the `g_events().eventPlayerOnGainSkillTries` /
+ * `g_callbacks()` notifications, the level-up screenshot and the
+ * `g_creatureEvents().playerAdvance` dispatch (player.cpp:3566-3567, 3582, 3584)
+ * stay Lua/host side, exactly like `Player::addSkillAdvance`
+ * (`Creature.addSkillTries`, player.cpp:1190-1249); the `magLevelPercent` write
+ * (player.cpp:3597-3601) is not reachable because the port's `Player` keeps the
+ * field private, so the percent refresh awaits a host accessor.
+ */
+internal fun addManaSpentProgression(player: Player, amount: Int) {
+    if (player.hasFlag(PlayerFlags_t.NotGainMana)) {
+        return
+    }
+
+    val vocation = player.vocations?.getVocation(player.vocationId) ?: return
+    var currReqMana = vocation.getReqMana(player.magLevel)
+    var nextReqMana = vocation.getReqMana(player.magLevel + 1)
+    if (currReqMana >= nextReqMana) {
+        // player has reached max magic level
+        return
+    }
+
+    if (amount == 0) {
+        return
+    }
+
+    var remaining = amount
+    var sendUpdateStats = false
+    while (player.manaSpent + remaining >= nextReqMana) {
+        remaining -= (nextReqMana - player.manaSpent).toInt()
+
+        player.magLevel++
+        player.manaSpent = 0
+
+        player.sendTextMessageTyped(
+            MessageClass.MESSAGE_EVENT_ADVANCE,
+            "You advanced to magic level ${player.magLevel}.",
+        )
+
+        sendUpdateStats = true
+        currReqMana = nextReqMana
+        nextReqMana = vocation.getReqMana(player.magLevel + 1)
+        if (currReqMana >= nextReqMana) {
+            return
+        }
+    }
+
+    player.manaSpent += remaining
+
+    if (sendUpdateStats) {
+        player.sendStats()
+        player.sendSkills()
     }
 }
 

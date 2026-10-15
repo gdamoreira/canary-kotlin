@@ -27,6 +27,9 @@ open class FakeCombatActor : CombatActor {
     var positionValue: Position = Position(100, 100, 7)
     var tileValue: CombatTile? = null
 
+    /** `Creature::m_combatDamage` (`creature.hpp:1077`) backing [getCombatDamage]. */
+    var combatDamageValue: CombatDamage = CombatDamage()
+
     override fun getPlayer(): CombatPlayer? = playerValue
     override fun getMonster(): CombatMonster? = monsterValue
     override fun getNpc(): Boolean = npcValue
@@ -37,9 +40,15 @@ open class FakeCombatActor : CombatActor {
     override fun getFaction(): Faction = factionValue
     override fun getPosition(): Position = positionValue
     override fun getTile(): CombatTile? = tileValue
+
+    override fun getCombatDamage(): CombatDamage = combatDamageValue
+
+    override fun setCombatDamage(damage: CombatDamage) {
+        combatDamageValue = damage
+    }
 }
 
-class FakeCombatPlayer : FakeCombatActor(), CombatPlayer {
+open class FakeCombatPlayer : FakeCombatActor(), CombatPlayer {
     var flags: MutableSet<PlayerFlags_t> = mutableSetOf()
     var levelValue: Int = 100
     var skullValue: Skulls_t = Skulls_t.SKULL_NONE

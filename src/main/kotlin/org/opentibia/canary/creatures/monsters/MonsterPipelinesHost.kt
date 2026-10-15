@@ -1,7 +1,9 @@
 package org.opentibia.canary.creatures.monsters
 
 import org.opentibia.canary.chat.SpeakClasses
+import org.opentibia.canary.combat.CombatTargetState
 import org.opentibia.canary.combat.CombatType
+import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.FindPathParams
 import org.opentibia.canary.creatures.FlagAsyncClass_t
@@ -309,6 +311,77 @@ class MonsterPipelinesHost(
     fun typeStateOf(monsterId: Long): MonsterTypeState? = entries[monsterId]?.typeState
 
     /**
+     * `Creature::getCombatValues(min, max)` (src/creatures/creature.hpp:620;
+     * `Monster::getCombatValues`, monster.cpp:3346-3355) for the registered
+     * monster: the `(minCombatValue, maxCombatValue)` pair the combat-intention
+     * commit staged on the behavior state, or `null` when both bounds are zero
+     * or the owner is not current. Feeds `Combat::getCombatDamage`'s
+     * `combatValues` branch (combat.cpp:186-190).
+     */
+    fun getCombatValues(monster: Monster): Pair<Int, Int>? =
+        currentEntry(monster)?.let { MonsterBehavior.getCombatValues(it.behaviorState) }
+
+    /**
+     * Production [CombatTargetState] over this host's registered monsters:
+     * [CombatTargetState.isImmune]/[CombatTargetState.isImmuneCondition]
+     * transcribe `Monster::isImmune` (monster.cpp:3535-3541) from the entry's
+     * `m_isImmune` latch and the `MonsterType` damage/condition immunity
+     * bitsets, and [CombatTargetState.isEnemyFaction] transcribes
+     * `Monster::isEnemyFaction` (monster.cpp:267-273) over the master chain and
+     * the type's `enemyFactions`.
+     *
+     * Every lookup re-resolves the entry by id and verifies the captured
+     * monster is still the registered owner, so a removed or replaced monster
+     * (a reused id) falls back to the inert defaults (AGENTS.md
+     * deferred-callback lifetime safety). An unregistered monster (an embedded
+     * host without the pipelines) keeps the same defaults.
+     */
+    fun combatTargetState(): CombatTargetState = object : CombatTargetState {
+        /** `Monster::isImmune(CombatType_t)` (monster.cpp:3539-3541). */
+        override fun isImmune(creature: Creature, combatType: CombatType): Boolean {
+            val monster = creature as? Monster ?: return false
+            val entry = currentEntry(monster) ?: return false
+            return MonsterBehavior.isImmune(
+                combatType = combatType,
+                immuneOverride = entry.behaviorState.immune,
+                damageImmunities = damageImmunitiesOf(entry),
+            )
+        }
+
+        /** `Monster::isImmune(ConditionType_t)` (monster.cpp:3535-3537). */
+        override fun isImmuneCondition(creature: Creature, conditionType: ConditionType): Boolean {
+            val monster = creature as? Monster ?: return false
+            val entry = currentEntry(monster) ?: return false
+            return MonsterBehavior.isImmune(
+                conditionType = conditionType,
+                immuneOverride = entry.behaviorState.immune,
+                conditionImmunities = entry.typeState.monsterType?.info?.m_conditionImmunities ?: emptySet(),
+            )
+        }
+
+        /** `Monster::isEnemyFaction(faction)` (monster.cpp:267-273). */
+        override fun isEnemyFaction(monster: Monster, faction: Faction): Boolean {
+            val masterMonster = monster.getMaster() as? Monster
+            if (masterMonster != null) {
+                return isEnemyFaction(masterMonster, faction)
+            }
+            val type = currentEntry(monster)?.typeState?.monsterType ?: return false
+            return type.info.enemyFactions.isNotEmpty() && type.info.enemyFactions.contains(faction)
+        }
+    }
+
+    /** The monster-type damage-immunity set mapped onto the combat enum. */
+    private fun damageImmunitiesOf(entry: Entry): Set<CombatType> =
+        entry.typeState.monsterType?.info?.m_damageImmunities
+            ?.map { CombatType.fromValue(it.value) }
+            ?.toSet()
+            ?: emptySet()
+
+    /** The entry that is still owned by [monster] (`null` after removal/replacement). */
+    private fun currentEntry(monster: Monster): Entry? =
+        entries[monster.id]?.takeIf { it.monster === monster }
+
+    /**
      * Instantiates and binds the pipelines for [monster]. Registering a new
      * instance for an id whose owner was not unregistered first replaces the
      * entry: pending completions then re-resolve to the new pipeline and are
@@ -432,10 +505,7 @@ class MonsterPipelinesHost(
             MonsterBehavior.isImmune(
                 combatType = combatType,
                 immuneOverride = entry.behaviorState.immune,
-                damageImmunities = entry.typeState.monsterType?.info?.m_damageImmunities
-                    ?.map { CombatType.fromValue(it.value) }
-                    ?.toSet()
-                    ?: emptySet(),
+                damageImmunities = damageImmunitiesOf(entry),
             )
         }
         host.isOpponent = { facts ->

@@ -36,6 +36,40 @@ data class CombatDamage(
     var runeSpellName: String = "",
 ) {
     /**
+     * C++ copy assignment (`CombatDamage::operator=(const CombatDamage&)`,
+     * implicit): `Combat::doCombatHealth`/`doCombatMana` and `Combat::CombatFunc`
+     * assign the extended copy back over the caller's value
+     * (`damage = targetDamage`, combat.cpp:2773; `tmpDamage = extensionsDamage`,
+     * combat.cpp:1585). Kotlin data classes only replace references, so the
+     * in-place assignment Canary performs is spelled out here.
+     */
+    fun copyFrom(other: CombatDamage) {
+        primaryType = other.primaryType
+        primaryValue = other.primaryValue
+        secondaryType = other.secondaryType
+        secondaryValue = other.secondaryValue
+        origin = other.origin
+        critical = other.critical
+        affected = other.affected
+        extension = other.extension
+        exString = other.exString
+        fatal = other.fatal
+        hazardDodge = other.hazardDodge
+        criticalDamage = other.criticalDamage
+        criticalChance = other.criticalChance
+        damageMultiplier = other.damageMultiplier
+        damageReductionMultiplier = other.damageReductionMultiplier
+        healingMultiplier = other.healingMultiplier
+        manaLeech = other.manaLeech
+        manaLeechChance = other.manaLeechChance
+        lifeLeech = other.lifeLeech
+        lifeLeechChance = other.lifeLeechChance
+        healingLink = other.healingLink
+        instantSpellName = other.instantSpellName
+        runeSpellName = other.runeSpellName
+    }
+
+    /**
      * Faithful port of `CombatDamage::isEmpty()`.
      *
      * Note: exactly like Canary, `hazardDodge` is intentionally absent from the

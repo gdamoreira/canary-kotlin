@@ -293,10 +293,18 @@ object Combat {
      * on a monster target fires `Monster::onAttackedByPlayer` even when the hit
      * is fully blocked.
      *
+     * `Combat::applyExtensions` runs on the affected-target list (combat.cpp:1688-1689)
+     * before the block stages: for the single-target overload the extended copy
+     * is assigned back over the caller's [damage] (`damage = targetDamage`,
+     * combat.cpp:2773). The critical/fatal values are the injected
+     * [extensionBaseChance]/[extensionBaseBonus]/[canApplyFatal] — the player
+     * skill `getBaseCritical` values, weapon-proficiency and bestiary-charm
+     * `lowBlow`/`savageBlow` plus the fatal item-tier roll (combat.cpp:2657-2680)
+     * stay in their owning systems (PARITY GAP).
+     *
      * PARITY GAPS: `canDoCombatWithExpertPvp` is reduced to
      * `!params.aggressive || caster !== target` (combat.cpp:1650); the healing
-     * summon/player/monster restrictions (combat.cpp:1660-1685),
-     * `Combat::applyExtensions` critical/fatal resolution, damage-dealt/received
+     * summon/player/monster restrictions (combat.cpp:1660-1685), damage-dealt/received
      * buffs, ghost mode, dodge/reflection, mana shield, creature events and
      * every protocol effect stay in their owning systems; the post-change
      * `CombatConditionFunc`/`CombatDispelFunc` call (combat.cpp:911-913) is not
@@ -308,6 +316,9 @@ object Combat {
         damage: CombatDamage,
         params: CombatParams,
         random: Random,
+        extensionBaseChance: Int = 0,
+        extensionBaseBonus: Int = 0,
+        canApplyFatal: Boolean = false,
     ) {
         if (params.aggressive && caster === target) {
             return
@@ -322,6 +333,12 @@ object Combat {
         if (attackerPlayer != null && targetMonster != null && params.combatType != CombatType.HEALING) {
             targetMonster.onAttackedByPlayer(attackerPlayer)
         }
+
+        // combat.cpp:1688-1689: the single affected target is the target itself.
+        // Runs before the block stages and the sign split (combat.cpp:1660-1711).
+        damage.copyFrom(
+            applyExtensions(damage, extensionBaseChance, extensionBaseBonus, random, canApplyFatal),
+        )
 
         if (damage.primaryValue > 0) {
             // game.cpp:8347-8350, 8412: healing skips blockHit.
@@ -392,10 +409,14 @@ object Combat {
      * a negative primary drain from a player caster is halved unless the target
      * is a black-skulled player.
      *
-     * PARITY GAPS: `applyExtensions`, leech and protocol effects stay in their
-     * owning systems, and the post-change condition/dispel call
-     * (combat.cpp:997-999) is not wired into this mana path. [random] is
-     * accepted for signature parity with [doCombatHealth].
+     * `Combat::applyExtensions` runs on the affected-target list (combat.cpp:1731-1732)
+     * before the change, exactly like [doCombatHealth]; the critical/fatal
+     * values are the injected parameters (see [doCombatHealth] for the reduced
+     * resolution).
+     *
+     * PARITY GAPS: leech and protocol effects stay in their owning systems, and
+     * the post-change condition/dispel call (combat.cpp:997-999) is not wired
+     * into this mana path.
      */
     fun doCombatMana(
         caster: CombatTarget?,
@@ -403,10 +424,18 @@ object Combat {
         damage: CombatDamage,
         params: CombatParams,
         random: Random,
+        extensionBaseChance: Int = 0,
+        extensionBaseBonus: Int = 0,
+        canApplyFatal: Boolean = false,
     ) {
         if (params.aggressive && caster === target) {
             return
         }
+
+        // combat.cpp:1731-1732: the single affected target is the target itself.
+        damage.copyFrom(
+            applyExtensions(damage, extensionBaseChance, extensionBaseBonus, random, canApplyFatal),
+        )
 
         // combat.cpp:988-996: `if (damage.primary.value < 0) { if (caster && target && caster->getPlayer()
         // && target->getSkull() != SKULL_BLACK && target->getPlayer()) damage.primary.value /= 2; }`
@@ -1145,15 +1174,22 @@ object Combat {
      * max viewport deltas and collects the `affectedTargets` under the
      * `targetCasterOrTopMost` filter and the reduced
      * `canDoCombatWithExpertPvp` condition `!aggressive || caster != creature`.
-     * The second pass re-walks the tiles, invokes [func] per accepted creature,
-     * fires `params.targetCallback` and, per tile, [combatTileEffects]; it ends
-     * with [postCombatEffects].
+     * Before the second pass the Wheel of Destiny beam-mastery counter is read
+     * (`combat.cpp:1577-1580`) and `Combat::applyExtensions` runs with Canary's
+     * copy semantics: the extended copy is promoted to `tmpDamage` for a single
+     * affected target, otherwise it is staged per target through
+     * `Creature::setCombatDamage` (`combat.cpp:1583-1586`, 2771-2775). The second
+     * pass re-walks the tiles, updates the beam mastery damage per accepted
+     * creature (`combat.cpp:1614-1617`), invokes [func] with the creature's own
+     * staged damage when it is non-empty (`combat.cpp:1619-1627`), fires
+     * `params.targetCallback` and, per tile, [combatTileEffects]; it ends with
+     * [postCombatEffects].
      *
-     * PARITY GAPS: the `ExpertPvp` side effects, the Wheel of Destiny beam
-     * mastery updates, the `Spectators().find` query (its result is unused by the
-     * C++ `combatTileEffects` body) and the per-creature
-     * `Creature::getCombatDamage` override are not modelled; `applyExtensions`
-     * runs on the ported single-target path, not here.
+     * PARITY GAPS: the `ExpertPvp` acceptance (`canDoCombatWithExpertPvp`) and
+     * side effects stay with the unported relation-context seam; the
+     * `Spectators().find` query's result is unused by the C++ body and the
+     * `applyExtensions` player/monster bonus resolution is injected through the
+     * extension parameters (see [applyExtensions]).
      */
     fun combatFunc(
         caster: CombatActor?,
@@ -1166,6 +1202,11 @@ object Combat {
         damage: CombatDamage?,
         func: CombatFunction?,
         noPvpWorld: Boolean = false,
+        expertPvpEnabled: Boolean = false,
+        extensionBaseChance: Int = 0,
+        extensionBaseBonus: Int = 0,
+        canApplyFatal: Boolean = false,
+        random: Random = Random(),
     ) {
         val casterPlayer = caster?.getPlayer()
 
@@ -1215,8 +1256,32 @@ object Combat {
             }
         }
 
-        val tmpDamage = damage?.copy() ?: CombatDamage()
+        // combat.cpp:1571-1582: the cast damage copy, then the beam-mastery
+        // counter read from the caster's wheel, then the affected count.
+        var tmpDamage = damage?.copy() ?: CombatDamage()
+        var beamAffectedTotal = if (casterPlayer != null) casterPlayer.getBeamAffectedTotal(tmpDamage) else 0
+        var beamAffectedCurrent = 0
         tmpDamage.affected = affectedTargets.size
+
+        // combat.cpp:1583-1586: the extensions cannot mutate the cast damage,
+        // so they run on a copy; a single affected target adopts it, otherwise
+        // the extended copy is staged on every affected target's own combat
+        // damage. `Combat::applyExtensions` returns early (and therefore stages
+        // nothing) for extension damage, a missing caster and healing
+        // (combat.cpp:2649-2651).
+        val extensionsApplied = caster != null && !tmpDamage.extension && tmpDamage.primaryType != CombatType.HEALING
+        val extensionsDamage = if (extensionsApplied) {
+            applyExtensions(tmpDamage, extensionBaseChance, extensionBaseBonus, random, canApplyFatal)
+        } else {
+            tmpDamage
+        }
+        if (affectedTargets.size == 1) {
+            tmpDamage = extensionsDamage
+        } else if (extensionsApplied) {
+            for (target in affectedTargets) {
+                target.setCombatDamage(extensionsDamage.copy())
+            }
+        }
 
         for (tile in tileList) {
             if (canDoCombat(caster, tile, params.aggressive) != ReturnValue.NOERROR) {
@@ -1236,11 +1301,31 @@ object Combat {
                 }
 
                 if (!params.aggressive || caster !== creature) {
+                    // combat.cpp:1614-1617: the beam-mastery damage update runs
+                    // for every accepted creature while the counter lasts.
+                    if (casterPlayer != null) {
+                        val beamUpdate = casterPlayer.updateBeamMasteryDamage(
+                            damage = tmpDamage,
+                            beamAffectedTotal = beamAffectedTotal,
+                            beamAffectedCurrent = beamAffectedCurrent,
+                        )
+                        beamAffectedTotal = beamUpdate.first
+                        beamAffectedCurrent = beamUpdate.second
+                    }
+
                     if (func != null) {
-                        // The C++ `CombatHealthFunc`/`CombatManaFunc` copy the
+                        // combat.cpp:1619-1627: a staged `Creature::getCombatDamage`
+                        // wins over the cast damage and is reset afterwards. The
+                        // C++ `CombatHealthFunc`/`CombatManaFunc` copy the
                         // pointed-to damage, so the port hands each target its
                         // own copy and mutations never leak across the area.
-                        func.apply(caster, creature, params, tmpDamage.copy())
+                        val creatureDamage = creature.getCombatDamage()
+                        if (!creatureDamage.isEmpty()) {
+                            func.apply(caster, creature, params, creatureDamage.copy())
+                            creature.setCombatDamage(CombatDamage())
+                        } else {
+                            func.apply(caster, creature, params, tmpDamage.copy())
+                        }
                     }
 
                     params.targetCallback?.onTargetCombat(caster, creature)
@@ -1251,7 +1336,7 @@ object Combat {
                 }
             }
 
-            combatTileEffects(caster, tile, params, effects, noPvpWorld)
+            combatTileEffects(caster, tile, params, effects, noPvpWorld, expertPvpEnabled)
         }
 
         postCombatEffects(caster, origin, toPos, params, effects)
@@ -1260,14 +1345,20 @@ object Combat {
     /**
      * `Combat::combatTileEffects` (src/creatures/combat/combat.cpp:1161-1264):
      * the field-item creation with the persistent-to-PvP swap table
-     * (`combat.cpp:1165-1200`) and the no-PvP-zone/`WORLD_TYPE_NO_PVP`
-     * fire/poison/energy/magic-wall/wildgrowth downgrades, then the
-     * `tileCallback`, the `sendCombatEffect` impact effect and the
-     * cast/impact sound fanout.
+     * (`combat.cpp:1165-1200`), the no-PvP-zone/`WORLD_TYPE_NO_PVP`
+     * fire/poison/energy/magic-wall/wildgrowth downgrades and the ExpertPvp
+     * wall swap plus the `legacyBlockingWall` fight-tick branch
+     * (`combat.cpp:1216-1231`), then the `tileCallback`, the
+     * `sendCombatEffect` impact effect and the cast/impact sound fanout.
      *
-     * PARITY GAPS: the `ExpertPvp` wall/field-context swaps and the
-     * `Item::CreateItem` owner/decay plumbing stay behind
-     * [CombatEffects.createFieldItem].
+     * [expertPvpEnabled] is `ExpertPvp::isEnabled()`; an expert-PvP world swaps
+     * `ITEM_MAGICWALL`/`ITEM_WILDGROWTH` for their safe variants and excludes
+     * them from the legacy fight-tick branch.
+     *
+     * PARITY GAP: `ExpertPvp::attachFieldContext(item, caster)`
+     * (combat.cpp:1239-1241) writes the cast-time field context onto the created
+     * item; the port's [CombatEffects.createFieldItem] seam does not carry the
+     * item back, so the attach stays with the host's field-item creation.
      */
     private fun combatTileEffects(
         caster: CombatActor?,
@@ -1275,6 +1366,7 @@ object Combat {
         params: CombatParams,
         effects: CombatEffects,
         noPvpWorld: Boolean,
+        expertPvpEnabled: Boolean,
     ) {
         if (params.itemId != 0) {
             var itemId = params.itemId
@@ -1303,13 +1395,19 @@ object Combat {
                             else -> itemId
                         }
                     } else {
-                        // `ExpertPvp::isEnabled()` swaps the wall for its safe
-                        // variant and stamps the field context; both stay in the
-                        // unported ExpertPvp subsystem (PARITY GAP).
+                        // combat.cpp:1221-1229: `ExpertPvp::isEnabled()` swaps
+                        // the legacy walls for their safe variants; the
+                        // `legacyBlockingWall` fight-tick branch excludes them.
+                        val expertPvpWall = expertPvpEnabled &&
+                            (itemId == ITEM_MAGICWALL || itemId == ITEM_WILDGROWTH)
+                        if (expertPvpWall) {
+                            itemId = if (itemId == ITEM_MAGICWALL) ITEM_MAGICWALL_SAFE else ITEM_WILDGROWTH_SAFE
+                        }
+
                         val pvpDamagingField = itemId == ITEM_FIREFIELD_PVP_FULL ||
                             itemId == ITEM_POISONFIELD_PVP ||
                             itemId == ITEM_ENERGYFIELD_PVP
-                        val legacyBlockingWall = itemId == ITEM_MAGICWALL || itemId == ITEM_WILDGROWTH
+                        val legacyBlockingWall = !expertPvpWall && (itemId == ITEM_MAGICWALL || itemId == ITEM_WILDGROWTH)
                         if (pvpDamagingField || legacyBlockingWall) {
                             casterPlayer.addInFightTicks()
                         }
