@@ -533,6 +533,9 @@ object GameWindowWriter {
     /** `TEXTCOLOR_NONE` (`src/utils/utils_definitions.hpp:460`). */
     const val TEXTCOLOR_NONE: Int = 255
 
+    /** `TEXTCOLOR_WHITE_EXP` (`src/utils/utils_definitions.hpp:459`). */
+    const val TEXTCOLOR_WHITE_EXP: Int = 215
+
     /** `CREATURE_MARK_UNMARKED = TEXTCOLOR_NONE` (`src/utils/utils_definitions.hpp:467`). */
     const val CREATURE_MARK_UNMARKED: Int = 255
 

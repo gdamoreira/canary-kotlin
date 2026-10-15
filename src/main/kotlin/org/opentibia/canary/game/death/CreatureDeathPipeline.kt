@@ -4,12 +4,23 @@ import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.monsters.MonsterBehavior
+import org.opentibia.canary.creatures.players.ITEM_FEMALE_CORPSE
+import org.opentibia.canary.creatures.players.ITEM_MALE_CORPSE
 import org.opentibia.canary.creatures.players.PlayerExperienceState
+import org.opentibia.canary.creatures.players.checkAutoLoot
 import org.opentibia.canary.creatures.players.onGainExperience
+import org.opentibia.canary.creatures.players.sendLootMessage
 import org.opentibia.canary.game.zones.ZoneType
+import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
+import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Tile
+import org.opentibia.canary.network.protocol.GameWindowWriter
+import org.opentibia.canary.network.protocol.MessageClass
+import org.opentibia.canary.network.protocol.MessageValue
+import org.opentibia.canary.network.protocol.TextMessageFrame
+import org.opentibia.canary.utils.Tools
 
 /**
  * World composition of `Creature::onDeath` (`src/creatures/creature.cpp:579-720`)
@@ -20,21 +31,15 @@ import org.opentibia.canary.map.Tile
  * runs the kill hooks, drops the corpse and calls the `death` virtual. Every
  * `g_game()`/`g_configManager()`/`Item` global it touches (creature re-lookup,
  * `PZ_LOCKED`, `removeCreature`, magic effects, tile insertion, decay, the kill
- * hooks and the experience sinks) is a constructor seam per AGENTS.md 1.1; the
- * entity-owned virtuals (`getRace`/`getCorpse`/`dropLoot`/`getGainedExperience`/
- * `death`) stay on the creature, exactly like the C++ virtual dispatch.
+ * hooks, the reward-corpse/loot-message/auto-loot tail, the
+ * `MESSAGE_EXPERIENCE_OTHERS` spectator fanout, the metric counters and the
+ * experience sinks) is a constructor seam per AGENTS.md 1.1; the entity-owned
+ * virtuals (`getRace`/`getCorpse`/`dropCorpse`/`dropLoot`/`getGainedExperience`/
+ * `getNameDescription`/`death`) stay on the creature, exactly like the C++
+ * virtual dispatch.
  *
  * The composition root binds one instance per world (`Game` places it on every
  * creature it accepts); a creature outside a world keeps the port's inert tail.
- *
- * PARITY GAPS:
- * - the `player_death`/`monster_death` metric counters (creature.cpp:675-717);
- * - `Creature::deprecatedOnKilledCreature`'s Lua `onKill` event loop
- *   (creature.cpp:1290-1303), which has no production host in this port;
- * - the reward-corpse/loot-message/auto-loot tail of `dropCorpse`
- *   (creature.cpp:786-816) and the `MESSAGE_EXPERIENCE_OTHERS` notice of
- *   `Creature::onGainExperience` (creature.cpp:1322-1327), which belong to the
- *   protocol and loot subsystems.
  */
 class CreatureDeathPipeline(
     /** `g_game().getCreatureByID` (game.cpp:1296) for the last-hit/damage-map re-resolution. */
@@ -57,6 +62,33 @@ class CreatureDeathPipeline(
     private val deprecatedOnKilledCreature: (Creature, Creature, Boolean) -> Boolean = { _, _, _ -> false },
     /** `Player::removeAttacked` (player.cpp:7235-7245). */
     private val removeAttacked: (Player, Creature) -> Unit = { _, _ -> },
+    /** `Player::getProtocolVersion` (player.cpp:1022-1030) behind the loot-message colour gate (creature.cpp:789). */
+    private val getProtocolVersion: (Player) -> Int = { 0 },
+    /** `Player::sendLootMessage` (player.cpp:12847-12862). */
+    private val sendLootMessage: (Player, String) -> Unit = { player, message -> player.sendLootMessage(message) },
+    /** `Item::isRewardCorpse` (item.hpp:140) behind the `disallowedCorpses` gate (creature.cpp:787). */
+    private val isRewardCorpse: (Item) -> Boolean = { false },
+    /**
+     * `g_game().map.getPathMatching(player->getPosition(), dirList,
+     * FrozenPathingConditionCall(corpse->getPosition()), fpp)` with
+     * `minTargetDist = 0`, `maxTargetDist = 1`, `fullPathSearch`, `clearSight`
+     * (creature.cpp:798-806).
+     */
+    private val isCorpseReachable: (Player, Position) -> Boolean = { _, _ -> false },
+    /** `Player::checkAutoLoot(isBoss)` (player.cpp:5692-5708). */
+    private val checkAutoLoot: (Player, Boolean) -> Boolean = { player, isBoss -> player.checkAutoLoot(isBoss) },
+    /** `g_dispatcher().addEvent(..., "Game::playerQuickLootCorpse")` (creature.cpp:808-812). */
+    private val scheduleQuickLoot: (Player, Container, Position) -> Unit = { _, _, _ -> },
+    /** `corpse->sendUpdateToClient(player)` (creature.cpp:814). */
+    private val sendCorpseUpdate: (Player, Item) -> Unit = { _, _ -> },
+    /** `Spectators().find<Player>(position)` (creature.cpp:1323). */
+    private val findSpectatorPlayers: (Position) -> List<Player> = { emptyList() },
+    /** `Player::sendTextMessage(TextMessage)` (creature.cpp:1326, player.cpp:6350-6407). */
+    private val sendTextMessageFrame: (Player, TextMessageFrame) -> Unit = { player, frame ->
+        player.sendTextMessageFrame(frame)
+    },
+    /** `g_metrics().addCounter(name, value, labels)` (creature.cpp:690-717). */
+    private val addCounter: (String, Double, Map<String, String>) -> Unit = { _, _, _ -> },
 ) {
     /**
      * `Creature::onDeath` (creature.cpp:579-720) over [creature]: the `onDeath`
@@ -166,12 +198,26 @@ class CreatureDeathPipeline(
             }
         }
 
-        val droppedCorpse = dropCorpse(
+        recordDeathMetrics(
             creature = creature,
+            thisPlayer = thisPlayer,
+            thisMaster = thisMaster,
             lastHitCreature = lastHitCreature,
             mostDamageCreature = mostDamageCreature,
+            mostDamageCreatureMaster = mostDamageCreatureMaster,
+            mostDamage = mostDamage,
             lastHitUnjustified = lastHitUnjustified,
             mostDamageUnjustified = mostDamageUnjustified,
+        )
+
+        // `dropCorpse(...)` is the virtual call of `Creature::onDeath`
+        // (creature.cpp:720); `Player::dropCorpse` overrides the PvP
+        // player-kill short-circuit.
+        val droppedCorpse = creature.dropCorpse(
+            lastHitCreature,
+            mostDamageCreature,
+            lastHitUnjustified,
+            mostDamageUnjustified,
         )
         creature.death(lastHitCreature)
 
@@ -185,13 +231,72 @@ class CreatureDeathPipeline(
     }
 
     /**
+     * `Creature::onDeath` metric tail (creature.cpp:688-717): a player death
+     * records `player_death` with the level/attribution/justified label set, a
+     * monster death records `monster_death` with the resolved killer (the
+     * most-damage master wins the name) and the summon flag. The C++
+     * `std::to_string` conversions render booleans as `"1"`/`"0"` and names as
+     * themselves or `(none)`.
+     */
+    private fun recordDeathMetrics(
+        creature: Creature,
+        thisPlayer: Player?,
+        thisMaster: Creature?,
+        lastHitCreature: Creature?,
+        mostDamageCreature: Creature?,
+        mostDamageCreatureMaster: Creature?,
+        mostDamage: Int,
+        lastHitUnjustified: Boolean,
+        mostDamageUnjustified: Boolean,
+    ) {
+        val mostDamagePlayer = mostDamageCreature as? Player
+        val mostMasterPlayer = mostDamageCreatureMaster as? Player
+        val killedByPlayer = mostDamagePlayer != null || mostMasterPlayer != null
+
+        if (thisPlayer != null) {
+            addCounter(
+                "player_death",
+                1.0,
+                mapOf(
+                    "name" to creature.getNameDescription(),
+                    "level" to thisPlayer.level.toString(),
+                    "most_damage_creature" to (mostDamageCreature?.name ?: "(none)"),
+                    "last_hit_creature" to (lastHitCreature?.name ?: "(none)"),
+                    "most_damage_dealt" to mostDamage.toString(),
+                    "most_damage_creature_master" to (mostDamageCreatureMaster?.name ?: "(none)"),
+                    "most_damage_unjustified" to toMetricBoolean(mostDamageUnjustified),
+                    "last_hit_unjustified" to toMetricBoolean(lastHitUnjustified),
+                    "by_player" to toMetricBoolean(killedByPlayer),
+                ),
+            )
+            return
+        }
+
+        var killerName = mostDamageCreature?.name ?: "(none)"
+        if (mostDamageCreatureMaster != null) {
+            killerName = mostDamageCreatureMaster.name
+        }
+        addCounter(
+            "monster_death",
+            1.0,
+            mapOf(
+                "name" to creature.name,
+                "killer" to killerName,
+                "is_summon" to toMetricBoolean(thisMaster != null),
+                "by_player" to toMetricBoolean(killedByPlayer),
+            ),
+        )
+    }
+
+    /**
      * `Creature::dropCorpse` (creature.cpp:732-828) over the entity virtuals:
      * a no-loot monster only puffs (with the death events when it has a
      * master), otherwise the race splash and the corpse are placed, the loot
-     * rolls into the corpse and the death events run with the full
-     * `CreatureEvent::executeOnDeath` argument set (creature.cpp:819-824).
+     * rolls into the corpse, the reward-corpse/loot-message/auto-loot tail runs
+     * and the death events execute with the full `CreatureEvent::executeOnDeath`
+     * argument set (creature.cpp:819-824).
      */
-    private fun dropCorpse(
+    fun dropCorpse(
         creature: Creature,
         lastHitCreature: Creature?,
         mostDamageCreature: Creature?,
@@ -227,8 +332,33 @@ class CreatureDeathPipeline(
             addItemToTile(tile, corpse)
             creature.dropLoot(corpse.getContainer(), lastHitCreature)
             startDecaying(corpse)
-            // PARITY GAP: reward-corpse flag, loot message, auto-loot path and
-            // the corpse container update (creature.cpp:786-816).
+
+            // Reward-corpse/loot-message/auto-loot tail (creature.cpp:786-816).
+            val disallowedCorpses = isRewardCorpse(corpse) ||
+                corpse.id == ITEM_MALE_CORPSE || corpse.id == ITEM_FEMALE_CORPSE
+            val player = mostDamageCreature as? Player
+            val corpseContainer = corpse.getContainer()
+            if (corpseContainer != null && player != null && !disallowedCorpses) {
+                val monster = creature as? Monster
+                if (monster != null && !monster.isRewardBoss()) {
+                    val colourMessage = getProtocolVersion(player) > 1200
+                    val suffix = corpseContainer.getAttribute(ItemAttribute.LOOTMESSAGE_SUFFIX) as? String ?: ""
+                    var lootMessage =
+                        "Loot of ${creature.getNameDescription()}: ${getContentDescription(corpseContainer, colourMessage)}"
+                    if (suffix.isNotEmpty()) {
+                        lootMessage = "$lootMessage ($suffix)"
+                    }
+                    sendLootMessage(player, "$lootMessage.")
+                }
+
+                if (monster != null && checkAutoLoot(player, monster.isRewardBoss()) &&
+                    isCorpseReachable(player, corpse.position)
+                ) {
+                    scheduleQuickLoot(player, corpseContainer, corpse.position)
+                }
+
+                sendCorpseUpdate(player, corpse)
+            }
         }
 
         creature.onDeathEventsHost(
@@ -241,6 +371,39 @@ class CreatureDeathPipeline(
         )
         return true
     }
+
+    /**
+     * `Container::getContentDescription(sendColoredMessage)`
+     * (src/items/containers/container.cpp:295-318): the container iterator
+     * skips every non-empty nested container (its children are described
+     * instead) and renders each leaf through `Item::getNameDescription`, in the
+     * `{id|name}` form for a coloured message and the plain name otherwise;
+     * an empty corpse reads `nothing`. The `items` package is outside this
+     * workstream's file ownership, so the C++ body is ported here, at its only
+     * non-Lua call site (`Creature::dropCorpse`, creature.cpp:791).
+     */
+    private fun getContentDescription(container: Container, sendColoredMessage: Boolean): String {
+        val descriptions = mutableListOf<String>()
+        val iterator = container.iterator()
+        while (iterator.hasNext()) {
+            val item = iterator.current() ?: break
+            iterator.advance()
+
+            val nested = item.getContainer()
+            if (nested != null && nested.items.isNotEmpty()) {
+                continue
+            }
+
+            descriptions += if (sendColoredMessage) {
+                "{${item.id}|${item.getNameDescription()}}"
+            } else {
+                item.getNameDescription()
+            }
+        }
+
+        return if (descriptions.isEmpty()) "nothing" else descriptions.joinToString(", ")
+    }
+
 
     /**
      * `creature->onGainExperience(experience, thisCreature)` dispatch
@@ -269,8 +432,10 @@ class CreatureDeathPipeline(
     /**
      * `Creature::onGainExperience` (creature.cpp:1308-1328): a zero gain or a
      * masterless creature stops; every other summon forwards half (all, for a
-     * familiar) to its master. The `MESSAGE_EXPERIENCE_OTHERS` spectator notice
-     * is a protocol side effect (PARITY GAP).
+     * familiar) to its master. A non-familiar gain additionally notifies every
+     * player in the creature's position with the
+     * `MESSAGE_EXPERIENCE_OTHERS` text frame (creature.cpp:1322-1327), showing
+     * the halved gain the C++ local carries after `gainExp /= 2`.
      */
     private fun creatureOnGainExperience(creature: Creature, gainExp: Long, target: Creature?) {
         if (gainExp == 0L) {
@@ -283,6 +448,26 @@ class CreatureDeathPipeline(
         val granted = if (isFamiliar) gainExp else gainExp / 2
 
         awardExperience(master, granted, target)
+
+        if (isFamiliar) {
+            return
+        }
+
+        val spectators = findSpectatorPlayers(creature.position)
+        if (spectators.isEmpty()) {
+            return
+        }
+
+        val suffix = if (granted != 1L) "s" else ""
+        val frame = TextMessageFrame(
+            type = MessageClass.MESSAGE_EXPERIENCE_OTHERS,
+            text = "${Tools.ucfirst(creature.getNameDescription())} gained $granted experience point$suffix.",
+            position = creature.position,
+            primary = MessageValue(granted, GameWindowWriter.TEXTCOLOR_WHITE_EXP),
+        )
+        for (spectator in spectators) {
+            sendTextMessageFrame(spectator, frame)
+        }
     }
 
     /**
@@ -300,5 +485,8 @@ class CreatureDeathPipeline(
     companion object {
         /** `loadIntConfig(L, PZ_LOCKED, "pzLocked", 60000)` (configmanager.cpp:340). */
         const val PZ_LOCKED_DEFAULT = 60_000
+
+        /** `std::to_string(bool)` behind the C++ metric labels. */
+        private fun toMetricBoolean(value: Boolean): String = if (value) "1" else "0"
     }
 }

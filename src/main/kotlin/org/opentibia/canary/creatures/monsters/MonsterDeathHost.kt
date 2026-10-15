@@ -24,6 +24,10 @@ class MonsterDeathHost(
     val lookCorpse: Int = 0,
     /** `MonsterType::info.race` (`src/creatures/monsters/monsters.hpp:68`), `Monster::getRace` (monster.cpp:1386-1388). */
     val race: RaceType = RaceType.RACE_NONE,
+    /** `MonsterType::nameDescription` (`src/creatures/monsters/monsters.hpp:172`), `Monster::getNameDescription` (monster.cpp:167-172). */
+    val nameDescription: String = "",
+    /** `MonsterType::info.isRewardBoss`, `Monster::isRewardBoss` (monster.cpp:291-293) behind the `dropCorpse` auto-loot gate (creature.cpp:790, 808). */
+    val isRewardBoss: Boolean = false,
     /** `MonsterType::info.experience`, the base of `Monster::getLostExperience` (monster.cpp:873-876). */
     val experience: Long = 0,
     /**

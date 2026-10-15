@@ -349,6 +349,9 @@ class GameHandler(
 
         /** The zero `Position` `IOLoginDataLoad::loadPlayerBasicInfo` treats as unset. */
         private val ZERO_POSITION = Position(0, 0, 0)
+
+        /** `CreatureEvent::getEventType` kill name (`creatureevent.cpp:163`). */
+        private const val KILL_EVENT_TYPE = "kill"
     }
 
     override fun channelRead0(ctx: ChannelHandlerContext, msg: ByteBuf) {
@@ -551,6 +554,24 @@ class GameHandler(
                     mostDamageUnjustified,
                 )
             }
+
+        // `Creature::deprecatedOnKilledCreature`'s kill-event loop
+        // (creature.cpp:1290-1303): the attached
+        // `getCreatureEvents(CREATURE_EVENT_KILL)` names filtered through the
+        // registry's `kill` event type — the same typed walk
+        // `ScriptingDispatch` runs for think/death — submitted to the
+        // WorldCommit lane through `creatureEventOnKill`. The master forwarding
+        // lives on `Creature.deprecatedOnKilledCreature`, so a summon kill
+        // reaches its player master's attached events through this host.
+        activePlayer.onKillEventsHost = { killer, target, lastHit ->
+            killer.getCreatureEvents()
+                .filter { name -> luaEnvironment.creatureEvents.get(name)?.eventType == KILL_EVENT_TYPE }
+                .forEach { name -> scriptingDispatch.creatureEventOnKill(name, killer, target, lastHit) }
+        }
+        // `Player::getProtocolVersion` (player.cpp:1022-1030): the negotiated
+        // session client version behind the loot-message colour gate
+        // (creature.cpp:789).
+        activePlayer.protocolVersionProvider = { clientVersionU32 }
 
         // Canary restores the persisted player systems during login
         // (IOLoginData::loadPlayer) before firing the login creature events
