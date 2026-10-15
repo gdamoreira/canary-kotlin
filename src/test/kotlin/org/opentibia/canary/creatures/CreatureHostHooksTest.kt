@@ -502,6 +502,9 @@ class CreatureHostHooksTest {
     @Test
     fun `player moved follow target refreshes the follow path`() {
         val player = player()
+        // The follow sight gate runs through `Player::canSee` (player.cpp:1402),
+        // which is inert without an attached client.
+        player.hasClient = { true }
         val follow = followTarget()
         assertThat(player.setFollowCreature(follow)).isTrue()
         var refreshes = 0

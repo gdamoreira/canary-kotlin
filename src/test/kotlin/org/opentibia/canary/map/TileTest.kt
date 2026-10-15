@@ -318,6 +318,43 @@ class TileTest {
     }
 
     @Test
+    fun `top visible creature without a viewer skips ghost players`() {
+        // tile.cpp:362-366 and 389-393: a ghost player is skipped in the
+        // viewer-less branch while invisible filtering is the first check.
+        val ghostOnTop = tileWithGround()
+        val ghostTop = creature(1, "Ghost").apply { switchGhostMode() }
+        val visibleBottom = creature(2, "Visible")
+        ghostOnTop.addThing(visibleBottom)
+        ghostOnTop.addThing(ghostTop)
+
+        assertThat(ghostOnTop.getTopVisibleCreature(null)).isSameAs(visibleBottom)
+        assertThat(ghostOnTop.getBottomVisibleCreature(null)).isSameAs(visibleBottom)
+
+        val ghostOnBottom = tileWithGround()
+        val ghostBottom = creature(3, "Ghost")
+        ghostBottom.switchGhostMode()
+        val visibleTop = creature(4, "Visible")
+        ghostOnBottom.addThing(ghostBottom)
+        ghostOnBottom.addThing(visibleTop)
+
+        assertThat(ghostOnBottom.getTopVisibleCreature(null)).isSameAs(visibleTop)
+        assertThat(ghostOnBottom.getBottomVisibleCreature(null)).isSameAs(visibleTop)
+    }
+
+    @Test
+    fun `queryAdd occupancy skips a ghost player but keeps normal creatures blocking`() {
+        // tile.cpp:850/911: only non-ghost creatures block the tile occupancy.
+        val tile = tileWithGround()
+        val ghost = creature(1, "Ghost").apply { switchGhostMode() }
+        tile.addThing(ghost)
+
+        assertThat(tile.queryAdd(INDEX_WHEREEVER, creature(2), 1, 0)).isEqualTo(ReturnValue.NOERROR)
+
+        tile.addThing(creature(3, "Solid"))
+        assertThat(tile.queryAdd(INDEX_WHEREEVER, creature(4), 1, 0)).isEqualTo(ReturnValue.NOTENOUGHROOM)
+    }
+
+    @Test
     fun `stack position and client index count ground tops creatures and down items`() {
         val tile = tileWithGround()
         val top = item(102)

@@ -149,7 +149,11 @@ class InboundOpcodeBatch3PacketHandlerRouterWiringTest {
         }
     }
 
-    private fun hero(): Player = Player(1, "Hero", 100, 100, position = Position(100, 100, 7))
+    private fun hero(): Player = Player(1, "Hero", 100, 100, position = Position(100, 100, 7)).apply {
+        // The attack/follow sight gates run through `Player::canSee`
+        // (player.cpp:1402), which is inert without an attached client.
+        hasClient = { true }
+    }
 
     private fun awaitWorldCommit(dispatcher: GameDispatcher) {
         val ran = CountDownLatch(1)

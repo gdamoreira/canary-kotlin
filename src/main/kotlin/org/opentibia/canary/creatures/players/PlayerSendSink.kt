@@ -104,6 +104,9 @@ interface PlayerSendSink : ProtocolSink {
     /** `Player::sendUpdateTile(tile, pos)` (player.cpp:8767). */
     fun sendUpdateTile(tile: Tile?, pos: Position)
 
+    /** `Player::sendCreatureTurn(creature)` (player.cpp:8809). */
+    fun sendCreatureTurn(creature: Creature)
+
     /** `Player::sendTextWindow(item, maxlen, canWrite)` (player.cpp:2390). */
     fun sendTextWindow(item: Item, maxlen: Int, canWrite: Boolean)
 
@@ -514,6 +517,41 @@ class PlayerFrameSink(
         super.sendCreatureAppear(creature, position, isLogin)
     }
 
+    /**
+     * `Player::sendCreatureTurn` (player.cpp:8809-8827): the player-level
+     * `canSeeCreature` gate and the `getClientIndexOfCreature` stack-position
+     * fallback to `sendUpdateTile`, then `ProtocolGame::sendCreatureTurn`
+     * (protocolgame.cpp:7988-8004) with its own `canSee(creature)` gate
+     * (removed flag, invisibility/ghost and the client viewport).
+     */
+    override fun sendCreatureTurn(creature: Creature) {
+        val tile = creature.getTile() ?: return
+        if (!player.canSeeCreature(creature)) {
+            return
+        }
+
+        val stackpos = tile.getClientIndexOfCreature(player, creature)
+        if (stackpos < 0 || stackpos >= MAX_STACKPOS) {
+            sendUpdateTile(tile, creature.position)
+            return
+        }
+
+        if (creature.isRemoved() || !CreaturePacketWriter.canSee(player, creature.position)) {
+            return
+        }
+
+        emitFrame {
+            CreaturePacketWriter.writeCreatureTurn(
+                this,
+                creature.position,
+                stackpos,
+                creature.id,
+                creature.direction,
+                walkthrough = player.canWalkthroughEx(creature),
+            )
+        }
+    }
+
     override fun sendCreatureChangeOutfit(creature: Creature, outfit: Outfit) {
         sendCreatureOutfit(creature, outfit)
     }
@@ -546,6 +584,8 @@ class PlayerFrameSink(
         // `ProtocolGame::sendCreatureSquare` (protocolgame.cpp:4723-4740) gates
         // on `canSee(creature)` (protocolgame.cpp:2376-2386): removed, not
         // visible to the player (ghost/invisibility) or out of the client view.
+        // The `isCipsoft860Profile` 0x86 branch (4730-4732) is intentionally
+        // out of scope: the port serializes the current protocol profile only.
         if (
             creature.isRemoved() ||
             !player.canSeeCreature(creature) ||
@@ -783,6 +823,11 @@ fun Player.sendFightModes() {
 /** `Player::sendUpdateTile(tile, pos)` (player.cpp:8767). */
 fun Player.sendUpdateTile(tile: Tile?, pos: Position) {
     playerSendSink?.sendUpdateTile(tile, pos)
+}
+
+/** `Player::sendCreatureTurn(creature)` (player.cpp:8809). */
+fun Player.sendCreatureTurn(creature: Creature) {
+    playerSendSink?.sendCreatureTurn(creature)
 }
 
 /** `Player::sendTextWindow(item, maxlen, canWrite)` (player.cpp:2390). */

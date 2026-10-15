@@ -66,6 +66,7 @@ import org.opentibia.canary.map.Town
 import org.opentibia.canary.network.protocol.MessageClass
 import org.opentibia.canary.network.protocol.ProtocolSink
 import org.opentibia.canary.network.protocol.SourceEffect
+import org.opentibia.canary.network.protocol.creature.CreaturePacketWriter
 import org.opentibia.canary.systems.bestiary.Charm
 import org.opentibia.canary.systems.bestiary.CharmRune
 import org.opentibia.canary.systems.forge.PlayerForgeHistory
@@ -937,8 +938,8 @@ abstract class Creature(
 
     /**
      * `Creature::isInGhostMode` (creature.hpp:212-214); base is false.
-     * PARITY GAP: `Player::isInGhostMode` (player.hpp:566-568) and its
-     * `ghostMode` flag are not modelled yet, mirroring the `Tile` walk checks.
+     * `Player::isInGhostMode` (player.hpp:566-569) overrides it with the
+     * modelled `ghostMode` flag.
      */
     open fun isInGhostMode(): Boolean = false
 
@@ -1778,6 +1779,17 @@ class Player(
     fun switchGhostMode() {
         ghostMode = !ghostMode
     }
+
+    /**
+     * `Player::canSee(pos)` (player.cpp:1402-1407): a clientless player sees
+     * nothing, otherwise the attached client's viewport decides. This replaces
+     * the [Creature.canSee] map viewport (`MAP_MAX_VIEW_PORT_X/Y` = 11/11)
+     * with `ProtocolGame::canSee` (protocolgame.cpp:2392-2414): the asymmetric
+     * `MAP_MAX_CLIENT_VIEW_PORT_X/Y` = 8/6 window with the +1 east/south
+     * margin, so the attack/follow sight gates are tighter for players.
+     */
+    override fun canSee(pos: Position): Boolean =
+        hasClient() && CreaturePacketWriter.canSee(this, pos)
 
     /** `Player::canSeeInvisibility()` (player.cpp:12989-12991). */
     override fun canSeeInvisibility(): Boolean =

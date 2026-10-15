@@ -10,6 +10,7 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.grouping.Group
 import org.opentibia.canary.creatures.grouping.TeamFinder
 import org.opentibia.canary.creatures.npcs.NpcType
+import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
@@ -618,6 +619,117 @@ class PlayerSendSinkTest {
 
         assertThat(bound.frames).hasSize(1)
         assertThat(bound.frames[0]).startsWith(*bytes(0x69, 0xE9, 0x03, 0xE8, 0x03, 0x07))
+    }
+
+    @Test
+    fun `sendCreatureTurn writes the turn frame through the player seam`() {
+        // Player::sendCreatureTurn (player.cpp:8809-8827) forwards to
+        // ProtocolGame::sendCreatureTurn (protocolgame.cpp:7988-8004): 0x6B,
+        // position, client stack index, the 0x63 creature marker, id, direction
+        // and the `canWalkthroughEx` byte.
+        val game = org.opentibia.canary.game.Game(GameMap(), org.opentibia.canary.game.scheduling.GameDispatcher())
+        game.map.getOrCreateTile(center).also { it.ground = Item(id = 100) }
+        game.map.getOrCreateTile(adjacent).also { it.ground = Item(id = 100) }
+        val observer = newPlayer()
+        assertThat(game.internalPlaceCreature(observer, center)).isTrue()
+        val rat = Monster(5000, "Rat", maxHealth = 100, health = 80, position = adjacent)
+        assertThat(game.placeCreature(rat, rat.position)).isTrue()
+        rat.direction = Direction.East
+        val frames = mutableListOf<ByteArray>()
+        val sink = PlayerFrameSink(
+            observer,
+            game.map,
+            { UnpooledByteBufAllocator.DEFAULT },
+            { frame ->
+                val out = ByteArray(frame.readableBytes())
+                frame.readBytes(out)
+                frame.release()
+                frames.add(out)
+            },
+        )
+        observer.protocolSink = sink
+
+        observer.sendCreatureTurn(rat)
+
+        assertThat(frames).containsExactly(
+            bytes(
+                0x6B, 0xE9, 0x03, 0xE8, 0x03, 0x07,
+                0x01,
+                0x63, 0x00,
+                0x88, 0x13, 0x00, 0x00,
+                0x01,
+                0x01,
+            ),
+        )
+    }
+
+    @Test
+    fun `sendCreatureTurn falls back to the tile refresh for an out-of-range stack position`() {
+        // player.cpp:8821-8824: stackpos < 0 || >= 10 -> sendUpdateTile(tile, pos).
+        val map = GameMap()
+        val tile = map.getOrCreateTile(adjacent)
+        tile.ground = Item(id = 100)
+        repeat(10) { index ->
+            tile.internalAddThing(
+                Monster(5100L + index, "Crowd $index", maxHealth = 100, health = 80, position = adjacent),
+            )
+        }
+        val rat = Monster(5000, "Rat", maxHealth = 100, health = 80, position = adjacent)
+        tile.internalAddThing(rat)
+        val bound = bind(map = map)
+
+        bound.sink.sendCreatureTurn(rat)
+
+        assertThat(bound.frames).hasSize(1)
+        assertThat(bound.frames[0]).startsWith(*bytes(0x69, 0xE9, 0x03, 0xE8, 0x03, 0x07))
+    }
+
+    @Test
+    fun `sendCreatureTurn is inert for a ghost the player cannot see`() {
+        // player.cpp:8819: the Player-level gate is canSeeCreature, which hides
+        // ghosts from players without group->access (player.cpp:1414-1416).
+        val game = org.opentibia.canary.game.Game(GameMap(), org.opentibia.canary.game.scheduling.GameDispatcher())
+        game.map.getOrCreateTile(center).also { it.ground = Item(id = 100) }
+        game.map.getOrCreateTile(adjacent).also { it.ground = Item(id = 100) }
+        val observer = newPlayer()
+        assertThat(game.internalPlaceCreature(observer, center)).isTrue()
+        val ghost = newPlayer(id = 2, name = "Ghost", position = adjacent)
+        ghost.switchGhostMode()
+        assertThat(game.placeCreature(ghost, ghost.position)).isTrue()
+        val frames = mutableListOf<ByteArray>()
+        val sink = PlayerFrameSink(
+            observer,
+            game.map,
+            { UnpooledByteBufAllocator.DEFAULT },
+            { frame ->
+                val out = ByteArray(frame.readableBytes())
+                frame.readBytes(out)
+                frame.release()
+                frames.add(out)
+            },
+        )
+        observer.protocolSink = sink
+
+        observer.sendCreatureTurn(ghost)
+
+        assertThat(frames).isEmpty()
+    }
+
+    @Test
+    fun `sendCreatureTurn is inert when the creature is outside the client view`() {
+        // ProtocolGame::sendCreatureTurn (protocolgame.cpp:7988-7990) gates on
+        // canSee(creature), whose viewport check rejects distant positions.
+        val map = GameMap()
+        val distant = Position(2000, 2000, 7)
+        val tile = map.getOrCreateTile(distant)
+        tile.ground = Item(id = 100)
+        val rat = Monster(5000, "Rat", maxHealth = 100, health = 80, position = distant)
+        tile.internalAddThing(rat)
+        val bound = bind(map = map)
+
+        bound.sink.sendCreatureTurn(rat)
+
+        assertThat(bound.frames).isEmpty()
     }
 
     @Test

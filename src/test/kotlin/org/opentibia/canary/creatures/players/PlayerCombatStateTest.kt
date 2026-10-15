@@ -31,7 +31,12 @@ class PlayerCombatStateTest {
         maxHealth = 150,
         health = 150,
         position = position,
-    )
+    ).apply {
+        // The attack/follow sight gates run through `Player::canSee`
+        // (player.cpp:1402), which is inert without an attached client; these
+        // tests model a connected player.
+        hasClient = { true }
+    }
 
     @Test
     fun `setChaseMode starts following the attacked creature`() {
@@ -87,6 +92,30 @@ class PlayerCombatStateTest {
 
         assertThat(player.chaseMode).isEqualTo(ChaseMode.StandStill)
         assertThat(player.cancelNextWalk).isFalse()
+    }
+
+    @Test
+    fun `attack and follow sight windows use the client viewport`() {
+        // Creature::setAttackedCreature (creature.cpp:1011-1030) and
+        // Creature::setFollowCreature (creature.cpp:1132-1166) gate on the
+        // virtual canSee; for a Player that is ProtocolGame::canSee's
+        // +/-8/+/-6 client window, tighter than the creature +/-11 map viewport.
+        val player = newPlayer(1, Position(100, 100, 7))
+        val insideEast = newPlayer(2, Position(109, 100, 7))
+        val outsideEast = newPlayer(3, Position(110, 100, 7))
+        val outsideSouth = newPlayer(4, Position(100, 108, 7))
+
+        assertThat(player.setAttackedCreature(insideEast)).isTrue()
+        assertThat(player.getAttackedCreature()).isSameAs(insideEast)
+
+        assertThat(player.setAttackedCreature(outsideEast)).isFalse()
+        assertThat(player.getAttackedCreature()).isNull()
+
+        assertThat(player.setFollowCreature(outsideSouth)).isFalse()
+        assertThat(player.getFollowCreature()).isNull()
+
+        assertThat(player.setFollowCreature(insideEast)).isTrue()
+        assertThat(player.getFollowCreature()).isSameAs(insideEast)
     }
 
     @Test

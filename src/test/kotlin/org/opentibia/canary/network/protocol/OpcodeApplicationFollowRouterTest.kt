@@ -45,7 +45,11 @@ class OpcodeApplicationFollowRouterTest {
     )
 
     private fun player(id: Long, name: String, position: Position): Player =
-        Player(id = id, name = name, maxHealth = 150, health = 150, position = position).also { game.addPlayer(it) }
+        Player(id = id, name = name, maxHealth = 150, health = 150, position = position).apply {
+            // The follow sight gate runs through `Player::canSee`
+            // (player.cpp:1402), which is inert without an attached client.
+            hasClient = { true }
+        }.also { game.addPlayer(it) }
 
     private fun route(frame: ByteBuf, player: Player): Int {
         val handled = GamePacketRouter.route(player, frame, context())

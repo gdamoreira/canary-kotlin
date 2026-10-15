@@ -46,7 +46,12 @@ class GameMovementTargetingTest {
         map.getOrCreateTile(position).also { it.ground = Item(id = 100) }
 
     private fun player(id: Long, name: String, position: Position = center): Player =
-        Player(id = id, name = name, maxHealth = 150, health = 150, position = position)
+        Player(id = id, name = name, maxHealth = 150, health = 150, position = position).apply {
+            // Targeting, follow and look run through `Player::canSee`
+            // (player.cpp:1402), which is inert without an attached client;
+            // these tests model a connected player.
+            hasClient = { true }
+        }
 
     private fun testCreature(id: Long, position: Position = center): TestCreature =
         TestCreature(id, "creature-$id", position)
