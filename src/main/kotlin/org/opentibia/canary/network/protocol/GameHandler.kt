@@ -450,11 +450,15 @@ class GameHandler(
             // the closed channel are dropped by the sink.
             activePlayer.protocolSink = null
 
-            // Canary unregisters the player on logout (`Player::removeList`,
-            // src/creatures/players/player.cpp:4519 -> `Game::removePlayer`,
-            // src/game/game.cpp:11631).
+            // `ProtocolGame::logout` (protocolgame.cpp:1178) removes the player
+            // creature (`g_game().removeCreature(player, true)`): the
+            // `Player::onRemoveCreature(player, isLogout = true)` branch leaves
+            // the party, removes the guild online entry and saves the player
+            // (player.cpp:12318-12353), then the ported
+            // `Creature::removeList()` -> `Game::removePlayer` unregisters the
+            // session (game.cpp:1602, player.cpp:4511, game.cpp:11631).
             dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                game.removePlayer(activePlayer)
+                game.removeCreature(activePlayer, isLogout = true)
             }
             onPlayerDisappear()
         }

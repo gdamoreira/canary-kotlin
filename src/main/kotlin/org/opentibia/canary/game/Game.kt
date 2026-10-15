@@ -74,6 +74,7 @@ import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.npcs.NpcInfo
 import org.opentibia.canary.creatures.players.PlayerTask
 import org.opentibia.canary.creatures.players.playerSendSink
+import org.opentibia.canary.creatures.players.removeList
 import org.opentibia.canary.creatures.players.sendCreatureReload
 import org.opentibia.canary.creatures.players.sendForgingData
 import org.opentibia.canary.creatures.players.sendNetworkMessage
@@ -2412,15 +2413,22 @@ class Game(
      * (`Map::removeCreature` ports the game.cpp:1563-1593 block), the master
      * link is cleared, the zone transition and `Creature::setRemoved()` run,
      * the creature leaves the think buckets and every summon is removed first
-     * with `setSkillLoss(false)`. A monster's host entry is dropped after
-     * `Creature::setRemoved()` so its pending completions re-resolve to `null`
-     * and the bound hooks turn inert (AGENTS.md deferred-callback lifetime
-     * safety).
+     * with `setSkillLoss(false)`. A player additionally leaves the game
+     * registry through the ported `Creature::removeList()` (game.cpp:1602 ->
+     * `Player::removeList`, player.cpp:4511 -> `Game::removePlayer`,
+     * game.cpp:11631), including the VIP offline broadcast. A session player
+     * never enters the spatial grid (the port registers session players
+     * through [addPlayer] instead of `internalPlaceCreature`'s
+     * `Creature::addList`, PARITY GAP), so a tileless player still receives
+     * the `Player::onRemoveCreature(creature, isLogout)` notification C++
+     * delivers through its own tile fanout. A monster's host entry is dropped
+     * after `Creature::setRemoved()` so its pending completions re-resolve to
+     * `null` and the bound hooks turn inert (AGENTS.md deferred-callback
+     * lifetime safety).
      *
-     * Parity gaps: `Cylinder::postRemoveNotification`, `Creature::removeList`
-     * and the team-finder logout cleanup (game.cpp:1599-1617) are not modeled.
-     * Like Canary, a missing tile keeps the creature-state tail running
-     * (game.cpp:1557-1560).
+     * Parity gaps: `Cylinder::postRemoveNotification` and the team-finder
+     * logout cleanup (game.cpp:1599-1617) are not modeled. Like Canary, a
+     * missing tile keeps the creature-state tail running (game.cpp:1557-1560).
      */
     fun removeCreature(creature: Creature, isLogout: Boolean = true): Boolean {
         if (creature.isRemoved()) {
@@ -2440,6 +2448,20 @@ class Game(
         }
 
         afterCreatureZoneChange(creature, fromZones, emptySet())
+
+        if (creature is Player) {
+            if (tile == null) {
+                creature.onRemoveCreature(creature, isLogout)
+            }
+            // `Creature::removeList()` (game.cpp:1602).
+            creature.removeList(
+                removePlayerFromGame = ::removePlayer,
+                gamePlayers = { players.values },
+                notifyVipStatusChange = { observer, removed, status ->
+                    playerVip(observer)?.notifyStatusChange(removed.getGUID(), removed.name, status)
+                },
+            )
+        }
 
         creature.setRemoved()
         removeCreatureCheck(creature)
