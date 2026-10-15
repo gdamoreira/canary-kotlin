@@ -4,6 +4,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.grouping.Party
 import org.opentibia.canary.combat.condition.ConditionId
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.game.scheduling.GameDispatcher
@@ -14,6 +15,7 @@ import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Spectators
 import org.opentibia.canary.network.protocol.CreatureType
+import org.opentibia.canary.social.guild.Guild
 import org.opentibia.canary.spells.WorldType
 
 /**
@@ -211,6 +213,34 @@ class GameStateUpdatersAndRecordsTest {
 
         assertThat(shields).hasSize(2).containsOnly(2L)
         assertThat(helpers).hasSize(2).containsOnly(2L to 42)
+    }
+
+    @Test
+    fun `the default getPlayerHelpers resolves the guild and party membership`() {
+        val game = newGame()
+        val guild = Guild(id = 1, name = "Red Rose")
+        val first = player(id = 1, name = "First")
+        val second = player(id = 2, name = "Second")
+        first.setGuild(guild)
+        second.setGuild(guild)
+
+        assertThat(game.getPlayerHelpers(first)).isEqualTo(2)
+        assertThat(game.getPlayerHelpers(second)).isEqualTo(2)
+
+        second.setGuild(null)
+        assertThat(game.getPlayerHelpers(first)).isEqualTo(1)
+
+        val leader = player(id = 3, name = "Leader")
+        val member = player(id = 4, name = "Member")
+        val party = Party(leader)
+        party.invitePlayer(member)
+        party.joinParty(member)
+        val partyOnly = player(id = 5, name = "PartyOnly")
+        partyOnly.setParty(party)
+
+        assertThat(game.getPlayerHelpers(partyOnly))
+            .isEqualTo(party.getMemberCount() + party.getInvitationCount() + 1)
+        assertThat(game.getPlayerHelpers(player(id = 6, name = "Loner"))).isZero()
     }
 
     @Test

@@ -74,6 +74,7 @@ import org.opentibia.canary.creatures.monsters.MonsterTargeting
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.npcs.NpcInfo
 import org.opentibia.canary.creatures.players.PlayerTask
+import org.opentibia.canary.creatures.players.getHelpers
 import org.opentibia.canary.creatures.players.playerSendSink
 import org.opentibia.canary.creatures.players.addList
 import org.opentibia.canary.creatures.players.removeList
@@ -2968,7 +2969,23 @@ class Game(
     /** `Player::sendCreatureType(creature, type)` protocol seam (game.cpp:9583-9588). */
     var sendCreatureType: (Player, Creature, CreatureType) -> Unit = { _, _, _ -> }
 
-    /** `Player::sendCreatureHelpers(creatureId, helpers)` protocol seam (game.cpp:9697). */
+    /**
+     * `Player::sendCreatureHelpers(creatureId, helpers)` protocol seam
+     * (game.cpp:9697): [updatePlayerHelpers] fans the helper count of the
+     * updated player out to each multifloor spectator.
+     *
+     * World-manager decision (wave 69 F4): the world composition root
+     * deliberately leaves this emitter unbound. Canary writes 0x94 only for
+     * old-protocol sessions (`ProtocolGame::sendCreatureHelpers` returns early
+     * on `!oldProtocol`, protocolgame.cpp:10928-10931) and
+     * `Player::sendCreatureHelpers` additionally gates on `client != nullptr`
+     * (player.cpp:1820-1823); the per-session host is the production path for
+     * client-gated protocol emission, so binding a current-profile writer at
+     * the world manager would emit a frame Canary never sends. An old-protocol
+     * profile (deferred) binds this seam per session; the helper-count chain
+     * (`Guild::addMember`/`removeMember` -> `Game::updatePlayerHelpers` ->
+     * `getPlayerHelpers`) is bound at the root and stays live.
+     */
     var sendCreatureHelpers: (Player, Long, Int) -> Unit = { _, _, _ -> }
 
     /** `Player::sendPlayerTyping(player, typing)` protocol seam (game.cpp:12711). */
@@ -3008,8 +3025,19 @@ class Game(
      */
     var getCreatureShader: (Creature) -> String = { "" }
 
-    /** `Player::getHelpers()` (player.hpp) seam; the Kotlin [Player] does not model the helpers counter yet (PARITY GAP). */
-    var getPlayerHelpers: (Player) -> Int = { 0 }
+    /**
+     * `Player::getHelpers()` (player.cpp:8335-8358) seam: the C++ reads the
+     * live guild online list (`Guild::getMembersOnline`, player.cpp:8337) and
+     * the party state directly, so the default resolves the same source through
+     * [Player.getHelpers]. The composition root may still override the seam
+     * with a different source.
+     */
+    var getPlayerHelpers: (Player) -> Int = { player ->
+        player.getHelpers(
+            guildMembersOnline = { guild -> guild.getMembersOnline() },
+            guildMemberCountOnline = { guild -> guild.getMemberCountOnline().toInt() },
+        )
+    }
 
     /**
      * `Player::getThingIndex(item)` (player.cpp) inventory scan backing

@@ -6,6 +6,11 @@ import io.netty.buffer.Unpooled
 import io.netty.channel.embedded.EmbeddedChannel
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.combat.condition.ConditionId
+import org.opentibia.canary.combat.condition.ConditionSpellCooldown
+import org.opentibia.canary.combat.condition.ConditionSpellGroupCooldown
+import org.opentibia.canary.combat.condition.ConditionType
+import org.opentibia.canary.combat.condition.SpellGroup
 import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
 import org.opentibia.canary.config.ConfigSource
@@ -27,6 +32,7 @@ import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.Items
 import org.opentibia.canary.kv.KVSQL
 import org.opentibia.canary.kv.ValueWrapper
+import org.opentibia.canary.lua.bindings.SpellBindings
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
@@ -38,6 +44,7 @@ import org.opentibia.canary.network.crypto.Adler32Checksum
 import org.opentibia.canary.network.crypto.RsaCipher
 import org.opentibia.canary.network.message.writeTibiaString
 import org.opentibia.canary.social.guild.JdbcGuildRepository
+import org.opentibia.canary.spells.InstantSpell
 import org.opentibia.canary.systems.imbuement.Imbuements
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -386,6 +393,127 @@ class ServerBootstrapCompositionBindingsTest {
             assertThat(houseInfoSaves.get()).isEqualTo(1)
             assertThat(houseItemSaves.get()).isEqualTo(1)
         } finally {
+            root.bootstrap.shutdown()
+        }
+    }
+
+    /**
+     * Wave 69 F4: the world `Game`'s `reduceAllSpellsCooldownTimer` seam must be
+     * bound by the production root to the owner's wheel
+     * (`PlayerWheel::reduceAllSpellsCooldownTimer`, player_wheel.cpp:3423-3450)
+     * so the Gift of Life path
+     * (`Game::checkGiftOfLife` -> `reduceAllSpellsCooldownTimer(player, 60000)`,
+     * player_wheel.cpp:3155-3170) reduces every stored spell cooldown.
+     */
+    @Test
+    fun `the booted root binds the gift of life cooldown reduction to the owner wheel`() {
+        val databaseBoot = TestDatabaseBoot("bindings_cooldowns_${System.nanoTime()}")
+        val root = bootRoot(databaseBoot)
+        var channel: EmbeddedChannel? = null
+        try {
+            val (player, session) = loginSession(root).also { channel = it.second }
+
+            SpellBindings.spellRegistry().registerInstantLuaEvent(
+                InstantSpell().apply {
+                    spellId = 1300
+                    name = "Bindings Beam"
+                    words = "exevo bindings beam"
+                    secondaryGroup = SpellGroup.SPELLGROUP_GREAT_BEAMS
+                },
+            )
+
+            val clock = 2_000_000L
+            player.now = { clock }
+            player.addCondition(
+                ConditionSpellCooldown(
+                    ConditionId.CONDITIONID_DEFAULT,
+                    ConditionType.CONDITION_SPELLCOOLDOWN,
+                    90_000,
+                    subId = 1300,
+                    now = { clock },
+                ),
+            )
+            player.addCondition(
+                ConditionSpellGroupCooldown(
+                    ConditionId.CONDITIONID_DEFAULT,
+                    ConditionType.CONDITION_SPELLGROUPCOOLDOWN,
+                    90_000,
+                    subId = SpellGroup.SPELLGROUP_GREAT_BEAMS.value,
+                    now = { clock },
+                ),
+            )
+
+            // `PlayerWheel::checkGiftOfLife`'s `reductionTimer = 60000`
+            // (player_wheel.cpp:3164-3165).
+            root.server().game.reduceAllSpellsCooldownTimer(player, 60_000)
+
+            assertThat(
+                player.getCondition(
+                    ConditionType.CONDITION_SPELLCOOLDOWN,
+                    ConditionId.CONDITIONID_DEFAULT,
+                    1300,
+                )?.ticks,
+            ).isEqualTo(30_000)
+            assertThat(
+                player.getCondition(
+                    ConditionType.CONDITION_SPELLGROUPCOOLDOWN,
+                    ConditionId.CONDITIONID_DEFAULT,
+                    SpellGroup.SPELLGROUP_GREAT_BEAMS.value,
+                )?.ticks,
+            ).isEqualTo(30_000)
+            assertThat(session.isOpen).isTrue()
+        } finally {
+            channel?.close()
+            root.bootstrap.shutdown()
+        }
+    }
+
+    /**
+     * Wave 69 F4: the guild helper broadcast must resolve the member count from
+     * `Player::getHelpers()` (player.cpp:8335-8358) and reach the world
+     * `Game::updatePlayerHelpers` (game.cpp:9690-9699) through the seam the
+     * production root installs on every guild `IOGuild::loadGuild` materializes
+     * (guild.cpp:14-32, ServerBootstrap guild repository binding).
+     */
+    @Test
+    fun `guild membership changes broadcast the helper count through the world binding`() {
+        val databaseBoot = TestDatabaseBoot("bindings_guildhelpers_${System.nanoTime()}")
+        val root = bootRoot(databaseBoot)
+        var channel: EmbeddedChannel? = null
+        try {
+            seedGuild(databaseBoot.dataSource)
+            val (player, session) = loginSession(root).also { channel = it.second }
+            val game = root.server().game
+            val frames = mutableListOf<Pair<Long, Int>>()
+            game.sendCreatureHelpers = { _, creatureId, helpers -> frames.add(creatureId to helpers) }
+
+            val guild = game.getGuild(7L)
+            assertThat(guild).isNotNull
+            assertThat(game.getPlayerHelpers(player)).isEqualTo(1)
+
+            val mate = Player(
+                id = 2L,
+                name = "Mate",
+                maxHealth = 1,
+                health = 1,
+                position = Position(1000, 1000, 7),
+            )
+            mate.setGuild(guild)
+
+            // `Guild::addMember` refreshes every online member through the world
+            // seam; only the placed session player spectates the login tile.
+            assertThat(frames).containsExactly(1L to 2, 2L to 2)
+            assertThat(game.getPlayerHelpers(player)).isEqualTo(2)
+
+            mate.setGuild(null)
+
+            // `Player::setGuild` calls `Guild::removeMember` before clearing
+            // `player->guild` (player.cpp:9316-9326), so the departing member's
+            // refresh still resolves the guild's remaining online count.
+            assertThat(frames).containsExactly(1L to 2, 2L to 2, 1L to 1, 2L to 1)
+            assertThat(session.isOpen).isTrue()
+        } finally {
+            channel?.close()
             root.bootstrap.shutdown()
         }
     }
