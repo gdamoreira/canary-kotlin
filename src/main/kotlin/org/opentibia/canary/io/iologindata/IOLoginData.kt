@@ -42,6 +42,7 @@ import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.ItemTypeRegistry
 import org.opentibia.canary.items.ObjectCategory_t
+import org.opentibia.canary.kv.ValueWrapper
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.persistence.PlayerFeatureStateLoader
 import org.opentibia.canary.systems.imbuement.ImbuementItem
@@ -114,8 +115,11 @@ typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
  * (iologindata_save_player.cpp:279-291) and the `players.animus_mastery` blob
  * (:293-299) through [PlayerConditionPersistence] and [IOBestiaryPersistence],
  * [savePlayerPreyClass(player)] and [savePlayerTaskHuntingClass(player)] write
- * the prey/task slots through [IOPreyPersistence], and
- * [PlayerSaveTransaction] shares one JDBC transaction across every repository
+ * the prey/task slots through [IOPreyPersistence],
+ * [savePlayerExivaRestrictions(player)] writes the `exiva-restrictions` scope
+ * through the composed `Player.kv` store (iologindata_save_player.cpp:878-907,
+ * called by [savePlayerFirst] before the record write like the C++ :201-203),
+ * and [PlayerSaveTransaction] shares one JDBC transaction across every repository
  * constructed over it (the port's `DBTransaction::executeWithinTransaction`
  * equivalent).
  *
@@ -459,6 +463,8 @@ class IOLoginData(
      * like the C++ `savePlayerFirst` returning `false`.
      */
     fun savePlayerFirst(player: Player): Boolean {
+        savePlayerExivaRestrictions(player)
+
         if (!players.savePlayerRecord(player)) {
             return false
         }
@@ -592,6 +598,36 @@ class IOLoginData(
 
         featureLoader?.save(player.id, player.features)
         return savePlayerStorage(player, player.features.storage)
+    }
+
+    /**
+     * `IOLoginDataSave::savePlayerExivaRestrictions`
+     * (src/io/functions/iologindata_save_player.cpp:878-907): the six flags of
+     * `Player::getExivaRestrictions()` are written into the
+     * `Player::kv()` `exiva-restrictions` scope as `ValueWrapper(bool)`
+     * exactly like the C++ implicit `ValueWrapper(bool)` constructor, and both
+     * whitelists become arrays of `ValueWrapper(static_cast<int>(guid))`
+     * elements. The scope is the same store the login load reads
+     * (`IOLoginDataLoad::loadPlayerExivaRestrictions`,
+     * iologindata_load_player.cpp:1042-1086), so the values persist through the
+     * KV write-behind flush. [savePlayerFirst] calls this before the `players`
+     * record write exactly like the C++ (:201-203). The C++ `nullptr` player
+     * guard is unrepresentable in Kotlin ([player] is non-null) like the other
+     * ported save helpers.
+     */
+    fun savePlayerExivaRestrictions(player: Player) {
+        val restrictions = player.getExivaRestrictions()
+        val scope = player.kv.scoped("exiva-restrictions")
+
+        scope.set(KEY_ALLOW_ALL, ValueWrapper(restrictions.allowAll))
+        scope.set(KEY_ALLOW_OWN_GUILD, ValueWrapper(restrictions.allowOwnGuild))
+        scope.set(KEY_ALLOW_OWN_PARTY, ValueWrapper(restrictions.allowOwnParty))
+        scope.set(KEY_ALLOW_VIP_LIST, ValueWrapper(restrictions.allowVipList))
+        scope.set(KEY_ALLOW_PLAYER_WHITELIST, ValueWrapper(restrictions.allowPlayerWhitelist))
+        scope.set(KEY_ALLOW_GUILD_WHITELIST, ValueWrapper(restrictions.allowGuildWhitelist))
+
+        scope.set(KEY_PLAYER_WHITELIST, ValueWrapper(restrictions.playerWhitelist.map { ValueWrapper(it.toInt()) }))
+        scope.set(KEY_GUILD_WHITELIST, ValueWrapper(restrictions.guildWhitelist.map { ValueWrapper(it.toInt()) }))
     }
 
     /** `IOLoginData::getNameByGuid` (src/io/iologindata.cpp:300-308). */
@@ -1394,5 +1430,15 @@ class IOLoginData(
 
         /** `1000 * 60 * 60 * 24 * 7` reward age window (iologindata_save_player.cpp:620). */
         const val REWARD_EXPIRATION_MS = 604_800_000L
+
+        /** `savePlayerExivaRestrictions` scope keys (iologindata_save_player.cpp:887-906). */
+        private const val KEY_ALLOW_ALL = "allowAll"
+        private const val KEY_ALLOW_OWN_GUILD = "allowOwnGuild"
+        private const val KEY_ALLOW_OWN_PARTY = "allowOwnParty"
+        private const val KEY_ALLOW_VIP_LIST = "allowVipList"
+        private const val KEY_ALLOW_PLAYER_WHITELIST = "allowPlayerWhitelist"
+        private const val KEY_ALLOW_GUILD_WHITELIST = "allowGuildWhitelist"
+        private const val KEY_PLAYER_WHITELIST = "playerWhitelist"
+        private const val KEY_GUILD_WHITELIST = "guildWhitelist"
     }
 }
