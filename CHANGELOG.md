@@ -641,8 +641,16 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 66: Wave 58 Recovery — Ancestry Audit (22:00 – 23:00)
+- **Silent merge failure discovered** — the wave-58 merge loop only landed `combat-spell-actor`; `host-lua-unification`, `known-creature-set` and `codec-fidelity` were recorded as done but never became ancestors of `main`.
+- **Recovered and merged** — known-creature set (1300-entry session cache + known/unknown frames), host/Lua unification (`Player.storage()`/`getOutfits`/`getBankBalance`, Lua delegation) and the condition/outfit codec (flat records, mount/familiar look columns) with conflicts resolved against the newer wave-59/63 designs; V20/V21/V22 keep the single-column animus layout.
+- **706 suites / 7817 tests, all green** (+36 tests recovered).
+- **Process note**: future wave merges verify every agent commit with `git merge-base --is-ancestor` before recording completion.
+
+---
+
 ### Current Status
-- **Automated Tests**: **702 test suites / 7781 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **706 test suites / 7817 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.

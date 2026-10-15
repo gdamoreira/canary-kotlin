@@ -1888,6 +1888,13 @@ Update §1–§3, `docs/development/implementation-status.md`, `README.md`, `CHA
 
 Completed: CombatSpell actor + nested loot + inline callbacks, host/Lua unification (storage/outfits/animus), known-creature set, condition codec + lookmount schema (V20). 685 suites / 7577 tests.
 
+
+> **Postscript (2026-10-15):** three of wave 58's four branches
+> (`host-lua-unification`, `known-creature-set`, `codec-fidelity`) silently
+> failed to merge at the time while the summary above recorded them as done.
+> They were recovered and merged during wave 63 (`4589ca3b`, `4b11d72e` and the
+> host-lua merge) after an ancestry audit — the recorded completion claims are
+> accurate again as of that recovery.
 ---
 
 <a id="wave-59"></a>

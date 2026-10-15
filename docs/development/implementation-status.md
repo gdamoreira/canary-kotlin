@@ -43,7 +43,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | Monster engine (`monster.cpp`, 4,014 lines) | 198 unique `Monster::` methods | 89 name-matched + async pipelines + host + type state + barrier buckets | **~85%** | wave 51: barrier-parallel creature async buckets, budget/requeue/promotion/rollback |
 | Map engine (`map.cpp`) | — | — | **~85%** | sight/`canWalkTo`/pathing/caches/spectators/houses/towns (wave 38) |
 | Persistence (`iologindata*`, `iomapserialize`) | — | — | **~80%** | 24/24 iologindata, 10/10 iomapserialize, market/prey/bestiary/bosstiary/guild/storage (V10–V14) |
-| **Estimated full-parity completion** | — | — | **~99.7%** | tracked inventory complete; wave 63 closed event fanout, spell execution, condition payload, client viewport, sub-load composition and the look-at renderer |
+| **Estimated full-parity completion** | — | — | **~99.8%** | tracked inventory complete; wave 63 closed event fanout, spell execution, condition payload, client viewport, sub-load composition and the look-at renderer; the wave-58 known-creature set, host/Lua unification and condition/outfit codec were recovered after an ancestry audit |
 
 #### 1.2 Module completion (by inventory rows in §2)
 
@@ -264,7 +264,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 **The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Wave 63 closed the
 previous six gaps; remaining work is call-site wiring and depth tails:
 
-1. **Persistence call-site tails** — `IOLoginDataSubloads.loadPlayerConditions` still runs its own partial reader (buffs/absorbs/increases/soul/capacity skipped at login; delegate to `PlayerConditionPersistence.decodeConditions`); guild loaded at login is never registered in `Game.guilds`; `loadPlayerVip`/`loadPlayerExivaRestrictions` inert; `monsterTypeByRaceId` seam unported; `SaveManager.registerOnlinePlayer` gap.
+1. **Persistence call-site tails** — guild loaded at login is never registered in `Game.guilds`; `loadPlayerVip`/`loadPlayerExivaRestrictions` inert; `monsterTypeByRaceId` seam unported; `SaveManager.registerOnlinePlayer` gap. (The login condition reader now decodes the flat records — the wave-58 codec was recovered in wave 63.)
 2. **Combat/spell wiring tails** — no production `CombatTarget` adapter for `onAttackedByPlayer` (Game.kt host wiring); `InstantSpell::canThrowSpell` range/sight seam; `CombatFunc` area-dispatch consumption tail; skill operand push for `valueCallback`; `getAimAtTargetSpells` population.
 3. **Event/transport tails** — global named-event dispatch (`ScriptingDispatch`) not yet walking the per-creature attached set; `creatureEventRegistered` boot injection; spawn-path `MonsterPipelinesHost.onSpawn` call site; `Game.sendCreatureTurn` composition wiring; non-`PlayerSendSink` transports keep the silent appear branch.
 4. **Renderer seam wiring** — `Item::getDescription` seams (items/spells/vocations/objectCategory) are unpassed from the composition root, so fluid/splash/rune/imbuement text degrades; Lua `item:getDescription` and the plural `Item::getDescriptions` remain unwired; shop look path.

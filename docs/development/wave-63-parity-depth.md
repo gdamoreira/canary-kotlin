@@ -212,3 +212,9 @@ composition wiring (`a9e35c2b`) and item description (`e23e4552`) — merged int
 Kotlin warnings**. Remaining tails are recorded in
 `implementation-status.md` §3 (persistence call-site wiring, combat/spell
 wiring, event/transport tails, renderer seams, map depth).
+
+**Recovery addendum (2026-10-15):** an ancestry audit found three wave-58
+branches had silently failed to merge (`host-lua-unification`,
+`known-creature-set`, `codec-fidelity`); they were recovered in the same
+session (`4589ca3b`, `4b11d72e` and the host-lua merge), bringing the
+integrated suite to **706 suites / 7817 tests**.
