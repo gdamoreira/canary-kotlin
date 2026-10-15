@@ -23,6 +23,7 @@ import org.opentibia.canary.game.scheduling.MonsterComputeConfig
 import org.opentibia.canary.game.scheduling.MonsterComputeService
 import org.opentibia.canary.io.IOBestiaryPersistence
 import org.opentibia.canary.io.appearances.Appearances
+import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.Items
 import org.opentibia.canary.kv.KVSQL
 import org.opentibia.canary.kv.ValueWrapper
@@ -115,7 +116,14 @@ class ServerBootstrapCompositionBindingsTest {
         config: ConfigManager = configManager(),
         monsterBoot: MonsterBoot = MonsterBoot { _, _, _, _ -> Monsters() },
         luaEnvironment: LuaEnvironment = LuaEnvironment().apply { initState() },
-        mapBoot: MapBoot = MapBoot { GameMap() },
+        // `ProtocolGame::login` places the session player (protocolgame.cpp:1056):
+        // the seeded `Knight Hero` login position needs a tile for the login
+        // sessions these tests open.
+        mapBoot: MapBoot = MapBoot {
+            GameMap().apply {
+                getOrCreateTile(Position(1000, 1000, 7)).ground = Item(id = 106)
+            }
+        },
     ): BootedRoot {
         var composition: GameComposition? = null
         var listener: ListenerBoot? = null

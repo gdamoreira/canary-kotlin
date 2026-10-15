@@ -18,7 +18,9 @@ import org.opentibia.canary.config.ConfigSource
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.game.scheduling.DispatcherInternalWork
 import org.opentibia.canary.game.scheduling.GameDispatcher
+import org.opentibia.canary.items.Item
 import org.opentibia.canary.map.GameMap
+import org.opentibia.canary.map.Position
 import org.opentibia.canary.network.codec.TibiaFrameDecoder
 import org.opentibia.canary.network.codec.TibiaMessageEncoder
 import org.opentibia.canary.network.crypto.Adler32Checksum
@@ -73,11 +75,20 @@ class CanaryServerSharedWorldStateTest {
             ConfigKeys.all.associateWith { it.luaIdentifier },
             properties = ConfigSource.of(mapOf("maxMessageBuffer" to "7")),
         )
+        // `ProtocolGame::login` places the session player (protocolgame.cpp:1056):
+        // the stub login position needs a ground area for the placement to
+        // succeed (a second session falls back to the neighbouring tiles).
+        val gameMap = GameMap()
+        for (y in 999..1001) {
+            for (x in 999..1001) {
+                gameMap.getOrCreateTile(Position(x, y, 7)).ground = Item(id = 106)
+            }
+        }
         server = CanaryServer(
             loginPort = 0,
             gamePort = 0,
             accountRepository = MockAccountRepo(),
-            gameMap = GameMap(),
+            gameMap = gameMap,
             dispatcher = dispatcher,
             configManager = config,
         )

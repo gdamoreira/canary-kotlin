@@ -14,7 +14,9 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.players.PlayerTask
 import org.opentibia.canary.creatures.players.vip.InMemoryVipRepository
+import org.opentibia.canary.creatures.players.vip.VipEntry
 import org.opentibia.canary.creatures.players.vip.VipRepository
+import org.opentibia.canary.creatures.players.vip.VipStatus
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.game.Game
 import org.opentibia.canary.game.scheduling.DispatcherLane
@@ -46,6 +48,9 @@ import org.opentibia.canary.systems.imbuement.ImbuementItem
 import org.opentibia.canary.systems.imbuement.ImbuementPlayer
 import org.opentibia.canary.systems.imbuement.Imbuements
 import org.opentibia.canary.systems.rewardchest.ReturnValue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 private val logger = KotlinLogging.logger {}
 
@@ -87,6 +92,10 @@ class GameHandler(
         itemTypes = itemTypes,
         ioMarket = ioMarket,
         imbuements = imbuements,
+        // `Player::vip()` (player.hpp:739): the directly constructed world
+        // resolves the session VIP component for the addList/removeList status
+        // broadcasts and the VIP request handlers.
+        playerVip = { player -> player.features.vip },
     ),
     /**
      * World-shared `Player::muteCountMap` (player.hpp:281) resolved by the
@@ -222,6 +231,22 @@ class GameHandler(
     companion object {
         const val PACKET_SELF_APPEAR = 0x0A
         const val PACKET_DISCONNECT = 0x14
+
+        /**
+         * Client protocol version at which `ProtocolGame::sendAddCreature`
+         * starts sending the `0xD4` VIP groups dialog (protocolgame.cpp:8746).
+         */
+        private const val VIP_GROUPS_VERSION = 1100
+
+        /**
+         * Bound on the login placement lane round trip; see [placeSessionPlayer].
+         * A lane that cannot complete the placement in this window reports the
+         * C++ temple-position failure instead of blocking the channel forever.
+         */
+        private const val PLACEMENT_TIMEOUT_SECONDS = 5L
+
+        /** The zero `Position` `IOLoginDataLoad::loadPlayerBasicInfo` treats as unset. */
+        private val ZERO_POSITION = Position(0, 0, 0)
     }
 
     override fun channelRead0(ctx: ChannelHandlerContext, msg: ByteBuf) {
@@ -328,17 +353,38 @@ class GameHandler(
             creatureById = { id -> game.getCreatureByID(id) },
         )
 
+        // `ProtocolGame::sendAddCreature`'s `creature == player` branch writes
+        // the self appear (0x17/0x0A) plus the login side systems; the port's
+        // frame sink has no self branch (PARITY GAP) and would emit a 0x6A
+        // add-creature frame for the logging-in player itself when the
+        // placement fanout reaches it. Bind the per-session seam so the self
+        // appear stays with `sendLoginSuccess` (exactly once) while every other
+        // creature keeps the sink's appear frame.
+        activePlayer.sendCreatureAppear = { creature, position, isLogin ->
+            if (creature !== activePlayer || !isLogin) {
+                activePlayer.protocolSink?.sendCreatureAppear(creature, position, isLogin)
+            }
+        }
+
         // Canary restores the persisted player systems during login
         // (IOLoginData::loadPlayer) before firing the login creature events
         // (Player::onPlacedCreature -> CreatureEvents::playerLogin).
         persistenceService?.load(activePlayer)
 
-        // Canary registers the player while placing the creature:
-        // `Game::placeCreature` -> `Player::addList` -> `Game::addPlayer`
-        // (src/creatures/players/player.cpp:4519, src/game/game.cpp:11624),
-        // before `Player::onPlacedCreature` fires the login creature events.
-        dispatcher.dispatch(DispatcherLane.WorldCommit) {
-            game.addPlayer(activePlayer)
+        // `ProtocolGame::login` placement block (protocolgame.cpp:1053-1063):
+        // `g_game().placeCreature(player, player->getLoginPosition()) ||
+        // g_game().placeCreature(player, player->getTemplePosition(), false, true)`;
+        // a failed placement disconnects with the temple error. The placement
+        // itself runs the ported `Creature::addList` -> `Player::addList`
+        // (game.cpp:1513, player.cpp:4519), which announces the session on the
+        // online VIP lists and registers it through `Game::addPlayer`
+        // (game.cpp:11624) before `Player::onPlacedCreature` fires the login
+        // creature events.
+        seedLoginPosition(activePlayer)
+        if (!placeSessionPlayer(activePlayer)) {
+            logger.warn { "Player '${activePlayer.name}' temple position is wrong" }
+            sendDisconnect(ctx, "Temple position is wrong. Please, contact the administrator.")
+            return
         }
 
         scriptingDispatch.playerLogin(activePlayer)
@@ -349,7 +395,51 @@ class GameHandler(
         onPlayerAppear()
 
         logger.info { "Player '${activePlayer.name}' logged into game world" }
-        sendLoginSuccess(ctx, activePlayer)
+        sendLoginSuccess(ctx, activePlayer, version)
+    }
+
+    /**
+     * `ProtocolGame::login` placement block (protocolgame.cpp:1053-1063): the
+     * login position is tried first and the forced temple placement second.
+     *
+     * The world mutation is confined to the WorldCommit lane (AGENTS.md 1.2);
+     * the calling thread waits for the result because the C++ login flow is
+     * synchronous and its failure branch disconnects the client. A listener
+     * without a running dispatcher runs the block inline, mirroring
+     * `CanaryServer.start`'s spawn-startup fallback for embedded use.
+     */
+    private fun placeSessionPlayer(player: Player): Boolean {
+        val placed = AtomicBoolean(false)
+        val done = CountDownLatch(1)
+        val block: () -> Unit = {
+            placed.set(
+                game.placeCreature(player, player.getLoginPosition()) ||
+                    game.placeCreature(player, player.getTemplePosition(), extendedPos = false, forced = true),
+            )
+            done.countDown()
+        }
+
+        val dispatched = dispatcher.isRunning && dispatcher.dispatch(DispatcherLane.WorldCommit) { block() }
+        if (!dispatched) {
+            block()
+        }
+
+        return done.await(PLACEMENT_TIMEOUT_SECONDS, TimeUnit.SECONDS) && placed.get()
+    }
+
+    /**
+     * `IOLoginDataLoad::loadPlayerBasicInfo` stores the persisted
+     * `posx`/`posy`/`posz` as `Player::loginPosition` and falls back to the
+     * temple when it is zero (iologindata_load_player.cpp:167-169, 207-210).
+     * The port's loader writes the persisted position to `Player.position`
+     * instead (PARITY GAP: IOLoginData loader seam), so a fresh session player
+     * starts with a zero login position; seed it from the loaded position so
+     * `ProtocolGame::login` places at the spot Canary would.
+     */
+    private fun seedLoginPosition(player: Player) {
+        if (player.getLoginPosition() == ZERO_POSITION) {
+            player.setLoginPosition(player.position)
+        }
     }
 
     /**
@@ -507,7 +597,7 @@ class GameHandler(
         }
     }
 
-    private fun sendLoginSuccess(ctx: ChannelHandlerContext, player: Player) {
+    private fun sendLoginSuccess(ctx: ChannelHandlerContext, player: Player, version: Int) {
         val out = ctx.alloc().buffer()
         // 1. Self Appear (0x0A)
         out.writeByte(PACKET_SELF_APPEAR)
@@ -519,6 +609,50 @@ class GameHandler(
         MapPacketWriter.writeMapDescription(out, gameMap, player.position)
 
         ctx.writeAndFlush(out)
+
+        // 3. VIP burst (0xD4 + one 0xD2 per persisted record).
+        sendVipBurst(player, version)
+    }
+
+    /**
+     * The `ProtocolGame::login` VIP burst (protocolgame.cpp:8746-8784):
+     * `sendVIPGroups()` on `version >= 1100`, then one `sendVIP` per
+     * `IOLoginData::getVIPEntries(player->getAccountId())` record. An online
+     * VIP resolves its live `PlayerVIP::getStatus`; a missing player — or, for
+     * a non-access player, a ghost — reports `VipStatus_t::Offline`
+     * (protocolgame.cpp:8750-8784).
+     */
+    private fun sendVipBurst(player: Player, version: Int) {
+        val sink = player.protocolSink ?: return
+
+        if (version >= VIP_GROUPS_VERSION) {
+            sink.sendVipGroups()
+        }
+
+        for (entry in vipEntriesOf(player)) {
+            val vipPlayer = game.getPlayerByGUID(entry.guid)
+            val status = when {
+                vipPlayer == null -> VipStatus.Offline
+                !player.isAccessPlayer() && vipPlayer.isInGhostMode() -> VipStatus.Offline
+                else -> vipPlayer.features.vip.getStatus()
+            }
+            sink.sendVip(entry.guid, entry.name, entry.description, entry.icon, entry.notify, status)
+        }
+    }
+
+    /**
+     * `IOLoginData::getVIPEntries(player->getAccountId())`
+     * (protocolgame.cpp:8750) through the injected loader. Without one the
+     * in-memory `PlayerVIP` list backs the burst so a directly constructed
+     * handler keeps serving the session.
+     */
+    private fun vipEntriesOf(player: Player): List<VipEntry> {
+        val accountId = player.account?.id
+        val loader = ioLoginData
+        if (loader != null && accountId != null) {
+            return loader.getVipEntries(accountId)
+        }
+        return player.features.vip.getVipEntries()
     }
 
     private fun sendDisconnect(ctx: ChannelHandlerContext, message: String) {

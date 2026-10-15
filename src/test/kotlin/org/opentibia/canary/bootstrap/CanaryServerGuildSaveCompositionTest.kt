@@ -16,6 +16,7 @@ import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.scheduling.MonsterComputeConfig
 import org.opentibia.canary.game.scheduling.MonsterComputeService
 import org.opentibia.canary.io.appearances.Appearances
+import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.Items
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
@@ -102,7 +103,13 @@ class CanaryServerGuildSaveCompositionTest {
             configBoot = ConfigBoot { _, _ -> ServerConfig(loginPort = 0, gamePort = 0) },
             configManagerBoot = ConfigManagerBoot { _, _ -> configManager() },
             databaseBoot = databaseBoot,
-            mapBoot = MapBoot { GameMap() },
+            // `ProtocolGame::login` places the session player (protocolgame.cpp:1056):
+            // the seeded `Knight Hero` login position needs a tile.
+            mapBoot = MapBoot {
+                GameMap().apply {
+                    getOrCreateTile(Position(1000, 1000, 7)).ground = Item(id = 106)
+                }
+            },
             scriptingBoot = ScriptingBoot { LuaEnvironment().apply { initState() } },
             appearanceBoot = AppearanceBoot { Appearances.load(ByteArray(0)) },
             itemBoot = ItemBoot { _, _ -> Items() },

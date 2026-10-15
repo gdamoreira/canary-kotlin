@@ -54,6 +54,7 @@ import org.opentibia.canary.network.protocol.GameHandler
 import org.opentibia.canary.network.protocol.GameMarketEscrow
 import org.opentibia.canary.network.protocol.LoginHandler
 import org.opentibia.canary.network.protocol.StatusHandler
+import org.opentibia.canary.social.guild.GuildRepository
 import org.opentibia.canary.systems.imbuement.ImbuementDecay
 import org.opentibia.canary.systems.imbuement.ImbuementEngine
 import org.opentibia.canary.systems.imbuement.Imbuements
@@ -174,6 +175,14 @@ class CanaryServer(
      * repository.
      */
     private val vipRepository: VipRepository? = null,
+    /**
+     * `IOGuild::loadGuild` / `getGuildIdByName` (src/io/ioguild.cpp:15-58)
+     * composed by the bootstrap over the shared save transaction; the world
+     * [game] resolves its `Game::getGuild`/`getGuildByName` `allowOffline`
+     * fallback (game.cpp:11727-11748) through it, so an offline guild load
+     * reads the persisted rows. `null` keeps the fallback inert.
+     */
+    internal val guildRepository: GuildRepository? = null,
 ) : ListenerBoot {
     /**
      * `g_dispatcher()` (`CanaryServer::run`, src/canary_server.cpp:132): the
@@ -286,6 +295,12 @@ class CanaryServer(
         creatureAsyncTaskBuckets = creatureAsyncTaskBuckets,
         monsterHost = monsterPipelinesHost,
         monsterTypeProvider = { name -> monsters?.getMonsterType(name) },
+        guildRepository = guildRepository,
+        // `Player::vip()` (player.hpp:739): the world VIP handlers
+        // (`Game::playerRequestAddVip`/`RemoveVip`/`EditVip`, game.cpp:7058-7114)
+        // and the `Creature::addList`/`removeList` status broadcasts resolve
+        // the session component through the same accessor Canary uses.
+        playerVip = { player -> player.features.vip },
         saveGuild = { guild -> saveManager?.saveGuild(guild) },
         modalWindowManager = ModalWindowManager(scripting = scriptingDispatch),
     )
@@ -293,10 +308,13 @@ class CanaryServer(
     init {
         // `SaveManager` session rotation (save_manager.cpp:150-171): the world
         // session install/removal (`Game::addPlayer`/`removePlayer`,
-        // game.cpp:11624/11631) feeds the online set `saveAll` rotates.
+        // game.cpp:11624/11631) feeds the online set `saveAll` rotates. The
+        // same manager backs the `g_saveManager().savePlayer(player)` call
+        // sites of the market/forge handlers (game.cpp:10816-11111).
         saveManager?.let { manager ->
             game.registerOnlinePlayer = manager::registerOnlinePlayer
             game.unregisterOnlinePlayer = manager::unregisterOnlinePlayer
+            game.savePlayer = { player -> manager.savePlayer(player) }
         }
     }
 

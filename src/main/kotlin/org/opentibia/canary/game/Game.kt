@@ -74,6 +74,7 @@ import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.npcs.NpcInfo
 import org.opentibia.canary.creatures.players.PlayerTask
 import org.opentibia.canary.creatures.players.playerSendSink
+import org.opentibia.canary.creatures.players.addList
 import org.opentibia.canary.creatures.players.removeList
 import org.opentibia.canary.creatures.players.sendCreatureReload
 import org.opentibia.canary.creatures.players.sendForgingData
@@ -2319,9 +2320,18 @@ class Game(
      * unregisters again and keeps the host inert. The type comes from the
      * injected [monsterTypeProvider] (`Monster::m_monsterType`, monster.hpp:363).
      *
-     * Parity gaps: `Creature::setID`, `Creature::addList` and
-     * `Creature::updateCalculatedStepSpeed` (game.cpp:1512-1514) have no Kotlin
-     * counterpart.
+     * A player runs the ported `Creature::addList` -> `Player::addList`
+     * (game.cpp:1513, player.cpp:4519-4525) once the map accepted it: every
+     * online player's VIP list announces the logging-in status and the session
+     * registers through [addPlayer]. `PlayerVIP::notifyStatusChange` is reached
+     * through the injected [playerVip] seam (`Player::vip()`, player.hpp:739).
+     *
+     * Parity gaps: `Creature::setID`, `Creature::updateCalculatedStepSpeed`
+     * (game.cpp:1512-1514) and the monster `Creature::addList` ->
+     * `Game::addMonster` branch have no Kotlin counterpart (monsters register
+     * through [monsterHost]); the appear fanout runs inside `Map::placeCreature`
+     * before the addList registration (the port folds `Game::placeCreature`'s
+     * fanout into the map layer).
      */
     fun internalPlaceCreature(
         creature: Creature,
@@ -2351,6 +2361,21 @@ class Game(
             }
             return false
         }
+
+        // `Creature::addList()` (game.cpp:1513): `Player::addList`
+        // (player.cpp:4519-4525) announces the player's current VIP status to
+        // every online list, then `Game::addPlayer` registers the session.
+        if (creature is Player) {
+            creature.addList(
+                gamePlayers = { players.values },
+                vipStatus = { playerVip(creature)?.getStatus() ?: VipStatus.Online },
+                notifyVipStatusChange = { observer, loginPlayer, status ->
+                    playerVip(observer)?.notifyStatusChange(loginPlayer.getGUID(), loginPlayer.name, status)
+                },
+                addPlayerToGame = ::addPlayer,
+            )
+        }
+
         placedCreatures[creature] = creature.getTile() ?: centerTile
 
         // `g_game().addCreatureHealth` reach of `Creature::changeHealth`
