@@ -15,6 +15,7 @@ import io.netty.util.concurrent.GlobalEventExecutor
 import javax.sql.DataSource
 import org.opentibia.canary.account.AccountRepository
 import org.opentibia.canary.account.InMemoryAccountRepository
+import org.opentibia.canary.chat.ChatManager
 import org.opentibia.canary.combat.CombatType
 import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
@@ -26,7 +27,9 @@ import org.opentibia.canary.creatures.players.pvp.ExpertPvp
 import org.opentibia.canary.creatures.players.vip.VipRepository
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.creatures.monsters.Monsters
+import org.opentibia.canary.creatures.npcs.Npcs
 import org.opentibia.canary.creatures.spawns.MonsterSpawnPath
+import org.opentibia.canary.creatures.spawns.NpcSpawnPath
 import org.opentibia.canary.creatures.spawns.dispatcherSpawnScheduler
 import org.opentibia.canary.database.Database
 import org.opentibia.canary.database.DatabaseConnectionFactory
@@ -155,6 +158,16 @@ class CanaryServer(
      */
     internal val monsters: Monsters? = null,
     /**
+     * `g_npcs()` (`src/creatures/npcs/npcs.hpp:98`) composed by the bootstrap;
+     * the production NPC spawn path resolves block names and builds each
+     * spawned npc from its registered type. `null` keeps the npc spawn path
+     * uncomposed (embedded/test use). PARITY GAP: Canary fills the registry
+     * from the datapack Lua scripts (`Npcs::load(false, true)`,
+     * src/canary_server.cpp:605); the port's `NpcType(name)` registration is
+     * not booted yet, so the production registry stays empty.
+     */
+    internal val npcs: Npcs? = null,
+    /**
      * `Creature::getCreatureAsyncTaskBuckets` shared world state
      * (creature.cpp:34-55) composed by the bootstrap; when absent the listener
      * owns one over its dispatcher. The same instance reaches [game] and
@@ -243,10 +256,20 @@ class CanaryServer(
      * `g_game().mounts` (src/game/game.hpp:628) equivalent: the mount definition
      * registry `GAME_STATE_INIT` loads (`Mounts::loadFromXml`, game.cpp:982) and
      * the world `Mounts::getMountByClientID`/`getMountByID` seams resolve
-     * through. The per-player `PlayerFeatures.mountDefinitions` registries stay
-     * separate until the player composition injects this instance (PARITY GAP).
+     * through. The same instance is injected into every session
+     * `PlayerFeatures.mountDefinitions` ([createGameHandler]), so the per-player
+     * mount runtime reads the booted definitions.
      */
     internal val mounts: Mounts = Mounts()
+
+    /**
+     * `g_chat()` (src/creatures/interactions/chat.hpp:91) equivalent composed
+     * at the server root: the channel registry the `GAME_STATE_INIT` arm loads
+     * through `g_chat().load()` (game.cpp:967, chat.cpp:340-410) and the world
+     * channel handlers reach (game.cpp:4324-4441). The [ChatClient] stays the
+     * exported no-op until a production session-sink client exists (PARITY GAP).
+     */
+    internal val chatManager: ChatManager = ChatManager()
 
     /**
      * `g_database()` equivalent over the booted [dataSource] (game.cpp:9592-9656):
@@ -359,6 +382,9 @@ class CanaryServer(
         playerVip = { player -> player.features.vip },
         saveGuild = { guild -> saveManager?.saveGuild(guild) },
         modalWindowManager = ModalWindowManager(scripting = scriptingDispatch),
+        // `g_chat()` (chat.cpp): the world channel handlers resolve the booted
+        // `Chat::normalChannels`/`privateChannels` registries through this one.
+        chatManager = chatManager,
     )
 
     init {
@@ -634,6 +660,32 @@ class CanaryServer(
             null
         }
 
+    // --- npc spawn path (`IOMap::loadNpcs` + `SpawnsNpc::startup`) --------------
+
+    /**
+     * Production NPC spawn path: `IOMap::loadNpcs` (src/io/iomap.hpp:64-73) over
+     * the booted `g_npcs()` registry plus the `map.spawnsNpc.startup()` half of
+     * `Game::setGameState(GAME_STATE_INIT)` (src/game/game.cpp:971). [start]
+     * loads the map's spawn XML before the INIT trigger; the engine starts on
+     * the WorldCommit lane next to `map.spawnsMonster.startup()` so every
+     * block places through `Game::internalPlaceCreature`
+     * (src/game/game.cpp:1495) confined to the world thread (AGENTS.md 1.2);
+     * [stop] drains it like `Game::shutdown` (src/game/game.cpp:9502). Composed
+     * only when an `Npcs` registry and a config manager are injected.
+     */
+    internal val npcSpawnPath: NpcSpawnPath? =
+        if (npcs != null && configManager != null) {
+            NpcSpawnPath(
+                game = game,
+                map = gameMap,
+                npcTypes = npcs,
+                spawnScheduler = dispatcherSpawnScheduler(this.dispatcher),
+                config = configManager,
+            )
+        } else {
+            null
+        }
+
     // --- raids (`Game::raids`) -------------------------------------------------
 
     /**
@@ -684,19 +736,23 @@ class CanaryServer(
     init {
         // --- `GAME_STATE_INIT` bindings (`Game::setGameState`, game.cpp:963-993) ---
 
-        // `map.spawnsMonster.startup()` (game.cpp:970): the XML half of the
-        // spawn path already ran during map boot (`IOMap::loadMonsters`); the
-        // start must place every block through `Game::internalPlaceCreature` on
-        // the world thread (AGENTS.md 1.2), so it is dispatched to the
-        // WorldCommit lane like `Game::addCreatureCheck` (game.cpp:7676-7684);
-        // a listener without a running dispatcher (embedded use) starts inline.
+        // `map.spawnsMonster.startup(); map.spawnsNpc.startup()` (game.cpp:970-971):
+        // the XML halves of both spawn paths already ran during map boot
+        // (`IOMap::loadMonsters`/`IOMap::loadNpcs`); the start must place every
+        // block through `Game::internalPlaceCreature` on the world thread
+        // (AGENTS.md 1.2), so it is dispatched to the WorldCommit lane like
+        // `Game::addCreatureCheck` (game.cpp:7676-7684) in the C++ statement
+        // order; a listener without a running dispatcher (embedded use) starts
+        // inline.
         game.initSpawns = {
-            monsterSpawnPath?.let { spawns ->
-                if (this.dispatcher.isRunning) {
-                    this.dispatcher.dispatch(DispatcherLane.WorldCommit) { spawns.startup() }
-                } else {
-                    spawns.startup()
-                }
+            val startSpawns = {
+                monsterSpawnPath?.startup()
+                npcSpawnPath?.startup()
+            }
+            if (this.dispatcher.isRunning) {
+                this.dispatcher.dispatch(DispatcherLane.WorldCommit) { startSpawns() }
+            } else {
+                startSpawns()
             }
         }
 
@@ -727,6 +783,14 @@ class CanaryServer(
         }
 
         coreDirectory?.let { core ->
+            // `g_chat().load()` (game.cpp:967) over
+            // `{CORE_DIRECTORY}/chatchannels/chatchannels.xml` (chat.cpp:341-347).
+            game.initChat = {
+                readCoreXml(Path.of(core, "chatchannels", "chatchannels.xml"))?.let { content ->
+                    chatManager.load(content)
+                }
+            }
+
             // `mounts->loadFromXml()` (game.cpp:982) over
             // `{CORE_DIRECTORY}/XML/mounts.xml`; the same registry answers the
             // `g_game().mounts` look-ups (mounts.cpp).
@@ -894,21 +958,25 @@ class CanaryServer(
         // its queue-latency/internal-work telemetry once the server is online.
         dispatcher.setQueueLatencyLoggingEnabled(true)
 
-        // `Map::loadMap(loadMonsters=true)` -> `IOMap::loadMonsters`
-        // (src/map/map.cpp:199-201): the spawn XML parses during map boot,
-        // before `GAME_STATE_INIT` starts the engine (src/game/game.cpp:970).
+        // `Map::loadMap(loadMonsters=true, loadNpcs=true)` -> `IOMap::loadMonsters`
+        // + `IOMap::loadNpcs` (src/map/map.cpp:199-212): both spawn XMLs parse
+        // during map boot, before `GAME_STATE_INIT` starts the engines
+        // (src/game/game.cpp:970-971).
         monsterSpawnPath?.let { spawns -> spawns.load() }
+        npcSpawnPath?.let { spawns -> spawns.load() }
 
         // `g_game().setGameState(GAME_STATE_INIT)` (src/canary_server.cpp:225):
         // the state trigger runs every wired INIT piece in the C++ statement
-        // order (src/game/game.cpp:963-993): items price, the spawn/raid
-        // startups, mounts, attached effects, MOTD/players record, the global
-        // `startup` events and the wheel global data.
+        // order (src/game/game.cpp:963-993): items price, the chat load, the
+        // spawn/raid startups, mounts, attached effects, MOTD/players record,
+        // the global `startup` events and the wheel global data.
         game.setGameState(GameState_t.GAME_STATE_INIT)
 
         // `Game::playersRecord` (src/game/game.cpp:9646) loaded by the INIT arm
         // seeds the login-path record tracker, so a fresh boot does not fire
-        // the `record` events for a record the previous run already stored.
+        // the `record` events for a record the previous run already stored,
+        // and a new peak persists through the same `Game::updatePlayersRecord`
+        // seam (game.cpp:9638).
         playersRecord.set(game.playersRecord)
 
         // `IOMarket::checkExpiredOffers()` runs after `GAME_STATE_INIT`
@@ -956,6 +1024,11 @@ class CanaryServer(
         monsterTypeProvider = { name -> monsters?.getMonsterType(name) },
         kvStore = kvStore,
         vipRepository = vipRepository,
+        // `Mounts::getInstance()` reads of the session mount runtime
+        // (player.cpp:7918-8128): every session `PlayerFeatures` resolves the
+        // booted `{CORE_DIRECTORY}/XML/mounts.xml` registry instead of a
+        // per-player empty copy.
+        mountDefinitions = mounts,
     )
 
     /**
@@ -976,22 +1049,24 @@ class CanaryServer(
 
     /**
      * `Game::checkPlayersRecord` (src/game/game.cpp:9625-9636): when the online count beats
-     * the stored record, advances the record and fires each registered `record` event with
-     * `(playersRecord, previousRecord)`. The CAS keeps the counters safe for concurrent
-     * logins; the Lua callbacks themselves stay confined to the WorldCommit lane.
+     * the stored record, advances the record, persists it through
+     * `Game::updatePlayersRecord` (game.cpp:9638-9644) and fires each
+     * registered `record` event with `(playersRecord, previousRecord)`. The CAS
+     * keeps the counters safe for concurrent logins; the Lua callbacks
+     * themselves stay confined to the WorldCommit lane.
      *
      * The record it compares against is the `Game::playersRecord` value the
      * `GAME_STATE_INIT` arm loaded from `server_config` ([start] seeds this
-     * tracker from it). PARITY GAP: the C++ `updatePlayersRecord` persistence
-     * (game.cpp:9638-9644) is not called from this login-path tracker, so a new
-     * peak is only persisted by the `Game::checkPlayersRecord` path the port
-     * does not invoke.
+     * tracker from it); a new peak writes back through the same world [game]
+     * record and the bound `savePlayersRecord` persistence.
      */
     internal fun checkPlayersRecord(): Boolean {
         val current = playersOnline.get()
         var record = playersRecord.get()
         while (current > record) {
             if (playersRecord.compareAndSet(record, current)) {
+                game.playersRecord = current
+                game.updatePlayersRecord()
                 return scriptingDispatch.globalRecord(current.toLong(), record.toLong())
             }
             record = playersRecord.get()
@@ -1011,6 +1086,7 @@ class CanaryServer(
         // so no callback can outlive its owner (AGENTS.md deferred-callback
         // lifetime safety).
         monsterSpawnPath?.shutdown()
+        npcSpawnPath?.shutdown()
         // `Game::shutdown` -> `raids.clear()` (src/game/game.cpp:9504): cancel
         // the pending raid check and every in-flight raid event while the
         // dispatcher is still alive, then drop the loaded scripts.

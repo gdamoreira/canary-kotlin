@@ -57,6 +57,7 @@ import org.opentibia.canary.systems.imbuement.ImbuementEngine
 import org.opentibia.canary.systems.imbuement.ImbuementItem
 import org.opentibia.canary.systems.imbuement.ImbuementPlayer
 import org.opentibia.canary.systems.imbuement.Imbuements
+import org.opentibia.canary.systems.mount.Mounts
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CountDownLatch
@@ -161,6 +162,15 @@ class GameHandler(
      * per-player in-memory repository.
      */
     private val vipRepository: VipRepository? = null,
+    /**
+     * `Mounts::getInstance()` definition registry
+     * (src/creatures/appearance/mounts/mounts.hpp) injected into every session
+     * `PlayerFeatures` so the mount runtime (`Player::toggleMount`/`hasMount`,
+     * player.cpp:7918-8128) resolves the booted
+     * `{CORE_DIRECTORY}/XML/mounts.xml` definitions. A directly constructed
+     * handler keeps a per-handler empty registry.
+     */
+    private val mountDefinitions: Mounts = Mounts(),
 ) : SimpleChannelInboundHandler<ByteBuf>() {
 
     private var player: Player? = null
@@ -890,6 +900,7 @@ class GameHandler(
             muteCountMap = muteCountMap,
             transformItemCharges = transformItemCharges,
             vipRepository = vipRepository ?: InMemoryVipRepository(),
+            mountDefinitions = mountDefinitions,
         ).also { it.account = account }.also(::bindRegistries)
 
         val guid = loader.getGuidByName(characterName)
@@ -909,6 +920,7 @@ class GameHandler(
             muteCountMap = muteCountMap,
             transformItemCharges = transformItemCharges,
             vipRepository = vipRepository ?: InMemoryVipRepository(),
+            mountDefinitions = mountDefinitions,
         )
         loaded.account = account
 

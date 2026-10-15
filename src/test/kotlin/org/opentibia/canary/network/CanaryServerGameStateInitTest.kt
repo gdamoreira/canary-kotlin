@@ -169,6 +169,37 @@ class CanaryServerGameStateInitTest {
     }
 
     @Test
+    fun `a new online peak persists the players record through the world seam`() {
+        val dataSource = DatabaseConnectionFactory.createInMemoryDataSource("canary_init_record_${System.nanoTime()}")
+        assertThat(DatabaseConnectionFactory.migrate(dataSource)).isGreaterThanOrEqualTo(10)
+        dataSource.connection.use { connection ->
+            connection.createStatement().use { statement ->
+                statement.executeUpdate("UPDATE server_config SET \"value\" = '2' WHERE config = 'players_record'")
+            }
+        }
+
+        val server = server(core = null, dataSource = dataSource)
+        try {
+            server.start()
+            assertThat(server.game.playersRecord).isEqualTo(2)
+
+            // Two logins do not beat the stored record of two; the third does.
+            // `Game::checkPlayersRecord` advances the peak and
+            // `Game::updatePlayersRecord` persists it (game.cpp:9625-9644).
+            repeat(2) { server.onPlayerAppear() }
+            assertThat(server.game.playersRecord).isEqualTo(2)
+            assertThat(readPlayersRecord(dataSource)).isEqualTo("2")
+
+            server.onPlayerAppear()
+            assertThat(server.game.playersRecord).isEqualTo(3)
+            assertThat(readPlayersRecord(dataSource)).isEqualTo("3")
+        } finally {
+            server.stop()
+            dataSource.close()
+        }
+    }
+
+    @Test
     fun `a boot without a core directory keeps the mount and attached-effect loads inert`() {
         val server = server(core = null)
 
@@ -183,6 +214,17 @@ class CanaryServerGameStateInitTest {
             server.stop()
         }
     }
+
+    private fun readPlayersRecord(dataSource: HikariDataSource): String =
+        dataSource.connection.use { connection ->
+            connection.createStatement().use { statement ->
+                statement.executeQuery("SELECT \"value\" FROM server_config WHERE config = 'players_record'")
+                    .use { result ->
+                        assertThat(result.next()).isTrue
+                        result.getString("value")
+                    }
+            }
+        }
 
     @Test
     fun `the loaded core xml is read from the configured core directory`() {

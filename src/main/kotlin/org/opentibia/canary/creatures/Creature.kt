@@ -89,6 +89,7 @@ import org.opentibia.canary.network.protocol.creature.CreaturePacketWriter
 import org.opentibia.canary.systems.bestiary.Charm
 import org.opentibia.canary.systems.bestiary.CharmRune
 import org.opentibia.canary.systems.forge.PlayerForgeHistory
+import org.opentibia.canary.systems.mount.Mounts
 import org.opentibia.canary.systems.prey.PreySlot
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import org.opentibia.canary.systems.rewardchest.RewardChest
@@ -2175,6 +2176,16 @@ class Player(
      * default self-contained.
      */
     val vipRepository: VipRepository = InMemoryVipRepository(),
+    /**
+     * `Mounts::getInstance()` definition registry
+     * (src/creatures/appearance/mounts/mounts.hpp) forwarded to
+     * [PlayerFeatures.mountDefinitions]: the composition root injects the
+     * registry `GAME_STATE_INIT` loaded from `{CORE_DIRECTORY}/XML/mounts.xml`
+     * (game.cpp:982), so the session mount runtime
+     * (`Player::toggleMount`/`tameMount`/`hasMount`, player.cpp:7918-8128)
+     * resolves the booted definitions instead of a per-player empty copy.
+     */
+    val mountDefinitions: Mounts = Mounts(),
 ) : Creature(id, name, maxHealth, health, maxMana, mana, speed, position), BatchUpdateActor {
 
     /**
@@ -2233,6 +2244,7 @@ class Player(
         muteCountMap = muteCountMap,
         transformItemCharges = transformItemCharges,
         vipRepository = vipRepository,
+        mountDefinitions = mountDefinitions,
     )
 
     /**
