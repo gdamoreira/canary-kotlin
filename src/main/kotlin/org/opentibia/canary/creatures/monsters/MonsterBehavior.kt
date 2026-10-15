@@ -1112,7 +1112,8 @@ object MonsterBehavior {
         }
     }
 
-    private fun splashFluidForRace(race: RaceType): Int? = when (race) {
+    /** The `Creature::dropCorpse` race switch (creature.cpp:742-770); `null` means no splash. */
+    fun splashFluidForRace(race: RaceType): Int? = when (race) {
         RaceType.RACE_VENOM -> FLUID_SLIME
         RaceType.RACE_BLOOD -> FLUID_BLOOD
         RaceType.RACE_INK -> FLUID_INK

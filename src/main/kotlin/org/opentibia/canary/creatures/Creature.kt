@@ -21,11 +21,18 @@ import org.opentibia.canary.creatures.appearance.outfit.OutfitEntry
 import org.opentibia.canary.creatures.grouping.Group
 import org.opentibia.canary.creatures.grouping.Party
 import org.opentibia.canary.creatures.grouping.PartyShields_t
+import org.opentibia.canary.creatures.monsters.MonsterBehavior
+import org.opentibia.canary.creatures.monsters.MonsterDeathHost
+import org.opentibia.canary.creatures.monsters.MonsterLoot
+import org.opentibia.canary.creatures.monsters.MonsterThink
 import org.opentibia.canary.creatures.monsters.MonsterType
+import org.opentibia.canary.creatures.monsters.RaceType
+import org.opentibia.canary.creatures.monsters.targetCreatureFactsOf
 import org.opentibia.canary.creatures.players.CountBlock
 import org.opentibia.canary.creatures.players.ExivaRestrictions
 import org.opentibia.canary.creatures.players.PlayerActionTimers
 import org.opentibia.canary.creatures.players.PlayerDeathState
+import org.opentibia.canary.creatures.players.PlayerExperienceState
 import org.opentibia.canary.creatures.players.PlayerTask
 import org.opentibia.canary.creatures.players.PlayerTownState
 import org.opentibia.canary.creatures.players.PlayerWalkState
@@ -43,6 +50,7 @@ import org.opentibia.canary.creatures.players.storages.Stash
 import org.opentibia.canary.creatures.players.vip.InMemoryVipRepository
 import org.opentibia.canary.creatures.players.vip.VipRepository
 import org.opentibia.canary.game.QuickLootFilter_t
+import org.opentibia.canary.game.death.CreatureDeathPipeline
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
@@ -89,6 +97,7 @@ import java.lang.ref.WeakReference
 import java.util.Collections
 import java.util.IdentityHashMap
 import kotlin.math.abs
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.pow
 
@@ -976,6 +985,57 @@ abstract class Creature(
         lastHitCreatureId = attacker.id
     }
 
+    /**
+     * `Creature::getDamageRatio` (creature.cpp:1168-1190): the attacker's share
+     * of the total damage recorded on the map, skipping the zero id and zero
+     * totals.
+     */
+    fun getDamageRatio(attacker: Creature): Double {
+        var totalDamage = 0L
+        var attackerDamage = 0L
+
+        for ((attackerId, damageInfo) in damageMap) {
+            if (attackerId == 0L || damageInfo.total == 0) {
+                continue
+            }
+
+            totalDamage += damageInfo.total
+            if (attackerId == attacker.id) {
+                attackerDamage += damageInfo.total
+            }
+        }
+
+        if (totalDamage == 0L) {
+            return 0.0
+        }
+
+        return attackerDamage.toDouble() / totalDamage
+    }
+
+    /**
+     * `Creature::getGainedExperience` (creature.cpp:1192-1194):
+     * `floor(getDamageRatio(attacker) * getLostExperience())`. The base
+     * `getLostExperience` is zero; `Monster` and `Player` override both members.
+     */
+    open fun getGainedExperience(attacker: Creature): Long =
+        floor(getDamageRatio(attacker) * getLostExperience()).toLong()
+
+    /**
+     * `Creature::hasBeenAttacked` (creature.cpp:830-836): the attacker is still
+     * inside the `PZ_LOCKED` window.
+     */
+    fun hasBeenAttacked(attackerId: Long): Boolean {
+        val attackInfo = damageMap[attackerId] ?: return false
+        return (now() - attackInfo.ticks) <= pzLockedProvider()
+    }
+
+    /**
+     * `g_configManager().getNumber(PZ_LOCKED)` (configmanager.cpp:340) seam for
+     * [hasBeenAttacked]. The world composition binds the configured window; the
+     * unbound default keeps the Canary config default.
+     */
+    var pzLockedProvider: () -> Int = { CreatureDeathPipeline.PZ_LOCKED_DEFAULT }
+
     /** `Creature::skull` (creature.hpp:925), default `SKULL_NONE`. */
     private var skull: Skulls_t = Skulls_t.SKULL_NONE
 
@@ -1070,6 +1130,15 @@ abstract class Creature(
 
     /** `Creature::getSummons` (creature.hpp:482-484). */
     fun getSummons(): List<Creature> = summonList
+
+    /**
+     * `Monster::death`'s `m_summons.clear()` (monster.cpp:3256-3262): the C++
+     * direct member clear; exposed to the death composition because the list is
+     * private in the port.
+     */
+    internal fun clearSummons() {
+        summonList.clear()
+    }
 
     /** `Creature::getSummonCount` (creature.hpp:624-626). */
     fun getSummonCount(): Int = summonList.size
@@ -1506,38 +1575,75 @@ abstract class Creature(
      * mostDamageUnjustified)`, exactly the arguments the Lua `onDeath` callback
      * receives. The events attached through [registerCreatureEvent] execute in
      * attachment order, after the corpse exists and before `Creature::death`
-     * (creature.cpp:720-722). The C++ corpse creation and last-hit/most-damage
-     * resolution (creature.cpp:577-720) reach the seam from the caller that owns
-     * the damage bookkeeping; [onDeath] carries no payload and passes the inert
-     * defaults (PARITY GAP: the `Game`-side resolution of `lastHitCreatureId`/
-     * `damageMap` is not ported). The network composition root
-     * (`CanaryServer`/`GameHandler`) binds the world `ScriptingDispatch` for
-     * every creature entering the world; the unbound default keeps the loop
-     * inert for embedded/test roots without a Lua environment.
+     * (creature.cpp:720-722). [deathPipeline] fires the loop with the resolved
+     * corpse and killers; a creature outside a world keeps the inert defaults.
+     * The network composition root (`CanaryServer`/`GameHandler`) binds the
+     * world `ScriptingDispatch` for every creature entering the world; the
+     * unbound default keeps the loop inert for embedded/test roots without a
+     * Lua environment.
      */
     var onDeathEventsHost: (Creature, Item?, Creature?, Creature?, Boolean, Boolean) -> Unit =
         { _, _, _, _, _, _ -> }
 
     /**
-     * `Creature::onDeath` (`creature.cpp:579-692`). The portable tail runs the
-     * registered death listeners, the `dropCorpse` death-event loop
-     * (`creature.cpp:819-824`, the scripting `onDeath` events fire while the
-     * corpse exists) with the inert payload defaults, the `death(lastHitCreature)`
-     * hook and `removeMaster()` (`creature.cpp:671-673`). Damage-map killer
-     * resolution, corpse/loot and bestiary handling stay with their owning
-     * subsystems (PARITY GAP).
+     * `Creature::onDeath` world composition
+     * (`game/death/CreatureDeathPipeline.kt`, `creature.cpp:579-720`): the
+     * damage-map last-hit/most-damage resolution, the `dropCorpse` corpse/loot
+     * pipeline, the experience map and the kill hooks. The world composition
+     * (`Game.internalPlaceCreature`) binds one pipeline per creature; a creature
+     * outside a world (embedded/tests) keeps the inert tail and no resolution.
+     */
+    var deathPipeline: CreatureDeathPipeline? = null
+
+    /**
+     * `Creature::onDeath` (creature.cpp:577-720). The registered death
+     * listeners run first (the port's observation seam), then the bound
+     * [deathPipeline] runs the C++ damage-map/corpse/experience body. Without a
+     * bound pipeline the portable tail only fires the death-event loop with the
+     * inert payload, the `death(lastHitCreature)` hook and `removeMaster()`
+     * (`creature.cpp:671-673`).
      */
     fun onDeath() {
         onDeathHandlers.toList().forEach { it(this) }
-        onDeathEventsHost(this, null, null, null, false, false)
-        death(null)
-        if (getMaster() != null) {
-            removeMaster()
+
+        val pipeline = deathPipeline
+        if (pipeline == null) {
+            onDeathEventsHost(this, null, null, null, false, false)
+            death(null)
+            if (getMaster() != null) {
+                removeMaster()
+            }
+            return
         }
+
+        pipeline.onDeath(this)
     }
 
     /** `Creature::death` (creature.hpp:968) — virtual base no-op hook. */
     open fun death(lastHitCreature: Creature? = null) {
+        // No behaviour.
+    }
+
+    /**
+     * `Creature::getRace` (creature.hpp:165-167) — the base returns `RACE_NONE`,
+     * so a plain creature drops no splash; `Monster` overrides it with
+     * `m_monsterType->info.race` (monster.cpp:1386-1388).
+     */
+    open fun getRace(): RaceType = RaceType.RACE_NONE
+
+    /**
+     * `Creature::getCorpse` (creature.cpp:838-843). The C++ base creates
+     * `Item::CreateItem(getLookCorpse())` and returns `null` for the zero id;
+     * the port keeps the base body inert because no ported family relies on it
+     * (`Monster` overrides it with `m_monsterType->info.lookcorpse` and the
+     * owner stamp, monster.cpp:3305-3320; the player corpse
+     * description/container stays with the reduced player-death path,
+     * PARITY GAP).
+     */
+    open fun getCorpse(lastHitCreature: Creature?, mostDamageCreature: Creature?): Item? = null
+
+    /** `Creature::dropLoot` (creature.hpp:963) — base no-op; `Monster` drops the loot table. */
+    open fun dropLoot(corpse: Container?, lastHitCreature: Creature?) {
         // No behaviour.
     }
 
@@ -1667,6 +1773,58 @@ class Monster(
 
     /** `Monster::hasExtraSwing` (monster.cpp:2091-2093). */
     override fun hasExtraSwing(): Boolean = hasExtraSwingProvider()
+
+    /**
+     * Live death-side facts and world sinks of this monster
+     * ([MonsterDeathHost]): `Monster::getRace`/`getLookCorpse`/
+     * `getLostExperience`/`getCorpse`/`dropLoot`/`death`
+     * (monster.cpp:873-881, 1386-1388, 3227-3436). The world composition
+     * (`Game.internalPlaceCreature` over the registered host entry) binds one
+     * instance per placed monster; an unbound monster keeps the inert values so
+     * an embedded monster drops no corpse and awards no experience.
+     */
+    var monsterDeathHost: MonsterDeathHost? = null
+
+    /** `Monster::getRace` (monster.cpp:1386-1388) over `m_monsterType->info.race`. */
+    override fun getRace(): RaceType = monsterDeathHost?.race ?: RaceType.RACE_NONE
+
+    /** `Monster::getLookCorpse` (monster.cpp:878-881) over `m_monsterType->info.lookcorpse`. */
+    fun getLookCorpse(): Int = monsterDeathHost?.lookCorpse ?: 0
+
+    /**
+     * `Monster::getLostExperience` (monster.cpp:873-876): a skill-loss monster
+     * returns `round(info.experience * (forgeStack + 10) / 10)` up to stack 15,
+     * then `info.experience * 28` (see [MonsterThink.getLostExperience]).
+     */
+    override fun getLostExperience(): Long {
+        val host = monsterDeathHost ?: return 0L
+        return MonsterThink.getLostExperience(host.forgeStack(), skillLoss, host.experience)
+    }
+
+    /** `Monster::getCorpse` (monster.cpp:3305-3320) stamping the most-damage player as `CORPSEOWNER`. */
+    override fun getCorpse(lastHitCreature: Creature?, mostDamageCreature: Creature?): Item? {
+        val host = monsterDeathHost ?: return null
+        return MonsterBehavior.getCorpse(
+            lookCorpse = host.lookCorpse,
+            createCorpse = host.createCorpse,
+            mostDamageCreature = mostDamageCreature?.let { targetCreatureFactsOf(it) },
+        )
+    }
+
+    /** `Monster::dropLoot` (monster.cpp:3415-3436) over the live loot table. */
+    override fun dropLoot(corpse: Container?, lastHitCreature: Creature?) {
+        val host = monsterDeathHost ?: return
+        MonsterLoot.dropLoot(corpse, host.lootRequest(), host.nextRoll, host.nextSliverCount)
+    }
+
+    /**
+     * `Monster::death` (monster.cpp:3227-3303): forge removal, summon drain,
+     * target/friend list clear, idle status, the dead latch, the death sound and
+     * the player-progression tail, run after `Creature::dropCorpse`.
+     */
+    override fun death(lastHitCreature: Creature?) {
+        monsterDeathHost?.die(this, lastHitCreature)
+    }
 
     /**
      * `MonsterPipelinesHost.onExecuteAsyncTasks` coordinator seam for
@@ -3232,6 +3390,34 @@ class Player(
     /** `Player::getLostExperience` (`player.hpp:1921-1923`) over `Creature::skillLoss`. */
     override fun getLostExperience(): Long =
         if (skillLoss) (experience * getLostPercent()).toLong() else 0L
+
+    /**
+     * `Player::getRace` (player.cpp:1528-1530): players always drop the blood
+     * splash; the player corpse itself (`Player::getCorpse`, player.cpp:4370)
+     * stays with the reduced player-death path (PARITY GAP).
+     */
+    override fun getRace(): RaceType = RaceType.RACE_BLOOD
+
+    /**
+     * `Player::getGainedExperience` (player.cpp:6180-6189): only under
+     * `EXPERIENCE_FROM_PLAYERS` does an attacking player different from the
+     * victim, within `EXP_FROM_PLAYERS_LEVEL_RANGE` levels, award the 75% share
+     * of the lost experience; every other attacker awards nothing.
+     */
+    override fun getGainedExperience(attacker: Creature): Long =
+        PlayerExperienceState(
+            player = this,
+            experienceFromPlayers = experienceFromPlayersProvider(),
+            expFromPlayersLevelRange = expFromPlayersLevelRangeProvider(),
+            getSkillLoss = { skillLoss },
+            getDamageMap = { getDamageMap() },
+        ).getGainedExperience(attacker)
+
+    /** `g_configManager().getBoolean(EXPERIENCE_FROM_PLAYERS)` (configmanager.cpp:123) seam. */
+    var experienceFromPlayersProvider: () -> Boolean = { false }
+
+    /** `g_configManager().getNumber(EXP_FROM_PLAYERS_LEVEL_RANGE)` (configmanager.cpp:122) seam. */
+    var expFromPlayersLevelRangeProvider: () -> Int = { 75 }
 
     /**
      * `Player::levelPercent` (player.hpp:1849) recomputed by

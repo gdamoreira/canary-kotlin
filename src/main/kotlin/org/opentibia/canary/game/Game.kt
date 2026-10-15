@@ -52,8 +52,15 @@ import org.opentibia.canary.creatures.grouping.TeamFinder
 import org.opentibia.canary.creatures.grouping.TeamFinderList
 import org.opentibia.canary.creatures.monsters.Faction
 import org.opentibia.canary.creatures.monsters.ForgeClassification
+import org.opentibia.canary.creatures.monsters.LootItemType
+import org.opentibia.canary.creatures.monsters.MonsterBehavior
+import org.opentibia.canary.creatures.monsters.MonsterDeathHost
+import org.opentibia.canary.creatures.monsters.MonsterDeathRequest
 import org.opentibia.canary.creatures.monsters.MonsterForge
+import org.opentibia.canary.creatures.monsters.MonsterLoot
+import org.opentibia.canary.creatures.monsters.MonsterLootDropRequest
 import org.opentibia.canary.creatures.monsters.MonsterPipelinesHost
+import org.opentibia.canary.creatures.monsters.RaceType
 import org.opentibia.canary.creatures.players.components.Achievement
 import org.opentibia.canary.creatures.players.components.AchievementRegistry
 import org.opentibia.canary.creatures.players.components.Badge
@@ -75,6 +82,7 @@ import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.npcs.NpcInfo
 import org.opentibia.canary.creatures.players.PlayerTask
 import org.opentibia.canary.creatures.players.getHelpers
+import org.opentibia.canary.creatures.players.onKilledMonster
 import org.opentibia.canary.creatures.players.playerSendSink
 import org.opentibia.canary.creatures.players.addList
 import org.opentibia.canary.creatures.players.removeList
@@ -88,6 +96,7 @@ import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.database.Database
 import org.opentibia.canary.database.PlayerLoginRepository
 import org.opentibia.canary.economy.market.MarketOfferType
+import org.opentibia.canary.game.death.CreatureDeathPipeline
 import org.opentibia.canary.game.modal.ModalWindow
 import org.opentibia.canary.game.modal.ModalWindowManager
 import org.opentibia.canary.game.movement.Direction
@@ -801,6 +810,160 @@ class Game(
      * (embedded/test roots).
      */
     var creatureEventHostBinder: (Creature) -> Unit = {}
+
+    /**
+     * `Creature::onDeath` world composition (creature.cpp:577-720) placed on
+     * every creature [internalPlaceCreature] accepts (and bound by
+     * [addPlayer] for session players): the damage-map last-hit/most-damage
+     * resolution, the `dropCorpse` corpse/loot pipeline, the experience map and
+     * the kill hooks (game/death/CreatureDeathPipeline.kt). The `PZ_LOCKED`
+     * window, the item/tile sinks and the kill entry points come from the
+     * composed world.
+     */
+    private val deathPipeline: CreatureDeathPipeline = CreatureDeathPipeline(
+        resolveCreature = ::getCreatureByID,
+        pzLocked = ::configuredPzLocked,
+        removeCreature = { creature -> removeCreature(creature, false) },
+        addMagicEffect = { position, effect -> addMagicEffect(position, effect) },
+        addItemToTile = { tile, item ->
+            internalAddItem(tile, item, INDEX_WHEREEVER, CylinderFlags.FLAG_NOLIMIT)
+        },
+        startDecaying = { item -> this.startDecaying(item) },
+        onKilledMonster = ::onKilledMonsterWorld,
+        onKilledPlayer = { killer, target, lastHit ->
+            (killer as? Player)?.pvpPlayer?.onKilledPlayer(target.pvpPlayer, lastHit) ?: false
+        },
+        removeAttacked = { killer, target ->
+            (target as? Player)?.let { victim -> killer.pvpPlayer.removeAttacked(victim.pvpPlayer) }
+        },
+        // PARITY GAP: `Creature::deprecatedOnKilledCreature`'s Lua `onKill`
+        // loop (creature.cpp:1290-1303) has no production host in this port.
+        deprecatedOnKilledCreature = { _, _, _ -> false },
+    )
+
+    /** `getLootRandom()` (`data/libs/functions/functions.lua:68-75`) die-roll seam. */
+    var lootRandom: () -> Int = { Random.nextInt(0, MonsterLoot.MAX_LOOT_CHANCE) }
+
+    /** `uniform_random(FORGE_MIN_SLIVERS, FORGE_MAX_SLIVERS)` sliver-draw seam (monster.cpp:3420). */
+    var sliverRandom: (Int, Int) -> Int = { min, max ->
+        if (max <= min) min else min + Random.nextInt(max - min + 1)
+    }
+
+    /** `Player::onKilledMonster` (player.cpp:6680-6698) with the live monster type. */
+    private fun onKilledMonsterWorld(killer: Player, monster: Monster) {
+        killer.onKilledMonster(
+            monster = monster,
+            mType = monsterHost?.typeStateOf(monster.id)?.monsterType ?: monsterTypeProvider(monster.name),
+        )
+    }
+
+    /** `g_configManager().getNumber(PZ_LOCKED)` (configmanager.cpp:340). */
+    private fun configuredPzLocked(): Int = configManager?.let { config ->
+        ConfigKeys.byName("PZ_LOCKED")?.let { key -> config.getNumber(key, key.defaultValue as Int) }
+    } ?: CreatureDeathPipeline.PZ_LOCKED_DEFAULT
+
+    /** `g_configManager().getNumber(RATE_LOOT)` (configmanager.cpp:294, default 1). */
+    private fun configuredRateLoot(): Int = configManager?.let { config ->
+        ConfigKeys.byName("RATE_LOOT")?.let { key -> config.getNumber(key, key.defaultValue as Int) }
+    } ?: 1
+
+    /** `g_configManager().getNumber(FORGE_MIN_SLIVERS)` (configmanager.cpp:140, default 3). */
+    private fun configuredForgeMinSlivers(): Int = configManager?.let { config ->
+        ConfigKeys.byName("FORGE_MIN_SLIVERS")?.let { key -> config.getNumber(key, key.defaultValue as Int) }
+    } ?: 3
+
+    /** `g_configManager().getNumber(FORGE_MAX_SLIVERS)` (configmanager.cpp:139, default 7). */
+    private fun configuredForgeMaxSlivers(): Int = configManager?.let { config ->
+        ConfigKeys.byName("FORGE_MAX_SLIVERS")?.let { key -> config.getNumber(key, key.defaultValue as Int) }
+    } ?: 7
+
+    /** `g_configManager().getBoolean(EXPERIENCE_FROM_PLAYERS)` (configmanager.cpp:123). */
+    private fun configuredExperienceFromPlayers(): Boolean = configManager?.let { config ->
+        ConfigKeys.byName("EXPERIENCE_FROM_PLAYERS")?.let { key -> config.getBoolean(key, key.defaultValue as Boolean) }
+    } ?: false
+
+    /** `g_configManager().getNumber(EXP_FROM_PLAYERS_LEVEL_RANGE)` (configmanager.cpp:122, default 75). */
+    private fun configuredExpFromPlayersLevelRange(): Int = configManager?.let { config ->
+        ConfigKeys.byName("EXP_FROM_PLAYERS_LEVEL_RANGE")?.let { key -> config.getNumber(key, key.defaultValue as Int) }
+    } ?: 75
+
+    /**
+     * Binds the monster death facts of [monster] from its registered host entry
+     * (`Monster::m_monsterType`/`forgeStack`/forge classification behind
+     * `Monster::getCorpse`/`dropLoot`/`getLostExperience`/`death`,
+     * monster.cpp:873-881, 1386-1388, 3227-3436). The item registry backing the
+     * corpse container comes from the composed [itemTypes]; the loot/sliver
+     * draws come from the [lootRandom]/[sliverRandom] seams. Without a host
+     * entry (an embedded root) the monster keeps the inert host and drops
+     * nothing.
+     */
+    private fun bindMonsterDeathHost(monster: Monster) {
+        val entry = monsterHost?.entryOf(monster.id)
+        if (entry == null) {
+            monster.monsterDeathHost = null
+            return
+        }
+
+        val info = entry.typeState.monsterType?.info
+        monster.monsterDeathHost = MonsterDeathHost(
+            lookCorpse = info?.lookcorpse ?: 0,
+            race = info?.race ?: RaceType.RACE_NONE,
+            experience = info?.experience ?: 0L,
+            forgeStack = { entry.typeState.forgeStack },
+            isFamiliar = info?.isFamiliar ?: false,
+            createCorpse = { id -> Item.create(id, registry = itemTypes) as? Container },
+            lootRequest = {
+                MonsterLootDropRequest(
+                    lootItems = info?.lootItems ?: emptyList(),
+                    lootDrop = monster.lootDrop,
+                    isRewardBoss = info?.isRewardBoss ?: false,
+                    rateLoot = configuredRateLoot(),
+                    forgeClassification = entry.typeState.monsterForgeClassification,
+                    forgeMinSlivers = configuredForgeMinSlivers(),
+                    forgeMaxSlivers = configuredForgeMaxSlivers(),
+                    itemType = { id -> itemTypes?.get(id)?.let { LootItemType(it.charges, it.isStackable) } },
+                )
+            },
+            nextRoll = { lootRandom() },
+            nextSliverCount = { min, max -> sliverRandom(min, max) },
+            die = { current, lastHit -> dieMonster(current, entry, lastHit) },
+        )
+    }
+
+    /** `Monster::death` body (monster.cpp:3227-3303) over the registered entry. */
+    private fun dieMonster(
+        monster: Monster,
+        entry: MonsterPipelinesHost.Entry,
+        lastHitCreature: Creature?,
+    ) {
+        val info = entry.typeState.monsterType?.info
+        MonsterBehavior.death(
+            MonsterDeathRequest(
+                monster = monster,
+                state = entry.behaviorState,
+                lastHitCreature = lastHitCreature,
+                attackedCreature = monster.getAttackedCreature(),
+                forgeClassification = entry.typeState.monsterForgeClassification,
+                hasMonsterType = info != null,
+                deathSound = info?.deathSound?.value ?: 0,
+                removeForgeMonster = { id, classification -> removeForgeMonster(id, classification, true) },
+                clearSummons = { monster.clearSummons() },
+                clearTargetList = { MonsterTargeting.clearTargetList(entry.targetState) },
+                clearFriendList = { MonsterTargeting.clearFriendList(entry.targetState) },
+                onIdleStatus = { monster.onIdleStatus() },
+                sendDeathSound = { position, sound ->
+                    sendSingleSoundEffect(position, soundEffectOf(sound), monster)
+                },
+            ),
+        )
+    }
+
+    /**
+     * `MonsterType::info.deathSound` (`SoundEffect_t`, monster.cpp:3276) value
+     * lookup on the ported sound table; an unknown id keeps `SILENCE`.
+     */
+    private fun soundEffectOf(sound: Int): SoundEffect =
+        SoundEffect.entries.firstOrNull { it.value == sound } ?: SoundEffect.SILENCE
 
     /** `Item::getParent()` (src/items/item.hpp): the tile each item added through this facade lives on. */
     private val itemParents = IdentityHashMap<Item, Tile>()
@@ -1766,6 +1929,16 @@ class Game(
             }
         }
         bindCreatureAsyncTaskHost(player)
+
+        // `Creature::onDeath` (creature.cpp:577-720): a session player never
+        // enters the spatial grid in this port, so the placement binding
+        // (`internalPlaceCreature`) never runs for it; the login path installs
+        // the same world death pipeline and config-backed experience gates.
+        player.deathPipeline = deathPipeline
+        player.pzLockedProvider = ::configuredPzLocked
+        player.experienceFromPlayersProvider = ::configuredExperienceFromPlayers
+        player.expFromPlayersLevelRangeProvider = ::configuredExpFromPlayersLevelRange
+
         registerOnlinePlayer(player)
     }
 
@@ -2437,6 +2610,20 @@ class Game(
         // monsters reach the same Lua dispatch as the engine-spawned path.
         if (creature is Monster) {
             creatureEventHostBinder(creature)
+        }
+
+        // `Creature::onDeath` (creature.cpp:577-720): every creature the world
+        // accepts carries the world death pipeline, and a monster additionally
+        // gets its `m_monsterType` death facts (corpse, loot, experience,
+        // `Monster::death` body) from the registered host entry.
+        creature.deathPipeline = deathPipeline
+        creature.pzLockedProvider = ::configuredPzLocked
+        if (creature is Player) {
+            creature.experienceFromPlayersProvider = ::configuredExperienceFromPlayers
+            creature.expFromPlayersLevelRangeProvider = ::configuredExpFromPlayersLevelRange
+        }
+        if (creature is Monster) {
+            bindMonsterDeathHost(creature)
         }
 
         if (creatureCheck) {
