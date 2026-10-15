@@ -51,3 +51,5 @@ jobs:
           docker compose -f docker-compose.yml config
           docker compose -f docker/docker-compose.yml config
           docker compose -f docker-compose.yml -f docker/docker-compose.mariadb.yml config
+          docker compose -f docker-compose.yml -f docker/docker-compose.split.yml config
+          docker compose --profile split -f docker-compose.yml -f docker/docker-compose.split.yml -f docker/docker-compose.mariadb.yml config

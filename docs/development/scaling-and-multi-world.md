@@ -1,6 +1,6 @@
 # Scaling & Multi-World Architecture — Analysis and Plan
 
-**Status:** Analysis (no code changes)
+**Status:** Analysis; Phase 1 (login/game service split) delivered — wave 75
 **Baseline:** `main` @ `686169ae`; 758 suites / 8091 tests green
 **Scope:** splitting LoginProtocol from GameProtocol, horizontal scaling, Redis
 state sharing, and multiple game worlds per account.
@@ -38,6 +38,7 @@ entrypoint split, a world registry, and world-scoped queries.
 
 - **Extract** a `LoginService` entrypoint: `LoginHandler` + `AccountRepository`
   + status handler + config/RSA. No world, no map, no dispatcher.
+  *(Delivered as `CANARY_ROLE=login`; see §2.4.)*
 - **Horizontal scale:** N instances behind a TCP load balancer (L4). The
   per-connection state (RSA/XTEA handshake) is connection-local; the session
   key is persisted in Postgres → any game instance can validate it.
@@ -93,9 +94,44 @@ map saves.
 
 | Phase | Deliverable | Effort |
 |---|---|---|
-| 1 | Split binaries: `login-service` + `game-service` (shared Postgres, LB for login, shared rate-limit store) | Low–medium |
+| 1 | Split binaries: `login-service` + `game-service` (shared Postgres, LB for login, shared rate-limit store) — **delivered** (wave 75) as one binary with `all`/`login`/`game` roles; shared rate-limit store still open | Low–medium |
 | 2 | Multi-world fleet (see Scenario 2B): one game instance per world + world registry + routing | Medium |
 | 3 | (Only if evidence demands) zone-sharding spike: ownership model, bus, gateway | Large |
+
+### 2.4 Phase 1 delivered (wave 75)
+
+The role split shipped as **one binary, three roles** (not two binaries):
+`--role <all|login|game>` / `CANARY_ROLE` (CLI > env > default `all`), with an
+unknown value failing fast at boot.
+
+- **`login`** — config, database connect + migrations, account/login
+  repositories, then the login + status listener only. No map, Lua, items,
+  monsters, dispatcher or save manager.
+- **`game`** — the full world boot as before, minus the login listener; game
+  port only.
+- **`all`** — the previous single-process default, unchanged.
+
+Delivery:
+
+- `docker/docker-compose.split.yml` runs `login` and `game` as separate
+  services of the same image, sharing one database (`db`, or `mariadb` via the
+  MariaDB override) and the game-data mounts:
+  `docker compose -f docker-compose.yml -f docker/docker-compose.split.yml up -d --build login game`.
+- The login role scales horizontally (`--scale login=N`). Instances are
+  connection-stateless and sit behind a TCP (L4) load balancer; the session
+  handoff is DB-mediated, so any login instance can hand a session to the game
+  instance. The game role stays one world per instance (scale by adding
+  worlds, Scenario 2B).
+- The base `server` service keeps running `all` by default; Compose overrides
+  cannot delete it, so split mode names the services explicitly
+  (`... up login game`).
+- Operational notes and the run commands live in `docker/DOCKER.md`
+  ("Split login/game mode (scaling phase 1)").
+
+**Open follow-up:** with more than one login instance, per-IP rate limiting and
+account-lockout counters remain per-process, so each instance enforces its own
+limits. Move them to a shared store (Redis or a database table) before
+exposing multiple login instances to untrusted traffic.
 
 ---
 

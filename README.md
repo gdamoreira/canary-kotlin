@@ -137,6 +137,11 @@ test-account dumps (`data/`), guarded `up.sh`/`up.ps1` start scripts,
 Upstream quickstart extras that do not apply to this port (MyAAC, login-server)
 are documented there.
 
+Scaling phase 1 is opt-in: [`docker/docker-compose.split.yml`](docker/docker-compose.split.yml)
+runs the login role (scalable behind a TCP load balancer) and the game role as
+separate services sharing the database — see
+[`docker/DOCKER.md`](docker/DOCKER.md#split-logingame-mode-scaling-phase-1).
+
 Default container ports:
 - **Login / Status Port**: `7171`
 - **Game World Port**: `7172`

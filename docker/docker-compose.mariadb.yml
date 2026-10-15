@@ -9,9 +9,46 @@
 # Overrides cannot delete services, so the PostgreSQL `db` service stays
 # defined in the merged model and `up` still starts it; the server no longer
 # uses it. Stop it with the same -f pair plus `stop db` if you want it down.
+#
+# The `login`/`game` entries below carry the same pins to the split roles
+# (docker/docker-compose.split.yml) and are gated behind the `split` profile,
+# so this file stays valid and behavior-identical when the split roles are not
+# in play; a bare `up` does not start them. The `build` key only keeps these
+# entries valid when this file is parsed without the split file; the full role
+# definitions live in docker-compose.split.yml. Combine all three files to run
+# the split roles on MariaDB:
+#
+#   docker compose -f docker-compose.yml -f docker/docker-compose.split.yml \
+#     -f docker/docker-compose.mariadb.yml up -d --build login game
 services:
   server:
     environment:
       CANARY_DB_ENGINE: "mariadb"
       CANARY_DB_HOST: "mariadb"
       CANARY_DB_PORT: "3306"
+
+  login:
+    profiles: ["split"]
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      CANARY_DB_ENGINE: "mariadb"
+      CANARY_DB_HOST: "mariadb"
+      CANARY_DB_PORT: "3306"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+  game:
+    profiles: ["split"]
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      CANARY_DB_ENGINE: "mariadb"
+      CANARY_DB_HOST: "mariadb"
+      CANARY_DB_PORT: "3306"
+    depends_on:
+      mariadb:
+        condition: service_healthy
