@@ -649,8 +649,19 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 67: Wave 64 — Parity Tails (23:00 – 01:00)
+- **VIP/Exiva composition** — `PlayerVip` composed + full kv `ValueWrapper` store; `loadPlayerVip`/`loadPlayerExivaRestrictions` wired; `Monsters::getMonsterTypeByRaceId` ported for bestiary race ids (7 net tests).
+- **Guild/save registration** — guilds loaded at login register into `Game.guilds` (shared instance); `SaveManager.registerOnlinePlayer`/`unregisterOnlinePlayer` wired at session install/removal with a stale-session identity guard (5 tests).
+- **Combat host wiring** — production `CreatureCombatTarget` adapter (`onPlayerAttack` from spell damage), `canThrowSpell` range/sight, `CombatFunc` area-dispatch tail, skill operand push, `getAimAtTargetSpells` (36 tests).
+- **Events/transport** — `ScriptingDispatch` per-creature filtering + registry validation, boot injection of the event seam, spawn-path `onSpawn`, `Game.sendCreatureTurn` transport + base appear fallback (10 tests).
+- **Renderer seams** — look/shop renderer seams, Lua `item:getDescription`, plural `Item::getDescriptions` (18 tests).
+- **Tile.queryAdd** — full creature branch (monster push/fields, PZ-lock/account rules, expert-PvP step, `isMoveLocked`) (12 tests).
+- **718 suites / 7905 tests, all green**; all six branch commits verified as ancestors of `main`.
+
+---
+
 ### Current Status
-- **Automated Tests**: **706 test suites / 7817 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **718 test suites / 7905 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.

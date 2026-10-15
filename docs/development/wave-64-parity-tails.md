@@ -1,6 +1,6 @@
 # Wave 64 Plan — Parity Tails: Persistence, Guild/Save, Combat Host, Events, Renderer, Tile
 
-**Status:** In progress — dispatched
+**Status:** Completed (2026-10-15) — six workstreams merged; 718 suites / 7905 tests green
 **Baseline:** `main` @ `b8e619f8`; 706 suites / 7817 tests green; zero Kotlin warnings
 **Source of scope:** `docs/development/implementation-status.md` §3 (remaining ranked tails after wave 63 + the wave-58 recovery).
 **Convention:** documents live directly in `docs/development/` (AGENTS.md §5/§6).
@@ -173,3 +173,15 @@ Update `docs/development/implementation-status.md` (§1 metrics, §3 tails),
 Live differential harness; CipSoft860/old-protocol branches; OTel SDK/OStream;
 remaining micro-seams (KV LRU ordering, `DEBUG_LOG`, daemon flags,
 `TransportCodec` tails).
+
+---
+
+## Completion (2026-10-15)
+
+All six workstreams landed and merged with zero conflicts: vip-exiva
+(`a16d4da8`), guild-save (`38f26cf4`), combat-host (`50df4b83`), events-transport
+(`3363a09d`), renderer-seams (`f34c8c08`), tile-queryadd (`93a9658c`).
+Integrated suite: **718 suites / 7905 tests, 0 failures, zero Kotlin
+warnings**; ancestry verified per commit. Remaining tails recorded in
+`implementation-status.md` §3 (composition bindings, persistence save tails,
+combat depth, monster/map tails).
