@@ -655,6 +655,13 @@ class ServerBootstrap(
             )
             world.getShopOwner = { player -> worldOperations?.shopOwnerOf(player) }
             world.closeShopWindow = { player -> worldOperations?.closeShopOwner(player) }
+            // Wave 70 G3: bind the production `Monster::createMonster` /
+            // `Game::placeCreature` / `Monster::onSpawn` chain behind the Lua
+            // `Game.createMonster`/`Game.createSoulPitMonster` entry points
+            // (game_functions.cpp:589/641).
+            (server as? CanaryServer)?.monsterSpawnPath?.let { spawnPath ->
+                worldOperations?.attachMonsterSpawn(spawnPath, monsterHost)
+            }
             // Wave 69 F4: `Game::checkGiftOfLife`'s cooldown reduction
             // (player_wheel.cpp:3155-3170, `reduceAllSpellsCooldownTimer(60000)`)
             // drives the owner's wheel, so the world `Game` seam binds to

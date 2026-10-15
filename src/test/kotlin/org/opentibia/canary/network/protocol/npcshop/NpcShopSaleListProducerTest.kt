@@ -22,6 +22,7 @@ import org.opentibia.canary.map.Position
 import org.opentibia.canary.network.crypto.Adler32Checksum
 import org.opentibia.canary.network.crypto.RsaCipher
 import org.opentibia.canary.network.message.writeTibiaString
+import org.opentibia.canary.network.protocol.CLIENT_VERSION
 import org.opentibia.canary.network.protocol.GameHandler
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import java.util.concurrent.CountDownLatch
@@ -79,7 +80,11 @@ class NpcShopSaleListProducerTest {
 
         val body = Unpooled.buffer()
         body.writeShortLE(2)
-        body.writeShortLE(1098)
+        body.writeShortLE(CLIENT_VERSION)
+        body.writeIntLE(CLIENT_VERSION)
+        body.writeTibiaString("")
+        body.writeTibiaString("")
+        body.writeByte(0)
         body.writeBytes(rsaCipher.encrypt(rsaPlain))
 
         val checksum = Adler32Checksum.compute(body, 0, body.readableBytes())
