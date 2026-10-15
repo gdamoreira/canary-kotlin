@@ -31,14 +31,20 @@ data class MonsterSpawn(val name: String, val minAmount: Int, val maxAmount: Int
 /**
  * The subset of Canary `Monster` used by the raid engine
  * (`Monster::createMonster`, `Monster::setForgeMonster`, `Monster::onSpawn`).
+ * The production bridge ([GameRaidMonster]) overrides the hooks over the real
+ * placed [org.opentibia.canary.creatures.Monster]; the open defaults keep the
+ * engine unit-testable with inert views.
  */
 open class RaidMonster(val name: String) {
-	fun setForgeMonster(value: Boolean) { }
+	open fun setForgeMonster(value: Boolean) { }
 
-	fun onSpawn(position: Position) { }
+	open fun onSpawn(position: Position) { }
 }
 
-/** Read-only tile view used by [AreaSpawnEvent]. Mirrors Canary `Tile` accessors (src/items/tile.hpp). */
+/**
+ * Read-only tile view used by [AreaSpawnEvent]. Mirrors Canary `Tile` accessors
+ * (src/items/tile.hpp).
+ */
 interface RaidTile {
 	val position: Position
 
@@ -46,7 +52,8 @@ interface RaidTile {
 
 	fun hasFlag(flag: Int): Boolean
 
-	val topCreature: RaidMonster?
+	/** `tile->getTopCreature() != nullptr` (raids.cpp:568): any creature blocks the tile. */
+	val hasTopCreature: Boolean
 }
 
 /**
@@ -276,7 +283,7 @@ class AreaSpawnEvent(
 
 					if (!tile.isMovableBlocking() &&
 						!tile.hasFlag(TILESTATE_PROTECTIONZONE) &&
-						tile.topCreature == null &&
+						!tile.hasTopCreature &&
 						spawner.placeCreature(monster, tile.position, false, true)
 					) {
 						monster.setForgeMonster(false)

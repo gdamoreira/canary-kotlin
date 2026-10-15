@@ -2,6 +2,7 @@ package org.opentibia.canary.creatures.spawns
 
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.monsters.Monsters
+import org.opentibia.canary.creatures.monsters.MonsterType as RegisteredMonsterType
 import org.opentibia.canary.game.Game
 import org.opentibia.canary.map.Position
 import java.util.concurrent.atomic.AtomicLong
@@ -44,14 +45,7 @@ class GameMonsterFactory(
 
     override fun create(monsterType: MonsterType, position: Position, startup: Boolean): Monster? {
         val registeredType = monsterTypes.getMonsterType(monsterType.name, silent = true) ?: return null
-        val monster = Monster(
-            id = monsterAutoId.getAndIncrement(),
-            name = registeredType.name,
-            maxHealth = registeredType.info.healthMax,
-            health = registeredType.info.health,
-            speed = registeredType.getBaseSpeed(),
-            position = position,
-        )
+        val monster = construct(registeredType, position)
 
         val placed = if (startup) {
             game.internalPlaceCreature(
@@ -71,4 +65,35 @@ class GameMonsterFactory(
         game.addMonster(monster)
         return monster
     }
+
+    /**
+     * `Monster::createMonster(name)` (src/creatures/monsters/monster.cpp:82-88):
+     * resolves the type through the booted `g_monsters()` registry and
+     * constructs the monster (`Monster::Monster`, monster.cpp:90-108) without
+     * placing it; `null` mirrors the C++ `nullptr`. The caller places it
+     * (`g_game().placeCreature`) and dispatches `Monster::onSpawn` when the
+     * placement succeeds, exactly like `GameFunctions::luaGameCreateMonster`
+     * (game_functions.cpp:589) and the raid events
+     * (src/lua/creature/raids.cpp:395).
+     *
+     * The monster is constructed at the C++ default position; the C++
+     * `Monster::setID()` runs during `Game::internalPlaceCreature`
+     * (game.cpp:1512), so a caller that never places it leaves a gap in the
+     * auto-id sequence (documented PARITY GAP of [create]).
+     */
+    fun createMonster(name: String): Monster? {
+        val registeredType = monsterTypes.getMonsterType(name) ?: return null
+        return construct(registeredType, Position(0, 0, 0))
+    }
+
+    /** `Monster::Monster(mType)` (monster.cpp:90-108) stat projection. */
+    private fun construct(registeredType: RegisteredMonsterType, position: Position): Monster =
+        Monster(
+            id = monsterAutoId.getAndIncrement(),
+            name = registeredType.name,
+            maxHealth = registeredType.info.healthMax,
+            health = registeredType.info.health,
+            speed = registeredType.getBaseSpeed(),
+            position = position,
+        )
 }

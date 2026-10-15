@@ -79,6 +79,35 @@ class MonsterSpawnPath(
         map.spawnsMonster.startup()
     }
 
+    /**
+     * `Monster::createMonster(name)` (src/creatures/monsters/monster.cpp:82-88)
+     * over the path's [GameMonsterFactory]: resolves the booted `g_monsters()`
+     * type and constructs the monster without placing it. `GameFunctions::
+     * luaGameCreateMonster` (game_functions.cpp:589) and the raid events
+     * (src/lua/creature/raids.cpp:395) create through this entry and then place
+     * with [placeCreature].
+     */
+    fun createMonster(name: String): Monster? = monsterFactory.createMonster(name)
+
+    /**
+     * `Game::placeCreature(creature, pos, extendedPos, force)`
+     * (src/game/game.cpp:1524) plus the `Creature::addList()` tail of
+     * `Game::internalPlaceCreature` (game.cpp:1513, `Monster::addList` ->
+     * `Game::addMonster`, game.cpp:11671) that registers the placed monster in
+     * the world monster index. The Kotlin `Game.internalPlaceCreature`
+     * documents that monster registration as a PARITY GAP and
+     * [GameMonsterFactory.create] compensates for the engine path; this
+     * placement facade applies the same registration for the Lua/raid callers,
+     * so `Game::getMonsterByID` resolves them like Canary.
+     */
+    fun placeCreature(monster: Monster, position: Position, extendedPos: Boolean, force: Boolean): Boolean {
+        if (!game.placeCreature(monster, position, extendedPos, force)) {
+            return false
+        }
+        game.addMonster(monster)
+        return true
+    }
+
     /** `SpawnsMonster::clear` through the `Game::shutdown` call site (src/game/game.cpp:9502). */
     fun shutdown() {
         map.spawnsMonster.clear()

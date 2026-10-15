@@ -21,6 +21,8 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.monsters.BosstiaryRarity_t
 import org.opentibia.canary.creatures.monsters.Faction
+import org.opentibia.canary.creatures.monsters.MonsterForge
+import org.opentibia.canary.creatures.monsters.MonsterPipelinesHost
 import org.opentibia.canary.creatures.monsters.Monsters
 import org.opentibia.canary.creatures.monsters.MonstersEvent
 import org.opentibia.canary.creatures.monsters.RaceType
@@ -35,6 +37,7 @@ import org.opentibia.canary.creatures.monsters.MonsterTypeScriptInterface
 import org.opentibia.canary.creatures.players.components.PlayerStorage
 import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.creatures.vocations.Vocation
+import org.opentibia.canary.creatures.spawns.MonsterSpawnPath
 import org.opentibia.canary.creatures.spawns.MonsterType
 import org.opentibia.canary.game.CylinderFlags
 import org.opentibia.canary.game.Game
@@ -355,6 +358,55 @@ class WorldLuaOperations(
     }
 
     /**
+     * Wires the production monster placement path of the Lua
+     * `Game.createMonster` (`GameFunctions::luaGameCreateMonster`,
+     * src/lua/functions/core/game/game_functions.cpp:589) and
+     * `Game.createSoulPitMonster` (game_functions.cpp:641) bindings after
+     * install, mirroring [attachCombat]: `initState` registers the documented
+     * unwired null operations because no world exists yet, so a composition
+     * root binds the composed spawn path and monster host when it does.
+     *
+     * The Canary chain is `Monster::createMonster(name)`
+     * (src/creatures/monsters/monster.cpp:82), `g_game().placeCreature(...)`
+     * (src/game/game.cpp:1524), then `Monster::onSpawn(position)`
+     * (monster.cpp:627-648); the soul-pit variant additionally latches
+     * `Monster::setSoulPitStack(stack)` (monster.cpp:3201-3208) before the
+     * spawn event. [monsterHost] dispatches `onSpawn` and the soul-pit stack
+     * through the placed monster's host entry; without one the spawn event
+     * degrades to a no-op (embedded/test roots), while the placement itself
+     * stays live.
+     *
+     * CALL-SITE NEED (composition root): the world `CanaryServer` owns both
+     * `monsterSpawnPath` and `monsterPipelinesHost`, so the boot must call
+     * `worldOperations.attachMonsterSpawn(monsterSpawnPath, monsterPipelinesHost)`
+     * where it already binds `attachCombat`/`attachModalWindows`
+     * (bootstrap/ServerBootstrap.kt, network/CanaryServer.kt init); that wiring
+     * belongs to the composition root, not this binding layer.
+     */
+    fun attachMonsterSpawn(
+        spawnPath: MonsterSpawnPath,
+        monsterHost: MonsterPipelinesHost? = null,
+    ) {
+        worldGame.attachMonsterSpawn(
+            createMonster = spawnPath::createMonster,
+            placeCreature = spawnPath::placeCreature,
+            onSpawn = { monster, position -> monsterHost?.onSpawn(monster.id, position) },
+            soulPitStack = { monster, stack ->
+                monsterHost?.typeStateOf(monster.id)?.let { state ->
+                    MonsterForge.setSoulPitStack(state, monster, stack)
+                }
+                // `Monster::setSoulPitStack` writes the `Monster::soulPit` latch
+                // through `setSoulPit(true)` (monster.cpp:3204-3208); the port's
+                // `MonsterForge.setSoulPitStack` updates only the split
+                // `MonsterTypeState.soulPit` (creatures/monsters PARITY GAP,
+                // outside this workstream's ownership), so the binding applies
+                // the entity latch here. `PlayerKillTracking` reads it.
+                monster.setSoulPit(true)
+            },
+        )
+    }
+
+    /**
      * Wires the `modalWindow:sendToPlayer` Lua entry point
      * (`ModalWindowFunctions::luaModalWindowSendToPlayer`,
      * src/lua/functions/core/game/modal_window_functions.cpp:234-252) after
@@ -531,10 +583,13 @@ class WorldLuaOperations(
  * Parity gaps: Canary's boosted-creature/boss rotations, bestiary, towns, houses,
  * charms, talkactions, achievements, raids, effects and the influence/fiendish monster
  * registries are not held by this operations object, so their lookups inherit the
- * documented empty defaults. `Game.createMonster`/`createNpc` and the soul-pit/generated
- * npc variants need the spawn engine, and `loadMap`/`loadMapChunk` need the dispatcher;
- * all inherit their seam defaults. The `Game.createItem` split over
- * `ceil(count / stackSize)` items is reproduced through the item-type `stackSize`.
+ * documented empty defaults. `Game.createMonster`/`createSoulPitMonster` are live once
+ * the composition root attaches the production placement path
+ * ([attachMonsterSpawn]); without one they keep the documented null default.
+ * `Game.createNpc` and the generated npc variant need the npc spawn engine, and
+ * `loadMap`/`loadMapChunk` need the dispatcher; they inherit their seam defaults. The
+ * `Game.createItem` split over `ceil(count / stackSize)` items is reproduced through the
+ * item-type `stackSize`.
  */
 class WorldGameOperations(
     private val itemIdsByName: Map<String, Int> = emptyMap(),
@@ -549,9 +604,98 @@ class WorldGameOperations(
     /** The booted `g_monsters()` registry, attached by `WorldLuaOperations.attachMonsters`. */
     private var monsters: Monsters? = null
 
+    /**
+     * Production monster-placement seams behind `Game.createMonster`/
+     * `Game.createSoulPitMonster`, bound by `WorldLuaOperations.attachMonsterSpawn`
+     * once the world exists; the defaults keep the documented null/no-op
+     * operations of an unbooted environment.
+     */
+    private var createMonsterByName: (String) -> Monster? = { null }
+    private var placeMonster: (Monster, Position, Boolean, Boolean) -> Boolean = { _, _, _, _ -> false }
+    private var dispatchMonsterSpawn: (Monster, Position) -> Unit = { _, _ -> }
+    private var setSoulPitStack: (Monster, Int) -> Unit = { _, _ -> }
+
     /** Wires the booted `g_monsters()` registry after binding install. */
     fun attachMonsters(monsters: Monsters) {
         this.monsters = monsters
+    }
+
+    /** Binds the production `Monster::createMonster`/`Game::placeCreature`/`Monster::onSpawn` chain. */
+    fun attachMonsterSpawn(
+        createMonster: (String) -> Monster?,
+        placeCreature: (Monster, Position, Boolean, Boolean) -> Boolean,
+        onSpawn: (Monster, Position) -> Unit,
+        soulPitStack: (Monster, Int) -> Unit,
+    ) {
+        this.createMonsterByName = createMonster
+        this.placeMonster = placeCreature
+        this.dispatchMonsterSpawn = onSpawn
+        this.setSoulPitStack = soulPitStack
+    }
+
+    /**
+     * `GameFunctions::luaGameCreateMonster` (game_functions.cpp:589):
+     * `Monster::createMonster(name)` -> optional master -> `g_game().placeCreature`
+     * -> `Monster::onSpawn(position)`. A failed placement clears the summon
+     * master and resolves to nil, exactly like the C++ tail. The bosstiary
+     * archfoe spectator cooldown timer broadcast (game_functions.cpp:605-611)
+     * needs the spectating-player send seam the Kotlin `Player` does not model
+     * (PARITY GAP).
+     */
+    override fun createMonster(
+        name: String,
+        position: Position,
+        extended: Boolean,
+        force: Boolean,
+        master: Any?,
+    ): Any? {
+        val monster = createMonsterByName(name) ?: return null
+        val isSummon = bindSummonMaster(monster, master)
+
+        if (!placeMonster(monster, position, extended, force)) {
+            if (isSummon) {
+                monster.setMaster(null)
+            }
+            return null
+        }
+
+        dispatchMonsterSpawn(monster, position)
+        return monster
+    }
+
+    /**
+     * `GameFunctions::luaGameCreateSoulPitMonster` (game_functions.cpp:641):
+     * the `Game.createMonster` chain plus `Monster::setSoulPitStack(stack)`
+     * (monster.cpp:3201-3208) between the placement and `Monster::onSpawn`.
+     */
+    override fun createSoulPitMonster(
+        name: String,
+        position: Position,
+        stack: Int,
+        extended: Boolean,
+        force: Boolean,
+        master: Any?,
+    ): Any? {
+        val monster = createMonsterByName(name) ?: return null
+        val isSummon = bindSummonMaster(monster, master)
+
+        if (!placeMonster(monster, position, extended, force)) {
+            if (isSummon) {
+                monster.setMaster(null)
+            }
+            return null
+        }
+
+        setSoulPitStack(monster, stack)
+        dispatchMonsterSpawn(monster, position)
+        return monster
+    }
+
+    /** `monster->setMaster(master, true)` of the Lua crafters; returns whether a master was bound. */
+    private fun bindSummonMaster(monster: Monster, master: Any?): Boolean {
+        val masterCreature = master as? Creature ?: return false
+        monster.setMaster(masterCreature, true)
+        return true
     }
 
     /**
