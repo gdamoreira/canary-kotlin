@@ -19,7 +19,7 @@ class GroupFunctionsBindingsTest {
         name = "gamemaster",
         id = 4,
         access = true,
-        flags = setOf(PlayerFlags_t.CannotUseCombat, PlayerFlags_t.CannotUseSpells),
+        flags = mutableSetOf(PlayerFlags_t.CannotUseCombat, PlayerFlags_t.CannotUseSpells),
         maxDepotItems = 500,
         maxVipEntries = 200,
     )

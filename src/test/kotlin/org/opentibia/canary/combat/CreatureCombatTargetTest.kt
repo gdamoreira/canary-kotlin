@@ -238,6 +238,44 @@ class CreatureCombatTargetTest {
     }
 
     @Test
+    fun `combatTargetOf exposes the host condition immunity state`() {
+        // `Game.combatTargetOf` must adopt `MonsterPipelinesHost.combatTargetState()`:
+        // the registered monster type's `m_conditionImmunities`
+        // (monster.cpp:3535-3537) deny the condition through the game facade.
+        val host = newHost()
+        val type = MonsterType("Poison Rat").apply {
+            info.m_conditionImmunities += ConditionType.CONDITION_POISON
+        }
+        val game = newGame(host, type)
+        val target = monster()
+        game.placeMonster(target)
+
+        val combatTarget = game.combatTargetOf(target)
+
+        assertThat(combatTarget.isImmune(ConditionType.CONDITION_POISON)).isTrue()
+        assertThat(combatTarget.isImmune(ConditionType.CONDITION_FIRE)).isFalse()
+    }
+
+    @Test
+    fun `combatTargetOf exposes the host enemy faction state`() {
+        // `Monster::isEnemyFaction` (monster.cpp:267-273) over the registered
+        // type's `enemyFactions`.
+        val host = newHost()
+        val type = MonsterType("Lion Rat").apply {
+            info.enemyFactions += Faction.Player
+        }
+        val game = newGame(host, type)
+        val target = monster()
+        game.placeMonster(target)
+
+        val monsterView = game.combatTargetOf(target).getMonster()
+
+        assertThat(monsterView).isNotNull
+        assertThat(monsterView!!.isEnemyFaction(Faction.Player)).isTrue()
+        assertThat(monsterView.isEnemyFaction(Faction.Marid)).isFalse()
+    }
+
+    @Test
     fun `the adapter forwards condition immunity and combat conditions`() {
         val rat = monster()
         val target = CreatureCombatTarget(rat, object : CombatTargetState {

@@ -1,7 +1,9 @@
 package org.opentibia.canary.systems.wheel
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import org.opentibia.canary.combat.CombatDamage
 import org.opentibia.canary.combat.CombatType
+import org.opentibia.canary.combat.condition.ConditionId
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.config.FeatureFlags
 import org.opentibia.canary.creatures.Creature
@@ -324,13 +326,24 @@ class PlayerWheel(
     /** `PlayerWheel::getStage(WheelStage_t)` (player_wheel.cpp:3813). */
     fun getStage(type: WheelStage): Int = stages[type.value]
 
-    /** `PlayerWheel::setStage` (player_wheel.cpp:3546). */
+    /**
+     * `PlayerWheel::setStage` (player_wheel.cpp:3546). Raising the beam-mastery
+     * stage also registers the three beam spells in [beamMasterySpells]:
+     * Canary populates that set in `registerPlayerBonusData`
+     * (player_wheel.cpp:2262-2266) during its `loadPlayerBonusData` pass, which
+     * the port does not model yet, so the same observable state is maintained
+     * at the stage transition (PARITY NOTE). Entries are never removed here,
+     * exactly like the C++ (only [resetUpgradedSpells] clears them).
+     */
     fun setStage(type: WheelStage, value: Int) {
         if (type.value >= stages.size) {
             logger.error { "[PlayerWheel::setStage] Type ${type.value} is out of range" }
             return
         }
         stages[type.value] = value
+        if (type == WheelStage.BEAM_MASTERY && value > 0) {
+            beamMasterySpells.addAll(BEAM_MASTERY_SPELL_NAMES)
+        }
     }
 
     /** `PlayerWheel::getInstant(WheelInstant_t)` (player_wheel.cpp:3757). */
@@ -444,9 +457,10 @@ class PlayerWheel(
     private val learnedSpellsSelected = mutableListOf<String>()
 
     /**
-     * `PlayerWheel::m_beamMasterySpells` (player_wheel.hpp:519): the beam-mastery
-     * path is not ported, so this set is only cleared by
-     * [resetUpgradedSpells] like the C++ (PARITY GAP).
+     * `PlayerWheel::m_beamMasterySpells` (player_wheel.hpp:519): raised by
+     * [setStage] for the "Beam Mastery" stage and cleared by
+     * [resetUpgradedSpells], exactly like the C++ `registerPlayerBonusData`/
+     * `resetUpgradedSpells` pair.
      */
     private val beamMasterySpells = mutableSetOf<String>()
 
@@ -1156,10 +1170,117 @@ class PlayerWheel(
         return damageBonus
     }
 
+    // --- beam mastery combat surface (player_wheel.cpp:3243-3255, 4037-4052) -----
+
+    /**
+     * `PlayerWheel::checkBeamMasteryDamage` (player_wheel.cpp:3243-3255):
+     * the per-accepted-target damage multiplier of the beam mastery stage,
+     * `10`/`12`/`14` for stages 1..3.
+     */
+    fun checkBeamMasteryDamage(): Int {
+        var damageBoost = 0
+        val stage = getStage(WheelStage.BEAM_MASTERY)
+        if (stage >= 3) {
+            damageBoost = 14
+        } else if (stage >= 2) {
+            damageBoost = 12
+        } else if (stage >= 1) {
+            damageBoost = 10
+        }
+
+        return damageBoost
+    }
+
+    /**
+     * `PlayerWheel::getBeamAffectedTotal` (player_wheel.cpp:4037-4043): `3`
+     * while the cast's `instantSpellName` is a beam-mastery spell and the
+     * "Beam Mastery" instant is active, `0` otherwise.
+     */
+    fun getBeamAffectedTotal(damage: CombatDamage): Int =
+        if (damage.instantSpellName in beamMasterySpells && getInstant("Beam Mastery")) {
+            BEAM_AFFECTED_TOTAL
+        } else {
+            0
+        }
+
+    /**
+     * `PlayerWheel::updateBeamMasteryDamage` (player_wheel.cpp:4045-4052):
+     * while the remaining beam counter is positive, `damage.damageMultiplier`
+     * grows by [checkBeamMasteryDamage], every spell cooldown drops by one
+     * second and the counter/current-target pair steps. The C++ mutates both
+     * counters through references; the port returns the updated
+     * `(beamAffectedTotal, beamAffectedCurrent)` pair.
+     */
+    fun updateBeamMasteryDamage(
+        damage: CombatDamage,
+        beamAffectedTotal: Int,
+        beamAffectedCurrent: Int,
+    ): Pair<Int, Int> {
+        if (beamAffectedTotal > 0) {
+            damage.damageMultiplier += checkBeamMasteryDamage()
+            reduceAllSpellsCooldownTimer(BEAM_COOLDOWN_REDUCTION_MILLIS)
+            return (beamAffectedTotal - 1) to (beamAffectedCurrent + 1)
+        }
+        return beamAffectedTotal to beamAffectedCurrent
+    }
+
+    /**
+     * `PlayerWheel::reduceAllSpellsCooldownTimer` (player_wheel.cpp:3423-3450):
+     * every stored `CONDITION_SPELLCOOLDOWN` whose sub-id resolves an instant
+     * spell through the injected `g_spells()` registry has its secondary-group
+     * cooldown and its own remaining time reduced by [value]; a cooldown at or
+     * below [value] is sent as zero and ended. An unwired owner (no [player])
+     * keeps the reduction inert.
+     */
+    fun reduceAllSpellsCooldownTimer(value: Int) {
+        val target = player ?: return
+        for (condition in target.getConditionsByType(ConditionType.CONDITION_SPELLCOOLDOWN)) {
+            val spellId = condition.subId
+            val spell = spells.getInstantSpellById(spellId) ?: continue
+            val spellSecondaryGroup = spell.secondaryGroup
+
+            val secondCondition = target.getCondition(
+                ConditionType.CONDITION_SPELLGROUPCOOLDOWN,
+                ConditionId.CONDITIONID_DEFAULT,
+                spellSecondaryGroup.value,
+            )
+
+            if (secondCondition != null) {
+                if (secondCondition.ticks <= value) {
+                    target.sendSpellGroupCooldown(spellSecondaryGroup, 0)
+                    secondCondition.endCondition(target.conditionTarget)
+                } else {
+                    secondCondition.setTicks(secondCondition.ticks - value)
+                    target.sendSpellGroupCooldown(spellSecondaryGroup, secondCondition.ticks)
+                }
+            }
+
+            if (condition.ticks <= value) {
+                target.sendSpellCooldown(spellId, 0)
+                condition.endCondition(target.conditionTarget)
+            } else {
+                condition.setTicks(condition.ticks - value)
+                target.sendSpellCooldown(spellId, condition.ticks)
+            }
+        }
+    }
+
     companion object {
         const val MIN_LEVEL_TO_START_COUNT_POINTS = 50
         const val POINTS_PER_LEVEL = 1
         const val MAX_GEM_GRADE = 3
+
+        /** `getBeamAffectedTotal`'s capped counter (player_wheel.cpp:4041). */
+        private const val BEAM_AFFECTED_TOTAL = 3
+
+        /** `reduceAllSpellsCooldownTimer(1000)` of `updateBeamMasteryDamage` (player_wheel.cpp:4048). */
+        private const val BEAM_COOLDOWN_REDUCTION_MILLIS = 1000
+
+        /**
+         * `m_beamMasterySpells.emplace(...)` of `registerPlayerBonusData`
+         * (player_wheel.cpp:2263-2265).
+         */
+        private val BEAM_MASTERY_SPELL_NAMES = setOf("Energy Beam", "Great Death Beam", "Great Energy Beam")
 
         /**
          * Mirror of `convertWheelGemAffinityToDomain` (src/utils/tools.cpp:2190):

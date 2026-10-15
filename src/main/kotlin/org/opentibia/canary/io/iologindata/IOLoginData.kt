@@ -44,8 +44,10 @@ import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.ItemTypeRegistry
 import org.opentibia.canary.items.ObjectCategory_t
 import org.opentibia.canary.kv.ValueWrapper
+import org.opentibia.canary.lua.bindings.SpellBindings
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.persistence.PlayerFeatureStateLoader
+import org.opentibia.canary.spells.Spells
 import org.opentibia.canary.systems.imbuement.ImbuementItem
 import org.opentibia.canary.systems.imbuement.Imbuements
 import org.opentibia.canary.systems.prey.IOPreyPersistence
@@ -288,6 +290,16 @@ class IOLoginData(
      * online-only flush running for direct constructions and tests.
      */
     private val isOffline: (Player) -> Boolean = { false },
+    /**
+     * `g_spells()` registry the port attaches to `Player.spells` at login
+     * ([loadPlayerInstantSpellList]). Canary resolves the process-wide
+     * singleton; per AGENTS.md 1.1 the booted engine registry is injected and
+     * attached so `Player::sendSpellCooldowns` (player.cpp:13405-13437) can
+     * resolve the stored `CONDITION_SPELLCOOLDOWN` sub-ids through
+     * `g_spells().getInstantSpellById`. A `null` result leaves any previously
+     * attached registry untouched.
+     */
+    private val spellRegistry: () -> Spells? = { SpellBindings.spellRegistry() },
 ) {
 
     /** The `Condition::serialize` codec of [savePlayerFirst] (condition.cpp:277-301). */
@@ -718,8 +730,16 @@ class IOLoginData(
 
     // --- IOLoginDataLoad / IOLoginDataSave helpers over the Kotlin state --------
 
-    /** `IOLoginDataLoad::loadPlayerInstantSpellList` (iologindata_load_player.cpp:527-541). */
+    /**
+     * `IOLoginDataLoad::loadPlayerInstantSpellList` (iologindata_load_player.cpp:527-541).
+     * The login is also where the port attaches the booted `g_spells()`
+     * registry to `Player.spells`; the C++ player reaches the singleton
+     * directly, so attaching it here keeps `Player::hasLearnedInstantSpell`
+     * and the cooldown sends (`Player::sendSpellCooldowns`,
+     * player.cpp:13405-13437) live for the whole session.
+     */
     fun loadPlayerInstantSpellList(player: Player) {
+        spellRegistry()?.let { player.spells = it }
         for (spellName in spells.load(player.id)) {
             player.spellBook.learnInstantSpell(spellName)
         }
