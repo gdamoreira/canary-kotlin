@@ -1,7 +1,7 @@
 > Adapted from canary/docs/systems/weapon-proficiency.md.
 > Canary-Kotlin status: implemented by the port (`systems/proficiency/`,
 > `WeaponProficiencyLoader`, KV scope `weapon-proficiency`; see
-> `docs/development/done/060-weapon-proficiencies-system.md`). The C++ paths in this
+> `docs/development/feature-history.md`). The C++ paths in this
 > document are the upstream reference for behavior and data precedence.
 
 # Weapon Proficiency (Protocol 15.11) - Server Guide

@@ -70,7 +70,7 @@ This document records the binding architectural policies, lifetime safety rules,
 
 ## 5. Feature Documentation & Canary Code Reference Mandate
 
-Whenever creating or proposing any new feature document in `docs/development/plan/`, `docs/development/implementing/`, or `docs/development/done/`, the document **MUST** adhere to the standard template and **MUST include exact Canary C++ source file references**:
+Whenever creating or proposing any new development document in `docs/development/`, the document **MUST** adhere to the standard template and **MUST include exact Canary C++ source file references**:
 
 ### 5.1 Mandatory Document Structure
 Each document must follow this layout:
@@ -107,17 +107,17 @@ Each document must follow this layout:
 
 ## 6. Mandatory Wave Documentation & Publication Gate (MUST)
 
-**Before each wave**, create a wave plan document `docs/development/plan/wave-<N>-<topic>.md` describing what the wave will implement: the tasks, the Kotlin deliverables, the Canary C++ sources (exact paths), and the tests. Then run the wave.
+**Before each wave**, create a wave document `docs/development/wave-<N>-<topic>.md` describing what the wave will implement: the tasks, the Kotlin deliverables, the Canary C++ sources (exact paths), and the tests. Then run the wave. Documents are created directly in `docs/development/` — there is no plan/implementing/done lifecycle folder.
 
 After **each wave** (a batch of parallel-agent implementations merged into `main`), the following is a **MUST** and is not complete until every step has run:
 
 1. **Update every affected document.**
    - `docs/development/missing-features.md` — coverage numbers and the affected inventory rows/ranked gaps.
    - `docs/development/game-play-features.md` — status, implemented components, residual gaps, and the current test-suite/test-count metrics.
-   - `docs/development/plan/`, `docs/development/implementing/`, `docs/development/done/` — **move the wave plan doc to `docs/development/done/`**, move feature specs that are now implemented there, update any `docs/development/implementing/` entries, and refresh their Implementation Status sections.
+   - `docs/development/` — **update the wave document in place** with its Implementation Status and completion notes; keep feature documents directly in `docs/development/`.
    - `README.md` — feature coverage, project structure, and test metrics.
    - `CHANGELOG.md` — add the new phase entry and refresh the Current Status metrics.
 2. **Commit the documentation update in a separate commit** (never fold it into the code/merge commits).
 3. **Push to `origin`** (`git push origin main`).
 
-A wave is **not finished** until the wave plan is in `docs/development/done/` and the documentation commit is pushed. Do not start the next wave before this gate passes. Keep the documented metrics truthful: run `./gradlew test` and record the real suite/test counts and any new residual gaps.
+A wave is **not finished** until the wave document in `docs/development/` is updated and the documentation commit is pushed. Do not start the next wave before this gate passes. Keep the documented metrics truthful: run `./gradlew test` and record the real suite/test counts and any new residual gaps.

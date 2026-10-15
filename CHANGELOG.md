@@ -13,7 +13,7 @@ All notable technical milestones, architectural transformations, feature impleme
   - Built `TibiaFrameDecoder` and `TibiaMessageEncoder`.
   - Implemented `LoginHandler` parsing client OS, protocol version, RSA credentials, and delivering character list opcode `0x64`.
 - **`07e4b2f` - Documentation Structure**:
-  - Created `docs/development/plan/`, `docs/development/implementing/`, and `docs/development/done/` lifecycle structure.
+  - Created `docs/development/`, `docs/development/`, and `docs/development/` lifecycle structure.
 - **`fa0f889` - Architectural Adaptation & Parity Strategy**:
   - Documented `000-kotlin-architectural-design.md`, replacing C++ singletons (`g_game`, `g_dispatcher`) and raw mutexes with dependency injection and single-threaded Coroutine Actor confinement.
   - Established `000-parity-validation-strategy.md` and sequential execution roadmap.
@@ -138,7 +138,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **`1a14b87` / `20cc0ea` - Gameplay Feature Matrix**:
   - Created `docs/development/game-play-features.md` inventorying all 56 Canary gameplay systems.
 - **`5b83cd4` - Advanced Feature Specifications**:
-  - Created implementation plans in `docs/development/plan/` for features `050` through `064` (Skill Wheel, Forge, Bestiary, Store, Hazard, etc.).
+  - Created implementation plans in `docs/development/` for features `050` through `064` (Skill Wheel, Forge, Bestiary, Store, Hazard, etc.).
 - **`95bcad5` / `03fa14c` - Canary C++ File References**:
   - Annotated all 64 feature documents with file paths and line numbers from the original Canary repository.
 - **`4918a4c` - Codebase Audit & Feature Template**:
@@ -153,7 +153,7 @@ All notable technical milestones, architectural transformations, feature impleme
   - Added `AGENTS.md` §1.1 (strict Canary parity — no invented methods/APIs) and §1.4 (Lua stays Lua — never port Lua logic to Kotlin).
   - Enforced immediately: renamed fabricated `Npc.onHear` → Canary `Npc::onCreatureSay`, `MagicField.onStepIn` → `onStepInField`.
 - **`87a83ad` / `d6f79d3` - Lua Parity Remediation Spec & Plan**:
-  - Approved design superseding `development/done/012` and `development/done/028`; foundation implementation plan created.
+  - Approved design superseding the `012` and `028` feature specifications (`docs/development/feature-history.md`); foundation implementation plan created.
 - **`24e04fb`…`92aed2d` - Lua Scripting Engine Foundation**:
   - Implemented `org.opentibia.canary.lua`: `LuaEnvironment` + `ScriptError` + LuaJ compat shim, `UserdataRegistry` (Canary-named metatables), `Actions`/`TalkActions` registries with `Action()`/`TalkAction()` constructors, and a boot-time `Scripts` loader.
   - Removed the Kotlin `ScriptRegistry`; item-use now dispatches Lua actions on the `GameDispatcher` WorldCommit lane.
@@ -200,7 +200,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Login flow** — `GameHandler` loads feature state via `PlayerPersistenceService` and dispatches the Lua `creatureEvent` `onLogin` on the WorldCommit lane.
 
 ### Phase 13: Documentation Finalization (03:45 – 04:00)
-- Moved feature specs `050–064` from `docs/development/plan/` to `docs/development/done/` (engine scope implemented + tested); `docs/development/plan/` now holds only the architectural `000-*` docs.
+- Moved feature specs `050–064` from `docs/development/` to `docs/development/` (engine scope implemented + tested); `docs/development/` now holds only the architectural `000-*` docs.
 - Updated `docs/development/game-play-features.md` to **56 / 56 implemented** with per-feature residual gaps; refreshed README/CHANGELOG metrics.
 
 ### Phase 14: Protocol Sends & Item Classification (04:00 – 04:30)
@@ -233,7 +233,7 @@ All notable technical milestones, architectural transformations, feature impleme
 - **VIP system** — `PlayerVip` (entries/groups CRUD, status/icon, caps).
 - **Inbound opcodes** — trade `0x7D–0x80`, follow `0xA2`, containers `0x75/0x87/0x88/0x95`, outfit/mount `0xD3/0xD4`, use-item-ex `0x83` decoded and routed.
 - **Inventory persistence** — Flyway `V5__player_items.sql` + `JdbcPlayerItemsRepository` with Canary attribute serialization.
-- **Process** — `AGENTS.md` §6 now mandates a pre-wave plan doc in `docs/development/plan/` (moved to `docs/development/done/` after the wave).
+- **Process** — `AGENTS.md` §6 now mandates a pre-wave plan doc in `docs/development/` (moved to `docs/development/` after the wave).
 
 ### Phase 19: Player Components, Imbuements, Prey/Task Hunting, Opcode Batch 2 (06:30 – 07:00)
 - **Player components** — `PlayerTitles`, `PlayerBadges`, `PlayerAchievements` (+ scoped `KV`), 82 tests.
@@ -616,8 +616,15 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 63: Development Docs Aggregation (18:00 – 19:00)
+- **`docs/development/` flattened** — the `plan/`/`implementing/`/`done/` lifecycle folders were removed; agents create documents directly in `docs/development/` (AGENTS.md §5/§6 updated).
+- **History aggregated** — 64 feature specs → `feature-history.md`, 41 wave plans → `wave-history.md`, the three `000-*` plan docs → `architecture-and-roadmap.md`; a folder `README.md` documents the conventions; all references swept repo-wide.
+- **694 suites / 7653 tests, all green.**
+
+---
+
 ### Current Status
 - **Automated Tests**: **694 test suites / 7653 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
-- **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/done/050–064`) are delivered as C++ engine cores + application services + protocol layer.
+- **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/game-play-features.md`.

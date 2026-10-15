@@ -29,4 +29,4 @@ points.
   — upstream C++ engine reference
 - [Task Board module](taskboard-module.md) — Lua module (Lua stays Lua)
 - [Weapon Proficiency](weapon-proficiency.md) — implemented by the Kotlin port
-  (development/done/060)
+  (development/feature-history.md)

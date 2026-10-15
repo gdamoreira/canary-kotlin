@@ -31,9 +31,10 @@ This directory is the main documentation hub for **Canary Kotlin Edition**.
 | [`development/missing-features.md`](development/missing-features.md) | Complete per-subsystem inventory and ranked remaining work |
 | [`development/game-play-features.md`](development/game-play-features.md) | 56-feature gameplay matrix and residual parity gaps |
 | [`development/improvements.md`](development/improvements.md) | Repository improvement backlog |
-| [`development/plan/`](development/plan/) | Architecture guidelines and wave plans |
-| [`development/done/`](development/done/) | Completed specifications (001–064 and waves 20–60) |
-| [`development/implementing/`](development/implementing/) | Features actively in progress |
+| [`development/architecture-and-roadmap.md`](development/architecture-and-roadmap.md) | Architecture mapping, parity strategy and roadmap |
+| [`development/feature-history.md`](development/feature-history.md) | All 64 feature specifications (001–064) |
+| [`development/wave-history.md`](development/wave-history.md) | All wave plans (20–60) |
+| [`development/README.md`](development/README.md) | Development-document conventions (agents write here) |
 
 ---
 
@@ -136,7 +137,7 @@ was ported and adapted. The mapping below records every source and target file.
 | `performance-lifetime/evidence.md` | `performance-lifetime/evidence.md` | Upstream engine reference |
 | `performance-lifetime/parallel-monster-ai-roadmap.md` | `performance-lifetime/parallel-monster-ai-roadmap.md` | Upstream engine reference |
 | `taskboard-module.md` | `taskboard-module.md` | Lua module (Lua stays Lua) |
-| `weapon-proficiency.md` | `weapon-proficiency.md` | Implemented by the Kotlin port (development/done/060) |
+| `weapon-proficiency.md` | `weapon-proficiency.md` | Implemented by the Kotlin port (development/feature-history.md) |
 
 ## Assets, Lua API and upstream tooling
 
@@ -151,7 +152,7 @@ Nothing existing in `canary-kotlin/docs` was removed or replaced by this port:
 `development/missing-features.md`, `development/game-play-features.md`,
 `development/improvements.md`, `development/TEMPLATE_FEATURE.md`,
 `development/canary-codebase-implementation-audit.md` and the
-`development/plan/`, `development/done/`, `development/implementing/`
+`development/`, `development/`, `development/`
 folders remain the authoritative Kotlin-specific documents.
 
 ---

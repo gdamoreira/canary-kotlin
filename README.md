@@ -155,11 +155,11 @@ canary-kotlin/
 │   ├── building/          # JDK 25 + Gradle build guides (Linux, Windows, WSL)
 │   ├── docker/            # Docker quickstart guide
 │   ├── systems/           # Engine subsystem contracts (upstream-adapted)
-│   ├── development/       # Development lifecycle docs
-│   │   ├── plan/          # Architectural guidelines & wave plans (000-*, wave-*)
-│   │   ├── implementing/  # Features actively in progress
-│   │   ├── done/          # 64 completed specifications + wave plans
-│   │   └── game-play-features.md  # Master 56-feature matrix (all implemented) & residual gaps
+│   ├── development/       # Development docs (agents write here; no lifecycle folders)
+│   │   ├── architecture-and-roadmap.md  # Architecture mapping, parity strategy, roadmap
+│   │   ├── feature-history.md    # Aggregated 64 feature specifications (001–064)
+│   │   ├── wave-history.md       # Aggregated wave plans (20–60)
+│   │   └── game-play-features.md # Master 56-feature matrix (all implemented) & residual gaps
 ├── src/
 │   ├── main/
 │   │   ├── kotlin/org/opentibia/canary/
@@ -213,13 +213,13 @@ The port follows two binding rules (see `AGENTS.md` §1.1 and §1.4):
 1. **Strict Canary parity** — no invented methods, classes, or values. Every Kotlin name mirrors its Canary C++ or Lua counterpart.
 2. **Lua stays Lua** — gameplay authored in `data/**/*.lua` (NPC dialogue, quests, spells, actions, systems) is executed *as Lua* through `LuaEnvironment` (LuaJ) and the Canary-named binding libraries; it is never re-implemented as Kotlin. Kotlin provides only the C++ engine primitives and the bindings those scripts call.
 
-Consequently, each of the 15 advanced features (`docs/development/plan/050–064`) is delivered as its **C++ engine core** in `systems/<feature>/`, with the Lua-authored portions left as Lua.
+Consequently, each of the 15 advanced features (see `docs/development/feature-history.md`) is delivered as its **C++ engine core** in `systems/<feature>/`, with the Lua-authored portions left as Lua.
 
 ---
 
 ## 🧩 Feature Coverage
 
-**All 56 Canary gameplay systems are implemented** (`docs/development/game-play-features.md`). The 15 advanced systems (`docs/development/done/050–064`) are delivered as faithful C++ engine cores in `systems/<feature>/` with application services and protocol parsers/serializers, wired where applicable:
+**All 56 Canary gameplay systems are implemented** (`docs/development/game-play-features.md`). The 15 advanced systems (`docs/development/feature-history.md`) are delivered as faithful C++ engine cores in `systems/<feature>/` with application services and protocol parsers/serializers, wired where applicable:
 
 `wheel` · `forge` · `bestiary` · `gamestore` · `hazard` · `dailyreward` · `rewardchest` · `familiar` · `hireling` · `mount` · `proficiency` · `soulwar` · `raid` · `offlinetraining` · `concoction`
 

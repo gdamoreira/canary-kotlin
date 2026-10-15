@@ -54,7 +54,7 @@ This document establishes the master inventory of all gameplay features from Can
 
 ## ✅ 2. Advanced Gameplay Features — Implemented (engine scope)
 
-> **Rule (AGENTS.md §1.4):** Lua stays Lua. For each feature the **C++ engine surface** is ported to Kotlin; player-facing logic authored in `data/**/*.lua` is executed as Lua through the scripting engine. Feature specs are in `docs/development/done/050–064`.
+> **Rule (AGENTS.md §1.4):** Lua stays Lua. For each feature the **C++ engine surface** is ported to Kotlin; player-facing logic authored in `data/**/*.lua` is executed as Lua through the scripting engine. Feature specs are in `docs/development/feature-history.md`.
 >
 > **Status:** all 15 features are implemented and tested (each `systems/<feature>/` package with engine core + application services, plus protocol parsers/serializers and router wiring where applicable). Residual parity gaps (protocol sends, deeper persistence, Lua-driven side effects) are listed per feature below.
 

@@ -53,7 +53,7 @@ private object NullSpectatorMapAccess : SpectatorMapAccess {
  * the revelation additional area/target/duration queries, the promotion-scroll
  * ledger ([unlockScroll]) and the [onThink] instant checks. Persistence, the
  * player item/gold economy and protocol serialization are not ported here.
- * Remaining gaps are noted in docs/development/done/050-wheel-of-destiny-engine.md.
+ * Remaining gaps are noted in docs/development/feature-history.md.
  */
 class PlayerWheel(
     val vocationCipId: Int,

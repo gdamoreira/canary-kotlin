@@ -538,7 +538,7 @@ Test conventions:
 
 # Feature Documentation Gates
 
-Every feature document in `docs/development/plan/`, `docs/development/implementing/` or `docs/development/done/` must:
+Every development document in `docs/development/` must:
 
 - follow the standard template ([TEMPLATE_FEATURE.md](development/TEMPLATE_FEATURE.md));
 - include exact upstream C++ source references (file paths, key methods,
@@ -549,12 +549,13 @@ This is the AGENTS.md §5 mandate. Never invent or assume upstream file paths.
 
 ## Wave publication gate
 
-Before each wave, create `docs/development/plan/wave-<N>-<topic>.md`. After each wave
+Before each wave, create `docs/development/wave-<N>-<topic>.md`. After each wave
 (AGENTS.md §6):
 
 1. Update `docs/development/missing-features.md`, `docs/development/game-play-features.md`,
    `README.md` and `CHANGELOG.md`.
-2. Move completed plans/specs to `docs/development/done/`.
+2. Update the wave document in place in `docs/development/` (there is no
+   plan/implementing/done lifecycle folder).
 3. Commit the documentation update separately from code changes.
 4. Push to origin.
 
