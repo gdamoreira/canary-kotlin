@@ -1,0 +1,21 @@
+-- Wave 59, task A3: Canary's single-column animus mastery storage.
+--
+-- Canary persists the learned animus masteries as one insertion-ordered blob in
+-- `players`.`animus_mastery` (schema.sql:156, `mediumblob DEFAULT NULL`), written
+-- by `AnimusMastery::serialize` and read by `AnimusMastery::unserialize`
+-- (src/creatures/players/animus_mastery/animus_mastery.cpp:62-73) through the
+-- inline `IOLoginDataSave::savePlayerFirst` / `IOLoginDataLoad::loadPlayerAnimusMastery`
+-- blocks (src/io/functions/iologindata_save_player.cpp:293-299,
+-- src/io/functions/iologindata_load_player.cpp:277-289).
+--
+-- The wave-36 `player_animus_mastery` relational table
+-- (V13__bestiary_bosstiary_persistence.sql:26-34) was an interim store;
+-- `IOBestiaryPersistence.loadAnimusMastery`/`saveAnimusMastery` now read and
+-- write this column. The interim table is left in place for databases migrated
+-- before this version; it is no longer written.
+--
+-- The column stays nullable for the same reason as `players`.`conditions`
+-- (V19): `ALTER TABLE ... ADD COLUMN` cannot apply Canary's `mediumblob`
+-- default to existing rows, and the loader treats a missing blob as 'no stored
+-- masteries', which is exactly what an empty blob decodes to.
+ALTER TABLE players ADD COLUMN IF NOT EXISTS animus_mastery LONGBLOB;
