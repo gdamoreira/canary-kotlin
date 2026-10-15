@@ -6,13 +6,13 @@ import org.opentibia.canary.creatures.Player
 
 /**
  * Player drain/cleanse hooks (src/creatures/players/player.cpp:3540-3552,
- * 6322-6348, 6577-6594) as extensions over the port's [Player].
+ * 6322-6348) as extensions over the port's [Player].
  *
  * `g_game().sendSingleSoundEffect` and `Player::sendStats` are call-site seams
- * per AGENTS.md 1.1. `Player::drainMana` and `Player::onAttackedCreatureDrainHealth`
- * are class overrides on [Player] (creatures/Creature.kt) so they ride the
- * virtual dispatch; the remaining hooks compose [Creature.drainHealth] over
- * the port's `Creature`.
+ * per AGENTS.md 1.1. `Player::drainMana`, `Player::onAttackedCreatureDrainHealth`
+ * and `Player::onTargetCreatureGainHealth` are class overrides on [Player]
+ * (creatures/Creature.kt) so they ride the virtual dispatch; the remaining
+ * hooks compose [Creature.drainHealth] over the port's `Creature`.
  */
 
 /** `PLAYER_SOUND_HEALTH_CHANGE` (player.hpp:128). */
@@ -63,45 +63,4 @@ fun Player.drainHealth(
 fun Player.onCleanseCondition(type: ConditionType) {
     val conditionName = CLEANSE_CONDITION_MESSAGES[type] ?: return
     sendTextMessage("You are no longer $conditionName. (cleanse charm)")
-}
-
-/**
- * `Player::onTargetCreatureGainHealth(target, points)` (player.cpp:6577-6594):
- * with a party, the target's (or its master's) player must be a partner for
- * the shared-experience credit. The C++ `isPartner(tmpPlayer)` first branch is
- * dead code because `isPartner(nullptr)` is always false; it is transcribed
- * anyway so the flow stays auditable. `Player::getPlayer()` on an arbitrary
- * creature is unported on the host, so it is the [getPlayer] seam.
- */
-fun Player.onTargetCreatureGainHealth(
-    /** The `target` argument (player.cpp:6577). */
-    target: Creature?,
-    /** The `points` argument (player.cpp:6577). */
-    points: Int,
-    /** `Creature::getPlayer()` (player.cpp:6581, 6585). */
-    getPlayer: (Creature) -> Player? = { null },
-    /** `Party::updatePlayerTicks(player, points)` (party.cpp:720-725). */
-    updatePlayerTicks: (Int) -> Unit = { credited ->
-        getParty()?.updatePlayerTicks(this, credited)
-    },
-) {
-    if (target != null && getParty() != null) {
-        var tmpPlayer: Player? = null
-
-        if (isPartner(tmpPlayer) && tmpPlayer !== this) {
-            tmpPlayer = getPlayer(target)
-        } else {
-            val targetMaster = target.getMaster()
-            if (targetMaster != null) {
-                val targetMasterPlayer = getPlayer(targetMaster)
-                if (targetMasterPlayer != null) {
-                    tmpPlayer = targetMasterPlayer
-                }
-            }
-        }
-
-        if (isPartner(tmpPlayer)) {
-            updatePlayerTicks(points)
-        }
-    }
 }

@@ -50,6 +50,7 @@ import org.opentibia.canary.creatures.players.components.RecentPvPKillEntry
 import org.opentibia.canary.creatures.players.getCapacity
 import org.opentibia.canary.creatures.players.getSubjectPronoun
 import org.opentibia.canary.creatures.players.getSubjectVerb
+import org.opentibia.canary.creatures.players.isPartner
 import org.opentibia.canary.creatures.players.lastHitIsPlayer
 import org.opentibia.canary.creatures.players.pvp.PlayerPvp
 import org.opentibia.canary.creatures.players.storages.Stash
@@ -819,9 +820,10 @@ abstract class Creature(
      * `onAttacked()`, the virtual [changeMana] clamp and the attacker
      * [addDamagePoints] credit, so the mana drain populates the damage map.
      *
-     * `Player::changeMana` (player.cpp:6765-6772: the `HasInfiniteMana` gate
-     * and the `g_game().addPlayerMana` broadcast) is not modelled (PARITY GAP);
-     * `Player::drainMana`'s stats refresh is the [Player] override.
+     * The virtual call resolves to `Player::changeMana` (player.cpp:6765-6772:
+     * the `HasInfiniteMana` gate, the `g_game().addPlayerMana` broadcast and
+     * the stats refresh) for player targets; `Player::drainMana` is the [Player]
+     * override that refreshes the stats once more.
      */
     open fun drainMana(attacker: Creature?, manaLoss: Int) {
         onAttacked()
@@ -1631,7 +1633,12 @@ abstract class Creature(
         onAttackedCreatureHandlers.toList().forEach { it(this, target) }
     }
 
-    /** `Creature::onTargetCreatureGainHealth` (creature.hpp:561). */
+    /**
+     * `Creature::onTargetCreatureGainHealth` (creature.hpp:561). The C++ base
+     * is empty and `Player::onTargetCreatureGainHealth` (player.cpp:6577-6594)
+     * overrides it with the party shared-experience credit, so the override
+     * rides this virtual dispatch.
+     */
     open fun onTargetCreatureGainHealth(target: Creature?, points: Int) {
         onTargetCreatureGainHealthHandlers.toList().forEach { it(this, target, points) }
     }
@@ -1642,9 +1649,8 @@ abstract class Creature(
      * keyed by this creature's id, and stamps [lastHitCreatureId].
      *
      * `Player::onAttackedCreatureDrainHealth`'s party-tick override
-     * (player.cpp:6563-6575) is the `PlayerCombatHooksState.kt` extension seam;
-     * it is not hooked into this virtual dispatch (PARITY GAP, mirroring
-     * [onTargetCreatureGainHealth]).
+     * (player.cpp:6563-6575) is the [Player] class override, so the credit also
+     * rides this virtual dispatch.
      */
     open fun onAttackedCreatureDrainHealth(target: Creature?, points: Int) {
         if (target == null || points <= 0) {
@@ -3381,9 +3387,35 @@ class Player(
     }
 
     /**
+     * `Player::changeMana(manaChange)` (player.cpp:6765-6772): the
+     * `HasInfiniteMana` flag only gates the `Creature::changeMana`
+     * (creature.cpp:869-875) clamp; the `g_game().addPlayerMana` party
+     * broadcast ([addPlayerMana], game.cpp:9326-9331) and the `sendStats()`
+     * refresh run unconditionally. [Game.internalPlaceCreature] binds the
+     * broadcast once the player enters the world (game.cpp:1495); an unplaced
+     * player (or one outside a `Game`) keeps the inert default.
+     */
+    override fun changeMana(manaChange: Int) {
+        if (!hasFlag(PlayerFlags_t.HasInfiniteMana)) {
+            super.changeMana(manaChange)
+        }
+        addPlayerMana(this)
+        sendStats()
+    }
+
+    /**
+     * `Player::getPlayer()` (player.cpp:9102-9104) returns the player itself,
+     * so `Creature::gainHealth`'s `healer->getPlayer()` reads and the
+     * `Player::onTargetCreatureGainHealth` master walk resolve through the
+     * virtual dispatch.
+     */
+    override fun getPlayer(): Player = this
+
+    /**
      * `Player::drainMana(attacker, manaLoss)` (player.cpp:3549-3552) over
      * `Creature::drainMana` (creature.cpp:901-907): the stats refresh runs
-     * after the base drain/credit.
+     * after the base drain/credit, and the virtual [changeMana] refreshes them
+     * once more exactly like the C++ `Player::changeMana` tail.
      */
     override fun drainMana(attacker: Creature?, manaLoss: Int) {
         super.drainMana(attacker, manaLoss)
@@ -3434,6 +3466,43 @@ class Player(
     /** `Monster::isHostile()` (monster.cpp:295-297) over `m_monsterType->info.isHostile`. */
     private fun isHostileMonster(monster: Monster): Boolean =
         monsterTypeProvider(monster.name)?.info?.isHostile ?: true
+
+    /**
+     * `Player::onTargetCreatureGainHealth(target, points)` (player.cpp:6577-6594):
+     * with a party, the target's (or its master's) player must be a partner for
+     * the shared-experience credit. The C++ `isPartner(tmpPlayer)` first branch
+     * is evaluated with a null `tmpPlayer` (always false), so only the master
+     * branch can credit; it is transcribed anyway so the flow stays auditable.
+     *
+     * The override rides the virtual dispatch: `Creature::gainHealth`
+     * (creature.cpp:886-891) calls `healer->onTargetCreatureGainHealth` and
+     * `healer->getPlayer()` resolves through [Player.getPlayer] (player.cpp:9102).
+     */
+    override fun onTargetCreatureGainHealth(target: Creature?, points: Int) {
+        super.onTargetCreatureGainHealth(target, points)
+
+        if (target == null || getParty() == null) {
+            return
+        }
+
+        var tmpPlayer: Player? = null
+
+        if (isPartner(tmpPlayer) && tmpPlayer !== this) {
+            tmpPlayer = target.getPlayer()
+        } else {
+            val targetMaster = target.getMaster()
+            if (targetMaster != null) {
+                val targetMasterPlayer = targetMaster.getPlayer()
+                if (targetMasterPlayer != null) {
+                    tmpPlayer = targetMasterPlayer
+                }
+            }
+        }
+
+        if (isPartner(tmpPlayer)) {
+            getParty()?.updatePlayerTicks(this, points)
+        }
+    }
 
     // --- blessings (player.hpp:1818, player.cpp:2422-2440, 10544-10579, 12993) ----
 

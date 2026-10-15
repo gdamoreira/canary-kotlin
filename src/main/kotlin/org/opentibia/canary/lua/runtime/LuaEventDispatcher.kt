@@ -9,6 +9,7 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.lua.registry.EventCallbackType
+import org.opentibia.canary.lua.registry.LuaMoveEvent
 import org.opentibia.canary.map.Position
 
 /**
@@ -375,6 +376,55 @@ object LuaEventDispatcher {
         pos: Position,
     ): Boolean = moveEventAddRemoveItem(env, itemId, REMOVE_ITEM_EVENT_TYPE, moveItem, tileItem, pos)
 
+    /**
+     * `MoveEvent::executeStep` (movement.cpp:738-793) for a registry event the
+     * caller already resolved (`MoveEvents::onCreatureMove`, movement.cpp:290-322):
+     * `onStepIn(creature, item, position, fromPosition)` /
+     * `onStepOut(creature, item, position, fromPosition)`. Returns the Lua
+     * result through the `LuaScriptInterface::callFunction` default-true
+     * boolean (luascript.cpp:793-810), so a script returning `false` stops the
+     * caller's item scan like the C++ `step == 0` break.
+     */
+    fun moveEventExecuteStep(
+        env: LuaEnvironment,
+        event: LuaMoveEvent,
+        creature: Creature,
+        item: Item?,
+        pos: Position,
+        fromPosition: Position,
+    ): Boolean {
+        val args = arrayOf(
+            wrapCreature(env, creature),
+            pushThing(env, item),
+            wrapPosition(env, pos),
+            wrapPosition(env, fromPosition),
+        )
+        return invokeBoolean(event.callback, args)
+    }
+
+    /**
+     * `MoveEvent::executeAddRemItem` (movement.cpp:838-856) for a registry
+     * event the caller already resolved (`MoveEvents::onItemMove`,
+     * movement.cpp:344-390): `onAddItem`/`onRemoveItem(moveItem, tileItem,
+     * position)`. Returns the Lua result through the
+     * `LuaScriptInterface::callFunction` default-true boolean
+     * (luascript.cpp:793-810).
+     */
+    fun moveEventExecuteAddRemItem(
+        env: LuaEnvironment,
+        event: LuaMoveEvent,
+        moveItem: Item,
+        tileItem: Item?,
+        pos: Position,
+    ): Boolean {
+        val args = arrayOf(
+            pushThing(env, moveItem),
+            pushThing(env, tileItem),
+            wrapPosition(env, pos),
+        )
+        return invokeBoolean(event.callback, args)
+    }
+
     private fun moveEventStep(
         env: LuaEnvironment,
         itemId: Int,
@@ -484,6 +534,16 @@ object LuaEventDispatcher {
     private fun invoke(callback: LuaValue, args: Array<LuaValue>): Boolean {
         callback.invoke(LuaValue.varargsOf(args))
         return true
+    }
+
+    /**
+     * `LuaScriptInterface::callFunction`'s return conversion
+     * (luascript.cpp:793-810): `Lua::getBoolean(L, -1, true)`, so a nil result
+     * defaults to `true` exactly like the C++ helper.
+     */
+    private fun invokeBoolean(callback: LuaValue, args: Array<LuaValue>): Boolean {
+        val result = callback.invoke(LuaValue.varargsOf(args)).arg1()
+        return if (result.isnil()) true else result.toboolean()
     }
 
     /**

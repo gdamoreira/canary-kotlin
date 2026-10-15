@@ -9,6 +9,7 @@ import org.opentibia.canary.combat.condition.Buff
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.Skulls_t
 import org.opentibia.canary.creatures.grouping.Party
 import org.opentibia.canary.creatures.vocations.Vocation
@@ -17,6 +18,8 @@ import org.opentibia.canary.items.Item
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.network.protocol.MessageClass
+import org.opentibia.canary.systems.bestiary.Charm
+import org.opentibia.canary.systems.bestiary.CharmRune
 import org.opentibia.canary.systems.wheel.PlayerWheel
 import org.opentibia.canary.systems.wheel.WheelStage
 
@@ -448,6 +451,9 @@ class GameCombatPipelineTest {
     @Test
     fun `combatChangeMana routes the drain through the player drainMana override`() {
         // Player::drainMana (player.cpp:3549-3552) over Creature::drainMana.
+        // The virtual `Player::changeMana` (player.cpp:6765-6772) refreshes the
+        // stats once and `Player::drainMana`'s tail refreshes them again,
+        // exactly like the C++ flow.
         val game = newGame()
         val attacker = game.player(9, "Mage")
         val target = Player(
@@ -466,7 +472,7 @@ class GameCombatPipelineTest {
         val damage = CombatDamage(primaryValue = -30, primaryType = CombatType.MANADRAIN)
         game.combatChangeMana(attacker, target, damage)
 
-        assertThat(stats).isEqualTo(1)
+        assertThat(stats).isEqualTo(2)
     }
 
     @Test
@@ -514,6 +520,94 @@ class GameCombatPipelineTest {
         assertThat(game.combatChangeMana(attacker, target, damage)).isFalse()
         assertThat(target.mana).isEqualTo(50)
         assertThat(target.getDamageMap()).isEmpty()
+    }
+
+    @Test
+    fun `combatChangeMana inverts a manadrain when the void inversion charm procs`() {
+        // game.cpp:9078-9094: `parseRacebyCharm(CHARM_VOIDINVERSION)` matching
+        // the attacker monster's raceid plus a passing
+        // `charm->chance[tier] > normal_random(0, 100)` roll inverts the
+        // COMBAT_MANADRAIN components, turning the drain into a restore.
+        val game = newGame()
+        val attacker = monster(9, health = 100)
+        val target = game.player(1, "Hero", health = 150)
+        target.mana = 50
+        target.maxMana = 200
+        target.features.bestiary.setCharmTier(CharmRune.CHARM_VOIDINVERSION, 0)
+        target.features.bestiary.parseRacebyCharm(CharmRune.CHARM_VOIDINVERSION, set = true, newRaceid = 42)
+        game.getMonsterTypeByName = { name -> MonsterType(name).apply { info.raceid = 42 } }
+        game.getBestiaryCharm = { rune ->
+            if (rune == CharmRune.CHARM_VOIDINVERSION) {
+                Charm(id = CharmRune.CHARM_VOIDINVERSION, chance = listOf(100.0))
+            } else {
+                null
+            }
+        }
+        game.normalRandom = { min, _ -> min }
+
+        val damage = CombatDamage(primaryValue = -30, primaryType = CombatType.MANADRAIN)
+        assertThat(game.combatChangeMana(attacker, target, damage)).isTrue()
+
+        assertThat(damage.primaryValue).isEqualTo(30)
+        assertThat(target.mana).isEqualTo(80)
+        assertThat(target.getDamageMap()).isEmpty()
+        assertThat(target.lastHitCreatureId).isZero()
+    }
+
+    @Test
+    fun `combatChangeMana skips the inversion when the charm roll misses`() {
+        // game.cpp:9089: `charm->chance[charmTier] > normal_random(0, 100)`
+        // must pass for the inversion; a failing roll keeps the drain.
+        val game = newGame()
+        val attacker = monster(9, health = 100)
+        val target = game.player(1, "Hero", health = 150)
+        target.mana = 50
+        target.maxMana = 200
+        target.features.bestiary.setCharmTier(CharmRune.CHARM_VOIDINVERSION, 0)
+        target.features.bestiary.parseRacebyCharm(CharmRune.CHARM_VOIDINVERSION, set = true, newRaceid = 42)
+        game.getMonsterTypeByName = { name -> MonsterType(name).apply { info.raceid = 42 } }
+        game.getBestiaryCharm = { rune ->
+            if (rune == CharmRune.CHARM_VOIDINVERSION) {
+                Charm(id = CharmRune.CHARM_VOIDINVERSION, chance = listOf(100.0))
+            } else {
+                null
+            }
+        }
+        game.normalRandom = { _, max -> max }
+
+        val damage = CombatDamage(primaryValue = -30, primaryType = CombatType.MANADRAIN)
+        assertThat(game.combatChangeMana(attacker, target, damage)).isTrue()
+
+        assertThat(damage.primaryValue).isEqualTo(-30)
+        assertThat(target.mana).isEqualTo(20)
+        assertThat(target.getDamageMap()[9L]?.total).isEqualTo(30)
+    }
+
+    @Test
+    fun `combatChangeMana skips the inversion when the charm raceid does not match`() {
+        // game.cpp:9082-9084: `playerCharmRaceid == mType->info.raceid`.
+        val game = newGame()
+        val attacker = monster(9, health = 100)
+        val target = game.player(1, "Hero", health = 150)
+        target.mana = 50
+        target.maxMana = 200
+        target.features.bestiary.setCharmTier(CharmRune.CHARM_VOIDINVERSION, 0)
+        target.features.bestiary.parseRacebyCharm(CharmRune.CHARM_VOIDINVERSION, set = true, newRaceid = 42)
+        game.getMonsterTypeByName = { name -> MonsterType(name).apply { info.raceid = 7 } }
+        game.getBestiaryCharm = { rune ->
+            if (rune == CharmRune.CHARM_VOIDINVERSION) {
+                Charm(id = CharmRune.CHARM_VOIDINVERSION, chance = listOf(100.0))
+            } else {
+                null
+            }
+        }
+        game.normalRandom = { min, _ -> min }
+
+        val damage = CombatDamage(primaryValue = -30, primaryType = CombatType.MANADRAIN)
+        assertThat(game.combatChangeMana(attacker, target, damage)).isTrue()
+
+        assertThat(damage.primaryValue).isEqualTo(-30)
+        assertThat(target.mana).isEqualTo(20)
     }
 
     @Test
