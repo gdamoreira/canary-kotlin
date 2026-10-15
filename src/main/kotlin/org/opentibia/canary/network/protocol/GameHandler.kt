@@ -7,9 +7,11 @@ import io.netty.channel.ChannelHandlerContext
 import io.netty.channel.SimpleChannelInboundHandler
 import org.opentibia.canary.account.Account
 import org.opentibia.canary.account.AccountRepository
+import org.opentibia.canary.account.AccountType
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.Skill
 import org.opentibia.canary.combat.condition.Stat
+import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.players.PlayerTask
@@ -171,6 +173,14 @@ class GameHandler(
     private var clientVersionString: String = ""
 
     /**
+     * `ProtocolGame::clientVersion` (protocolgame.hpp) parsed from the current
+     * layout's `uint32_t` client version (`onRecvFirstMessage`,
+     * protocolgame.cpp:1225-1226), compared against `CLIENT_VERSION` by
+     * `ProtocolGame::login` (protocolgame.cpp:1383).
+     */
+    private var clientVersionU32: Int = 0
+
+    /**
      * `ProtocolGame::protocolProfile` (protocolgame.hpp) resolved from the
      * session version through the [ProtocolProfileRegistry] game-login layout
      * (protocolgame.cpp:1191-1197). The current profile is the fallback for
@@ -226,6 +236,16 @@ class GameHandler(
         // (player.hpp:1761) backing `Game::getImbuingItem` (game.cpp:7137) and
         // the walk/follow entry points of `Game::playerMove`/`forcePlayerMove`/
         // targeting (game.cpp:4282-4307, 7030-7040).
+        //
+        // `Game::updatePlayerHelpers` -> `Player::sendCreatureHelpers`
+        // (game.cpp:9690-9699, player.cpp:1820-1823): the 0x94 frame is gated by
+        // the spectator's own session (`ProtocolGame::sendCreatureHelpers`
+        // returns early unless `oldProtocol`, protocolgame.cpp:10928-10931), so
+        // the stateless world seam routes to the spectator's attached sink. The
+        // same lambda is idempotent when several handlers share one `Game`.
+        game.sendCreatureHelpers = { spectator, creatureId, helpers ->
+            spectator.protocolSink?.sendCreatureHelpers(creatureId, helpers)
+        }
         game.getImbuingItem = { player -> player.getImbuingItem() }
         game.setNextWalkTask = { player, task -> player.setNextWalkTask(task as? PlayerTask) }
         game.setNextWalkActionTask = { player, task -> player.setNextWalkActionTask(task as? PlayerTask) }
@@ -292,6 +312,14 @@ class GameHandler(
         }
     }
 
+    /**
+     * `MAX_EXIVA_WHITELIST` (configmanager, default 100) behind the exiva
+     * add/remove caps; the port reads the [ConfigKeys] default because the
+     * handler has no `g_configManager()` seam (PARITY GAP: config injection).
+     */
+    private val maxExivaWhitelist: Int =
+        (ConfigKeys.byName("MAX_EXIVA_WHITELIST")?.defaultValue as? Int) ?: 100
+
     companion object {
         /**
          * `sendAddCreature` self branch opcode for the supported profiles
@@ -345,24 +373,55 @@ class GameHandler(
         val os = msg.readUnsignedShortLE()
         val version = msg.readUnsignedShortLE()
 
+        // `ProtocolGame::onRecvFirstMessage` (protocolgame.cpp:1191-1210): a
+        // version without a registered game-login layout, a disallowed profile
+        // or a run without old-protocol support disconnects with the allowed
+        // client-protocol description before the RSA block is read. The port's
+        // `OLD_PROTOCOL` default is the Canary config default `true`
+        // (configmanager.cpp:45); a composition root that disables it has no
+        // seam yet (PARITY GAP).
+        val layout = ProtocolProfileRegistry.resolveGameLoginLayout(version)
+        if (layout == null) {
+            sendDisconnect(
+                ctx,
+                ProtocolProfileRegistry.getUnsupportedClientProtocolMessage(includeOldProtocolProfiles = true),
+            )
+            return
+        }
+        val resolvedProfile = ProtocolProfileRegistry.getProfile(layout.profileId)
+        if (resolvedProfile == null || !ProtocolProfileRegistry.isProfileAllowed(resolvedProfile.id)) {
+            sendDisconnect(ctx, "This client protocol is not supported yet.")
+            return
+        }
+        sessionProfile = resolvedProfile
+
         if (msg.readableBytes() < RsaCipher.BLOCK_SIZE) {
             ctx.close()
             return
         }
 
-        // `ProtocolGame::onRecvFirstMessage` (protocolgame.cpp:1187-1246): the
-        // profile game-login layout declares the pre-RSA fields (client version
-        // u32, client version string, asset hash, dat revision, preview state).
-        // A layout-less version, malformed extras or any unconsumed byte falls
-        // back to the lenient skip the port has always applied (PARITY GAP:
-        // unsupported versions are not disconnected).
-        val layout = ProtocolProfileRegistry.resolveGameLoginLayout(version)
-        sessionProfile = layout?.profileId?.let { ProtocolProfileRegistry.getProfile(it) }
-            ?: ProtocolProfileRegistry.getCurrentProfile()
+        // The profile layout declares the pre-RSA fields (client version u32,
+        // client version string, asset hash, dat revision, preview state); a
+        // malformed extras block falls back to the lenient RSA-block skip.
         val rsaStart = msg.readerIndex() + msg.readableBytes() - RsaCipher.BLOCK_SIZE
-        clientVersionString = layout?.let { parseGameLoginExtras(msg, it, rsaStart) } ?: ""
+        clientVersionU32 = 0
+        clientVersionString = parseGameLoginExtras(msg, layout, rsaStart) ?: ""
         if (msg.readerIndex() != rsaStart) {
             msg.readerIndex(rsaStart)
+        }
+
+        // `ProtocolGame::login` (protocolgame.cpp:1383-1386): a modern client
+        // whose declared client version differs from `CLIENT_VERSION` is
+        // unsupported.
+        if (!sessionProfile.hasFeature(ProtocolFeature.OldProtocolCompat) &&
+            layout.hasClientVersionU32 &&
+            clientVersionU32 != CLIENT_VERSION
+        ) {
+            sendDisconnect(
+                ctx,
+                ProtocolProfileRegistry.getUnsupportedClientProtocolMessage(includeOldProtocolProfiles = true),
+            )
+            return
         }
 
         val rsaBytes = ByteArray(RsaCipher.BLOCK_SIZE)
@@ -425,6 +484,7 @@ class GameHandler(
         // as the per-player sink over this channel (fire-and-forget writes).
         // `g_game().getCreatureByID` feeds the session known-set eviction
         // (`ProtocolGame::checkCreatureAsKnown`, protocolgame.cpp:2346).
+        val selfTail = selfAppearTailFor(version, activePlayer)
         activePlayer.protocolSink = NettyProtocolSink(
             ctx.channel(),
             activePlayer,
@@ -437,8 +497,22 @@ class GameHandler(
             // `sendAddCreature` self branch (protocolgame.cpp:8641-8682): the
             // negotiated version, profile features, store pair and world-type
             // exiva gate feed the login frame tail.
-            selfAppearTail = selfAppearTailFor(version),
+            selfAppearTail = selfTail,
+            // `ProtocolGame::sendExivaRestrictions(true)` resolves the stored
+            // guid whitelists through `IOLoginData::getNameByGuid`
+            // (protocolgame.cpp:12273) and `Game::getGuild(id, true)->getName()`
+            // (protocolgame.cpp:12292).
+            playerNameByGuid = { guid -> ioLoginData?.getNameByGuid(guid) ?: "" },
+            guildNameById = { guildId -> game.getGuild(guildId, allowOffline = true)?.name ?: "" },
         )
+
+        // `sendAddCreature`'s `!oldProtocol` exiva tail (protocolgame.cpp:8676-8682):
+        // the exiva-button byte is written inline by the self appear frame and
+        // `sendExivaRestrictions(true)` queues the 0xCA whitelist frame before it,
+        // so emit before the placement announces the session.
+        if (selfTail.exivaEnabled) {
+            activePlayer.protocolSink?.sendExivaRestrictions(isLogin = true)
+        }
 
         // `Player::sendModalWindow` (player.cpp:9021-9028): the per-session
         // `ModalWindowManager` resolves this connection's `ProtocolGame`, so a
@@ -522,7 +596,7 @@ class GameHandler(
                 if (endIndex - msg.readerIndex() < 4) {
                     return null
                 }
-                msg.readUnsignedIntLE()
+                clientVersionU32 = msg.readUnsignedIntLE().toInt()
             }
             if (layout.hasClientVersionString) {
                 versionString = readBoundedTibiaString(msg, endIndex) ?: return null
@@ -577,20 +651,27 @@ class GameHandler(
      * (`ProtocolGame::sendAddCreature` self branch, protocolgame.cpp:8641-8682):
      * the version, the `LoginSpeedFormula`/`OldProtocolCompat` profile features,
      * the `ExpertPvp::isEnabled()` + `ExpertPvpModeByte` controls gate, the
-     * `g_configManager()` STORE_IMAGES_URL/STORE_COIN_PACKET pair and the
-     * `Game::getWorldType() == WORLD_TYPE_NO_PVP` exiva gate.
+     * `g_configManager()` STORE_IMAGES_URL/STORE_COIN_PACKET pair, the
+     * `Game::getWorldType() == WORLD_TYPE_NO_PVP` exiva gate and the inline
+     * bug-report flag (`oldProtocol && (version >= 1054 ||
+     * InlineLoginBugReportFlag)`, protocolgame.cpp:8653-8658).
      */
-    private fun selfAppearTailFor(version: Int): SelfAppearTail = SelfAppearTail(
-        clientVersion = version,
-        loginSpeedFormula = sessionProfile.hasFeature(ProtocolFeature.LoginSpeedFormula),
-        expertPvpControlsEnabled = game.expertPvpEnabled &&
-            sessionProfile.hasFeature(ProtocolFeature.ExpertPvpModeByte),
-        storeImagesUrl = game.storeImagesUrl,
-        storeCoinPacket = game.storeCoinPacket,
-        oldProtocol = sessionProfile.hasFeature(ProtocolFeature.OldProtocolCompat),
-        exivaEnabled = !sessionProfile.hasFeature(ProtocolFeature.OldProtocolCompat) &&
-            game.getWorldType() == WorldType.NO_PVP,
-    )
+    private fun selfAppearTailFor(version: Int, player: Player): SelfAppearTail {
+        val oldProtocol = sessionProfile.hasFeature(ProtocolFeature.OldProtocolCompat)
+        return SelfAppearTail(
+            clientVersion = version,
+            loginSpeedFormula = sessionProfile.hasFeature(ProtocolFeature.LoginSpeedFormula),
+            expertPvpControlsEnabled = game.expertPvpEnabled &&
+                sessionProfile.hasFeature(ProtocolFeature.ExpertPvpModeByte),
+            storeImagesUrl = game.storeImagesUrl,
+            storeCoinPacket = game.storeCoinPacket,
+            oldProtocol = oldProtocol,
+            exivaEnabled = !oldProtocol && game.getWorldType() == WorldType.NO_PVP,
+            inlineBugReportFlag = oldProtocol &&
+                (version >= 1054 || sessionProfile.hasFeature(ProtocolFeature.InlineLoginBugReportFlag)),
+            bugReportEnabled = player.getAccountType().value >= AccountType.ACCOUNT_TYPE_NORMAL.value,
+        )
+    }
 
     /**
      * `ProtocolGame::login` placement block (protocolgame.cpp:1053-1063): the
@@ -792,6 +873,22 @@ class GameHandler(
                         itemTypes = itemTypes,
                         clientVersionString = clientVersionString,
                         protocolProfile = sessionProfile,
+                        // `IOLoginData::getGuidByName` behind the exiva
+                        // player-whitelist apply (protocolgame.cpp:12227); a
+                        // directly constructed handler without the loader
+                        // resolves nothing, like an empty player table.
+                        exivaPlayerGuidByName = { name -> ioLoginData?.getGuidByName(name) ?: 0L },
+                        // `IOGuild::getGuildIdByName` behind the exiva
+                        // guild-whitelist apply (protocolgame.cpp:12239). The
+                        // `IOGuild` instance is not reachable from the handler,
+                        // so the id resolves through `Game::getGuildByName`
+                        // (`guildRepository.getGuildIdByName` first,
+                        // game.cpp:11738-11748); the offline load is the
+                        // side-effect difference from the C++ pure id lookup.
+                        exivaGuildIdByName = { name ->
+                            game.getGuildByName(name, allowOffline = true)?.id ?: 0L
+                        },
+                        maxExivaWhitelist = maxExivaWhitelist,
                     )
                 )
             } finally {

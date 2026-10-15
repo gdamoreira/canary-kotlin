@@ -1,6 +1,7 @@
 package org.opentibia.canary.bootstrap
 
 import com.zaxxer.hikari.HikariDataSource
+import org.opentibia.canary.network.protocol.CLIENT_VERSION
 import io.netty.buffer.ByteBuf
 import io.netty.buffer.Unpooled
 import io.netty.channel.embedded.EmbeddedChannel
@@ -189,7 +190,11 @@ class CanaryServerCompositionSeamsTest {
 
         val body = Unpooled.buffer()
         body.writeShortLE(2) // OS
-        body.writeShortLE(1098) // Protocol version
+        body.writeShortLE(CLIENT_VERSION)
+        body.writeIntLE(CLIENT_VERSION)
+        body.writeTibiaString("")
+        body.writeTibiaString("")
+        body.writeByte(0)
         body.writeBytes(rsaCipher.encrypt(rsaPlain))
 
         val checksum = Adler32Checksum.compute(body, 0, body.readableBytes())

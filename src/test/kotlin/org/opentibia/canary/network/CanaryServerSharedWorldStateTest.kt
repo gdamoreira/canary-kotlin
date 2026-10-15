@@ -1,6 +1,7 @@
 package org.opentibia.canary.network
 
 import io.netty.buffer.ByteBuf
+import org.opentibia.canary.network.protocol.CLIENT_VERSION
 import io.netty.buffer.Unpooled
 import io.netty.channel.embedded.EmbeddedChannel
 import java.util.concurrent.CountDownLatch
@@ -131,7 +132,11 @@ class CanaryServerSharedWorldStateTest {
 
         val body = Unpooled.buffer()
         body.writeShortLE(2)
-        body.writeShortLE(1098)
+        body.writeShortLE(CLIENT_VERSION)
+        body.writeIntLE(CLIENT_VERSION)
+        body.writeTibiaString("")
+        body.writeTibiaString("")
+        body.writeByte(0)
         body.writeBytes(rsaCipher.encrypt(rsaPlain))
 
         val checksum = Adler32Checksum.compute(body, 0, body.readableBytes())

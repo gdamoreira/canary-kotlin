@@ -79,7 +79,11 @@ class FullLoginToGameWorldFlowTest {
         val loginRsaEnc = rsaCipher.encrypt(loginRsaPlain)
         val loginBody = Unpooled.buffer()
         loginBody.writeShortLE(2) // Windows
-        loginBody.writeShortLE(1098) // Client Version
+        loginBody.writeShortLE(CLIENT_VERSION)
+        loginBody.writeIntLE(CLIENT_VERSION)
+        loginBody.writeTibiaString("")
+        loginBody.writeTibiaString("")
+        loginBody.writeByte(0)
         loginBody.writeBytes(loginRsaEnc)
 
         val unchecksummed = Unpooled.buffer()
@@ -135,7 +139,11 @@ class FullLoginToGameWorldFlowTest {
         val gameRsaEnc = rsaCipher.encrypt(gameRsaPlain)
         val gameBody = Unpooled.buffer()
         gameBody.writeShortLE(2) // Windows
-        gameBody.writeShortLE(1098) // Client Version
+        gameBody.writeShortLE(CLIENT_VERSION)
+        gameBody.writeIntLE(CLIENT_VERSION)
+        gameBody.writeTibiaString("")
+        gameBody.writeTibiaString("")
+        gameBody.writeByte(0)
         gameBody.writeBytes(gameRsaEnc)
 
         val gameChecksum = Adler32Checksum.compute(gameBody, 0, gameBody.readableBytes())

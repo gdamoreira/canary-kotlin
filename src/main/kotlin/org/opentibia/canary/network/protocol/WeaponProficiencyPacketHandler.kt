@@ -47,6 +47,9 @@ object WeaponProficiencyPacketHandler {
     /** The `action == 0x01` tracked-weapons window branch (protocolgame.cpp:3137). */
     const val ACTION_SEND_TRACKED_WEAPONS: Int = 0x01
 
+    /** The `action == 0x02` clear-stats/selected-perks branch (protocolgame.cpp:3158-3165). */
+    const val ACTION_CLEAR_SELECTED_PERKS: Int = 0x02
+
     /** The `action == 0x03` selected-perks branch (protocolgame.cpp:3167). */
     const val ACTION_SET_SELECTED_PERKS: Int = 0x03
 
