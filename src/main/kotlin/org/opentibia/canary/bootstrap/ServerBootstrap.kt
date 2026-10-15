@@ -484,7 +484,17 @@ class ServerBootstrap(
         // every session `PlayerFeatures`: the `PlayerVIP` mutators persist
         // through the same repository the login VIP reads use.
         val vipRepository = JdbcVipRepository(saveTransaction)
-        val ioGuild = IOGuild(JdbcGuildRepository(saveTransaction))
+        // `Guild::removeMember`'s `g_game().removeGuild(id)` reach
+        // (guild.cpp:29-31) is installed on every guild `IOGuild::loadGuild`
+        // materializes; the world reference stays late-bound like the registry
+        // seams above so an emptied guild leaves `Game::guilds` and flushes
+        // through the save manager.
+        val ioGuild = IOGuild(
+            JdbcGuildRepository(
+                saveTransaction,
+                removeGuild = { guildId -> worldGame.get()?.removeGuild(guildId) },
+            ),
+        )
         val subloads = IOLoginDataSubloads(
             subloadRepository = subloadRepository,
             storageRepository = DbPlayerStorageRepository(saveTransaction),
@@ -536,6 +546,11 @@ class ServerBootstrap(
             playerSavePath,
             guilds = { worldGame.get()?.getGuilds()?.values?.toList() ?: emptyList() },
             guildSaver = { guild -> ioGuild.saveGuild(guild) },
+            // `SaveManager::saveMap` (save_manager.cpp:196-206) reaches the
+            // booted `Map::save` (map.cpp:262-273); the house save steps stay
+            // behind `GameMap.saveHouseInfo`/`saveHouseItems`, unwired until the
+            // map-load path binds them (PARITY GAP).
+            mapSaver = { gameMap.save() },
             keyValueSaver = { kvStore.saveAll() },
         )
 

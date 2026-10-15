@@ -5,7 +5,9 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.database.DatabaseConnectionFactory
+import org.opentibia.canary.map.Position
 
 /**
  * H2 (Flyway V1-V9) round-trip tests for [JdbcGuildRepository], transcribed
@@ -110,6 +112,20 @@ class JdbcGuildRepositoryTest {
     @Test
     fun `loadGuild returns null for an unknown guild`() {
         assertThat(repository.loadGuild(404)).isNull()
+    }
+
+    @Test
+    fun `loadGuild installs the removal seam on the materialized guild`() {
+        seedGuild(10, "Red Rose", ownerId = 1)
+        val removed = mutableListOf<Long>()
+        val seamRepository = JdbcGuildRepository(dataSource, removeGuild = { removed.add(it) })
+        val guild = seamRepository.loadGuild(10)!!
+        val member = Player(1, "Wolfie", 100, 100, position = Position(100, 100, 7))
+        guild.addMember(member)
+
+        guild.removeMember(member)
+
+        assertThat(removed).containsExactly(10L)
     }
 
     @Test
