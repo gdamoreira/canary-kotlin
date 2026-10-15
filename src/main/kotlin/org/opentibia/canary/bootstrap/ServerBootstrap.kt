@@ -521,6 +521,17 @@ class ServerBootstrap(
         // through the save manager. The same repository backs the world
         // `Game::getGuild`/`getGuildByName` offline fallback
         // (game.cpp:11727-11748) through the listener.
+        //
+        // Wave 69 F4 (world-manager guild broadcast): the `updatePlayerHelpers`
+        // seam above is the world-manager half of
+        // `Guild::addMember`/`Guild::removeMember` (guild.cpp:14-32) and stays
+        // bound — the helper count itself resolves through
+        // `Game.getPlayerHelpers` (`Player::getHelpers`, player.cpp:8335-8358).
+        // The frame emission stays per-session: `ProtocolGame::sendCreatureHelpers`
+        // writes 0x94 only for old-protocol sessions (protocolgame.cpp:10928-10931)
+        // and `Player::sendCreatureHelpers` gates on the attached client
+        // (player.cpp:1820-1823), so the world root deliberately binds no
+        // current-profile `Game.sendCreatureHelpers` writer.
         val guildRepository = JdbcGuildRepository(
             saveTransaction,
             removeGuild = { guildId -> worldGame.get()?.removeGuild(guildId) },
@@ -644,6 +655,13 @@ class ServerBootstrap(
             )
             world.getShopOwner = { player -> worldOperations?.shopOwnerOf(player) }
             world.closeShopWindow = { player -> worldOperations?.closeShopOwner(player) }
+            // Wave 69 F4: `Game::checkGiftOfLife`'s cooldown reduction
+            // (player_wheel.cpp:3155-3170, `reduceAllSpellsCooldownTimer(60000)`)
+            // drives the owner's wheel, so the world `Game` seam binds to
+            // `PlayerWheel::reduceAllSpellsCooldownTimer` (player_wheel.cpp:3423-3450).
+            world.reduceAllSpellsCooldownTimer = { player, value ->
+                player.wheel().reduceAllSpellsCooldownTimer(value)
+            }
         }
         worldGame.set(server.game)
         server.start()
