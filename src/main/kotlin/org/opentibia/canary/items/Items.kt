@@ -2,6 +2,7 @@ package org.opentibia.canary.items
 
 import org.opentibia.canary.creatures.WeaponType_t
 import org.opentibia.canary.systems.imbuement.ImbuementTypes_t
+import org.opentibia.canary.systems.proficiency.Proficiency
 import io.github.oshai.kotlinlogging.KotlinLogging
 import org.opentibia.canary.io.appearances.Appearances
 import org.opentibia.canary.io.appearances.HookType
@@ -76,6 +77,18 @@ class Items {
 
     /** Length of the C++ `items` vector (highest loaded id + 1). */
     private var itemCount = 0
+
+    /**
+     * `WeaponProficiency::proficiencies` (`weapon_proficiency.cpp:79`) loaded by
+     * the composition root from `{CORE_DIRECTORY}/items/proficiencies.json`
+     * (`WeaponProficiency::loadFromJson`) and carried here so the session packet
+     * context receives the same boot registry the item load validated against;
+     * the `0xB3` perk selection resolves through it
+     * (`GamePacketContext.weaponProficiencyRegistry`). Empty until the root
+     * binds it, which keeps every selection a no-op exactly like the C++
+     * missing-registry branch (weapon_proficiency.cpp:607-610).
+     */
+    var weaponProficiencyRegistry: Map<Int, Proficiency> = emptyMap()
 
     init {
         items[0] = ItemType(id = 0, name = "")

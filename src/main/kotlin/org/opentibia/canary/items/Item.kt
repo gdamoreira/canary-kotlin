@@ -868,6 +868,14 @@ open class Item(
     /** `Item::m_parent` (src/items/item.hpp:772); weak like the C++ `std::weak_ptr`. */
     private var parent: WeakReference<Cylinder>? = null
 
+    /**
+     * The `item->setParent(player)` substitute for a held container
+     * (`Item::getHoldingPlayer`, item.cpp:879-889): the Kotlin [Player] is not
+     * a [Cylinder], so the composed world records the weak link the holding
+     * walk reads. Weak, like the C++ `std::weak_ptr` inventory parent.
+     */
+    private var holdingPlayerLink: WeakReference<Player>? = null
+
     /** `Item::decayDisabled` (src/items/item.hpp:779); `isDecayDisabled` reads it. */
     var decayDisabled: Boolean = false
 
@@ -956,6 +964,38 @@ open class Item(
             cylinder = cylinder.getParent()!!
         }
         return cylinder as? Tile
+    }
+
+    /**
+     * `Item::getHoldingPlayer` (src/items/item.cpp:879-889): the first creature
+     * on the parent chain. The C++ chain reaches the `Player` because the
+     * player is a `Cylinder`; the Kotlin [Player] is not, so a held container
+     * carries the world-recorded link ([setHoldingPlayer]) and the walk
+     * consults it at every step, mirroring the C++ parent chain.
+     */
+    fun getHoldingPlayer(): Player? {
+        var current: Cylinder? = getCylinder() ?: getParent()
+        while (current != null) {
+            val creature = current.getCreature()
+            if (creature is Player) {
+                return creature
+            }
+            (current as? Item)?.holdingPlayerLink?.get()?.let { return it }
+            current = current.getParent()
+        }
+        return null
+    }
+
+    /**
+     * Records the player the item is held by. C++ expresses this relation
+     * through `item->setParent(player)` (`Player::internalAddThing`,
+     * player.cpp:6082-6101); because the Kotlin [Player] is not a [Cylinder],
+     * the composed world stores the weak link instead (AGENTS.md
+     * deferred-callback lifetime safety: a weak reference cannot retain the
+     * player).
+     */
+    fun setHoldingPlayer(player: Player?) {
+        holdingPlayerLink = player?.let { WeakReference(it) }
     }
 
     override fun getItem(): Item = this

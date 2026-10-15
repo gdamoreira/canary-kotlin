@@ -95,6 +95,14 @@ data class GamePacketContext(
      */
     val protocolProfile: ProtocolProfile? = null,
     /**
+     * `ProtocolGame::m_isLivestreamViewer` (protocolgame.hpp:646): set by
+     * `ProtocolGame::castViewerLogin` (protocolgame.cpp:12380, unported PARITY
+     * GAP) and drives the viewer opcode arm of
+     * `ProtocolGame::parsePacketFromDispatcher` (protocolgame.cpp:1647-1666),
+     * including the one-byte `0xCA` container resend.
+     */
+    val isLivestreamViewer: Boolean = false,
+    /**
      * `WeaponProficiency::proficiencies` registry loaded from
      * `proficiencies.json` (`WeaponProficiency::loadFromJson`,
      * weapon_proficiency.cpp:79): the `0xB3` action `0x03` perk selection
@@ -1222,42 +1230,62 @@ object GamePacketRouter {
 
                 // Exiva restrictions: 0xCA parseExivaRestrictions
                 ExivaRestrictionsPacketHandler.OPCODE_EXIVA_RESTRICTIONS -> {
-                    // `parsePacketFromDispatcher` gates the parse on
-                    // `!oldProtocol && g_game().getWorldType() == WORLD_TYPE_NO_PVP`
-                    // (protocolgame.cpp:1992-1996) and the function repeats the
-                    // `WORLD_TYPE == "no-pvp"` check (protocolgame.cpp:12210-12212);
-                    // on any other session the payload is not the normal-client
-                    // unrestricted 0xCA and the frame tail is dropped. The
-                    // livestream-viewer container resend for the same opcode is a
-                    // PARITY GAP (the port has no viewer sessions).
-                    val profile = context.protocolProfile
-                    val parsesExiva = profile?.hasFeature(ProtocolFeature.OldProtocolCompat) != true &&
-                        context.game?.getWorldType() == WorldType.NO_PVP
-                    if (!parsesExiva) {
-                        buffer.skipBytes(buffer.readableBytes())
-                        true
-                    } else {
-                        val command = ExivaRestrictionsPacketHandler.parse(buffer)
+                    if (context.isLivestreamViewer) {
+                        // `parsePacketFromDispatcher`'s `m_isLivestreamViewer`
+                        // arm (protocolgame.cpp:1647-1666): a viewer's 0xCA with
+                        // exactly `UPDATE_CONTAINER_PAYLOAD_SIZE` (1) unread
+                        // byte is the container resend; any other payload size
+                        // is dropped like the C++ switch `break`.
+                        val command = if (buffer.readableBytes() == 1) {
+                            ContainerBrowsePacketHandler.parseLivestreamViewerContainer(buffer)
+                        } else {
+                            buffer.skipBytes(buffer.readableBytes())
+                            null
+                        }
                         if (command == null) {
-                            false
+                            true
                         } else {
                             context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                                val echo = ExivaRestrictionsPacketHandler.apply(
-                                    player = player,
-                                    command = command,
-                                    maxWhitelist = context.maxExivaWhitelist,
-                                    playerGuidByName = context.exivaPlayerGuidByName,
-                                    guildIdByName = context.exivaGuildIdByName,
-                                )
-                                player.protocolSink?.sendExivaRestrictions(
-                                    isLogin = false,
-                                    addedPlayerNames = echo.addedPlayerNames,
-                                    removedPlayerNames = echo.removedPlayerNames,
-                                    addedGuildNames = echo.addedGuildNames,
-                                    removedGuildNames = echo.removedGuildNames,
-                                )
+                                ContainerBrowsePacketHandler.applyLivestreamViewerContainer(player, command)
                             }
                             true
+                        }
+                    } else {
+                        // `parsePacketFromDispatcher` gates the parse on
+                        // `!oldProtocol && g_game().getWorldType() == WORLD_TYPE_NO_PVP`
+                        // (protocolgame.cpp:1992-1996) and the function repeats the
+                        // `WORLD_TYPE == "no-pvp"` check (protocolgame.cpp:12210-12212);
+                        // on any other session the payload is not the normal-client
+                        // unrestricted 0xCA and the frame tail is dropped.
+                        val profile = context.protocolProfile
+                        val parsesExiva = profile?.hasFeature(ProtocolFeature.OldProtocolCompat) != true &&
+                            context.game?.getWorldType() == WorldType.NO_PVP
+                        if (!parsesExiva) {
+                            buffer.skipBytes(buffer.readableBytes())
+                            true
+                        } else {
+                            val command = ExivaRestrictionsPacketHandler.parse(buffer)
+                            if (command == null) {
+                                false
+                            } else {
+                                context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                                    val echo = ExivaRestrictionsPacketHandler.apply(
+                                        player = player,
+                                        command = command,
+                                        maxWhitelist = context.maxExivaWhitelist,
+                                        playerGuidByName = context.exivaPlayerGuidByName,
+                                        guildIdByName = context.exivaGuildIdByName,
+                                    )
+                                    player.protocolSink?.sendExivaRestrictions(
+                                        isLogin = false,
+                                        addedPlayerNames = echo.addedPlayerNames,
+                                        removedPlayerNames = echo.removedPlayerNames,
+                                        addedGuildNames = echo.addedGuildNames,
+                                        removedGuildNames = echo.removedGuildNames,
+                                    )
+                                }
+                                true
+                            }
                         }
                     }
                 }
