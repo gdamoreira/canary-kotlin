@@ -999,8 +999,16 @@ class Game(
 
     // --- movement/combat/targeting seams (game.cpp:1622-7790) -----------------
 
-    /** `Player::sendCreatureTurn(creature)` (player.cpp:12092) protocol seam used by [internalCreatureTurn]. */
-    var sendCreatureTurn: (Player, Creature) -> Unit = { _, _ -> }
+    /**
+     * `Player::sendCreatureTurn(creature)` (player.cpp:8809-8827) protocol seam
+     * used by [internalCreatureTurn]. The `PlayerSendSink` binding delivers the
+     * 0x6B frame (or the `sendUpdateTile` fallback) to the spectator client; a
+     * player without an attached sink keeps the `Player::client == nullptr`
+     * no-op.
+     */
+    var sendCreatureTurn: (Player, Creature) -> Unit = { player, creature ->
+        player.playerSendSink?.sendCreatureTurn(creature)
+    }
 
     /** `Player::sendChangeSpeed(creature, stepSpeed)` protocol seam used by the speed helpers. */
     var sendChangeSpeed: (Player, Creature, Int) -> Unit = { player, creature, stepSpeed ->

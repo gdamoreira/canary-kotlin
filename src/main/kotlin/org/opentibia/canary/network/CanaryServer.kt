@@ -17,6 +17,7 @@ import org.opentibia.canary.account.AccountRepository
 import org.opentibia.canary.account.InMemoryAccountRepository
 import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
+import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.monsters.MonsterPipelinesHost
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.creatures.monsters.Monsters
@@ -254,6 +255,12 @@ class CanaryServer(
             removeCreatureCheck = { monster -> game.removeCreatureCheck(monster) }
             internalCreatureTurn = { monster, direction -> game.internalCreatureTurn(monster, direction) }
 
+            // `CreatureEvents::getEventByName` (creatureevent.cpp:43-52): the
+            // boot-time registry lookup consulted by `Creature::registerCreatureEvent`
+            // (creature.cpp:1674-1693), so unknown creature event names are
+            // rejected in production.
+            creatureEventRegistered = { name -> luaEnvironment.creatureEvents.get(name) != null }
+
             // `MonsterTypeFunctions::luaMonsterTypeRegisterEvent`
             // (monster_type_functions.cpp:1235-1242): a late registration walks
             // `g_game().getMonsters()` and pushes the event onto every live
@@ -286,6 +293,10 @@ class CanaryServer(
                 monsterTypes = monsters,
                 spawnScheduler = dispatcherSpawnScheduler(this.dispatcher),
                 config = configManager,
+                // `Monster::onSpawn(position)` (monster.cpp:627-648) dispatched by
+                // `SpawnMonster::spawnMonster` (spawn_monster.cpp:220) reaches the
+                // world host entry of the placed monster.
+                onMonsterSpawn = { monster, position -> monsterPipelinesHost?.onSpawn(monster.id, position) },
             )
         } else {
             null
@@ -315,7 +326,21 @@ class CanaryServer(
     internal val imbuementEngine: ImbuementEngine? =
         imbuements?.let { registry -> ImbuementEngine(registry, ImbuementDecay(registry, this.dispatcher)) }
 
-    private val scriptingDispatch = ScriptingDispatch(luaEnvironment, this.dispatcher)
+    /**
+     * World-confined Lua event caller. `creatureEventsOf` is
+     * `Creature::getCreatureEvents` (creature.hpp:952): a live monster resolves
+     * to its host entry's attached named events (registered by
+     * `Monster::Monster` and `MonsterTypeFunctions::luaMonsterTypeRegisterEvent`),
+     * every other creature keeps the permissive global walk until its
+     * `registerEvent` binding is wired.
+     */
+    private val scriptingDispatch = ScriptingDispatch(
+        luaEnvironment,
+        this.dispatcher,
+        creatureEventsOf = { creature ->
+            if (creature is Monster) monsterPipelinesHost?.typeStateOf(creature.id)?.creatureEvents else null
+        },
+    )
 
     /** `Game::playersOnline` equivalent; see [checkPlayersRecord]. */
     private val playersOnline = AtomicInteger(0)

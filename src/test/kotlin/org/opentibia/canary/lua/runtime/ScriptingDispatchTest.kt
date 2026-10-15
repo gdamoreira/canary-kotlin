@@ -209,6 +209,168 @@ class ScriptingDispatchTest {
     }
 
     @Test
+    fun `creatureOnThink walks only the attached think events of the creature`() {
+        val environment = env()
+        environment.loadChunk(
+            """
+            local attached = CreatureEvent("AttachedThink")
+            function attached.onThink(creature, interval)
+                seen_attached_think = creature:getName()
+            end
+            attached:register()
+
+            local global = CreatureEvent("GlobalThink")
+            function global.onThink(creature, interval)
+                seen_global_think = creature:getName()
+            end
+            global:register()
+            """.trimIndent()
+        )
+
+        val rat = Monster(2, "Rat", 20, 20, position = Position(50, 50, 7))
+        val wolf = Monster(3, "Wolf", 20, 20, position = Position(51, 50, 7))
+        val unattached = Monster(4, "Bear", 20, 20, position = Position(52, 50, 7))
+        val attachedEvents = mapOf(
+            rat.id to setOf("AttachedThink"),
+            wolf.id to setOf("GlobalThink"),
+            unattached.id to emptySet<String>(),
+        )
+        val dispatcher = GameDispatcher().apply { start() }
+        try {
+            val scripting = ScriptingDispatch(environment, dispatcher) { creature -> attachedEvents[creature.id] }
+
+            assertThat(scripting.creatureOnThink(rat, 1000)).isTrue()
+            awaitLane(dispatcher)
+            assertThat(environment.getGlobal("seen_attached_think").tojstring()).isEqualTo("Rat")
+            assertThat(environment.getGlobal("seen_global_think").isnil()).isTrue()
+
+            assertThat(scripting.creatureOnThink(wolf, 1000)).isTrue()
+            awaitLane(dispatcher)
+            assertThat(environment.getGlobal("seen_global_think").tojstring()).isEqualTo("Wolf")
+            assertThat(environment.getGlobal("seen_attached_think").tojstring()).isEqualTo("Rat")
+
+            assertThat(scripting.creatureOnThink(unattached, 1000)).isFalse()
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    @Test
+    fun `creatureOnDeath walks only the attached death events of the creature`() {
+        val environment = env()
+        environment.loadChunk(
+            """
+            local attached = CreatureEvent("AttachedDeath")
+            function attached.onDeath(creature)
+                seen_attached_death = creature:getName()
+            end
+            attached:register()
+
+            local global = CreatureEvent("GlobalDeath")
+            function global.onDeath(creature)
+                seen_global_death = creature:getName()
+            end
+            global:register()
+            """.trimIndent()
+        )
+
+        val rat = Monster(2, "Rat", 20, 0, position = Position(50, 50, 7))
+        val wolf = Monster(3, "Wolf", 20, 0, position = Position(51, 50, 7))
+        val dispatcher = GameDispatcher().apply { start() }
+        try {
+            val attachedEvents = mapOf(
+                rat.id to setOf("AttachedDeath"),
+                wolf.id to emptySet<String>(),
+            )
+            val scripting = ScriptingDispatch(environment, dispatcher) { creature -> attachedEvents[creature.id] }
+
+            assertThat(
+                scripting.creatureOnDeath(
+                    rat, Item(2159), null, null, lastHitUnjustified = false, mostDamageUnjustified = false,
+                )
+            ).isTrue()
+            awaitLane(dispatcher)
+            assertThat(environment.getGlobal("seen_attached_death").tojstring()).isEqualTo("Rat")
+            assertThat(environment.getGlobal("seen_global_death").isnil()).isTrue()
+
+            assertThat(
+                scripting.creatureOnDeath(
+                    wolf, Item(2159), null, null, lastHitUnjustified = false, mostDamageUnjustified = false,
+                )
+            ).isFalse()
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    @Test
+    fun `playerAnswerModalWindow walks only the attached modal window events of the player`() {
+        val environment = env()
+        environment.loadChunk(
+            """
+            local attached = CreatureEvent("AttachedModal")
+            function attached.onModalWindow(player, modalWindowId, buttonId, choiceId)
+                seen_attached_modal = player:getName()
+                seen_modal_button = buttonId
+            end
+            attached:register()
+
+            local global = CreatureEvent("GlobalModal")
+            function global.onModalWindow(player, modalWindowId, buttonId, choiceId)
+                seen_global_modal = player:getName()
+            end
+            global:register()
+            """.trimIndent()
+        )
+
+        val player = Player(1, "Hero", 100, 100, position = Position(100, 100, 7))
+        val dispatcher = GameDispatcher().apply { start() }
+        try {
+            val attachedEvents = mapOf(player.id to setOf("AttachedModal"))
+            val scripting = ScriptingDispatch(environment, dispatcher) { creature -> attachedEvents[creature.id] }
+
+            assertThat(scripting.playerAnswerModalWindow(player, 42L, 1, 2)).isTrue()
+            awaitLane(dispatcher)
+
+            assertThat(environment.getGlobal("seen_attached_modal").tojstring()).isEqualTo("Hero")
+            assertThat(environment.getGlobal("seen_modal_button").toint()).isEqualTo(1)
+            assertThat(environment.getGlobal("seen_global_modal").isnil()).isTrue()
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    @Test
+    fun `an attached name unknown to the registry is never dispatched`() {
+        val environment = env()
+        environment.loadChunk(
+            """
+            local attached = CreatureEvent("AttachedThink")
+            function attached.onThink(creature, interval)
+                seen_attached_think = creature:getName()
+            end
+            attached:register()
+            """.trimIndent()
+        )
+
+        val monster = Monster(2, "Rat", 20, 20, position = Position(50, 50, 7))
+        val dispatcher = GameDispatcher().apply { start() }
+        try {
+            val withUnknown = ScriptingDispatch(environment, dispatcher) {
+                setOf("AttachedThink", "GhostEvent")
+            }
+            assertThat(withUnknown.creatureOnThink(monster, 1000)).isTrue()
+            awaitLane(dispatcher)
+            assertThat(environment.getGlobal("seen_attached_think").tojstring()).isEqualTo("Rat")
+
+            val unknownOnly = ScriptingDispatch(environment, dispatcher) { setOf("GhostEvent") }
+            assertThat(unknownOnly.creatureOnThink(monster, 1000)).isFalse()
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    @Test
     fun `creatureOnDeath dispatches the registered death event with corpse and flags`() {
         val environment = env()
         environment.loadChunk(

@@ -24,6 +24,20 @@ import org.opentibia.canary.map.Position
 class ScriptingDispatch(
     private val environment: LuaEnvironment,
     private val dispatcher: GameDispatcher,
+    /**
+     * `Creature::getCreatureEvents` (src/creatures/creature.hpp:952,
+     * creature.cpp:1701-1715): the named creature events attached to [Creature]
+     * through `Creature::registerCreatureEvent`
+     * (src/creatures/creature.cpp:1674-1693), in attachment order; `null` when
+     * the port has no per-creature attachment registry for that creature
+     * (players and NPCs until their `registerEvent` bindings are wired).
+     *
+     * The composition root injects the world's per-creature sets (the
+     * `MonsterPipelinesHost` entry of each live monster); the permissive `null`
+     * default keeps the wave-63 global walk for every registered event of the
+     * type (PARITY GAP: it fires events the creature never attached).
+     */
+    private val creatureEventsOf: (Creature) -> Collection<String>? = { null },
 ) {
 
     // --- TalkActions (TalkAction::executeSay) ----------------------------------------
@@ -55,36 +69,37 @@ class ScriptingDispatch(
      * every registered creature event whose type is `login`, in registration order, to the
      * WorldCommit lane so the `onLogin` callbacks run confined. Returns whether at least one
      * login event was registered.
+     *
+     * Like the C++ registry walk (`for (const auto &it : creatureEvents)`), this is a global
+     * dispatch: every registered `login` event fires, not only the ones attached to the
+     * player (`creatureEventsOf` is deliberately not consulted).
      */
     fun playerLogin(player: Player): Boolean =
-        submitCreatureEvents(LOGIN_EVENT_TYPE) { name ->
+        submitRegisteredCreatureEvents(LOGIN_EVENT_TYPE) { name ->
             LuaEventDispatcher.creatureEventOnLogin(environment, name, player)
         }
 
     /**
      * Mirrors the `onThink` loop of `Creature::onThink` (src/creatures/creature.cpp:157-163):
-     * submits every registered creature event whose type is `think`, in registration order,
-     * to the WorldCommit lane so the `onThink` callbacks run confined. Returns whether at
-     * least one think event was registered.
-     *
-     * Canary only fires the events attached to the creature through
-     * `Creature::registerCreatureEvent`; this port has no per-creature attachment registry
-     * yet, so every registered think event fires (recorded in PARITY GAPS).
+     * submits the `think` events attached to [creature] through
+     * `Creature::registerCreatureEvent` (`Creature::getCreatureEvents(CREATURE_EVENT_THINK)`),
+     * in attachment order, to the WorldCommit lane so the `onThink` callbacks run confined.
+     * Returns whether at least one attached think event was dispatched; a creature whose
+     * attachment source is absent keeps the permissive global walk (PARITY GAP).
      */
     fun creatureOnThink(creature: Creature, interval: Long): Boolean =
-        submitCreatureEvents(THINK_EVENT_TYPE) { name ->
+        submitCreatureEvents(creature, THINK_EVENT_TYPE) { name ->
             LuaEventDispatcher.creatureEventOnThink(environment, name, creature, interval)
         }
 
     /**
      * Mirrors the `onDeath` loop of `Creature::dropCorpse` (src/creatures/creature.cpp:820-824):
-     * submits every registered creature event whose type is `death`, in registration order,
-     * to the WorldCommit lane so the `onDeath` callbacks run confined. Returns whether at
-     * least one death event was registered.
-     *
-     * Canary only fires the events attached to the creature through
-     * `Creature::registerCreatureEvent`; this port has no per-creature attachment registry
-     * yet, so every registered death event fires (recorded in PARITY GAPS).
+     * submits the `death` events attached to [creature] through
+     * `Creature::registerCreatureEvent`
+     * (`Creature::getCreatureEvents(CREATURE_EVENT_DEATH)`), in attachment order, to the
+     * WorldCommit lane so the `onDeath` callbacks run confined. Returns whether at least
+     * one attached death event was dispatched; a creature whose attachment source is
+     * absent keeps the permissive global walk (PARITY GAP).
      */
     fun creatureOnDeath(
         creature: Creature,
@@ -94,7 +109,7 @@ class ScriptingDispatch(
         lastHitUnjustified: Boolean,
         mostDamageUnjustified: Boolean,
     ): Boolean =
-        submitCreatureEvents(DEATH_EVENT_TYPE) { name ->
+        submitCreatureEvents(creature, DEATH_EVENT_TYPE) { name ->
             LuaEventDispatcher.creatureEventOnDeath(
                 environment, name, creature, corpse, killer, mostDamageKiller,
                 lastHitUnjustified, mostDamageUnjustified,
@@ -169,14 +184,13 @@ class ScriptingDispatch(
 
     /**
      * Mirrors the `CREATURE_EVENT_MODALWINDOW` loop of `Game::playerAnswerModalWindow`
-     * (src/game/game.cpp:11171-11175): submits every registered `onModalWindow` creature
-     * event, in registration order, to the WorldCommit lane so the callbacks run confined.
-     * Returns whether at least one modal-window event was registered.
-     *
-     * Canary only fires the events attached to the player through
-     * `Creature::registerCreatureEvent`; this port has no per-creature attachment registry
-     * yet, so every registered modal-window event fires (recorded in PARITY GAPS). The
-     * `uint32_t` window id is narrowed to the Lua `Int` argument of
+     * (src/game/game.cpp:11171-11175): submits the `modalwindow` events attached to
+     * [player] through `Creature::registerCreatureEvent`
+     * (`Player::getCreatureEvents(CREATURE_EVENT_MODALWINDOW)`), in attachment order,
+     * to the WorldCommit lane so the callbacks run confined. Returns whether at least
+     * one attached modal-window event was dispatched; a player whose attachment source
+     * is absent keeps the permissive global walk (PARITY GAP). The `uint32_t` window id
+     * is narrowed to the Lua `Int` argument of
      * [LuaEventDispatcher.creatureEventOnModalWindow]; the hardcoded offline-training id
      * never reaches this path (game.cpp:11157).
      */
@@ -186,7 +200,7 @@ class ScriptingDispatch(
         button: Int,
         choice: Int,
     ): Boolean =
-        submitCreatureEvents(MODALWINDOW_EVENT_TYPE) { name ->
+        submitCreatureEvents(player, MODALWINDOW_EVENT_TYPE) { name ->
             LuaEventDispatcher.creatureEventOnModalWindow(
                 environment, name, player, modalWindowId.toInt(), button, choice,
             )
@@ -313,7 +327,30 @@ class ScriptingDispatch(
     private fun submitMove(itemId: Int, eventType: String, invoke: () -> Boolean): Boolean =
         submit(environment.moveEvents.getByItemId(itemId).any { it.eventType == eventType }, invoke)
 
-    private fun submitCreatureEvents(eventType: String, invoke: (String) -> Boolean): Boolean {
+    /**
+     * `Creature::getCreatureEvents(type)` walk: resolves the attached names for
+     * [creature] through [creatureEventsOf] and keeps only those the registry
+     * knows under [eventType] (an attached name the registry never registered is
+     * dropped, mirroring the typed `CreatureEventList`). When the seam has no
+     * attachment source for the creature (`null`), the walk falls back to every
+     * registered event of the type (wave-63 behavior, PARITY GAP).
+     */
+    private fun submitCreatureEvents(
+        creature: Creature,
+        eventType: String,
+        invoke: (String) -> Boolean,
+    ): Boolean {
+        val attached = creatureEventsOf(creature)
+        val candidates = attached ?: environment.creatureEvents.names()
+        val names = candidates.filter { environment.creatureEvents.get(it)?.eventType == eventType }
+        return submit(names.isNotEmpty()) {
+            names.forEach { invoke(it) }
+            true
+        }
+    }
+
+    /** The global `CreatureEvents::playerLogin`-style registry walk filtered by [eventType]. */
+    private fun submitRegisteredCreatureEvents(eventType: String, invoke: (String) -> Boolean): Boolean {
         val names = environment.creatureEvents.names()
             .filter { environment.creatureEvents.get(it)?.eventType == eventType }
         return submit(names.isNotEmpty()) {

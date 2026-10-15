@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
+import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.monsters.Monsters
 import org.opentibia.canary.game.Game
@@ -121,6 +122,29 @@ class MonsterSpawnPathTest {
         assertThat(monster.direction).isEqualTo(Direction.North)
         assertThat(monster.isRemoved()).isFalse
         assertThat(map.spawnsMonster.isStarted()).isTrue
+    }
+
+    @Test
+    fun `the composition threads the onSpawn hook into the engine with the block position`() {
+        // `Monster::onSpawn(position)` (monster.cpp:627-648) is dispatched by
+        // `SpawnMonster::spawnMonster` (spawn_monster.cpp:220) after placement;
+        // the composition root hands the engine the world host entry.
+        val dispatched = mutableListOf<Pair<Monster, Position>>()
+        path = MonsterSpawnPath(
+            game = game,
+            map = map,
+            monsterTypes = monsters,
+            spawnScheduler = scheduler,
+            config = ConfigManager(keyMap = ConfigKeys.all.associateWith { it.luaIdentifier }),
+            now = { now },
+            onMonsterSpawn = { monster, position -> dispatched.add(monster to position) },
+        )
+        assertThat(path.load()).isTrue
+
+        path.startup()
+
+        val monster = game.getMonsterByID(MONSTER_AUTO_ID_START)!!
+        assertThat(dispatched).containsExactly(monster to spawnPosition)
     }
 
     @Test
