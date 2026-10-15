@@ -964,7 +964,16 @@ class CanaryServer(
                         pipeline.addLast("frameDecoder", TibiaFrameDecoder())
                         pipeline.addLast("messageEncoder", TibiaMessageEncoder())
                         pipeline.addLast("statusHandler", StatusHandler())
-                        pipeline.addLast("loginHandler", LoginHandler(rsaCipher, accountRepository))
+                        pipeline.addLast(
+                            "loginHandler",
+                            LoginHandler(
+                                rsaCipher,
+                                accountRepository,
+                                worldName = worldConfigString("SERVER_NAME", "Canary World"),
+                                worldIp = worldConfigString("IP", "127.0.0.1"),
+                                gamePort = gamePort,
+                            ),
+                        )
                     }
                 })
 

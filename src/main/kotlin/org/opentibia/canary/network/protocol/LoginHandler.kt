@@ -21,7 +21,16 @@ private val logger = KotlinLogging.logger {}
  */
 class LoginHandler(
     private val rsaCipher: RsaCipher = RsaCipher(),
-    private val accountRepository: AccountRepository = InMemoryAccountRepository()
+    private val accountRepository: AccountRepository = InMemoryAccountRepository(),
+    /**
+     * World advertisement written in the character list (name/IP/game port).
+     * Wave 75: split-mode deployments advertise the configured values so the
+     * client connects to the game instance (or its load balancer) rather than
+     * the historical hardcoded defaults.
+     */
+    private val worldName: String = "Canary World",
+    private val worldIp: String = "127.0.0.1",
+    private val gamePort: Int = 7172,
 ) : SimpleChannelInboundHandler<ByteBuf>() {
 
     companion object {
@@ -152,9 +161,9 @@ class LoginHandler(
         out.writeByte(1)
         // World 0 description
         out.writeByte(0) // world id
-        out.writeTibiaString("Canary World")
-        out.writeTibiaString("127.0.0.1")
-        out.writeShortLE(7172) // game port
+        out.writeTibiaString(worldName)
+        out.writeTibiaString(worldIp)
+        out.writeShortLE(gamePort)
         out.writeByte(0) // preview / state
 
         // Characters list
