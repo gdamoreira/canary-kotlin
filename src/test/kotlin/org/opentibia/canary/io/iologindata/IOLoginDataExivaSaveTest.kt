@@ -180,6 +180,30 @@ class IOLoginDataExivaSaveTest {
         assertThat(loaded.allowGuildWhitelist).isFalse()
     }
 
+    @Test
+    fun `savePlayer persists a whitelist guid above Int MAX and the reload wraps it back to uint32`() {
+        val player = newPlayer()
+        player.kv = kv.scoped("player").scoped("101")
+        val restrictions = player.getExivaRestrictions()
+        restrictions.playerWhitelist.add(4_294_967_295L)
+        restrictions.guildWhitelist.add(4_294_967_295L)
+
+        val loginData = newLoginData()
+        assertThat(loginData.savePlayer(player)).isTrue()
+        assertThat(kv.saveAll()).isTrue()
+
+        val reloaded = newPlayer()
+        reloaded.kv = KVSQL(dataSource).scoped("player").scoped("101")
+        assertThat(loginData.loadPlayerById(reloaded, 101L, disableIrrelevantInfo = false)).isTrue()
+
+        val loaded = reloaded.getExivaRestrictions()
+        // The persisted `static_cast<int>(guid)` is `-1`; the C++ loader pushes
+        // it into `std::vector<uint32_t>`, so the value wraps back to
+        // 4294967295 (uint32 semantics) instead of sign-extending to -1.
+        assertThat(loaded.playerWhitelist).containsExactly(4_294_967_295L)
+        assertThat(loaded.guildWhitelist).containsExactly(4_294_967_295L)
+    }
+
     private fun insertPlayer(id: Long, name: String) {
         dataSource.connection.use { conn ->
             conn.prepareStatement(

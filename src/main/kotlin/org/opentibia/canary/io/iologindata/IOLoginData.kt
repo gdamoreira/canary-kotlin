@@ -8,6 +8,7 @@ import org.opentibia.canary.creatures.OpenContainer
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerPronoun_t
 import org.opentibia.canary.creatures.Slots_t
+import org.opentibia.canary.creatures.Virtue_t
 import org.opentibia.canary.creatures.grouping.Group
 import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.creatures.monsters.MonsterType
@@ -112,9 +113,13 @@ typealias ItemsMap = MutableMap<Int, Pair<Item, Int>>
  * [savePlayerStash(player)] walks `Player::getStashItems` with the C++
  * decay/ware filters, [savePlayerBestiarySystem(player)] writes the charm
  * state and cyclopedia tracker through [IOBestiaryPersistence],
- * [savePlayerFirst(player)] also writes the `conditions` stream
- * (iologindata_save_player.cpp:279-291) and the `players.animus_mastery` blob
- * (:293-299) through [PlayerConditionPersistence] and [IOBestiaryPersistence],
+ * [savePlayerFirst(player)] runs [savePlayerSystems(player)] first (`virtue`/
+ * `harmony` into the `spells` scope, iologindata_save_player.cpp:861-876,
+ * called at :201) whose scope restores the monk state in
+ * [loadOnlyDataForOnlinePlayer] (iologindata_load_player.cpp:1020-1028), then
+ * writes the `conditions` stream (iologindata_save_player.cpp:279-291) and the
+ * `players.animus_mastery` blob (:293-299) through
+ * [PlayerConditionPersistence] and [IOBestiaryPersistence],
  * [savePlayerPreyClass(player)] and [savePlayerTaskHuntingClass(player)] write
  * the prey/task slots through [IOPreyPersistence],
  * [savePlayerExivaRestrictions(player)] writes the `exiva-restrictions` scope
@@ -437,13 +442,31 @@ class IOLoginData(
      * The forge/bosstiary/wheel systems already live in the feature repository.
      * `IOLoginDataLoad::loadPlayerUpdateSystem`
      * (iologindata_load_player.cpp:1031-1039) `updateInventoryWeight` is
-     * re-applied once the whole inventory tree is attached, and the exiva
-     * restrictions load last like the C++ `loadPlayerExivaRestrictions`
-     * (iologindata.cpp:192).
+     * re-applied once the whole inventory tree is attached, its tail restores
+     * the persisted virtue/harmony of the `spells` scope
+     * (iologindata_load_player.cpp:1020-1028), and the exiva restrictions load
+     * last like the C++ `loadPlayerExivaRestrictions` (iologindata.cpp:192).
      */
     fun loadOnlyDataForOnlinePlayer(player: Player, record: PlayerRecord?) {
         featureLoader?.loadInto(player.id, player.features)
         player.updateInventoryWeight()
+
+        // `IOLoginDataLoad::loadPlayerUpdateSystem` tail
+        // (iologindata_load_player.cpp:1020-1028): the persisted monk state is
+        // read back from the `spells` scope of `Player::kv()`. The C++
+        // `static_cast<Virtue_t>(getNumber())` and `setHarmony(getNumber())`
+        // truncate the stored number to the enum's `uint8_t` domain; the
+        // notifications stay off exactly like the C++ `setVirtue(..., false)`.
+        val spellsScope = player.kv.scoped(KEY_SPELLS)
+        spellsScope.get(KEY_VIRTUE)?.let { stored ->
+            val virtueValue = stored.getNumber().toInt() and 0xFF
+            val virtue = Virtue_t.entries.firstOrNull { it.value == virtueValue } ?: Virtue_t.None
+            player.setVirtue(virtue, notifyClient = false)
+        }
+        spellsScope.get(KEY_HARMONY)?.let { stored ->
+            player.setHarmony(stored.getNumber().toInt())
+        }
+
         subloads?.loadPlayerExivaRestrictions(player)
     }
 
@@ -476,12 +499,14 @@ class IOLoginData(
 
     /**
      * `IOLoginData::savePlayerFirst` (src/io/functions/iologindata_save_player.cpp:191-372):
-     * the `players` record write plus the blob columns of the same statement,
-     * the persistent `conditions` stream (:279-291) and the `animus_mastery`
-     * blob (:293-299). A failed write of either blob fails the guard exactly
-     * like the C++ `savePlayerFirst` returning `false`.
+     * `savePlayerSystems` (:201) and `savePlayerExivaRestrictions` (:203)
+     * first, then the `players` record write plus the blob columns of the same
+     * statement, the persistent `conditions` stream (:279-291) and the
+     * `animus_mastery` blob (:293-299). A failed write of either blob fails
+     * the guard exactly like the C++ `savePlayerFirst` returning `false`.
      */
     fun savePlayerFirst(player: Player): Boolean {
+        savePlayerSystems(player)
         savePlayerExivaRestrictions(player)
 
         if (!players.savePlayerRecord(player)) {
@@ -617,6 +642,31 @@ class IOLoginData(
 
         featureLoader?.save(player.id, player.features)
         return savePlayerStorage(player, player.features.storage)
+    }
+
+    /**
+     * `IOLoginDataSave::savePlayerSystems`
+     * (src/io/functions/iologindata_save_player.cpp:861-876): the monk virtue
+     * and harmony charges are persisted into the `spells` scope of
+     * `Player::kv()` as `ValueWrapper(uint8_t)` values (`static_cast<uint8_t>
+     * (virtue)` and the `uint8_t` harmony), so
+     * `IOLoginDataLoad::loadPlayerUpdateSystem`
+     * (iologindata_load_player.cpp:1020-1028) restores them at login. Both
+     * writes keep the C++ `>` guards (`virtue > Virtue_t::None`, `harmony > 0`),
+     * so a cleared state leaves a previously persisted value untouched. The
+     * C++ `nullptr` player guard is unrepresentable in Kotlin ([player] is
+     * non-null) like the other ported save helpers.
+     */
+    fun savePlayerSystems(player: Player) {
+        val virtue = player.getVirtue()
+        if (virtue > Virtue_t.None) {
+            player.kv.scoped(KEY_SPELLS).set(KEY_VIRTUE, ValueWrapper(virtue.value and 0xFF))
+        }
+
+        val harmony = player.getHarmony()
+        if (harmony > 0) {
+            player.kv.scoped(KEY_SPELLS).set(KEY_HARMONY, ValueWrapper(harmony and 0xFF))
+        }
     }
 
     /**
@@ -1455,6 +1505,11 @@ class IOLoginData(
 
         /** `1000 * 60 * 60 * 24 * 7` reward age window (iologindata_save_player.cpp:620). */
         const val REWARD_EXPIRATION_MS = 604_800_000L
+
+        /** `savePlayerSystems` `spells` scope and its keys (iologindata_save_player.cpp:866-875). */
+        private const val KEY_SPELLS = "spells"
+        private const val KEY_VIRTUE = "virtue"
+        private const val KEY_HARMONY = "harmony"
 
         /** `savePlayerExivaRestrictions` scope keys (iologindata_save_player.cpp:887-906). */
         private const val KEY_ALLOW_ALL = "allowAll"

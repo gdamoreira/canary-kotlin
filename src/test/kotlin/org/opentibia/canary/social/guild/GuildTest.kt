@@ -78,6 +78,53 @@ class GuildTest {
     }
 
     @Test
+    fun `addMember asks the game to update the helpers of every online member`() {
+        val updates = mutableListOf<Player>()
+        val guild = Guild(id = 1, name = "Red Rose", updatePlayerHelpers = { updates.add(it) })
+        val leader = player(1, "Leader")
+        val member = player(2, "Member")
+
+        guild.addMember(leader, GuildRank.Leader)
+        assertThat(updates).containsExactly(leader)
+
+        guild.addMember(member)
+        assertThat(updates).containsExactly(leader, leader, member)
+    }
+
+    @Test
+    fun `removeMember updates the remaining members then the removed player`() {
+        val updates = mutableListOf<Player>()
+        val guild = Guild(id = 1, name = "Red Rose", updatePlayerHelpers = { updates.add(it) })
+        val first = player(1, "First")
+        val second = player(2, "Second")
+        guild.addMember(first)
+        guild.addMember(second)
+        updates.clear()
+
+        guild.removeMember(first)
+        assertThat(updates).containsExactly(second, first)
+
+        updates.clear()
+        guild.removeMember(second)
+        assertThat(updates).containsExactly(second)
+    }
+
+    @Test
+    fun `a guild materialized by a repository carries the helper broadcast seam`() {
+        val updates = mutableListOf<Player>()
+        val repository = InMemoryGuildRepository(
+            listOf(Guild(id = 7, name = "Wolves")),
+            updatePlayerHelpers = { updates.add(it) },
+        )
+        val guild = repository.loadGuild(7)!!
+        val member = player(1, "Member")
+
+        guild.addMember(member)
+
+        assertThat(updates).containsExactly(member)
+    }
+
+    @Test
     fun `removeMember erases every entry and asks the game to remove an empty guild`() {
         val removedGuilds = mutableListOf<Long>()
         val guild = Guild(id = 1, name = "Red Rose", removeGuild = { removedGuilds.add(it) })

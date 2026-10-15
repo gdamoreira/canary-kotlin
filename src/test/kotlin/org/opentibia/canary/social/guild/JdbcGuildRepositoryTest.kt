@@ -129,6 +129,19 @@ class JdbcGuildRepositoryTest {
     }
 
     @Test
+    fun `loadGuild installs the helper broadcast seam on the materialized guild`() {
+        seedGuild(10, "Red Rose", ownerId = 1)
+        val updates = mutableListOf<Player>()
+        val seamRepository = JdbcGuildRepository(dataSource, updatePlayerHelpers = { updates.add(it) })
+        val guild = seamRepository.loadGuild(10)!!
+        val member = Player(1, "Wolfie", 100, 100, position = Position(100, 100, 7))
+
+        guild.addMember(member)
+
+        assertThat(updates).containsExactly(member)
+    }
+
+    @Test
     fun `saveGuild persists only the balance like canary`() {
         seedGuild(10, "Red Rose", balance = 100, ownerId = 1, motd = "old motd")
         val guild = repository.loadGuild(10)!!
