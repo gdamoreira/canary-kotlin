@@ -255,7 +255,9 @@ class PlayerFrameSink(
     private val shopInventoryMap: (Player) -> Map<Int, Int> = { emptyMap() },
     /** `player->kv()->get("npc-shop-hidden-sell-item")` (protocolgame.cpp:6551). */
     private val shopHiddenSellItems: (Player) -> Boolean = { false },
-) : ProtocolFrameSink(player, map), PlayerSendSink {
+    /** `g_game().getCreatureByID` behind the known-set eviction (protocolgame.cpp:2346). */
+    creatureById: (Long) -> Creature? = { null },
+) : ProtocolFrameSink(player, map, creatureById), PlayerSendSink {
 
     override fun frameAllocator(): ByteBufAllocator = frameAllocatorProvider()
 
@@ -557,14 +559,30 @@ class PlayerFrameSink(
     }
 
     override fun sendCreatureReload(creature: Creature) {
+        if (!canSee(creature)) {
+            return
+        }
+
         val tile = creature.getTile() ?: return
         val stackpos = tile.getClientIndexOfCreature(player, creature)
         if (stackpos < 0 || stackpos >= MAX_STACKPOS) {
             return
         }
 
+        if (knownCreatureSet.contains(creature.id)) {
+            emitFrame {
+                TilePacketWriter.writeUpdateTileCreature(
+                    this,
+                    creature.position,
+                    stackpos,
+                    appearanceOf(creature, known = false, removedKnown = 0),
+                )
+            }
+            return
+        }
+
         emitFrame {
-            TilePacketWriter.writeUpdateTileCreature(
+            GameWindowWriter.writeAddCreature(
                 this,
                 creature.position,
                 stackpos,
@@ -574,10 +592,21 @@ class PlayerFrameSink(
     }
 
     override fun sendCreatureEmblem(creature: Creature) {
+        if (!canSee(creature)) {
+            return
+        }
+
         val tile = creature.getTile() ?: return
         val stackpos = tile.getClientIndexOfCreature(player, creature)
 
-        emitFrame { CreatureUpdateWriter.writeCreatureEmblem(this, creature.position, stackpos, appearanceOf(creature)) }
+        emitFrame {
+            CreatureUpdateWriter.writeCreatureEmblem(
+                this,
+                creature.position,
+                stackpos,
+                appearanceOf(creature, known = false, removedKnown = creature.id),
+            )
+        }
     }
 
     override fun sendCreatureSquare(creature: Creature, color: Int) {

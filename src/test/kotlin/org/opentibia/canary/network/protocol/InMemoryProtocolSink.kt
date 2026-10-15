@@ -2,6 +2,7 @@ package org.opentibia.canary.network.protocol
 
 import io.netty.buffer.ByteBuf
 import io.netty.buffer.UnpooledByteBufAllocator
+import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.players.PlayerFrameSink
 import org.opentibia.canary.creatures.players.PlayerSendSink

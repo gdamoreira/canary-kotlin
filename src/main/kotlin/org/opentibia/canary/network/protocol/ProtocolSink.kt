@@ -3,6 +3,7 @@ package org.opentibia.canary.network.protocol
 import io.netty.buffer.ByteBuf
 import io.netty.buffer.ByteBufAllocator
 import io.netty.channel.Channel
+import kotlin.math.abs
 import kotlin.math.floor
 import org.opentibia.canary.combat.condition.Outfit
 import org.opentibia.canary.creatures.Creature
@@ -107,7 +108,16 @@ interface ProtocolSink {
 abstract class ProtocolFrameSink(
     protected val player: Player,
     protected val map: GameMap,
+    /** `g_game().getCreatureByID` behind the known-set eviction (`protocolgame.cpp:2346`). */
+    creatureById: (Long) -> Creature? = { null },
 ) : ProtocolSink {
+
+    /**
+     * `ProtocolGame::knownCreatureSet` (`protocolgame.hpp:620`) with the
+     * `checkCreatureAsKnown` and `contains` semantics; the eviction visibility
+     * test is [canSee].
+     */
+    protected val knownCreatureSet = KnownCreatureSet(player, creatureById) { canSee(it) }
 
     /** Allocator for one outgoing frame; the Netty sink returns the channel allocator. */
     protected abstract fun frameAllocator(): ByteBufAllocator
@@ -138,6 +148,10 @@ abstract class ProtocolFrameSink(
     }
 
     override fun sendCreatureAppear(creature: Creature, position: Position, isLogin: Boolean) {
+        if (!canSee(position)) {
+            return
+        }
+
         val tile = creature.getTile() ?: return
         val stackpos = tile.getClientIndexOfCreature(player, creature)
         if (stackpos < 0 || stackpos >= MAX_STACKPOS) {
@@ -236,13 +250,76 @@ abstract class ProtocolFrameSink(
     }
 
     /**
-     * Resolved `ProtocolGame::AddCreature` input for the observer. `known` /
-     * `removedKnown` are the unported session known-set outputs, and the
-     * health-hidden, guild-emblem, speech-bubble, creature-mark and
-     * walkthrough fields that have no Kotlin state use the Canary neutral
-     * values (PARITY GAPS).
+     * `ProtocolGame::canSee(const std::shared_ptr<Creature>&)`
+     * (protocolgame.cpp:2375-2390): removed creatures, creatures the player
+     * cannot see and out-of-viewport positions are not visible. The
+     * `Player::canSeeCreature` ghost-mode branch is a Player-side parity gap
+     * (the port's `Player` inherits the base `Creature::canSeeCreature`).
+     */
+    protected fun canSee(creature: Creature?): Boolean {
+        if (creature == null || creature.isRemoved()) {
+            return false
+        }
+
+        if (!player.canSeeCreature(creature)) {
+            return false
+        }
+
+        return canSee(creature.position)
+    }
+
+    /** `ProtocolGame::canSee(const Position&)` (protocolgame.cpp:2392-2394). */
+    protected fun canSee(pos: Position): Boolean = canSee(pos.x, pos.y, pos.z)
+
+    /** `ProtocolGame::canSee(x, y, z)` (protocolgame.cpp:2396-2411). */
+    protected fun canSee(x: Int, y: Int, z: Int): Boolean {
+        val myPos = player.position
+        if (myPos.z <= GameMap.MAP_INIT_SURFACE_LAYER) {
+            // We are on ground level or above (7 -> 0): the view is 7 -> 0.
+            if (z > GameMap.MAP_INIT_SURFACE_LAYER) {
+                return false
+            }
+        } else if (myPos.z >= GameMap.MAP_INIT_SURFACE_LAYER + 1) {
+            // We are underground (8 -> 15): the view is +/- 2 floors.
+            if (abs(myPos.z - z) > GameMap.MAP_LAYER_VIEW_LIMIT) {
+                return false
+            }
+        }
+
+        // A negative offset means the action takes place on a lower floor.
+        val offsetz = myPos.z - z
+        return x >= myPos.x - GameMap.MAP_MAX_CLIENT_VIEW_PORT_X + offsetz &&
+            x <= myPos.x + (GameMap.MAP_MAX_CLIENT_VIEW_PORT_X + 1) + offsetz &&
+            y >= myPos.y - GameMap.MAP_MAX_CLIENT_VIEW_PORT_Y + offsetz &&
+            y <= myPos.y + (GameMap.MAP_MAX_CLIENT_VIEW_PORT_Y + 1) + offsetz
+    }
+
+    /**
+     * Resolved `ProtocolGame::AddCreature` input for the observer with the
+     * session known-set outputs of `ProtocolGame::checkCreatureAsKnown`
+     * (protocolgame.cpp:2334): the first frame for a creature carries
+     * `known = false` plus the evicted `removedKnown`, every later frame
+     * `known = true`.
      */
     protected fun appearanceOf(creature: Creature): CreatureAppearanceFrame {
+        val known = knownCreatureSet.checkCreatureAsKnown(creature.id)
+        return appearanceOf(creature, known.known, known.removedKnown)
+    }
+
+    /**
+     * Resolved `ProtocolGame::AddCreature` input with explicit `known` /
+     * `removedKnown` out-parameter values for call sites that pass them without
+     * touching the set (`ProtocolGame::sendCreatureEmblem`'s
+     * `AddCreature(creature, false, creature->getID())` and
+     * `ProtocolGame::reloadCreature`'s known branch). The health-hidden,
+     * guild-emblem, speech-bubble, creature-mark and walkthrough fields that
+     * have no Kotlin state use the Canary neutral values (PARITY GAPS).
+     */
+    protected fun appearanceOf(
+        creature: Creature,
+        known: Boolean,
+        removedKnown: Long,
+    ): CreatureAppearanceFrame {
         val master = creature.getMaster()
         return CreatureAppearanceFrame(
             id = creature.id,
@@ -259,6 +336,8 @@ abstract class ProtocolFrameSink(
                 is Npc -> CreatureType.NPC
                 else -> CreatureType.MONSTER
             },
+            known = known,
+            removedKnown = removedKnown,
             masterId = master?.id,
             masterIsPlayer = master is Player,
             vocationClientId = (creature as? Player)?.getPlayerVocationEnum() ?: 0,
@@ -371,6 +450,8 @@ class NettyProtocolSink(
     channel: Channel,
     player: Player,
     map: GameMap,
+    /** `g_game().getCreatureByID` behind the known-set eviction (protocolgame.cpp:2346). */
+    creatureById: (Long) -> Creature? = { null },
 ) : PlayerSendSink by PlayerFrameSink(
     player,
     map,
@@ -382,4 +463,5 @@ class NettyProtocolSink(
             frame.release()
         }
     },
+    creatureById = creatureById,
 )
