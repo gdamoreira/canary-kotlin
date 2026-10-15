@@ -183,6 +183,8 @@ class Raids(
 		started = false
 		running = null
 		lastRaidEnd = 0
+
+		environment.scriptRunner?.reInitState()
 	}
 
 	/** Mirrors `Raids::reload` (src/lua/creature/raids.cpp:169). */

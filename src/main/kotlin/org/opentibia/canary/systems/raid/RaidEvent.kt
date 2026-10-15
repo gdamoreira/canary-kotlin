@@ -99,6 +99,13 @@ interface RaidScriptRunner {
 	fun loadScript(file: String, scriptName: String): Boolean
 
 	fun executeOnRaid(scriptName: String): Boolean
+
+	/**
+	 * `ScriptInterface::reInitState` reached by `Raids::clear`
+	 * (src/lua/creature/raids.cpp:166): drops every script reference the
+	 * runner loaded, so a cleared container cannot execute a stale script.
+	 */
+	fun reInitState() {}
 }
 
 /**

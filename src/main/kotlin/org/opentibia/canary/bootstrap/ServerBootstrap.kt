@@ -336,6 +336,10 @@ internal fun defaultListenerFactory(rsaCipher: RsaCipher = RsaCipher.fromEnviron
             gamePort = config.gamePort,
             accountRepository = accountRepository,
             gameMap = gameMap,
+            // `g_configManager().getString(DATA_DIRECTORY)`: the raid container
+            // loads `{DATA_DIRECTORY}/raids/raids.xml` at `GAME_STATE_INIT`
+            // (src/lua/creature/raids.cpp:29).
+            dataDirectory = config.dataDir,
             dispatcher = dispatcher,
             rsaCipher = rsaCipher,
             luaEnvironment = luaEnvironment,
