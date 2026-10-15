@@ -22,6 +22,12 @@ class FakeSpellWorld(
     var playerByName: (String) -> SpellTarget? = { null }
     var playersByAccount: (Account?) -> List<SpellCaster> = { emptyList() }
 
+    /** One `Game::canThrowObjectTo` invocation recorded by [canThrowObjectTo]. */
+    data class ThrowCall(val from: Position, val to: Position, val checkSightLine: Boolean, val range: Int)
+
+    /** Every [canThrowObjectTo] call in order. */
+    val canThrowCalls: MutableList<ThrowCall> = mutableListOf()
+
     /** `Combat::canDoCombat(player, tile, aggressive)` return value. */
     var canDoCombatResult: ReturnValue = ReturnValue.NOERROR
 
@@ -44,8 +50,10 @@ class FakeSpellWorld(
 
     override fun getBottomVisibleCreatureId(position: Position): Long? = bottomVisibleCreature(position)
 
-    override fun canThrowObjectTo(from: Position, to: Position, checkSightLine: Boolean, range: Int): Boolean =
-        canThrow(from, to, checkSightLine, range)
+    override fun canThrowObjectTo(from: Position, to: Position, checkSightLine: Boolean, range: Int): Boolean {
+        canThrowCalls.add(ThrowCall(from, to, checkSightLine, range))
+        return canThrow(from, to, checkSightLine, range)
+    }
 
     override fun getPlayerByNameWildcard(name: String): SpellTarget? = playerByName(name)
 

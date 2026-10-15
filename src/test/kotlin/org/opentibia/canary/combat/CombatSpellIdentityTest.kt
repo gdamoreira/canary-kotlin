@@ -238,9 +238,22 @@ class CombatSpellIdentityTest {
 
     // `params.valueCallback->getMinMaxValues` (combat.cpp:191-192, 1982-2068).
 
+    /** `ValueCallback(COMBAT_FORMULA_LEVELMAGIC)` (`Combat::setCallback`, combat.cpp:674-676). */
+    private fun levelMagicCallback(
+        get: (useCharges: Boolean, operands: CombatCallbackOperands.LevelMagic) -> Pair<Int, Int>?,
+    ): CombatValueCallback = object : CombatValueCallback {
+        override val type: FormulaType = FormulaType.LEVELMAGIC
+
+        override fun getMinMaxValues(useCharges: Boolean, operands: CombatCallbackOperands): Pair<Int, Int>? =
+            when (operands) {
+                is CombatCallbackOperands.LevelMagic -> get(useCharges, operands)
+                else -> null
+            }
+    }
+
     @Test
     fun `value callback min max numbers win over the level magic formula`() {
-        val callback = CombatValueCallback { useCharges -> if (useCharges) 30 to 30 else 10 to 20 }
+        val callback = levelMagicCallback { useCharges, _ -> if (useCharges) 30 to 30 else 10 to 20 }
 
         val damage = Combat.getCombatDamage(
             formulaType = FormulaType.LEVELMAGIC,
@@ -260,7 +273,7 @@ class CombatSpellIdentityTest {
     @Test
     fun `value callback forwards the use charges flag`() {
         var seenUseCharges: Boolean? = null
-        val callback = CombatValueCallback { useCharges ->
+        val callback = levelMagicCallback { useCharges, _ ->
             seenUseCharges = useCharges
             5 to 5
         }
@@ -280,9 +293,30 @@ class CombatSpellIdentityTest {
     }
 
     @Test
+    fun `the level magic callback receives the raw level and magic level skill operands`() {
+        // combat.cpp:2001-2006: `onGetPlayerMinMaxValues(player, level, maglevel)`.
+        var seenOperands: CombatCallbackOperands.LevelMagic? = null
+        val callback = levelMagicCallback { _, operands ->
+            seenOperands = operands
+            5 to 5
+        }
+
+        Combat.getCombatDamage(
+            formulaType = FormulaType.LEVELMAGIC,
+            levelFormula = 100,
+            valueCallback = callback,
+            level = 120,
+            magicLevelSkill = 44,
+            random = Random(1),
+        )
+
+        assertThat(seenOperands).isEqualTo(CombatCallbackOperands.LevelMagic(level = 120, magicLevelSkill = 44))
+    }
+
+    @Test
     fun `an unresolved value callback leaves the damage at zero`() {
         // combat.cpp:2037-2040: the C++ early return leaves the callback damage at 0.
-        val callback = CombatValueCallback { null }
+        val callback = levelMagicCallback { _, _ -> null }
 
         val damage = Combat.getCombatDamage(
             formulaType = FormulaType.LEVELMAGIC,
@@ -299,7 +333,7 @@ class CombatSpellIdentityTest {
     @Test
     fun `monster combat values still win over the value callback`() {
         // combat.cpp:186-192: `getCombatValues` is checked before the callback.
-        val callback = CombatValueCallback { 30 to 30 }
+        val callback = levelMagicCallback { _, _ -> 30 to 30 }
 
         val damage = Combat.getCombatDamage(
             formulaType = FormulaType.LEVELMAGIC,

@@ -8,11 +8,22 @@ import org.opentibia.canary.creatures.Skulls_t
 import org.opentibia.canary.creatures.monsters.Faction
 import org.opentibia.canary.creatures.vocations.Vocation
 import org.opentibia.canary.game.movement.Direction
+import org.opentibia.canary.game.movement.getDistanceX
+import org.opentibia.canary.game.movement.getDistanceY
 import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.game.zones.ZoneType
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import java.util.Random
+
+/**
+ * `CombatFunction` (src/creatures/combat/combat.hpp:112-113): the per-target
+ * handler `Combat::CombatFunc` invokes for every accepted creature, receiving
+ * the resolved damage for that target.
+ */
+fun interface CombatFunction {
+    fun apply(caster: CombatActor?, target: CombatActor, params: CombatParams, damage: CombatDamage)
+}
 
 /**
  * Faithful port of the deterministic damage core of Canary `Combat`
@@ -45,6 +56,8 @@ import java.util.Random
  *    src/creatures/combat/combat.cpp:309-572
  *  - `Combat::getCombatArea`: src/creatures/combat/combat.cpp:233-243
  *  - `AreaCombat::getList`: src/creatures/combat/combat.cpp:2289-2325
+ *  - `Combat::combatFunc`/`combatTileEffects`/`postCombatEffects`:
+ *    src/creatures/combat/combat.cpp:1161-1275, 1507-1643
  */
 object Combat {
     /**
@@ -76,15 +89,17 @@ object Combat {
      *
      * When the caster carries no combat values, the player branch resolves the
      * damage through `params.valueCallback->getMinMaxValues` (combat.cpp:191-192)
-     * before the formula matrix; [valueCallback] carries the two numbers the Lua
-     * callback returned and [useCharges] is the `params.useCharges` argument.
+     * before the formula matrix: the callback receives the formula operands
+     * Canary pushes into the Lua call — `(level, magicLevelSkill)` for
+     * `COMBAT_FORMULA_LEVELMAGIC`, `(attackSkill, attackValue, attackFactor)`
+     * resolved by [skillFormula] for `COMBAT_FORMULA_SKILL` (combat.cpp:2001-2028)
+     * — and its two returned numbers are split into primary/secondary exactly
+     * like `ValueCallback::getMinMaxValues` (combat.cpp:2046-2063).
      *
      * PARITY GAPS: the Wheel of Destiny `getCombatDataSpell`/`getCombatDataAugment`
      * and weapon-proficiency spell augments (combat.cpp:178-179, 224-227) stay in
      * their owning systems; [combatValues] carries `getCombatValues` in their
-     * place. The callback's `COMBAT_FORMULA_SKILL` operand calculation (the
-     * weapon `calculateSkillFormula` push, combat.cpp:2017-2027) is not modelled,
-     * so [valueCallback] is resolved for the level/magic callback contract.
+     * place.
      */
     fun getCombatDamage(
         formulaType: FormulaType,
@@ -107,6 +122,9 @@ object Combat {
         weaponElementalBond: CombatType = CombatType.NONE,
         valueCallback: CombatValueCallback? = null,
         useCharges: Boolean = false,
+        level: Int = 0,
+        magicLevelSkill: Int = 0,
+        skillFormula: CombatSkillFormula? = null,
     ): CombatDamage {
         val damage = CombatDamage()
         damage.origin = origin
@@ -130,12 +148,15 @@ object Combat {
         } else if (combatValues != null) {
             damage.primaryValue = normalRandom(combatValues.first, combatValues.second, random)
         } else if (valueCallback != null) {
-            // combat.cpp:191-192: `params.valueCallback->getMinMaxValues(player, damage, params.useCharges)`;
-            // the callback branch sets the primary from `normal_random` and clears
-            // the secondary (combat.cpp:2048-2063).
-            valueCallback.getMinMaxValues(useCharges)?.let { (min, max) ->
-                damage.primaryValue = normalRandom(min, max, random)
-            }
+            resolveValueCallbackDamage(
+                callback = valueCallback,
+                damage = damage,
+                useCharges = useCharges,
+                random = random,
+                level = level,
+                magicLevelSkill = magicLevelSkill,
+                skillFormula = skillFormula,
+            )
         } else if (formulaType == FormulaType.LEVELMAGIC) {
             val min = (levelFormula * mina + minb).toInt()
             val max = (levelFormula * maxa + maxb).toInt()
@@ -152,6 +173,66 @@ object Combat {
         }
 
         return damage
+    }
+
+    /**
+     * Port of the `ValueCallback::getMinMaxValues` resolution invoked by
+     * `Combat::getCombatDamage` (combat.cpp:191-192, 1982-2068).
+     *
+     * The `type` switch pushes the formula operands Canary hands to the Lua
+     * `onGetPlayerMinMaxValues` call (combat.cpp:2001-2028): LEVELMAGIC pushes
+     * the raw level and magic-level skill, SKILL pushes the
+     * `Weapon::calculateSkillFormula` operands (or the `attackSkill = 0`,
+     * `attackValue = 7`, `attackFactor = 0` defaults when no weapon resolves).
+     * The two returned numbers feed `normal_random`; with an elemental skill
+     * weapon the result splits into physical/elemental damage by
+     * `elementAttack / attackValue`, otherwise the secondary is cleared
+     * (combat.cpp:2046-2063). An unhandled callback type logs and returns with
+     * the damage untouched (combat.cpp:2036-2040).
+     */
+    private fun resolveValueCallbackDamage(
+        callback: CombatValueCallback,
+        damage: CombatDamage,
+        useCharges: Boolean,
+        random: Random,
+        level: Int,
+        magicLevelSkill: Int,
+        skillFormula: CombatSkillFormula?,
+    ) {
+        when (callback.type) {
+            FormulaType.LEVELMAGIC -> {
+                val operands = CombatCallbackOperands.LevelMagic(level, magicLevelSkill)
+                val (min, max) = callback.getMinMaxValues(useCharges, operands) ?: return
+                damage.primaryValue = normalRandom(min, max, random)
+                damage.secondaryType = CombatType.NONE
+                damage.secondaryValue = 0
+            }
+
+            FormulaType.SKILL -> {
+                val values = skillFormula?.calculateSkillFormula(useCharges)
+                val attackSkill = values?.attackSkill ?: 0
+                val attackValue = values?.attackValue ?: 7
+                val attackFactor = values?.attackFactor ?: 0f
+                if (values != null) {
+                    damage.secondaryType = values.elementType
+                }
+
+                val operands = CombatCallbackOperands.Skill(attackSkill, attackValue, attackFactor)
+                val (min, max) = callback.getMinMaxValues(useCharges, operands) ?: return
+                val defaultDmg = normalRandom(min, max, random)
+                if (values?.shouldCalculateSecondaryDamage == true) {
+                    val factor = values.elementAttack.toDouble() / attackValue
+                    damage.primaryValue = Math.round(defaultDmg * (1.0 - factor)).toInt()
+                    damage.secondaryValue = Math.round(defaultDmg * factor).toInt()
+                } else {
+                    damage.primaryValue = defaultDmg
+                    damage.secondaryType = CombatType.NONE
+                    damage.secondaryValue = 0
+                }
+            }
+
+            else -> Unit
+        }
     }
 
     /**
@@ -1035,13 +1116,7 @@ object Combat {
      *
      * Positions on or above [MAP_MAX_LAYERS] are ignored; without an [area] the
      * bare target tile is created, otherwise the selected [AreaCombat] matrix is
-     * walked through [CombatMap].
-     *
-     * PARITY GAP: the area dispatch that consumes the list
-     * (`Combat::CombatFunc`, combat.cpp:1507-1643: spectator ranges,
-     * `canDoCombat(caster, tile, ...)` filtering, `targetCasterOrTopMost`,
-     * creature combat-damage overrides and the effect/protocol calls) is not
-     * wired yet; only the tile enumeration is ported.
+     * walked through [CombatMap]. The list is consumed by [combatFunc].
      */
     fun getCombatArea(
         centerPos: Position,
@@ -1058,6 +1133,226 @@ object Combat {
             area.getList(centerPos, targetPos, list, getDirectionTo(targetPos, centerPos), map)
         } else {
             list.add(map.getOrCreateTile(targetPos))
+        }
+    }
+
+    /**
+     * `Combat::CombatFunc` (src/creatures/combat/combat.cpp:1507-1643): the area
+     * dispatch consumption tail.
+     *
+     * The tile list is enumerated twice exactly like Canary. The first pass runs
+     * the no-PvP first-on-stack gate (`combat.cpp:1524-1530`), accumulates the
+     * max viewport deltas and collects the `affectedTargets` under the
+     * `targetCasterOrTopMost` filter and the reduced
+     * `canDoCombatWithExpertPvp` condition `!aggressive || caster != creature`.
+     * The second pass re-walks the tiles, invokes [func] per accepted creature,
+     * fires `params.targetCallback` and, per tile, [combatTileEffects]; it ends
+     * with [postCombatEffects].
+     *
+     * PARITY GAPS: the `ExpertPvp` side effects, the Wheel of Destiny beam
+     * mastery updates, the `Spectators().find` query (its result is unused by the
+     * C++ `combatTileEffects` body) and the per-creature
+     * `Creature::getCombatDamage` override are not modelled; `applyExtensions`
+     * runs on the ported single-target path, not here.
+     */
+    fun combatFunc(
+        caster: CombatActor?,
+        origin: Position,
+        toPos: Position,
+        area: AreaCombat?,
+        params: CombatParams,
+        map: CombatMap,
+        effects: CombatEffects,
+        damage: CombatDamage?,
+        func: CombatFunction?,
+        noPvpWorld: Boolean = false,
+    ) {
+        val casterPlayer = caster?.getPlayer()
+
+        val tileList = mutableListOf<CombatTile>()
+        if (caster != null) {
+            getCombatArea(caster.getPosition(), toPos, area, map, tileList)
+        } else {
+            getCombatArea(toPos, toPos, area, map, tileList)
+        }
+
+        var maxX = 0
+        var maxY = 0
+        val affectedTargets = mutableListOf<CombatActor>()
+
+        for (tile in tileList) {
+            if (casterPlayer != null && noPvpWorld && tile.getPosition() == origin) {
+                if (!casterPlayer.isFirstOnStack()) {
+                    casterPlayer.sendCancelMessage(ReturnValue.NOTPOSSIBLE)
+                    casterPlayer.sendMagicEffect(origin, CONST_ME_POFF)
+                    return
+                }
+            }
+
+            val tilePos = tile.getPosition()
+            maxX = maxOf(maxX, getDistanceX(tilePos, toPos))
+            maxY = maxOf(maxY, getDistanceY(tilePos, toPos))
+
+            if (canDoCombat(caster, tile, params.aggressive) != ReturnValue.NOERROR) {
+                continue
+            }
+
+            val topCreature = tile.getTopCreature()
+            for (creature in tile.getCreatures()) {
+                if (params.targetCasterOrTopMost) {
+                    if (caster != null && caster.getTile() == tile) {
+                        if (creature !== caster) {
+                            continue
+                        }
+                    } else if (creature !== topCreature) {
+                        continue
+                    }
+                }
+
+                if (!params.aggressive || caster !== creature) {
+                    affectedTargets.add(creature)
+                }
+            }
+        }
+
+        val tmpDamage = damage?.copy() ?: CombatDamage()
+        tmpDamage.affected = affectedTargets.size
+
+        for (tile in tileList) {
+            if (canDoCombat(caster, tile, params.aggressive) != ReturnValue.NOERROR) {
+                continue
+            }
+
+            val topCreature = tile.getTopCreature()
+            for (creature in tile.getCreatures()) {
+                if (params.targetCasterOrTopMost) {
+                    if (caster != null && caster.getTile() == tile) {
+                        if (creature !== caster) {
+                            continue
+                        }
+                    } else if (creature !== topCreature) {
+                        continue
+                    }
+                }
+
+                if (!params.aggressive || caster !== creature) {
+                    if (func != null) {
+                        // The C++ `CombatHealthFunc`/`CombatManaFunc` copy the
+                        // pointed-to damage, so the port hands each target its
+                        // own copy and mutations never leak across the area.
+                        func.apply(caster, creature, params, tmpDamage.copy())
+                    }
+
+                    params.targetCallback?.onTargetCombat(caster, creature)
+
+                    if (params.targetCasterOrTopMost) {
+                        break
+                    }
+                }
+            }
+
+            combatTileEffects(caster, tile, params, effects, noPvpWorld)
+        }
+
+        postCombatEffects(caster, origin, toPos, params, effects)
+    }
+
+    /**
+     * `Combat::combatTileEffects` (src/creatures/combat/combat.cpp:1161-1264):
+     * the field-item creation with the persistent-to-PvP swap table
+     * (`combat.cpp:1165-1200`) and the no-PvP-zone/`WORLD_TYPE_NO_PVP`
+     * fire/poison/energy/magic-wall/wildgrowth downgrades, then the
+     * `tileCallback`, the `sendCombatEffect` impact effect and the
+     * cast/impact sound fanout.
+     *
+     * PARITY GAPS: the `ExpertPvp` wall/field-context swaps and the
+     * `Item::CreateItem` owner/decay plumbing stay behind
+     * [CombatEffects.createFieldItem].
+     */
+    private fun combatTileEffects(
+        caster: CombatActor?,
+        tile: CombatTile,
+        params: CombatParams,
+        effects: CombatEffects,
+        noPvpWorld: Boolean,
+    ) {
+        if (params.itemId != 0) {
+            var itemId = params.itemId
+            when (itemId) {
+                ITEM_FIREFIELD_PERSISTENT_FULL -> itemId = ITEM_FIREFIELD_PVP_FULL
+                ITEM_FIREFIELD_PERSISTENT_MEDIUM -> itemId = ITEM_FIREFIELD_PVP_MEDIUM
+                ITEM_FIREFIELD_PERSISTENT_SMALL -> itemId = ITEM_FIREFIELD_PVP_SMALL
+                ITEM_ENERGYFIELD_PERSISTENT -> itemId = ITEM_ENERGYFIELD_PVP
+                ITEM_POISONFIELD_PERSISTENT -> itemId = ITEM_POISONFIELD_PVP
+                ITEM_MAGICWALL_PERSISTENT -> itemId = ITEM_MAGICWALL
+                ITEM_WILDGROWTH_PERSISTENT -> itemId = ITEM_WILDGROWTH
+                else -> Unit
+            }
+
+            if (caster != null) {
+                val casterPlayer = if (caster.isSummon()) caster.getMaster()?.getPlayer() else caster.getPlayer()
+                if (casterPlayer != null) {
+                    val noPvpField = noPvpWorld || tile.hasFlag(TileFlags.TILESTATE_NOPVPZONE)
+                    if (noPvpField) {
+                        itemId = when (itemId) {
+                            ITEM_FIREFIELD_PVP_FULL -> ITEM_FIREFIELD_NOPVP
+                            ITEM_POISONFIELD_PVP -> ITEM_POISONFIELD_NOPVP
+                            ITEM_ENERGYFIELD_PVP -> ITEM_ENERGYFIELD_NOPVP
+                            ITEM_MAGICWALL -> ITEM_MAGICWALL_SAFE
+                            ITEM_WILDGROWTH -> ITEM_WILDGROWTH_SAFE
+                            else -> itemId
+                        }
+                    } else {
+                        // `ExpertPvp::isEnabled()` swaps the wall for its safe
+                        // variant and stamps the field context; both stay in the
+                        // unported ExpertPvp subsystem (PARITY GAP).
+                        val pvpDamagingField = itemId == ITEM_FIREFIELD_PVP_FULL ||
+                            itemId == ITEM_POISONFIELD_PVP ||
+                            itemId == ITEM_ENERGYFIELD_PVP
+                        val legacyBlockingWall = itemId == ITEM_MAGICWALL || itemId == ITEM_WILDGROWTH
+                        if (pvpDamagingField || legacyBlockingWall) {
+                            casterPlayer.addInFightTicks()
+                        }
+                    }
+                }
+            }
+
+            effects.createFieldItem(caster, tile, itemId)
+        }
+
+        params.tileCallback?.onTileCombat(caster, tile)
+
+        if (params.impactEffect != CONST_ME_NONE) {
+            effects.addMagicEffect(caster, tile.getPosition(), params.impactEffect)
+        }
+
+        if (params.soundImpactEffect != SOUND_SILENCE) {
+            effects.sendDoubleSoundEffect(tile.getPosition(), params.soundCastEffect, params.soundImpactEffect, caster)
+        } else if (params.soundCastEffect != SOUND_SILENCE) {
+            effects.sendSingleSoundEffect(tile.getPosition(), params.soundCastEffect, caster)
+        }
+    }
+
+    /**
+     * `Combat::postCombatEffects` (src/creatures/combat/combat.cpp:1265-1275):
+     * the distance effect from the origin to the strike position and the
+     * cast/impact sound fanout.
+     */
+    fun postCombatEffects(
+        caster: CombatActor?,
+        origin: Position,
+        pos: Position,
+        params: CombatParams,
+        effects: CombatEffects,
+    ) {
+        if (caster != null && params.distanceEffect != CONST_ANI_NONE) {
+            effects.addDistanceEffect(caster, origin, pos, params.distanceEffect)
+        }
+
+        if (params.soundImpactEffect != SOUND_SILENCE) {
+            effects.sendDoubleSoundEffect(pos, params.soundCastEffect, params.soundImpactEffect, caster)
+        } else if (params.soundCastEffect != SOUND_SILENCE) {
+            effects.sendSingleSoundEffect(pos, params.soundCastEffect, caster)
         }
     }
 
@@ -1119,4 +1414,67 @@ object Combat {
 
     /** `MAP_MAX_LAYERS` (src/map/map_const.hpp:17). */
     const val MAP_MAX_LAYERS = 16
+
+    /** `CONST_ME_NONE` (src/utils/utils_definitions.hpp:60). */
+    const val CONST_ME_NONE = 0
+
+    /** `CONST_ME_POFF` (src/utils/utils_definitions.hpp:63). */
+    const val CONST_ME_POFF = 3
+
+    /** `CONST_ANI_NONE` (src/utils/utils_definitions.hpp:303). */
+    const val CONST_ANI_NONE = 0
+
+    /** `SoundEffect_t::SILENCE` (`src/creatures/creatures_definitions.hpp`). */
+    const val SOUND_SILENCE = 0
+
+    /** `ITEM_FIREFIELD_PVP_FULL` (src/utils/utils_definitions.hpp:580). */
+    const val ITEM_FIREFIELD_PVP_FULL = 2118
+
+    /** `ITEM_FIREFIELD_PVP_MEDIUM` (src/utils/utils_definitions.hpp:581). */
+    const val ITEM_FIREFIELD_PVP_MEDIUM = 2119
+
+    /** `ITEM_FIREFIELD_PVP_SMALL` (src/utils/utils_definitions.hpp:582). */
+    const val ITEM_FIREFIELD_PVP_SMALL = 2120
+
+    /** `ITEM_FIREFIELD_PERSISTENT_FULL` (src/utils/utils_definitions.hpp:583). */
+    const val ITEM_FIREFIELD_PERSISTENT_FULL = 2123
+
+    /** `ITEM_FIREFIELD_PERSISTENT_MEDIUM` (src/utils/utils_definitions.hpp:584). */
+    const val ITEM_FIREFIELD_PERSISTENT_MEDIUM = 2124
+
+    /** `ITEM_FIREFIELD_PERSISTENT_SMALL` (src/utils/utils_definitions.hpp:585). */
+    const val ITEM_FIREFIELD_PERSISTENT_SMALL = 2125
+
+    /** `ITEM_FIREFIELD_NOPVP` (src/utils/utils_definitions.hpp:586). */
+    const val ITEM_FIREFIELD_NOPVP = 21465
+
+    /** `ITEM_POISONFIELD_PVP` (src/utils/utils_definitions.hpp:588). */
+    const val ITEM_POISONFIELD_PVP = 105
+
+    /** `ITEM_POISONFIELD_PERSISTENT` (src/utils/utils_definitions.hpp:589). */
+    const val ITEM_POISONFIELD_PERSISTENT = 2121
+
+    /** `ITEM_POISONFIELD_NOPVP` (src/utils/utils_definitions.hpp:590). */
+    const val ITEM_POISONFIELD_NOPVP = 2134
+
+    /** `ITEM_ENERGYFIELD_PVP` (src/utils/utils_definitions.hpp:592). */
+    const val ITEM_ENERGYFIELD_PVP = 2122
+
+    /** `ITEM_ENERGYFIELD_PERSISTENT` (src/utils/utils_definitions.hpp:593). */
+    const val ITEM_ENERGYFIELD_PERSISTENT = 2126
+
+    /** `ITEM_ENERGYFIELD_NOPVP` (src/utils/utils_definitions.hpp:594). */
+    const val ITEM_ENERGYFIELD_NOPVP = 2135
+
+    /** `ITEM_MAGICWALL_PERSISTENT` (src/utils/utils_definitions.hpp:597). */
+    const val ITEM_MAGICWALL_PERSISTENT = 2129
+
+    /** `ITEM_WILDGROWTH` (src/utils/utils_definitions.hpp:600). */
+    const val ITEM_WILDGROWTH = 2130
+
+    /** `ITEM_WILDGROWTH_PERSISTENT` (src/utils/utils_definitions.hpp:601). */
+    const val ITEM_WILDGROWTH_PERSISTENT = 3635
+
+    /** `ITEM_WILDGROWTH_SAFE` (src/utils/utils_definitions.hpp:602). */
+    const val ITEM_WILDGROWTH_SAFE = 10182
 }

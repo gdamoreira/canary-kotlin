@@ -724,11 +724,16 @@ class SpellEngine(
     }
 
     /**
-     * `InstantSpell::canThrowSpell` (`spells.cpp:1299-1310`). The range-less and
-     * ranged `Game::canThrowObjectTo` overloads are folded into one seam call
-     * with `-1` meaning "no range limit".
+     * `InstantSpell::canThrowSpell` (`spells.cpp:1299-1310`).
+     *
+     * A different floor always rejects; otherwise the sight/range fold of the
+     * two `Game::canThrowObjectTo` overloads is delegated to
+     * [SpellWorld.canThrowObjectTo] with `-1` meaning "no range limit"
+     * (`spells.cpp:1306`): the range-less overload bounds by the client
+     * viewport defaults (`MAP_MAX_CLIENT_VIEW_PORT_X/Y`, game.hpp:472) and the
+     * ranged overload by `range` on both axes.
      */
-    private fun canThrowSpell(caster: SpellCaster, spell: InstantSpell, target: SpellTarget): Boolean {
+    fun canThrowSpell(caster: SpellCaster, spell: InstantSpell, target: SpellTarget): Boolean {
         val fromPos = caster.getPosition()
         val toPos = target.getPosition()
         if (fromPos.z != toPos.z) {

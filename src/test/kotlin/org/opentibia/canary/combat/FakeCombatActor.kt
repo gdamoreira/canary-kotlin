@@ -7,6 +7,7 @@ import org.opentibia.canary.creatures.monsters.Faction
 import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.game.zones.ZoneType
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.systems.rewardchest.ReturnValue
 
 /**
  * Test double for the [CombatActor]/[CombatPlayer] validation seam.
@@ -47,9 +48,19 @@ class FakeCombatPlayer : FakeCombatActor(), CombatPlayer {
     var permittedConditionInPzValue: Boolean = false
     var vocationCanCombatValue: Boolean = true
     var vocationIdValue: Int = 1
+    var firstOnStackValue: Boolean = true
 
     /** Last argument passed to [getSkullClient]. */
     var skullClientTarget: CombatActor? = null
+
+    /** Every `Player::sendCancelMessage` return value in order. */
+    val cancelMessages: MutableList<ReturnValue> = mutableListOf()
+
+    /** Every `Player::sendMagicEffect` `(position, effect)` pair in order. */
+    val magicEffects: MutableList<Pair<Position, Int>> = mutableListOf()
+
+    /** `Player::addInFightTicks()` call count. */
+    var fightTicks: Int = 0
 
     override fun getPlayer(): CombatPlayer = this
 
@@ -71,6 +82,20 @@ class FakeCombatPlayer : FakeCombatActor(), CombatPlayer {
     override fun getVocationCanCombat(): Boolean = vocationCanCombatValue
 
     override fun getVocationId(): Int = vocationIdValue
+
+    override fun isFirstOnStack(): Boolean = firstOnStackValue
+
+    override fun sendCancelMessage(ret: ReturnValue) {
+        cancelMessages.add(ret)
+    }
+
+    override fun sendMagicEffect(position: Position, effect: Int) {
+        magicEffects.add(position to effect)
+    }
+
+    override fun addInFightTicks() {
+        fightTicks++
+    }
 }
 
 class FakeCombatMonster(
@@ -94,11 +119,53 @@ class FakeCombatTile(
     var teleport: Boolean = false
     var itemIdList: MutableList<Int> = mutableListOf()
 
+    /** `Tile::getCreatures()`; the first entry is the top creature. */
+    var creatureList: MutableList<CombatActor> = mutableListOf()
+
     override fun hasFlag(flag: TileFlags): Boolean = flag in flags
     override fun hasProperty(property: Int): Boolean = property in properties
     override fun getPosition(): Position = positionValue
     override fun getTeleportItem(): Boolean = teleport
     override fun getItemIds(): List<Int> = itemIdList
+    override fun getCreatures(): List<CombatActor> = creatureList
+    override fun getTopCreature(): CombatActor? = creatureList.firstOrNull()
+}
+
+/** Recording double for the `g_game()` effect/tile calls of the [Combat] tail. */
+class FakeCombatEffects : CombatEffects {
+    data class MagicEffect(val caster: CombatActor?, val position: Position, val effect: Int)
+
+    data class Sound(val position: Position, val castEffect: Int, val impactEffect: Int, val caster: CombatActor?)
+
+    data class DistanceEffect(val caster: CombatActor, val fromPos: Position, val toPos: Position, val effect: Int)
+
+    data class FieldItem(val caster: CombatActor?, val tile: CombatTile, val itemId: Int)
+
+    val magicEffects: MutableList<MagicEffect> = mutableListOf()
+    val doubleSounds: MutableList<Sound> = mutableListOf()
+    val singleSounds: MutableList<Sound> = mutableListOf()
+    val distanceEffects: MutableList<DistanceEffect> = mutableListOf()
+    val fieldItems: MutableList<FieldItem> = mutableListOf()
+
+    override fun addMagicEffect(caster: CombatActor?, position: Position, effect: Int) {
+        magicEffects.add(MagicEffect(caster, position, effect))
+    }
+
+    override fun sendDoubleSoundEffect(position: Position, castEffect: Int, impactEffect: Int, caster: CombatActor?) {
+        doubleSounds.add(Sound(position, castEffect, impactEffect, caster))
+    }
+
+    override fun sendSingleSoundEffect(position: Position, effect: Int, caster: CombatActor?) {
+        singleSounds.add(Sound(position, effect, 0, caster))
+    }
+
+    override fun addDistanceEffect(caster: CombatActor, fromPos: Position, toPos: Position, effect: Int) {
+        distanceEffects.add(DistanceEffect(caster, fromPos, toPos, effect))
+    }
+
+    override fun createFieldItem(caster: CombatActor?, tile: CombatTile, itemId: Int) {
+        fieldItems.add(FieldItem(caster, tile, itemId))
+    }
 }
 
 class FakeCombatMap : CombatMap {
