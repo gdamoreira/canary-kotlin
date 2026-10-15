@@ -518,6 +518,18 @@ object GameWindowWriter {
     /** `SERVER_BEAT` (`src/game/game.hpp:64`). */
     const val SERVER_BEAT: Int = 0x32
 
+    /** `Creature::speedA` (`src/creatures/creature.hpp:76`). */
+    private const val SPEED_A: Double = 857.36
+
+    /** `Creature::speedB` (`src/creatures/creature.hpp:77`). */
+    private const val SPEED_B: Double = 261.29
+
+    /** `Creature::speedC` (`src/creatures/creature.hpp:78`). */
+    private const val SPEED_C: Double = -4795.01
+
+    /** The `addDouble(..., 3)` precision of the login speed formula (protocolgame.cpp:8647-8649). */
+    private const val LOGIN_SPEED_PRECISION: Int = 3
+
     /** `TEXTCOLOR_NONE` (`src/utils/utils_definitions.hpp:460`). */
     const val TEXTCOLOR_NONE: Int = 255
 
@@ -863,28 +875,48 @@ object GameWindowWriter {
 
     /**
      * `sendAddCreature` for the `creature == player` branch
-     * (protocolgame.cpp:8639-8668): the self appear opcode, the player id, the
-     * server beat and the `version >= 1054` expert-PvP controls byte.
+     * (protocolgame.cpp:8639-8682): the self appear opcode, the player id, the
+     * server beat, the `version >= 981` `LoginSpeedFormula` doubles
+     * (`Creature::speedA`/`speedB`/`speedC` at precision 3,
+     * src/creatures/creature.hpp:76-78), the `version >= 1054` / `>= 1058`
+     * expert-PvP control bytes, the `version >= 1080` store-images URL /
+     * coin-packet pair and the `!oldProtocol` exiva-button byte.
      *
-     * PARITY GAPS: the `version >= 981` speed-formula doubles, the `>= 1058`
-     * expert-mode byte, the `>= 1080` store images URL / coin-packet pair and
-     * the current-profile exiva-button byte are not modeled (the port's login
-     * tail does not resolve the `g_configManager()`/world-type values behind
-     * them), so this frame carries only the prefix fields above exactly like
-     * the pre-existing login frame it replaces.
+     * PARITY GAPS: the `oldProtocol && (version >= 1054 ||
+     * InlineLoginBugReportFlag)` inline bug-report flag byte written before the
+     * `>= 1054` byte (protocolgame.cpp:8653-8660) is not modeled; the port's
+     * supported profiles take the current-profile arm.
      */
     fun writeSelfAddCreature(
         out: ByteBuf,
         playerId: Long,
-        clientVersion: Int = CLIENT_VERSION,
-        expertPvpControlsEnabled: Boolean = false,
+        tail: SelfAppearTail = SelfAppearTail(),
     ) {
-        out.writeByte(selfAppearOpcode(clientVersion))
+        out.writeByte(selfAppearOpcode(tail.clientVersion))
         out.writeIntLE(playerId.toInt())
         out.writeShortLE(SERVER_BEAT)
 
-        if (clientVersion >= 1054) {
-            out.writeByte(if (expertPvpControlsEnabled) 0x01 else 0x00)
+        if (tail.clientVersion >= 981 && tail.loginSpeedFormula) {
+            out.writeCanaryDouble(SPEED_A, LOGIN_SPEED_PRECISION)
+            out.writeCanaryDouble(SPEED_B, LOGIN_SPEED_PRECISION)
+            out.writeCanaryDouble(SPEED_C, LOGIN_SPEED_PRECISION)
+        }
+
+        if (tail.clientVersion >= 1054) {
+            out.writeByte(if (tail.expertPvpControlsEnabled) 0x01 else 0x00)
+        }
+
+        if (tail.clientVersion >= 1058) {
+            out.writeByte(if (tail.expertPvpControlsEnabled) 0x01 else 0x00)
+        }
+
+        if (tail.clientVersion >= 1080) {
+            out.writeTibiaString(tail.storeImagesUrl)
+            out.writeShortLE(tail.storeCoinPacket)
+        }
+
+        if (!tail.oldProtocol) {
+            out.writeByte(if (tail.exivaEnabled) 0x01 else 0x00)
         }
     }
 

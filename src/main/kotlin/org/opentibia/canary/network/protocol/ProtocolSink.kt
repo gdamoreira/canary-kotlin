@@ -137,6 +137,34 @@ interface ProtocolSink : VipClient {
 }
 
 /**
+ * `ProtocolGame::sendAddCreature` self-branch inputs
+ * (src/server/network/protocol/protocolgame.cpp:8641-8682) resolved from the
+ * session protocol state: the negotiated client `version` behind the
+ * `>= 980`/`>= 981`/`>= 1054`/`>= 1058`/`>= 1080` gates, the
+ * `ProtocolFeature::LoginSpeedFormula` speed-formula doubles, the expert-PvP
+ * controls gate (`ExpertPvp::isEnabled()` plus `ExpertPvpModeByte`), the
+ * `g_configManager()` STORE_IMAGES_URL/STORE_COIN_PACKET pair, the
+ * `ProtocolFeature::OldProtocolCompat` arm that skips the store/exiva tail and
+ * the `Game::getWorldType() == WORLD_TYPE_NO_PVP` exiva-button value.
+ *
+ * The defaults describe the port's `Current` profile with the Canary config
+ * defaults (`coinImagesURL = ""`, `coinPacketSize = 25`; configmanager.cpp:359,
+ * 410) and no exiva, exactly like a directly constructed transport.
+ */
+data class SelfAppearTail(
+    val clientVersion: Int = CLIENT_VERSION,
+    val loginSpeedFormula: Boolean = true,
+    val expertPvpControlsEnabled: Boolean = false,
+    val storeImagesUrl: String = "",
+    val storeCoinPacket: Int = STORE_COIN_PACKET_DEFAULT,
+    val oldProtocol: Boolean = false,
+    val exivaEnabled: Boolean = false,
+)
+
+/** `STORE_COIN_PACKET` config default (`loadIntConfig(..., 25)`, configmanager.cpp:359). */
+const val STORE_COIN_PACKET_DEFAULT: Int = 25
+
+/**
  * Shared frame serialization for every [ProtocolSink] transport: the senders
  * resolve live entity state into the ported frame types, allocate one `ByteBuf`
  * per frame from [frameAllocator] and hand it to [writeFrame], which owns the
@@ -197,7 +225,7 @@ abstract class ProtocolFrameSink(
 
         val tile = creature.getTile() ?: return
         val stackpos = tile.getClientIndexOfCreature(player, creature)
-        if (stackpos < 0 || stackpos >= MAX_STACKPOS) {
+        if (stackpos < 0 || stackpos >= PROTOCOL_MAX_STACKPOS) {
             // `Player::sendCreatureAppear` falls back to `sendUpdateTile`
             // (player.cpp:8793). The transports without the extended
             // `PlayerSendSink.sendUpdateTile` sender refresh the viewport
@@ -209,9 +237,12 @@ abstract class ProtocolFrameSink(
 
         if (creature === player) {
             // `ProtocolGame::sendAddCreature`'s `creature == player` branch
-            // (protocolgame.cpp:8639-8668): the self appear frame instead of
+            // (protocolgame.cpp:8639-8682): the self appear frame instead of
             // the 0x6A add-creature frame, so the logging-in player's own
-            // placement fanout emits the login frame exactly once.
+            // placement fanout emits the login frame exactly once. The
+            // delegated session transports override [sendCreatureAppear] to
+            // resolve their negotiated [SelfAppearTail]; this base transport
+            // keeps the current-profile defaults.
             emit { GameWindowWriter.writeSelfAddCreature(this, player.id) }
             return
         }
@@ -423,27 +454,7 @@ abstract class ProtocolFrameSink(
     protected fun canSee(pos: Position): Boolean = canSee(pos.x, pos.y, pos.z)
 
     /** `ProtocolGame::canSee(x, y, z)` (protocolgame.cpp:2396-2411). */
-    protected fun canSee(x: Int, y: Int, z: Int): Boolean {
-        val myPos = player.position
-        if (myPos.z <= GameMap.MAP_INIT_SURFACE_LAYER) {
-            // We are on ground level or above (7 -> 0): the view is 7 -> 0.
-            if (z > GameMap.MAP_INIT_SURFACE_LAYER) {
-                return false
-            }
-        } else if (myPos.z >= GameMap.MAP_INIT_SURFACE_LAYER + 1) {
-            // We are underground (8 -> 15): the view is +/- 2 floors.
-            if (abs(myPos.z - z) > GameMap.MAP_LAYER_VIEW_LIMIT) {
-                return false
-            }
-        }
-
-        // A negative offset means the action takes place on a lower floor.
-        val offsetz = myPos.z - z
-        return x >= myPos.x - GameMap.MAP_MAX_CLIENT_VIEW_PORT_X + offsetz &&
-            x <= myPos.x + (GameMap.MAP_MAX_CLIENT_VIEW_PORT_X + 1) + offsetz &&
-            y >= myPos.y - GameMap.MAP_MAX_CLIENT_VIEW_PORT_Y + offsetz &&
-            y <= myPos.y + (GameMap.MAP_MAX_CLIENT_VIEW_PORT_Y + 1) + offsetz
-    }
+    protected fun canSee(x: Int, y: Int, z: Int): Boolean = protocolCanSeePosition(player, x, y, z)
 
     /**
      * Resolved `ProtocolGame::AddCreature` input for the observer with the
@@ -581,11 +592,32 @@ abstract class ProtocolFrameSink(
         val skillFactor = (player.getSkillLevel(skills_t.SKILL_FIST) + 4) / 28.0
         return WeaponAttack.Fist((flatBonus + fightFactor * skillFactor).toInt())
     }
+}
 
-    private companion object {
-        /** `MAX_STACKPOS` (`src/server/network/protocol/protocolgame.hpp`). */
-        const val MAX_STACKPOS = 10
+/** `MAX_STACKPOS` (`src/server/network/protocol/protocolgame.hpp`). */
+internal const val PROTOCOL_MAX_STACKPOS: Int = 10
+
+/** `ProtocolGame::canSee(x, y, z)` (protocolgame.cpp:2396-2411). */
+internal fun protocolCanSeePosition(player: Player, x: Int, y: Int, z: Int): Boolean {
+    val myPos = player.position
+    if (myPos.z <= GameMap.MAP_INIT_SURFACE_LAYER) {
+        // We are on ground level or above (7 -> 0): the view is 7 -> 0.
+        if (z > GameMap.MAP_INIT_SURFACE_LAYER) {
+            return false
+        }
+    } else if (myPos.z >= GameMap.MAP_INIT_SURFACE_LAYER + 1) {
+        // We are underground (8 -> 15): the view is +/- 2 floors.
+        if (abs(myPos.z - z) > GameMap.MAP_LAYER_VIEW_LIMIT) {
+            return false
+        }
     }
+
+    // A negative offset means the action takes place on a lower floor.
+    val offsetz = myPos.z - z
+    return x >= myPos.x - GameMap.MAP_MAX_CLIENT_VIEW_PORT_X + offsetz &&
+        x <= myPos.x + (GameMap.MAP_MAX_CLIENT_VIEW_PORT_X + 1) + offsetz &&
+        y >= myPos.y - GameMap.MAP_MAX_CLIENT_VIEW_PORT_Y + offsetz &&
+        y <= myPos.y + (GameMap.MAP_MAX_CLIENT_VIEW_PORT_Y + 1) + offsetz
 }
 
 /**
@@ -626,33 +658,79 @@ internal fun emitSaleItemList(
  * `g_spells()` registry ([basicDataSpellsOf]), exactly like the spell-registry
  * consumers of the login/window senders.
  *
- * [sendSaleItemList] is overridden instead of delegated because the shop-owner
- * provider cannot reach the delegated [PlayerFrameSink]'s `ProtocolFrameSink`
+ * [sendSaleItemList] and the self `sendCreatureAppear` branch are overridden
+ * instead of delegated because the shop-owner and negotiated [SelfAppearTail]
+ * providers cannot reach the delegated [PlayerFrameSink]'s `ProtocolFrameSink`
  * constructor (that surface lives outside this module's ownership); the frame
- * sequence itself stays in [emitSaleItemList].
+ * sequences themselves stay in [emitSaleItemList] and
+ * [GameWindowWriter.writeSelfAddCreature].
  */
-class NettyProtocolSink(
+class NettyProtocolSink private constructor(
     private val channel: Channel,
     private val player: Player,
-    map: GameMap,
-    /** `g_game().getCreatureByID` behind the known-set eviction (protocolgame.cpp:2346). */
-    creatureById: (Long) -> Creature? = { null },
+    private val delegate: PlayerFrameSink,
     /** `Player::getShopOwner` (player.cpp:6123-6125) behind `sendSaleItemList`. */
-    private val shopOwner: (Player) -> Npc? = { null },
-) : PlayerSendSink by PlayerFrameSink(
-    player,
-    map,
-    frameAllocatorProvider = { channel.alloc() },
-    frameWriter = { frame ->
-        if (channel.isActive) {
-            channel.writeAndFlush(frame)
-        } else {
-            frame.release()
+    private val shopOwner: (Player) -> Npc?,
+    /** `ProtocolGame` session state behind the self appear frame (protocolgame.cpp:8641-8682). */
+    private val selfAppearTail: SelfAppearTail,
+) : PlayerSendSink by delegate {
+
+    constructor(
+        channel: Channel,
+        player: Player,
+        map: GameMap,
+        /** `g_game().getCreatureByID` behind the known-set eviction (protocolgame.cpp:2346). */
+        creatureById: (Long) -> Creature? = { null },
+        /** `Player::getShopOwner` (player.cpp:6123-6125) behind `sendSaleItemList`. */
+        shopOwner: (Player) -> Npc? = { null },
+        /** The negotiated session tail of the self appear frame. */
+        selfAppearTail: SelfAppearTail = SelfAppearTail(),
+    ) : this(
+        channel,
+        player,
+        PlayerFrameSink(
+            player,
+            map,
+            frameAllocatorProvider = { channel.alloc() },
+            frameWriter = { frame ->
+                if (channel.isActive) {
+                    channel.writeAndFlush(frame)
+                } else {
+                    frame.release()
+                }
+            },
+            basicDataSpells = { basicDataSpellsOf(player) },
+            creatureById = creatureById,
+        ),
+        shopOwner,
+        selfAppearTail,
+    )
+
+    /**
+     * `ProtocolGame::sendAddCreature`'s `creature == player` branch resolved
+     * with this session's negotiated [SelfAppearTail]. Every other appear path
+     * delegates to the shared [PlayerFrameSink] so the known-creature
+     * bookkeeping stays single-sourced; a self appear that fails the
+     * viewport/tile guard also delegates, which emits the same
+     * `sendUpdateTile` fallback Canary uses (player.cpp:8791-8794).
+     */
+    override fun sendCreatureAppear(creature: Creature, position: Position, isLogin: Boolean) {
+        if (creature === player && protocolCanSeePosition(player, position.x, position.y, position.z)) {
+            val tile = creature.getTile()
+            val stackpos = tile?.getClientIndexOfCreature(player, creature) ?: -1
+            if (stackpos in 0 until PROTOCOL_MAX_STACKPOS) {
+                val frame = channel.alloc().buffer()
+                GameWindowWriter.writeSelfAddCreature(frame, player.id, selfAppearTail)
+                if (channel.isActive) {
+                    channel.writeAndFlush(frame)
+                } else {
+                    frame.release()
+                }
+                return
+            }
         }
-    },
-    basicDataSpells = { basicDataSpellsOf(player) },
-    creatureById = creatureById,
-) {
+        delegate.sendCreatureAppear(creature, position, isLogin)
+    }
 
     override fun sendSaleItemList(inventoryMap: Map<Int, Int>) {
         emitSaleItemList(player, shopOwner(player), inventoryMap) { build ->

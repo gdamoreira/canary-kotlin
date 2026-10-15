@@ -1710,6 +1710,27 @@ class Game(
     var setScheduledSaleUpdate: (Player, Boolean) -> Unit = { _, _ -> }
 
     /**
+     * `g_configManager().getString(STORE_IMAGES_URL)` (configmanager.cpp:410)
+     * read by the `ProtocolGame::sendAddCreature` self appear frame
+     * (protocolgame.cpp:8672). Resolved once from the injected
+     * `g_configManager()` with the Canary default (`""`) so the login frame
+     * carries the configured store URL without a global.
+     */
+    val storeImagesUrl: String =
+        ConfigKeys.byName("STORE_IMAGES_URL")?.let { key ->
+            configManager?.getString(key, key.defaultValue as String)
+        } ?: ""
+
+    /**
+     * `g_configManager().getNumber(STORE_COIN_PACKET)` (configmanager.cpp:359)
+     * behind the same self appear frame pair; the Canary default is 25.
+     */
+    val storeCoinPacket: Int =
+        ConfigKeys.byName("STORE_COIN_PACKET")?.let { key ->
+            configManager?.getNumber(key, key.defaultValue as Int)
+        } ?: 25
+
+    /**
      * `Game::addPlayer` (src/game/game.cpp:11624) plus the login composition the
      * eliminated globals require: the `MAX_MESSAGEBUFFER` host value from the
      * injected `g_configManager()` (configmanager.cpp:315) and the shared
