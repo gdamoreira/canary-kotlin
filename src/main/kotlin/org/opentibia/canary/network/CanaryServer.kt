@@ -18,6 +18,7 @@ import org.opentibia.canary.account.InMemoryAccountRepository
 import org.opentibia.canary.combat.CombatType
 import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
+import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.monsters.MonsterBehavior
 import org.opentibia.canary.creatures.monsters.MonsterPipelinesHost
@@ -380,6 +381,36 @@ class CanaryServer(
     }
 
     /**
+     * Binds the `onThinkEventsHost`/`onDeathEventsHost` seams of [creature] to
+     * the world [scriptingDispatch], so the attached `think`/`death` creature
+     * events fire confined to the WorldCommit lane. The monster spawn path
+     * binds every spawned monster; the session players are bound by
+     * [GameHandler]. The corpse/killer payload of the death loop stays with
+     * the unported damage bookkeeping, so the binder owns the null/false
+     * payload (Creature.kt PARITY GAP).
+     */
+    internal fun bindCreatureEventHosts(creature: Creature) {
+        creature.onThinkEventsHost = { c, interval ->
+            scriptingDispatch.creatureOnThink(c, interval.toLong())
+        }
+        creature.onDeathEventsHost = { c ->
+            scriptingDispatch.creatureOnDeath(c, null, null, null, false, false)
+        }
+    }
+
+    init {
+        // Wave 68 E1: the Lua `modalWindow:sendToPlayer` entry point
+        // (`ModalWindowFunctions::luaModalWindowSendToPlayer`,
+        // modal_window_functions.cpp:234-252) stays the documented no-op until
+        // the world exists (`LuaEnvironment.initState` installs it before the
+        // composition root composes `game`); re-install it over the world's
+        // per-player modal host resolution so the window emits through the
+        // session `ProtocolGame` sink and its id answers through
+        // `Game::playerAnswerModalWindow` (game.cpp:11144-11176).
+        luaEnvironment.worldOperations?.attachModalWindows { player -> game.modalWindowManagerOf(player) }
+    }
+
+    /**
      * `Tile::queryAdd` environment (src/items/tile.cpp:691-964): the C++
      * `g_game()`/`g_configManager()`/`ExpertPvp` globals become the port's
      * per-tile seams (AGENTS.md 1.1). The live monster facts resolve through
@@ -447,8 +478,13 @@ class CanaryServer(
                 config = configManager,
                 // `Monster::onSpawn(position)` (monster.cpp:627-648) dispatched by
                 // `SpawnMonster::spawnMonster` (spawn_monster.cpp:220) reaches the
-                // world host entry of the placed monster.
-                onMonsterSpawn = { monster, position -> monsterPipelinesHost?.onSpawn(monster.id, position) },
+                // world host entry of the placed monster. The same hook binds the
+                // attached `think`/`death` event seams of the new monster to the
+                // world dispatch (creature.cpp:157-163, 819-824).
+                onMonsterSpawn = { monster, position ->
+                    monsterPipelinesHost?.onSpawn(monster.id, position)
+                    bindCreatureEventHosts(monster)
+                },
             )
         } else {
             null

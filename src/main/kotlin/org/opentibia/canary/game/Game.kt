@@ -10168,6 +10168,41 @@ class Game(
     }
 
     /**
+     * Per-session `ModalWindowManager` hosts, keyed by player id.
+     *
+     * Canary stores the open window ids and the `Player::client` sender on the
+     * player itself (player.hpp:1695; player.cpp:9021-9028). The port keeps the
+     * constructor-injected [modalWindowManager] as the world/scripting host and
+     * registers the session host the network root composes for a logging-in
+     * player here (`ModalWindowManager`'s "hosts instantiate one manager per
+     * session" contract), so `Player::sendModalWindow` emits through the
+     * session `ProtocolGame` sink while the window tracking and answer routing
+     * stay reachable from `Game::playerAnswerModalWindow` (game.cpp:11144).
+     *
+     * Registration/removal happen on the WorldCommit lane (the login placement
+     * and the `Game::removeCreature` logout block), matching AGENTS.md 1.2.
+     */
+    private val sessionModalWindowManagers = mutableMapOf<Long, ModalWindowManager>()
+
+    /** Registers `player`'s session modal host; called by the network root on login. */
+    internal fun registerModalWindowManager(player: Player, manager: ModalWindowManager) {
+        sessionModalWindowManagers[player.id] = manager
+    }
+
+    /** Drops `player`'s session modal host; called by the network root on disconnect. */
+    internal fun unregisterModalWindowManager(player: Player) {
+        sessionModalWindowManagers.remove(player.id)
+    }
+
+    /**
+     * The modal-window host of [player]: the registered session host, falling
+     * back to the constructor-injected [modalWindowManager] for players that
+     * entered the world without a network session (embedded/test roots).
+     */
+    internal fun modalWindowManagerOf(player: Player): ModalWindowManager? =
+        sessionModalWindowManagers[player.id] ?: modalWindowManager
+
+    /**
      * `Game::playerAnswerModalWindow` (src/game/game.cpp:11144): the player
      * lookup wraps the ported [ModalWindowManager.playerAnswerModalWindow]
      * (the offline-training branch and the `onModalWindow` creature events).
@@ -10175,7 +10210,7 @@ class Game(
     fun playerAnswerModalWindow(playerId: Long, modalWindowId: Long, button: Int, choice: Int) {
         val player = getPlayerByID(playerId) ?: return
 
-        modalWindowManager?.playerAnswerModalWindow(player, modalWindowId, button, choice)
+        modalWindowManagerOf(player)?.playerAnswerModalWindow(player, modalWindowId, button, choice)
     }
 
     /**
@@ -14024,13 +14059,16 @@ class Game(
     /**
      * `Game::sendOfflineTrainingDialog` (src/game/game.cpp:11134): send the
      * hardcoded [offlineTrainingWindow] unless the player already has it open.
+     * The emit target is the player's modal-window host (the session host in
+     * production, else the world fallback), so the window reaches the session
+     * `ProtocolGame` sink.
      */
     fun sendOfflineTrainingDialog(player: Player?) {
         if (player == null) {
             return
         }
 
-        val manager = modalWindowManager ?: return
+        val manager = modalWindowManagerOf(player) ?: return
         if (!manager.hasModalWindowOpen(player, ModalWindowManager.OFFLINE_TRAINING_WINDOW_ID)) {
             manager.sendModalWindow(player, offlineTrainingWindow)
         }

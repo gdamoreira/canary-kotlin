@@ -1,7 +1,9 @@
 package org.opentibia.canary.lua.runtime
 
+import org.opentibia.canary.combat.CombatActor
 import org.opentibia.canary.combat.CombatEffects
 import org.opentibia.canary.combat.CombatTargetState
+import org.opentibia.canary.combat.CombatTile
 import org.opentibia.canary.combat.condition.CombatType
 import org.luaj.vm2.LuaError
 import org.luaj.vm2.LuaValue
@@ -34,6 +36,10 @@ import org.opentibia.canary.creatures.players.components.PlayerStorage
 import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.creatures.vocations.Vocation
 import org.opentibia.canary.creatures.spawns.MonsterType
+import org.opentibia.canary.game.CylinderFlags
+import org.opentibia.canary.game.Game
+import org.opentibia.canary.game.modal.ModalWindow
+import org.opentibia.canary.game.modal.ModalWindowManager
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.game.movement.Teleport
 import org.opentibia.canary.items.Container
@@ -56,10 +62,12 @@ import org.opentibia.canary.lua.bindings.LootData
 import org.opentibia.canary.lua.bindings.LootFunctions
 import org.opentibia.canary.lua.bindings.LootOperations
 import org.opentibia.canary.lua.bindings.LuaCombat
+import org.opentibia.canary.lua.bindings.LuaCombatActor
 import org.opentibia.canary.lua.bindings.LuaCombatAreaRegistry
 import org.opentibia.canary.lua.bindings.LuaCombatCallbackBridge
 import org.opentibia.canary.lua.bindings.LuaCombatExecutor
 import org.opentibia.canary.lua.bindings.LuaCombatNoEffects
+import org.opentibia.canary.lua.bindings.LuaCombatTile
 import org.opentibia.canary.lua.bindings.MonsterAttackInfo
 import org.opentibia.canary.lua.bindings.MonsterFunctions
 import org.opentibia.canary.lua.bindings.MonsterOperations
@@ -124,6 +132,7 @@ import org.opentibia.canary.lua.bindings.library.LuaEnums
 import org.opentibia.canary.lua.bindings.library.LuaScriptResults
 import org.opentibia.canary.lua.bindings.library.MetricsFunctions
 import org.opentibia.canary.lua.bindings.library.ModalWindowFunctions
+import org.opentibia.canary.lua.bindings.library.ModalWindowOperations
 import org.opentibia.canary.lua.bindings.library.NetworkMessageFunctions
 import org.opentibia.canary.lua.bindings.library.ResultFunctions
 import org.opentibia.canary.lua.bindings.library.WebhookFunctions
@@ -257,6 +266,13 @@ class WorldLuaOperations(
      */
     combatValuesOf: (Creature) -> Pair<Int, Int>? = { null },
 ) {
+    /**
+     * The environment [install] registered the binding classes on; late-bound
+     * entry points ([attachModalWindows]) re-install their operations on it
+     * once the world exists.
+     */
+    private var installedEnvironment: LuaEnvironment? = null
+
     private val worldGame: WorldGameOperations =
         WorldGameOperations(itemIdsByName, itemTypes, gameMap, monsterTypesByName, itemClassifications)
 
@@ -339,6 +355,26 @@ class WorldLuaOperations(
     }
 
     /**
+     * Wires the `modalWindow:sendToPlayer` Lua entry point
+     * (`ModalWindowFunctions::luaModalWindowSendToPlayer`,
+     * src/lua/functions/core/game/modal_window_functions.cpp:234-252) after
+     * binding install, mirroring [attachCombat]: `initState` registers the
+     * documented unwired no-op operations because no world exists yet, so the
+     * composition root re-installs the operations over [managerOf] (the world
+     * `Game`'s session modal host resolution) when it does. The window then
+     * emits through the target player's session `ProtocolGame` sink and its id
+     * routes the answers through `Game::playerAnswerModalWindow`
+     * (game.cpp:11144).
+     */
+    fun attachModalWindows(managerOf: (Player) -> ModalWindowManager?) {
+        val env = installedEnvironment ?: return
+        if (env.getLuaState() == null) {
+            return
+        }
+        ModalWindowFunctions.install(env, SessionModalWindowOperations(managerOf))
+    }
+
+    /**
      * `Player::getShopOwner` (player.cpp:6123-6125): the merchant the player's
      * open shop window is bound to, recorded by the `npc:openShopWindow` path
      * ([WorldNpcOperations]). The composition root binds this to
@@ -402,6 +438,7 @@ class WorldLuaOperations(
      * installed by `LuaEnvironment.initState()`. Safe to call after `initState()`.
      */
     fun install(env: LuaEnvironment) {
+        installedEnvironment = env
         GameFunctions.install(env, game)
         PlayerFunctions.install(env, player)
         // SpellBindings is the canonical `Spell` owner: it creates the registry that
@@ -3552,4 +3589,106 @@ class WorldImbuementOperations(
 
     override fun getCategory(imbuement: Imbuement): CategoryImbuement? =
         imbuements?.getCategoryByID(imbuement.category)
+}
+
+/**
+ * [ModalWindowOperations] over the target player's modal-window host, resolved
+ * by the composition root once the world exists ([WorldLuaOperations.attachModalWindows]).
+ *
+ * Mirrors `ModalWindowFunctions::luaModalWindowSendToPlayer`
+ * (src/lua/functions/core/game/modal_window_functions.cpp:234-252): the
+ * `Player::hasModalWindowOpen` gate skips an already-open window
+ * (player.cpp:8314-8316) and `Player::sendModalWindow` (player.cpp:9021-9028)
+ * emits through the session host. The C++ entry point pushes `true`
+ * unconditionally; a player without a resolved host drops the send like a
+ * `Player::client == nullptr` session.
+ */
+private class SessionModalWindowOperations(
+    private val managerOf: (Player) -> ModalWindowManager?,
+) : ModalWindowOperations {
+
+    override fun sendToPlayer(player: Player, window: ModalWindow): Boolean {
+        val manager = managerOf(player)
+        if (manager != null && !manager.hasModalWindowOpen(player, window.id)) {
+            manager.sendModalWindow(player, window)
+        }
+        return true
+    }
+}
+
+/**
+ * Production [CombatEffects] over the live world [Game]: the `g_game()` fanout
+ * of the Lua combat dispatch (`Combat::combatTileEffects` and
+ * `Combat::postCombatEffects`, src/creatures/combat/combat.cpp:1161-1275).
+ *
+ * The seam views map back through the [LuaCombatActor]/[LuaCombatTile]
+ * adapters the executor builds ([LuaCombatWorld]), so the C++
+ * `std::shared_ptr<Creature>`/`std::shared_ptr<Tile>` are recovered for the
+ * `Game::addMagicEffect`/`Game::addDistanceEffect`/`Game::internalAddItem`
+ * calls. Fields created here mirror `Item::CreateItem(itemId)`, the
+ * `item->setOwner(caster)` stamp and `Item::startDecaying`'s duration half
+ * (combat.cpp:1233-1247).
+ *
+ * PARITY GAPS (recorded, not invented):
+ *  - `Combat::sendCombatEffect`'s Monk elemental-bond effect swap
+ *    (combat.cpp:1143-1152) stays with the weapons subsystem (the
+ *    [CombatEffects.addMagicEffect] contract records the same gap);
+ *  - `ExpertPvp::attachFieldContext(item, caster)` (combat.cpp:1239-1241) is
+ *    not modelled on the port's `ExpertPvp`;
+ *  - `Item::startDecaying`'s `g_decay()` scheduling is not composed at the
+ *    root yet, so only the default duration is applied.
+ */
+class GameCombatEffects(
+    private val game: Game,
+    /** `Item::items` catalog backing `Item::CreateItem` of the field item. */
+    private val itemTypes: ItemTypeRegistry? = null,
+) : CombatEffects {
+
+    /** `g_game().addMagicEffect(position, effect, caster)` (combat.cpp:1254). */
+    override fun addMagicEffect(caster: CombatActor?, position: Position, effect: Int) {
+        game.addMagicEffect(position, effect, casterCreature(caster))
+    }
+
+    /** `g_game().sendDoubleSoundEffect(position, cast, impact, caster)` (combat.cpp:1260). */
+    override fun sendDoubleSoundEffect(
+        position: Position,
+        castEffect: Int,
+        impactEffect: Int,
+        caster: CombatActor?,
+    ) {
+        game.sendDoubleSoundEffect(
+            position,
+            soundEffectOf(castEffect),
+            soundEffectOf(impactEffect),
+            casterCreature(caster),
+        )
+    }
+
+    /** `g_game().sendSingleSoundEffect(position, effect, caster)` (combat.cpp:1262). */
+    override fun sendSingleSoundEffect(position: Position, effect: Int, caster: CombatActor?) {
+        game.sendSingleSoundEffect(position, soundEffectOf(effect), casterCreature(caster))
+    }
+
+    /** `Combat::addDistanceEffect(caster, fromPos, toPos, effect)` (combat.cpp:1265-1275). */
+    override fun addDistanceEffect(caster: CombatActor, fromPos: Position, toPos: Position, effect: Int) {
+        game.addDistanceEffect(fromPos, toPos, effect, casterCreature(caster))
+    }
+
+    /** `Combat::combatTileEffects`'s field-item branch (combat.cpp:1233-1247). */
+    override fun createFieldItem(caster: CombatActor?, tile: CombatTile, itemId: Int) {
+        val targetTile = (tile as? LuaCombatTile)?.tile ?: return
+        val item = Item.create(itemId, registry = itemTypes)
+        casterCreature(caster)?.let { item.setOwner(it.id) }
+        val ret = game.internalAddItem(targetTile, item, INDEX_WHEREEVER, CylinderFlags.FLAG_NOLIMIT)
+        if (ret == ReturnValue.NOERROR) {
+            item.setDefaultDuration()
+        }
+    }
+
+    /** The C++ creature behind the executor's actor view; null for an absent caster. */
+    private fun casterCreature(caster: CombatActor?): Creature? = (caster as? LuaCombatActor)?.creature
+
+    /** `SoundEffect_t` value -> enum; an unknown value degrades to `SILENCE`. */
+    private fun soundEffectOf(value: Int): SoundEffect =
+        SoundEffect.entries.firstOrNull { it.value == value } ?: SoundEffect.SILENCE
 }

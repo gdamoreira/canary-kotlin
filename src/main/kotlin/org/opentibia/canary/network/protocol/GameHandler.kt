@@ -19,6 +19,8 @@ import org.opentibia.canary.creatures.players.vip.VipRepository
 import org.opentibia.canary.creatures.players.vip.VipStatus
 import org.opentibia.canary.creatures.vocations.Vocations
 import org.opentibia.canary.game.Game
+import org.opentibia.canary.game.modal.ModalWindowClient
+import org.opentibia.canary.game.modal.ModalWindowManager
 import org.opentibia.canary.game.scheduling.DispatcherLane
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.game.zones.TileFlags
@@ -154,7 +156,29 @@ class GameHandler(
 
     private var player: Player? = null
     private var xteaCipher: XteaCipher? = null
-    private val scriptingDispatch = ScriptingDispatch(luaEnvironment, dispatcher)
+
+    /**
+     * Per-session modal-window host (`Player::sendModalWindow`,
+     * player.cpp:9021-9028): the client forwards to this session's
+     * `ProtocolGame` sink ([Player.protocolSink]) and the host records the
+     * window ids `Game::playerAnswerModalWindow` (game.cpp:11144) erases.
+     * Registered with the world `Game` during the login placement (WorldCommit
+     * lane) and dropped on disconnect.
+     */
+    private var modalWindowManager: ModalWindowManager? = null
+
+    /**
+     * World-confined Lua event caller of this session. [creatureEventsOf] is
+     * `Creature::getCreatureEvents` (creature.cpp:1701-1715), so the
+     * `think`/`death` loops only fire the events the session player attached
+     * through `Creature::registerCreatureEvent` (creature.cpp:1674-1693)
+     * instead of the permissive wave-63 global walk.
+     */
+    private val scriptingDispatch = ScriptingDispatch(
+        luaEnvironment,
+        dispatcher,
+        creatureEventsOf = { creature -> creature.getCreatureEvents() },
+    )
 
     /**
      * `g_imbuementDecay()` engine bound by this handler: the server-owned
@@ -366,6 +390,30 @@ class GameHandler(
             }
         }
 
+        // `Player::sendModalWindow` (player.cpp:9021-9028): the per-session
+        // `ModalWindowManager` resolves this connection's `ProtocolGame`, so a
+        // window the world opens for the player emits through the session sink
+        // and the recorded ids route the 0xF9 answers back through
+        // `Game::playerAnswerModalWindow` (game.cpp:11144-11176). The host is
+        // registered with the world `Game` inside the placement block below so
+        // the mutation stays on the WorldCommit lane (AGENTS.md 1.2).
+        modalWindowManager = ModalWindowManager(
+            scripting = scriptingDispatch,
+            client = ModalWindowClient { modalWindow -> activePlayer.protocolSink?.sendModalWindow(modalWindow) },
+        )
+
+        // `Creature::onThink`/`Creature::dropCorpse` scripting loops
+        // (creature.cpp:157-163, 819-824): the session's `ScriptingDispatch`
+        // runs the attached events confined to the WorldCommit lane. The
+        // corpse/killer payload stays with the unported damage bookkeeping, so
+        // the binder owns the null/false payload (Creature.kt PARITY GAP).
+        activePlayer.onThinkEventsHost = { creature, interval ->
+            scriptingDispatch.creatureOnThink(creature, interval.toLong())
+        }
+        activePlayer.onDeathEventsHost = { creature ->
+            scriptingDispatch.creatureOnDeath(creature, null, null, null, false, false)
+        }
+
         // Canary restores the persisted player systems during login
         // (IOLoginData::loadPlayer) before firing the login creature events
         // (Player::onPlacedCreature -> CreatureEvents::playerLogin).
@@ -412,6 +460,10 @@ class GameHandler(
         val placed = AtomicBoolean(false)
         val done = CountDownLatch(1)
         val block: () -> Unit = {
+            // `Player::modalWindows`/`Player::client` session wiring: register
+            // the session modal host before `Game::addPlayer` announces the
+            // session so an answer cannot race the registration.
+            modalWindowManager?.let { manager -> game.registerModalWindowManager(player, manager) }
             placed.set(
                 game.placeCreature(player, player.getLoginPosition()) ||
                     game.placeCreature(player, player.getTemplePosition(), extendedPos = false, forced = true),
@@ -546,8 +598,11 @@ class GameHandler(
             // the party, removes the guild online entry and saves the player
             // (player.cpp:12318-12353), then the ported
             // `Creature::removeList()` -> `Game::removePlayer` unregisters the
-            // session (game.cpp:1602, player.cpp:4511, game.cpp:11631).
+            // session (game.cpp:1602, player.cpp:4511, game.cpp:11631). The
+            // session modal host is dropped with the session so a reused id
+            // cannot inherit it.
             dispatcher.dispatch(DispatcherLane.WorldCommit) {
+                modalWindowManager?.let { game.unregisterModalWindowManager(activePlayer) }
                 game.removeCreature(activePlayer, isLogout = true)
             }
             onPlayerDisappear()

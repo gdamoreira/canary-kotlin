@@ -17,6 +17,7 @@ import org.opentibia.canary.creatures.players.grouping.Groups
 import org.opentibia.canary.creatures.players.vip.VipRepository
 import org.opentibia.canary.creatures.vocations.VocationRates
 import org.opentibia.canary.creatures.vocations.Vocations
+import org.opentibia.canary.combat.CombatTargetState
 import org.opentibia.canary.database.DatabaseConfig
 import org.opentibia.canary.database.DatabaseConnectionFactory
 import org.opentibia.canary.database.JdbcAccountRepository
@@ -62,6 +63,7 @@ import org.opentibia.canary.lua.bindings.SpellBindings
 import org.opentibia.canary.lua.bindings.library.ConfigFunctions
 import org.opentibia.canary.lua.bindings.library.WorldConfigOperations
 import org.opentibia.canary.lua.loader.Scripts
+import org.opentibia.canary.lua.runtime.GameCombatEffects
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.WorldLootOperations
 import org.opentibia.canary.map.GameMap
@@ -617,8 +619,10 @@ class ServerBootstrap(
         // after `listenerFactory.create` (Canary reaches them through
         // `g_game()`):
         //  - `WorldLuaOperations.attachCombat` re-binds the Lua combat entry
-        //    points over the booted map and the world creature/player lookups
-        //    (the wave-65 `attachMonsters` pattern);
+        //    points over the booted map, the production monster combat state
+        //    (`MonsterPipelinesHost.combatTargetState`) and the `g_game()`
+        //    effect fanout (`GameCombatEffects`), plus the world
+        //    creature/player lookups (the wave-65 `attachMonsters` pattern);
         //  - `Player::getShopOwner`/`Player::closeShopWindow`
         //    (player.cpp:2933-2944, 6123-6125) resolve the merchant recorded by
         //    the production `npc:openShopWindow` path, which makes
@@ -626,8 +630,14 @@ class ServerBootstrap(
         //    work in production.
         server.game?.let { world ->
             val worldOperations = luaEnvironment.worldOperations
+            // The production listener factory always yields the `CanaryServer`
+            // root; a lifecycle test double without a monster pipeline host
+            // keeps the inert state.
+            val monsterHost = (server as? CanaryServer)?.monsterPipelinesHost
             worldOperations?.attachCombat(
                 gameMap,
+                targetState = monsterHost?.combatTargetState() ?: CombatTargetState.Inert,
+                effects = GameCombatEffects(world, itemTypes),
                 creatureById = { id -> world.getCreatureByID(id) },
                 playerByName = { name -> world.getPlayerByNameWildcard(name).second },
             )
