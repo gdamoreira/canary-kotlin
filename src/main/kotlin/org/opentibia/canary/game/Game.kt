@@ -786,6 +786,21 @@ class Game(
     /** `Creature::getParent()` equivalent (src/creatures/creature.hpp): the tile each placed creature lives on. */
     private val placedCreatures = IdentityHashMap<Creature, Tile>()
 
+    /**
+     * `Creature::onThink`/`Creature::dropCorpse` scripting-loop binder
+     * (src/creatures/creature.cpp:157-163, 819-824): Canary attaches the
+     * creature events to the creature itself, so every creature that enters the
+     * world executes them; the port binds the world `ScriptingDispatch` hosts
+     * through this seam. [internalPlaceCreature] runs it for every monster the
+     * map accepts, so summons (`Monster::createSummon` -> `Game::placeCreature`),
+     * the raid engine (`SingleSpawnEvent`, src/lua/creature/raids.cpp:395) and
+     * the Lua `Game.createMonster` binding (`game_functions.cpp:589`) reach the
+     * same think/death hosts as the engine-spawned path. The network
+     * composition root (`CanaryServer`) binds it; inert by default
+     * (embedded/test roots).
+     */
+    var creatureEventHostBinder: (Creature) -> Unit = {}
+
     /** `Item::getParent()` (src/items/item.hpp): the tile each item added through this facade lives on. */
     private val itemParents = IdentityHashMap<Item, Tile>()
 
@@ -2321,6 +2336,9 @@ class Game(
      * in (GameMap.kt) already reaches its pipeline; a rejected map placement
      * unregisters again and keeps the host inert. The type comes from the
      * injected [monsterTypeProvider] (`Monster::m_monsterType`, monster.hpp:363).
+     * A monster the map accepts also runs [creatureEventHostBinder], so every
+     * placement path (summon/raid/Lua) reaches the world think/death scripting
+     * hosts (creature.cpp:157-163, 819-824), not only the engine spawner's.
      *
      * A player runs the ported `Creature::addList` -> `Player::addList`
      * (game.cpp:1513, player.cpp:4519-4525) once the map accepted it: every
@@ -2390,6 +2408,14 @@ class Game(
         // 2031-2054): a creature entering the world is admitted through the
         // world buckets instead of running its batch on the producer thread.
         bindCreatureAsyncTaskHost(creature)
+
+        // `Creature::onThink`/`Creature::dropCorpse` scripting loops
+        // (creature.cpp:157-163, 819-824): a monster the map accepted receives
+        // its think/death event hosts, so summons, raid and Lua-created
+        // monsters reach the same Lua dispatch as the engine-spawned path.
+        if (creature is Monster) {
+            creatureEventHostBinder(creature)
+        }
 
         if (creatureCheck) {
             addCreatureCheck(creature)

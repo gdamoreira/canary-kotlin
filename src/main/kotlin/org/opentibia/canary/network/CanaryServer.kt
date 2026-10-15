@@ -360,6 +360,13 @@ class CanaryServer(
                 isStartup = { game.getGameState() == GameState_t.GAME_STATE_STARTUP },
             )
         }
+
+        // `Creature::onThink`/`Creature::dropCorpse` scripting loops
+        // (creature.cpp:157-163, 819-824): every monster the world accepts
+        // through `Game::internalPlaceCreature` (game.cpp:1495) receives the
+        // world think/death hosts, so summons, raid and Lua-created monsters
+        // are covered next to the engine-spawned path.
+        game.creatureEventHostBinder = ::bindCreatureEventHosts
     }
 
     /** `g_configManager().getString(WORLD_TYPE)` (configmanager.cpp:413) resolved by the listener. */
@@ -400,19 +407,32 @@ class CanaryServer(
     /**
      * Binds the `onThinkEventsHost`/`onDeathEventsHost` seams of [creature] to
      * the world [scriptingDispatch], so the attached `think`/`death` creature
-     * events fire confined to the WorldCommit lane. The monster spawn path
-     * binds every spawned monster; the session players are bound by
-     * [GameHandler]. The corpse/killer payload of the death loop stays with
-     * the unported damage bookkeeping, so the binder owns the null/false
-     * payload (Creature.kt PARITY GAP).
+     * events fire confined to the WorldCommit lane. [game]'s
+     * `creatureEventHostBinder` runs this for every monster the world accepts
+     * through `Game::internalPlaceCreature` (game.cpp:1495), so summons, raid
+     * and Lua-created monsters are covered too; the session players are bound by
+     * [GameHandler] at login. The death loop forwards the full
+     * `CreatureEvent::executeOnDeath` argument set
+     * (src/lua/creature/creatureevent.cpp:292-326) the caller resolved; the
+     * C++ corpse/last-hit computation (creature.cpp:577-720) stays with the
+     * unported damage bookkeeping, so a payload-less `Creature.onDeath` still
+     * passes the inert defaults (Creature.kt PARITY GAP).
      */
     internal fun bindCreatureEventHosts(creature: Creature) {
         creature.onThinkEventsHost = { c, interval ->
             scriptingDispatch.creatureOnThink(c, interval.toLong())
         }
-        creature.onDeathEventsHost = { c ->
-            scriptingDispatch.creatureOnDeath(c, null, null, null, false, false)
-        }
+        creature.onDeathEventsHost =
+            { c, corpse, killer, mostDamageKiller, lastHitUnjustified, mostDamageUnjustified ->
+                scriptingDispatch.creatureOnDeath(
+                    c,
+                    corpse,
+                    killer,
+                    mostDamageKiller,
+                    lastHitUnjustified,
+                    mostDamageUnjustified,
+                )
+            }
     }
 
     init {
@@ -495,12 +515,12 @@ class CanaryServer(
                 config = configManager,
                 // `Monster::onSpawn(position)` (monster.cpp:627-648) dispatched by
                 // `SpawnMonster::spawnMonster` (spawn_monster.cpp:220) reaches the
-                // world host entry of the placed monster. The same hook binds the
-                // attached `think`/`death` event seams of the new monster to the
-                // world dispatch (creature.cpp:157-163, 819-824).
+                // world host entry of the placed monster. The attached
+                // `think`/`death` event seams are already bound by
+                // `Game::internalPlaceCreature` (game.cpp:1495) before this hook
+                // fires.
                 onMonsterSpawn = { monster, position ->
                     monsterPipelinesHost?.onSpawn(monster.id, position)
-                    bindCreatureEventHosts(monster)
                 },
             )
         } else {

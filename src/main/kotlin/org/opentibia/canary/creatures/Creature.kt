@@ -1499,34 +1499,37 @@ abstract class Creature(
     }
 
     /**
+     * `CreatureEvent::executeOnDeath` argument set
+     * (src/lua/creature/creatureevent.cpp:292-326) carried by the
      * `Creature::dropCorpse` death-event loop (src/creatures/creature.cpp:819-824):
-     * executes the `death` creature events attached to this creature through
-     * [registerCreatureEvent], in attachment order, after the corpse exists and
-     * before `Creature::death` (creature.cpp:720-722). The loop hands over the
-     * creature only: the C++ corpse creation and the last-hit/most-damage
-     * resolution (creature.cpp:577-720) stay with the unported damage
-     * bookkeeping (PARITY GAP), so the binder owns the
-     * `ScriptingDispatch.creatureOnDeath` payload. The unbound default keeps the
-     * loop inert for embedded/test roots without a Lua environment.
-     *
-     * CALL-SITE NEED (files outside this wave's ownership): the network
-     * composition root (`CanaryServer`/`GameHandler`, where `scriptingDispatch`
-     * lives) must bind this for every creature entering the world. Until then
-     * the production loop stays inert (PARITY GAP).
+     * `(creature, corpse, killer, mostDamageKiller, lastHitUnjustified,
+     * mostDamageUnjustified)`, exactly the arguments the Lua `onDeath` callback
+     * receives. The events attached through [registerCreatureEvent] execute in
+     * attachment order, after the corpse exists and before `Creature::death`
+     * (creature.cpp:720-722). The C++ corpse creation and last-hit/most-damage
+     * resolution (creature.cpp:577-720) reach the seam from the caller that owns
+     * the damage bookkeeping; [onDeath] carries no payload and passes the inert
+     * defaults (PARITY GAP: the `Game`-side resolution of `lastHitCreatureId`/
+     * `damageMap` is not ported). The network composition root
+     * (`CanaryServer`/`GameHandler`) binds the world `ScriptingDispatch` for
+     * every creature entering the world; the unbound default keeps the loop
+     * inert for embedded/test roots without a Lua environment.
      */
-    var onDeathEventsHost: (Creature) -> Unit = { _ -> }
+    var onDeathEventsHost: (Creature, Item?, Creature?, Creature?, Boolean, Boolean) -> Unit =
+        { _, _, _, _, _, _ -> }
 
     /**
      * `Creature::onDeath` (`creature.cpp:579-692`). The portable tail runs the
      * registered death listeners, the `dropCorpse` death-event loop
      * (`creature.cpp:819-824`, the scripting `onDeath` events fire while the
-     * corpse exists), the `death(lastHitCreature)` hook and `removeMaster()`
-     * (`creature.cpp:671-673`). Damage-map killer resolution, corpse/loot and
-     * bestiary handling stay with their owning subsystems (PARITY GAP).
+     * corpse exists) with the inert payload defaults, the `death(lastHitCreature)`
+     * hook and `removeMaster()` (`creature.cpp:671-673`). Damage-map killer
+     * resolution, corpse/loot and bestiary handling stay with their owning
+     * subsystems (PARITY GAP).
      */
     fun onDeath() {
         onDeathHandlers.toList().forEach { it(this) }
-        onDeathEventsHost(this)
+        onDeathEventsHost(this, null, null, null, false, false)
         death(null)
         if (getMaster() != null) {
             removeMaster()

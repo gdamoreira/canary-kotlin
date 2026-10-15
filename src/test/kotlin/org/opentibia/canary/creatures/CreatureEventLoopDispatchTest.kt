@@ -103,14 +103,14 @@ class CreatureEventLoopDispatchTest {
         val player = Player(id = 1, name = "Hero", maxHealth = 150, health = 150, position = Position(1000, 1000, 7))
         attach(player, environment, "PlayerDeathLoop")
         val scripting = ScriptingDispatch(environment, dispatcher, creatureEventsOf = { it.getCreatureEvents() })
-        player.onDeathEventsHost = { creature ->
+        player.onDeathEventsHost = { creature, corpse, killer, mostDamageKiller, lastHitUnjustified, mostDamageUnjustified ->
             scripting.creatureOnDeath(
                 creature = creature,
-                corpse = null,
-                killer = null,
-                mostDamageKiller = null,
-                lastHitUnjustified = false,
-                mostDamageUnjustified = false,
+                corpse = corpse,
+                killer = killer,
+                mostDamageKiller = mostDamageKiller,
+                lastHitUnjustified = lastHitUnjustified,
+                mostDamageUnjustified = mostDamageUnjustified,
             )
         }
         try {
