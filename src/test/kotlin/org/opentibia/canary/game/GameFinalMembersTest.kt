@@ -264,7 +264,7 @@ class GameFinalMembersTest {
         val scheduled = mutableListOf<Long>()
         val cycled = mutableListOf<Long>()
         harness.game.scheduleEvent = { delay, _ -> scheduled.add(delay); 1L }
-        harness.game.cycleEvent = { delay, _ -> cycled.add(delay); 1L }
+        harness.game.cycleEvent = { delay, _, _ -> cycled.add(delay); 1L }
         harness.game.getTimeNow = { 1704090600L }
 
         harness.game.start()
@@ -277,7 +277,7 @@ class GameFinalMembersTest {
     fun `start derives the light hour from the current time`() {
         val harness = newGame()
         harness.game.scheduleEvent = { _, _ -> 1L }
-        harness.game.cycleEvent = { _, _ -> 1L }
+        harness.game.cycleEvent = { _, _, _ -> 1L }
         harness.game.getTimeNow = { 1704090600L }
 
         harness.game.start()
@@ -293,7 +293,7 @@ class GameFinalMembersTest {
         val harness = newGame()
         val cycled = mutableListOf<Long>()
         harness.game.scheduleEvent = { _, _ -> 1L }
-        harness.game.cycleEvent = { delay, _ -> cycled.add(delay); 1L }
+        harness.game.cycleEvent = { delay, _, _ -> cycled.add(delay); 1L }
         harness.game.marketRefreshPricesIntervalMinutes = 0
 
         harness.game.start()

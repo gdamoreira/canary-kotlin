@@ -320,6 +320,23 @@ class CanaryServer(
     }
 
     init {
+        // Wave 69 F1: `g_dispatcher().scheduleEvent`/`cycleEvent`/`stopEvent`
+        // (dispatcher.cpp:1147-1180) composition. The `Game` delayed
+        // registrations (`Game::start`, game.cpp:862-919, and the forge re-arm
+        // timers, game.cpp:12038/12204) execute through the world dispatcher,
+        // which re-arms every cycle event on its interval
+        // (dispatcher.cpp:906-943); `Game::scheduleEvent`'s call sites all stay
+        // on `Maintenance` while `cycleEvent` passes the explicit lane.
+        game.scheduleEvent = { delayMs, task ->
+            this.dispatcher.schedule(delayMs, DispatcherLane.Maintenance) { task() }.eventId
+        }
+        game.cycleEvent = { delayMs, lane, task ->
+            this.dispatcher.cycleEvent(delayMs, lane, "Game::cycleEvent") { task() }.eventId
+        }
+        game.stopEvent = { eventId -> this.dispatcher.stopEvent(eventId) }
+    }
+
+    init {
         // Coordinator call-site bindings of `MonsterPipelinesHost` over the
         // composed world (`Game::addCreatureCheck`/`removeCreatureCheck`,
         // game.cpp:7659/7687, and `Game::internalCreatureTurn`, game.cpp:7599).
@@ -606,6 +623,12 @@ class CanaryServer(
         // (g_globalEvents().startup(), src/game/game.cpp:988) before the world serves
         // players. Confined to the WorldCommit lane by ScriptingDispatch.
         scriptingDispatch.globalStartup()
+
+        // `g_game().start(&serviceManager)` (src/canary_server.cpp:243): the
+        // tibian clock seed and the maintenance/cycle event registrations, run
+        // once the listeners are bound. `Game::start` is one-shot, so a
+        // repeated boot cannot double-arm the loop.
+        game.start()
     }
 
     /** Builds the per-connection game handler wired to this server's record tracking. */

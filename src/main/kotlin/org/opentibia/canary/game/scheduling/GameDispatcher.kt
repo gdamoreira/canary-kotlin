@@ -54,7 +54,7 @@ private const val DISPATCHER_TELEMETRY_WARMUP_MS: Long = 1_000
 /**
  * Handle for a [GameDispatcher.schedule]/[GameDispatcher.cycleEvent] registration.
  *
- * Cancellation is re-resolved by event id ([GameDispatcher.cancelScheduledEvent])
+ * Cancellation is re-resolved by event id ([GameDispatcher.stopEvent])
  * instead of capturing the dispatcher (AGENTS.md deferred callback lifetime rules).
  */
 class ScheduledTask internal constructor(
@@ -553,7 +553,7 @@ class GameDispatcher(
         val id = nextEventId()
         val cancelled = AtomicBoolean(false)
         val weakSelf = WeakReference(this)
-        val handle = ScheduledTask(id, cancelled) { eventId -> weakSelf.get()?.cancelScheduledEvent(eventId) }
+        val handle = ScheduledTask(id, cancelled) { eventId -> weakSelf.get()?.stopEvent(eventId) }
         if (running.get()) {
             val target = executableLane(lane)
             if (!tryReserveLaneSlot(target, capacity)) {
@@ -587,11 +587,11 @@ class GameDispatcher(
     }
 
     /**
-     * `Dispatcher::stopEvent` (dispatcher.cpp:1171-1179): the winner of the
+     * `Dispatcher::stopEvent` (dispatcher.cpp:1173-1180): the winner of the
      * scheduled-map removal releases the admission slot; when the worker already
      * promoted the event, the promotion owner releases it instead.
      */
-    private fun cancelScheduledEvent(eventId: Long) {
+    fun stopEvent(eventId: Long) {
         val event = scheduledEvents.remove(eventId) ?: return
         event.cancelled?.set(true)
         releaseReservedSlot(event)

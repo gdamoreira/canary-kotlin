@@ -200,6 +200,7 @@ import java.lang.ref.WeakReference
 import java.util.Calendar
 import java.util.IdentityHashMap
 import java.util.Random as JavaRandom
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.random.Random
@@ -13520,8 +13521,13 @@ class Game(
 
     // --- final member seams (game.cpp:770-12608) --------------------------------
 
-    /** `g_dispatcher().cycleEvent(delay, event)` seam used by [start]. */
-    var cycleEvent: (Long, () -> Unit) -> Long = { _, _ -> 0 }
+    /**
+     * `g_dispatcher().cycleEvent(delay, event, context, lane)` seam used by
+     * [start]. The lane is explicit because `Game::start` pins every cycle to
+     * `Maintenance` except `checkCreatures`, which keeps the C++ default
+     * `WorldCommit` lane (game.cpp:894-919).
+     */
+    var cycleEvent: (Long, DispatcherLane, () -> Unit) -> Long = { _, _, _ -> 0 }
 
     /** `g_luaEnvironment().collectGarbage()` (game.cpp:891) seam (Lua boundary, AGENTS.md 1.4). */
     var collectLuaGarbage: () -> Unit = { }
@@ -13741,13 +13747,23 @@ class Game(
     /** `Game::getLightHour` (src/game/game.hpp:551). */
     fun getLightHour(): Int = lightHour
 
+    /** Guards the one-shot [start] registration; a repeated boot must not re-arm the loop. */
+    private val loopStarted = AtomicBoolean(false)
+
     /**
      * `Game::start` (src/game/game.cpp:862): the tibian clock seed and the
      * maintenance/cycle event registrations. The protocol `ServiceManager`
      * registration has no Kotlin counterpart (PARITY GAP: the network bootstrap
      * owns the listeners).
+     *
+     * The registration is one-shot: the C++ boot calls it once, and a repeated
+     * Kotlin boot must not register a second set of cycle events.
      */
     fun start() {
+        if (!loopStarted.compareAndSet(false, true)) {
+            return
+        }
+
         val now = getTimeNow()
         val calendar = java.util.Calendar.getInstance()
         calendar.timeInMillis = now * 1000
@@ -13756,10 +13772,10 @@ class Game(
 
         scheduleEvent(EVENT_MS + 1000L) { createFiendishMonsters() }
         scheduleEvent(EVENT_MS + 1000L) { createInfluencedMonsters() }
-        cycleEvent(EVENT_MS.toLong()) { updateForgeableMonsters() }
-        cycleEvent(EVENT_LIGHTINTERVAL_MS.toLong()) { checkLight() }
-        cycleEvent(EVENT_CHECK_CREATURE_INTERVAL_MS) { checkCreatures() }
-        cycleEvent(EVENT_LUA_GARBAGE_COLLECTION_MS) { collectLuaGarbage() }
+        cycleEvent(EVENT_MS.toLong(), DispatcherLane.Maintenance) { updateForgeableMonsters() }
+        cycleEvent(EVENT_LIGHTINTERVAL_MS.toLong(), DispatcherLane.Maintenance) { checkLight() }
+        cycleEvent(EVENT_CHECK_CREATURE_INTERVAL_MS, DispatcherLane.WorldCommit) { checkCreatures() }
+        cycleEvent(EVENT_LUA_GARBAGE_COLLECTION_MS, DispatcherLane.Maintenance) { collectLuaGarbage() }
 
         val marketItemsPriceIntervalMinutes = marketRefreshPricesIntervalMinutes
         if (marketItemsPriceIntervalMinutes > 0) {
@@ -13767,10 +13783,10 @@ class Game(
             if (marketItemsPriceIntervalMS < 60000L) {
                 marketItemsPriceIntervalMS = 60000L
             }
-            cycleEvent(marketItemsPriceIntervalMS) { loadItemsPrice() }
+            cycleEvent(marketItemsPriceIntervalMS, DispatcherLane.Maintenance) { loadItemsPrice() }
         }
 
-        cycleEvent(UPDATE_PLAYERS_ONLINE_DB_MS) { updatePlayersOnline() }
+        cycleEvent(UPDATE_PLAYERS_ONLINE_DB_MS, DispatcherLane.Maintenance) { updatePlayersOnline() }
     }
 
     /** `Game::resetMonsters` (src/game/game.cpp:770): clear every monster target/friend list. */

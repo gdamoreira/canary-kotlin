@@ -81,6 +81,57 @@ class GameDispatcherTest {
     }
 
     @Test
+    fun `stops a scheduled task by event id`() = runBlocking<Unit> {
+        val executed = AtomicInteger(0)
+
+        val task = dispatcher.schedule(delayMs = 200) {
+            executed.incrementAndGet()
+        }
+
+        dispatcher.stopEvent(task.eventId)
+        Thread.sleep(300)
+
+        assertThat(executed.get()).isEqualTo(0)
+    }
+
+    @Test
+    fun `stops a cycle event by event id`() = runBlocking<Unit> {
+        var now = 1_000L
+        val localDispatcher = GameDispatcher(clock = { now })
+        localDispatcher.start()
+        try {
+            val fires = AtomicInteger(0)
+            val task = localDispatcher.cycleEvent(delayMs = 100, context = "test-stop-cycle") {
+                fires.incrementAndGet()
+            }
+
+            now += 100
+            localDispatcher.wake()
+            withTimeout(2_000) {
+                while (fires.get() < 1) {
+                    delay(5)
+                }
+            }
+
+            // A checkpoint dispatched after the cycle runs only after the
+            // worker re-registered it, so the stop below cannot race the
+            // execution window.
+            val checkpoint = CompletableDeferred<Unit>()
+            localDispatcher.dispatch { checkpoint.complete(Unit) }
+            withTimeout(2_000) { checkpoint.await() }
+
+            localDispatcher.stopEvent(task.eventId)
+            now += 1_000
+            localDispatcher.wake()
+            delay(50)
+
+            assertThat(fires.get()).isEqualTo(1)
+        } finally {
+            localDispatcher.shutdown()
+        }
+    }
+
+    @Test
     fun `executes tasks from every serial lane`() = runBlocking<Unit> {
         val lanes = listOf(
             DispatcherLane.ProtocolInput,
