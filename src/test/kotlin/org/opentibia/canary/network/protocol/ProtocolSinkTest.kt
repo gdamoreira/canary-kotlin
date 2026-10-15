@@ -268,6 +268,31 @@ class ProtocolSinkTest {
     }
 
     @Test
+    fun `sendCreatureAppear for the session player emits the self add-creature frame`() {
+        // `ProtocolGame::sendAddCreature`'s `creature == player` branch
+        // (protocolgame.cpp:8639-8660): the self appear opcode (0x17 on the
+        // `version >= 980` arm) with the player id, the server beat and the
+        // expert-PvP controls byte instead of the 0x6A add-creature frame.
+        val map = GameMap()
+        val tile = map.getOrCreateTile(observerPosition)
+        tile.ground = Item(id = 100)
+        val player = observer()
+        tile.internalAddThing(player)
+        val sink = InMemoryProtocolSink(player, map)
+
+        sink.sendCreatureAppear(player, player.position, isLogin = true)
+
+        assertThat(sink.frames).containsExactly(
+            bytes(
+                GameWindowWriter.PACKET_SELF_APPEAR,
+                0x01, 0x00, 0x00, 0x00,
+                0x32, 0x00,
+                0x00,
+            ),
+        )
+    }
+
+    @Test
     fun `sendCreatureAppear falls back to the tile refresh for an out-of-range stack position`() {
         // player.cpp:8791-8794: stackpos < 0 || >= 10 -> sendUpdateTile(tile, pos).
         // The in-memory transport mirrors the Netty PlayerFrameSink transport.

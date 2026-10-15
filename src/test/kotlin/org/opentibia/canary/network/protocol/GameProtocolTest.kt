@@ -97,9 +97,9 @@ class GameProtocolTest {
         val decrypted = xteaCipher.decrypt(responseBytes, responseBytes.readerIndex(), responseBytes.readableBytes())
         assertThat(decrypted).isTrue()
 
-        // Opcode 0x0A (Login / Self Appear)
+        // Opcode 0x17 (`sendAddCreature` self branch, `version >= 980`)
         val opcode = responseBytes.readUnsignedByte().toInt()
-        assertThat(opcode).isEqualTo(0x0A)
+        assertThat(opcode).isEqualTo(GameHandler.PACKET_SELF_APPEAR)
 
         val creatureId = responseBytes.readUnsignedIntLE()
         assertThat(creatureId).isEqualTo(1L)

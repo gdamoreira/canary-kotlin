@@ -2,6 +2,7 @@ package org.opentibia.canary.network.protocol.npcshop
 
 import io.netty.buffer.ByteBuf
 import org.opentibia.canary.network.message.writeTibiaString
+import org.opentibia.canary.network.protocol.StoreWindowWriter
 
 /**
  * One NPC shop entry, mirroring the Canary `ShopBlock`
@@ -35,10 +36,10 @@ data class ShopBlock(
  * provider callbacks so callers without an item registry can use the
  * zero-value defaults.
  *
- * Parity note: `sendSaleItemList` also emits leading `0xEE` resource-balance
- * frames through `ProtocolGame::sendResourceBalance` (protocolgame.cpp:6628);
- * those are a separate outbound packet keyed on the protocol profile and are
- * not part of the `0x7B` shop frame serialized here.
+ * [writeSaleItemListFrames] composes the whole `sendSaleItemList` sequence:
+ * the leading `0xEE` resource-balance frames (`ProtocolGame::sendResourceBalance`,
+ * protocolgame.cpp:6628) plus the `0x7B` list, each queued as its own output
+ * message exactly like Canary's `writeToOutputBuffer` calls.
  */
 object NpcShopWindowSerializer {
 
@@ -48,6 +49,18 @@ object NpcShopWindowSerializer {
 
     /** `ITEM_GOLD_COIN` (src/utils/utils_definitions.hpp:608); `Npc::currencyId` default. */
     const val ITEM_GOLD_COIN: Int = 3031
+
+    /** `ITEM_PLATINUM_COIN` (src/utils/utils_definitions.hpp:609). */
+    const val ITEM_PLATINUM_COIN: Int = 3035
+
+    /** `ITEM_CRYSTAL_COIN` (src/utils/utils_definitions.hpp:610). */
+    const val ITEM_CRYSTAL_COIN: Int = 3043
+
+    /** `ITEM_PLATINUM_COIN` converts at `100` gold (protocolgame.cpp:6676). */
+    private const val PLATINUM_COIN_WORTH: Long = 100
+
+    /** `ITEM_CRYSTAL_COIN` converts at `10000` gold (protocolgame.cpp:6672). */
+    private const val CRYSTAL_COIN_WORTH: Long = 10000
 
     /** `std::numeric_limits<uint32_t>::max()` price sentinel written as zero. */
     private const val HIDDEN_PRICE: Long = 0xFFFFFFFFL
@@ -114,6 +127,56 @@ object NpcShopWindowSerializer {
 
             out.writeShopBlock(block, storageValue, itemTypeName, itemTypeWeight, itemTypeIsSplashOrFluid)
         }
+    }
+
+    /**
+     * `ProtocolGame::sendSaleItemList` (protocolgame.cpp:6669-6736): the whole
+     * sequence behind `Player::sendSaleItemList` (player.cpp:2408).
+     *
+     * The bank balance is always emitted first; the second balance frame is the
+     * inventory money accumulated from the passed [inventoryMap] on the gold
+     * currency, or the custom-currency count under
+     * `RESOURCE_INVENTORY_CURRENCY_CUSTOM` otherwise. Each frame goes through
+     * [emit] as its own output message.
+     *
+     * The `version >= 1100`/`ResourceBalancePackets` guard on
+     * `sendResourceBalance` stays with the caller (the port's profile only
+     * consumes the current layout).
+     */
+    fun writeSaleItemListFrames(
+        emit: (ByteBuf.() -> Unit) -> Unit,
+        shopBlocks: List<ShopBlock>,
+        inventoryMap: Map<Int, Int>,
+        bankBalance: Long,
+        currency: Int = ITEM_GOLD_COIN,
+        oldProtocol: Boolean = false,
+    ) {
+        emit { StoreWindowWriter.writeResourceBalance(this, StoreWindowWriter.Resource.BANK, bankBalance) }
+
+        if (currency == ITEM_GOLD_COIN) {
+            var playerMoney = 0L
+            inventoryMap[ITEM_CRYSTAL_COIN]?.let { playerMoney += it.toLong() * CRYSTAL_COIN_WORTH }
+            inventoryMap[ITEM_PLATINUM_COIN]?.let { playerMoney += it.toLong() * PLATINUM_COIN_WORTH }
+            inventoryMap[ITEM_GOLD_COIN]?.let { playerMoney += it.toLong() }
+
+            emit {
+                StoreWindowWriter.writeResourceBalance(
+                    this,
+                    StoreWindowWriter.Resource.INVENTORY_MONEY,
+                    playerMoney,
+                )
+            }
+        } else {
+            val customCurrencyValue = (inventoryMap[currency] ?: 0).toLong()
+            val resource = if (oldProtocol) {
+                StoreWindowWriter.Resource.INVENTORY_MONEY
+            } else {
+                StoreWindowWriter.Resource.INVENTORY_CURRENCY_CUSTOM
+            }
+            emit { StoreWindowWriter.writeResourceBalance(this, resource, customCurrencyValue) }
+        }
+
+        emit { writeSaleItemList(this, shopBlocks, inventoryMap, oldProtocol) }
     }
 
     /**
