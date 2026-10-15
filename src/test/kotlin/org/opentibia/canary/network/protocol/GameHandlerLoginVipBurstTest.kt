@@ -37,6 +37,7 @@ import org.opentibia.canary.network.crypto.RsaCipher
 import org.opentibia.canary.network.crypto.XteaCipher
 import org.opentibia.canary.network.message.readTibiaString
 import org.opentibia.canary.network.message.writeTibiaString
+import org.opentibia.canary.network.protocol.misc.MiscSessionWriter
 import org.opentibia.canary.network.protocol.vip.VipWindowWriter
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -181,6 +182,23 @@ class GameHandlerLoginVipBurstTest {
         assertThat(ran.await(2, TimeUnit.SECONDS)).isTrue()
     }
 
+    /**
+     * The `ProtocolGame::sendAddCreature` tail frames queued between the self
+     * appear frame and the map description (protocolgame.cpp:8686-8693):
+     * `sendAllowBugReport` (0x1A), `sendTibiaTime` (0xEF),
+     * `sendPendingStateEntered` (0x0A) and `sendEnterWorld` (0x0F).
+     */
+    private fun assertLoginTail(ch: EmbeddedChannel) {
+        assertThat(readFrame(ch).readUnsignedByte().toInt())
+            .isEqualTo(MiscSessionWriter.PACKET_ALLOW_BUG_REPORT)
+        assertThat(readFrame(ch).readUnsignedByte().toInt())
+            .isEqualTo(CreatureWindowWriter.PACKET_TIBIA_TIME)
+        assertThat(readFrame(ch).readUnsignedByte().toInt())
+            .isEqualTo(MiscSessionWriter.PACKET_PENDING_STATE_ENTERED)
+        assertThat(readFrame(ch).readUnsignedByte().toInt())
+            .isEqualTo(MiscSessionWriter.PACKET_ENTER_WORLD)
+    }
+
     @Test
     fun `login sends the VIP groups dialog and one entry per persisted record`() {
         val handler = GameHandler(
@@ -200,6 +218,8 @@ class GameHandlerLoginVipBurstTest {
         // frames of the login tail, each as its own output message.
         val loginFrame = readFrame(ch)
         assertThat(loginFrame.readUnsignedByte().toInt()).isEqualTo(GameHandler.PACKET_SELF_APPEAR)
+
+        assertLoginTail(ch)
 
         val mapFrame = readFrame(ch)
         assertThat(mapFrame.readUnsignedByte().toInt()).isEqualTo(MapPacketWriter.PACKET_MAP_DESCRIPTION.toInt())
@@ -268,6 +288,8 @@ class GameHandlerLoginVipBurstTest {
 
         val loginFrame = readFrame(ch)
         assertThat(loginFrame.readUnsignedByte().toInt()).isEqualTo(GameHandler.PACKET_SELF_APPEAR)
+
+        assertLoginTail(ch)
 
         val mapFrame = readFrame(ch)
         assertThat(mapFrame.readUnsignedByte().toInt()).isEqualTo(MapPacketWriter.PACKET_MAP_DESCRIPTION.toInt())

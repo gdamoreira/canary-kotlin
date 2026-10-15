@@ -153,7 +153,18 @@ class MultiCharacterSwitchMovementTest {
         assertThat(char1SelfAppear.readUnsignedByte().toInt()).isEqualTo(GameHandler.PACKET_SELF_APPEAR)
         val char1CreatureId = char1SelfAppear.readUnsignedIntLE()
         char1SelfAppear.readUnsignedShortLE() // server beat
-        char1SelfAppear.readUnsignedByte()    // expert PvP controls
+        char1SelfAppear.skipBytes(15)         // speed-formula doubles (>= 981)
+        char1SelfAppear.readUnsignedByte()    // expert PvP controls (>= 1054)
+        char1SelfAppear.readUnsignedByte()    // expert mode button (>= 1058)
+        char1SelfAppear.readTibiaString()     // STORE_IMAGES_URL (>= 1080)
+        char1SelfAppear.readUnsignedShortLE() // STORE_COIN_PACKET (>= 1080)
+        char1SelfAppear.readUnsignedByte()    // exiva button
+
+        // The `sendAddCreature` tail frames (protocolgame.cpp:8686-8693).
+        assertThat(readFrameOpcode(char1Channel, char1Cipher)).isEqualTo(0x1A)
+        assertThat(readFrameOpcode(char1Channel, char1Cipher)).isEqualTo(0xEF)
+        assertThat(readFrameOpcode(char1Channel, char1Cipher)).isEqualTo(0x0A)
+        assertThat(readFrameOpcode(char1Channel, char1Cipher)).isEqualTo(0x0F)
 
         // Read Map Description
         val char1Response: ByteBuf = char1Channel.readOutbound()
@@ -250,7 +261,18 @@ class MultiCharacterSwitchMovementTest {
         assertThat(char2SelfAppear.readUnsignedByte().toInt()).isEqualTo(GameHandler.PACKET_SELF_APPEAR)
         val char2CreatureId = char2SelfAppear.readUnsignedIntLE()
         char2SelfAppear.readUnsignedShortLE() // server beat
-        char2SelfAppear.readUnsignedByte()    // expert PvP controls
+        char2SelfAppear.skipBytes(15)         // speed-formula doubles (>= 981)
+        char2SelfAppear.readUnsignedByte()    // expert PvP controls (>= 1054)
+        char2SelfAppear.readUnsignedByte()    // expert mode button (>= 1058)
+        char2SelfAppear.readTibiaString()     // STORE_IMAGES_URL (>= 1080)
+        char2SelfAppear.readUnsignedShortLE() // STORE_COIN_PACKET (>= 1080)
+        char2SelfAppear.readUnsignedByte()    // exiva button
+
+        // The `sendAddCreature` tail frames (protocolgame.cpp:8686-8693).
+        assertThat(readFrameOpcode(char2Channel, char2Cipher)).isEqualTo(0x1A)
+        assertThat(readFrameOpcode(char2Channel, char2Cipher)).isEqualTo(0xEF)
+        assertThat(readFrameOpcode(char2Channel, char2Cipher)).isEqualTo(0x0A)
+        assertThat(readFrameOpcode(char2Channel, char2Cipher)).isEqualTo(0x0F)
 
         // Read Map Description
         val char2Response: ByteBuf = char2Channel.readOutbound()
@@ -286,6 +308,17 @@ class MultiCharacterSwitchMovementTest {
         // --- STEP 6: DISCONNECT CHAR 2 ---
         char2Channel.close()
         assertThat(char2Channel.isOpen).isFalse()
+    }
+
+    /** Reads one outbound frame, decrypts it and returns its opcode. */
+    private fun readFrameOpcode(channel: EmbeddedChannel, cipher: XteaCipher): Int {
+        val frame = channel.readOutbound<ByteBuf>() ?: error("no outbound frame was written")
+        frame.readUnsignedShortLE() // len
+        frame.readUnsignedIntLE()   // checksum
+        cipher.decrypt(frame, frame.readerIndex(), frame.readableBytes())
+        val opcode = frame.readUnsignedByte().toInt()
+        frame.release()
+        return opcode
     }
 
     private fun padToBlockMultiple(buf: ByteBuf): ByteBuf {

@@ -14,6 +14,7 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.players.PlayerTask
 import org.opentibia.canary.creatures.players.getAllSaleItemIdAndCount
+import org.opentibia.canary.creatures.players.updateState
 import org.opentibia.canary.creatures.players.vip.InMemoryVipRepository
 import org.opentibia.canary.creatures.players.vip.VipEntry
 import org.opentibia.canary.creatures.players.vip.VipRepository
@@ -43,7 +44,9 @@ import org.opentibia.canary.network.crypto.RsaCipher
 import org.opentibia.canary.network.crypto.XteaCipher
 import org.opentibia.canary.network.message.readTibiaString
 import org.opentibia.canary.network.message.writeTibiaString
+import org.opentibia.canary.network.protocol.misc.MiscSessionWriter
 import org.opentibia.canary.persistence.PlayerPersistenceService
+import org.opentibia.canary.spells.WorldType
 import org.opentibia.canary.systems.imbuement.ImbuementAction
 import org.opentibia.canary.systems.imbuement.ImbuementDecay
 import org.opentibia.canary.systems.imbuement.ImbuementEngine
@@ -51,6 +54,7 @@ import org.opentibia.canary.systems.imbuement.ImbuementItem
 import org.opentibia.canary.systems.imbuement.ImbuementPlayer
 import org.opentibia.canary.systems.imbuement.Imbuements
 import org.opentibia.canary.systems.rewardchest.ReturnValue
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -159,6 +163,22 @@ class GameHandler(
     private var xteaCipher: XteaCipher? = null
 
     /**
+     * `ProtocolGame::clientVersionString` (protocolgame.hpp:627) parsed from the
+     * current-profile login layout (`onRecvFirstMessage`, protocolgame.cpp:1228-1231).
+     * Feeds the `shouldSendWeaponProficiencyDetailList` build-string gate
+     * (protocolgame.cpp:109-132) through [GamePacketContext.clientVersionString].
+     */
+    private var clientVersionString: String = ""
+
+    /**
+     * `ProtocolGame::protocolProfile` (protocolgame.hpp) resolved from the
+     * session version through the [ProtocolProfileRegistry] game-login layout
+     * (protocolgame.cpp:1191-1197). The current profile is the fallback for
+     * versions the port serves through the current wire layout.
+     */
+    private var sessionProfile: ProtocolProfile = ProtocolProfileRegistry.getCurrentProfile()
+
+    /**
      * Per-session modal-window host (`Player::sendModalWindow`,
      * player.cpp:9021-9028): the client forwards to this session's
      * `ProtocolGame` sink ([Player.protocolSink]) and the host records the
@@ -224,6 +244,19 @@ class GameHandler(
         // shop-open/state sale-list refresh.
         game.getAllSaleItemIdAndCount = { player, countMap -> player.getAllSaleItemIdAndCount(countMap) }
         game.sendSaleItemList = { player, inventoryMap -> player.protocolSink?.sendSaleItemList(inventoryMap) }
+        // `Player::updateState()` (player.cpp:6056-6064): the inventory refresh
+        // followed by the shop tail, which defers `Game::updatePlayerSaleItems`
+        // through the dispatcher (`Player::updateSaleShopList`, player.cpp:6051-6054)
+        // when the session has an open shop window.
+        game.updateState = { target ->
+            target.updateState(
+                updateSaleShopList = {
+                    val playerId = target.id
+                    dispatcher.dispatch(DispatcherLane.WorldCommit) { game.updatePlayerSaleItems(playerId) }
+                },
+                hasShopOwner = { game.getShopOwner(target) != null },
+            )
+        }
 
         val engine = composedImbuementEngine
         if (engine != null) {
@@ -312,14 +345,24 @@ class GameHandler(
         val os = msg.readUnsignedShortLE()
         val version = msg.readUnsignedShortLE()
 
-        if (msg.readableBytes() > RsaCipher.BLOCK_SIZE) {
-            val skip = msg.readableBytes() - RsaCipher.BLOCK_SIZE
-            msg.skipBytes(skip)
-        }
-
         if (msg.readableBytes() < RsaCipher.BLOCK_SIZE) {
             ctx.close()
             return
+        }
+
+        // `ProtocolGame::onRecvFirstMessage` (protocolgame.cpp:1187-1246): the
+        // profile game-login layout declares the pre-RSA fields (client version
+        // u32, client version string, asset hash, dat revision, preview state).
+        // A layout-less version, malformed extras or any unconsumed byte falls
+        // back to the lenient skip the port has always applied (PARITY GAP:
+        // unsupported versions are not disconnected).
+        val layout = ProtocolProfileRegistry.resolveGameLoginLayout(version)
+        sessionProfile = layout?.profileId?.let { ProtocolProfileRegistry.getProfile(it) }
+            ?: ProtocolProfileRegistry.getCurrentProfile()
+        val rsaStart = msg.readerIndex() + msg.readableBytes() - RsaCipher.BLOCK_SIZE
+        clientVersionString = layout?.let { parseGameLoginExtras(msg, it, rsaStart) } ?: ""
+        if (msg.readerIndex() != rsaStart) {
+            msg.readerIndex(rsaStart)
         }
 
         val rsaBytes = ByteArray(RsaCipher.BLOCK_SIZE)
@@ -391,6 +434,10 @@ class GameHandler(
             // `Player::sendSaleItemList` gate (player.cpp:2408); the
             // composition root binds the Lua-recorded merchant.
             shopOwner = { player -> game.getShopOwner(player) },
+            // `sendAddCreature` self branch (protocolgame.cpp:8641-8682): the
+            // negotiated version, profile features, store pair and world-type
+            // exiva gate feed the login frame tail.
+            selfAppearTail = selfAppearTailFor(version),
         )
 
         // `Player::sendModalWindow` (player.cpp:9021-9028): the per-session
@@ -457,6 +504,93 @@ class GameHandler(
         logger.info { "Player '${activePlayer.name}' logged into game world" }
         sendLoginSuccess(ctx, activePlayer, version)
     }
+
+    /**
+     * `ProtocolGame::onRecvFirstMessage`'s pre-RSA profile fields
+     * (protocolgame.cpp:1222-1246) for the resolved [GameLoginLayout]: the
+     * client version `u32`, the client version string, the asset-hash string,
+     * the dat revision `u16` and the preview-state byte. The fields must
+     * consume exactly up to [endIndex] (the RSA block); a malformed payload
+     * returns `null` so the caller falls back to the lenient skip.
+     */
+    private fun parseGameLoginExtras(msg: ByteBuf, layout: GameLoginLayout, endIndex: Int): String? {
+        val start = msg.readerIndex()
+        var versionString = ""
+
+        val parsed = runCatching {
+            if (layout.hasClientVersionU32) {
+                if (endIndex - msg.readerIndex() < 4) {
+                    return null
+                }
+                msg.readUnsignedIntLE()
+            }
+            if (layout.hasClientVersionString) {
+                versionString = readBoundedTibiaString(msg, endIndex) ?: return null
+            }
+            if (layout.hasAssetHashString) {
+                if (readBoundedTibiaString(msg, endIndex) == null) {
+                    return null
+                }
+            }
+            if (layout.hasContentRevisionU16) {
+                if (endIndex - msg.readerIndex() < 2) {
+                    return null
+                }
+                msg.readUnsignedShortLE()
+            }
+            if (layout.hasPreviewState) {
+                if (endIndex - msg.readerIndex() < 1) {
+                    return null
+                }
+                msg.readByte()
+            }
+        }.isSuccess
+
+        if (!parsed || msg.readerIndex() != endIndex) {
+            msg.readerIndex(start)
+            return null
+        }
+        return versionString
+    }
+
+    /**
+     * Reads one length-prefixed Tibia string that must end at or before
+     * [endIndex], without crossing into the RSA block.
+     */
+    private fun readBoundedTibiaString(msg: ByteBuf, endIndex: Int): String? {
+        if (endIndex - msg.readerIndex() < 2) {
+            return null
+        }
+        val start = msg.readerIndex()
+        val length = msg.readUnsignedShortLE()
+        if (endIndex - msg.readerIndex() < length) {
+            msg.readerIndex(start)
+            return null
+        }
+        val bytes = ByteArray(length)
+        msg.readBytes(bytes)
+        return String(bytes, StandardCharsets.UTF_8)
+    }
+
+    /**
+     * Resolves the self appear frame tail from the session protocol state
+     * (`ProtocolGame::sendAddCreature` self branch, protocolgame.cpp:8641-8682):
+     * the version, the `LoginSpeedFormula`/`OldProtocolCompat` profile features,
+     * the `ExpertPvp::isEnabled()` + `ExpertPvpModeByte` controls gate, the
+     * `g_configManager()` STORE_IMAGES_URL/STORE_COIN_PACKET pair and the
+     * `Game::getWorldType() == WORLD_TYPE_NO_PVP` exiva gate.
+     */
+    private fun selfAppearTailFor(version: Int): SelfAppearTail = SelfAppearTail(
+        clientVersion = version,
+        loginSpeedFormula = sessionProfile.hasFeature(ProtocolFeature.LoginSpeedFormula),
+        expertPvpControlsEnabled = game.expertPvpEnabled &&
+            sessionProfile.hasFeature(ProtocolFeature.ExpertPvpModeByte),
+        storeImagesUrl = game.storeImagesUrl,
+        storeCoinPacket = game.storeCoinPacket,
+        oldProtocol = sessionProfile.hasFeature(ProtocolFeature.OldProtocolCompat),
+        exivaEnabled = !sessionProfile.hasFeature(ProtocolFeature.OldProtocolCompat) &&
+            game.getWorldType() == WorldType.NO_PVP,
+    )
 
     /**
      * `ProtocolGame::login` placement block (protocolgame.cpp:1053-1063): the
@@ -656,6 +790,8 @@ class GameHandler(
                         game = game,
                         ioMarket = ioMarket,
                         itemTypes = itemTypes,
+                        clientVersionString = clientVersionString,
+                        protocolProfile = sessionProfile,
                     )
                 )
             } finally {
@@ -668,9 +804,25 @@ class GameHandler(
         // The self appear (0x17) is emitted by the placement fanout through the
         // session sink's `ProtocolGame::sendAddCreature` self branch, exactly
         // once (the player is its own spectator, `Game::placeCreature`,
-        // game.cpp:1533). The login tail continues with the map description and
-        // the stats/skills frames `sendAddCreature` queues after it
-        // (protocolgame.cpp:8691-8707).
+        // game.cpp:1533).
+        //
+        // `ProtocolGame::sendAddCreature` then queues the login tail frames
+        // (protocolgame.cpp:8686-8693): `sendAllowBugReport` (0x1A) and
+        // `sendTibiaTime(g_game().getLightHour())` (0xEF) for non-old-protocol
+        // profiles, and `sendPendingStateEntered` (0x0A) plus
+        // `sendEnterWorld` (0x0F) for `version >= 980`.
+        val oldProtocol = sessionProfile.hasFeature(ProtocolFeature.OldProtocolCompat)
+        if (!oldProtocol) {
+            writeFrame(ctx) { MiscSessionWriter.writeAllowBugReport(this) }
+            writeFrame(ctx) { CreatureWindowWriter.writeTibiaTime(this, game.getLightHour()) }
+        }
+        if (version >= 980) {
+            if (!oldProtocol) {
+                writeFrame(ctx) { MiscSessionWriter.writePendingStateEntered(this) }
+            }
+            writeFrame(ctx) { MiscSessionWriter.writeEnterWorld(this) }
+        }
+
         val out = ctx.alloc().buffer()
         MapPacketWriter.writeMapDescription(out, gameMap, player.position)
         ctx.writeAndFlush(out)
@@ -681,6 +833,13 @@ class GameHandler(
 
         // VIP burst (0xD4 + one 0xD2 per persisted record).
         sendVipBurst(player, version)
+    }
+
+    /** Queues one unframed protocol message on [ctx] (fire-and-forget). */
+    private inline fun writeFrame(ctx: ChannelHandlerContext, build: ByteBuf.() -> Unit) {
+        val out = ctx.alloc().buffer()
+        out.build()
+        ctx.writeAndFlush(out)
     }
 
     /**

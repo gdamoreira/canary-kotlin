@@ -270,9 +270,11 @@ class ProtocolSinkTest {
     @Test
     fun `sendCreatureAppear for the session player emits the self add-creature frame`() {
         // `ProtocolGame::sendAddCreature`'s `creature == player` branch
-        // (protocolgame.cpp:8639-8660): the self appear opcode (0x17 on the
-        // `version >= 980` arm) with the player id, the server beat and the
-        // expert-PvP controls byte instead of the 0x6A add-creature frame.
+        // (protocolgame.cpp:8639-8682): the self appear opcode (0x17 on the
+        // `version >= 980` arm) with the player id, the server beat, the
+        // `>= 981` speed-formula doubles, both expert-PvP control bytes, the
+        // `>= 1080` store pair and the exiva byte instead of the 0x6A
+        // add-creature frame.
         val map = GameMap()
         val tile = map.getOrCreateTile(observerPosition)
         tile.ground = Item(id = 100)
@@ -287,6 +289,13 @@ class ProtocolSinkTest {
                 GameWindowWriter.PACKET_SELF_APPEAR,
                 0x01, 0x00, 0x00, 0x00,
                 0x32, 0x00,
+                0x03, 0x0F, 0x15, 0x0D, 0x80,
+                0x03, 0xA9, 0xFC, 0x03, 0x80,
+                0x03, 0x7D, 0xD5, 0xB6, 0x7F,
+                0x00,
+                0x00,
+                0x00, 0x00,
+                0x19, 0x00,
                 0x00,
             ),
         )

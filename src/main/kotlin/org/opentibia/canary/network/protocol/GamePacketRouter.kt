@@ -15,6 +15,7 @@ import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.LuaEventDispatcher
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.network.protocol.offline.StartOfflineTrainingPacketParser
+import org.opentibia.canary.network.protocol.proficiency.WeaponProficiencyPayload
 import org.opentibia.canary.network.protocol.rewardchest.RewardChestCollectPacketParser
 import org.opentibia.canary.network.protocol.bestiary.BestiaryPacketParser
 import org.opentibia.canary.network.protocol.forge.ForgePacketParser
@@ -70,7 +71,22 @@ data class GamePacketContext(
      * Optional so callers without the market persistence keep the decode-only
      * boundary.
      */
-    val ioMarket: IOMarket? = null
+    val ioMarket: IOMarket? = null,
+    /**
+     * `ProtocolGame::clientVersionString` (protocolgame.hpp:627) parsed at login
+     * (`ProtocolGame::onRecvFirstMessage`, protocolgame.cpp:1228): the
+     * `shouldSendWeaponProficiencyDetailList` build-string gate
+     * (protocolgame.cpp:109-132) resolves the 0xC4 trailing list from it.
+     * Empty when the session did not negotiate a build string.
+     */
+    val clientVersionString: String = "",
+    /**
+     * `ProtocolGame::protocolProfile` (protocolgame.hpp) resolved from the
+     * session version at login; the weapon-proficiency family gate
+     * (`ProtocolFeature::OfficialWeaponProficiencyPayload`) reads it. `null`
+     * keeps the short 0xC4 shape.
+     */
+    val protocolProfile: ProtocolProfile? = null
 )
 
 object GamePacketRouter {
@@ -1045,11 +1061,24 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // Player::weaponProficiency()'s getTrackedWeaponIds,
-                            // clearSelectedPerks, setSelectedPerk, applyPerks and
-                            // clearAllStats surface (weapon_proficiency.cpp:320-595, 1488)
-                            // is not ported, so the decoded command only marks the
-                            // confinement boundary (PARITY GAP).
+                            when (command) {
+                                // `action == 0x01` (protocolgame.cpp:3135-3141): one
+                                // `sendWeaponProficiencyWindow` per tracked weapon id,
+                                // sorted by `WeaponProficiency::getTrackedWeaponIds`
+                                // (weapon_proficiency.cpp:320-329). The action reads no
+                                // further payload and returns before the trailing
+                                // window/proficiency sends.
+                                is WeaponProficiencyWindowsCommand ->
+                                    sendTrackedWeaponWindows(player, context)
+
+                                // Actions 0x02-0x09 mutate the selected-perk state
+                                // (`clearSelectedPerks`/`setSelectedPerk`/`applyPerks`,
+                                // weapon_proficiency.cpp:575-640) before the trailing
+                                // window/proficiency sends; that component surface is not
+                                // ported, so the decoded command only marks the
+                                // confinement boundary (PARITY GAP).
+                                is WeaponProficiencyActionCommand -> Unit
+                            }
                         }
                         true
                     }
@@ -1197,12 +1226,17 @@ object GamePacketRouter {
                                 // ProtocolGame::parseInspectionObject's
                                 // INSPECT_PROFICIENCY branch (protocolgame.cpp:2926-2930):
                                 // the decoded item id feeds sendWeaponProficiencyWindow
-                                // (0xC4). The `shouldSendWeaponProficiencyDetailList`
-                                // trailing-list gate needs the client build string the
-                                // port's login does not parse (PARITY GAP), so the
-                                // shorter current shape is sent.
+                                // (0xC4) with the session build-string detail-list gate
+                                // (`shouldSendWeaponProficiencyDetailList`,
+                                // protocolgame.cpp:12354).
                                 is InspectObjectCommand.Proficiency ->
-                                    player.protocolSink?.sendWeaponProficiencyWindow(command.itemId)
+                                    player.protocolSink?.sendWeaponProficiencyWindow(
+                                        command.itemId,
+                                        WeaponProficiencyPayload.shouldSendWeaponProficiencyDetailList(
+                                            context.protocolProfile,
+                                            context.clientVersionString,
+                                        ),
+                                    )
 
                                 // INSPECT_PLAYERTRADE and the remaining inspection
                                 // types consume no further payload and send nothing
@@ -1433,6 +1467,24 @@ object GamePacketRouter {
         }
 
         return packetsHandled
+    }
+
+    /**
+     * `ProtocolGame::parseWeaponProficiency`'s `action == 0x01` branch
+     * (protocolgame.cpp:3135-3141): one `sendWeaponProficiencyWindow` per
+     * tracked weapon id, resolved from the stored per-weapon proficiency state
+     * (`WeaponProficiency::getTrackedWeaponIds`, weapon_proficiency.cpp:320-329:
+     * the stored ids, sorted ascending).
+     */
+    private fun sendTrackedWeaponWindows(player: Player, context: GamePacketContext) {
+        val sink = player.protocolSink ?: return
+        val sendDetailList = WeaponProficiencyPayload.shouldSendWeaponProficiencyDetailList(
+            context.protocolProfile,
+            context.clientVersionString,
+        )
+        for (weaponId in player.features.weaponProficiencies.keys.sorted()) {
+            sink.sendWeaponProficiencyWindow(weaponId, sendDetailList)
+        }
     }
 
     /**

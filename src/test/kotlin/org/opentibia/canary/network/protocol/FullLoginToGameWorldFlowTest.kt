@@ -164,9 +164,22 @@ class FullLoginToGameWorldFlowTest {
         assertThat(creatureId).isEqualTo(1L)
         val graphicsSpeed = selfFrame.readUnsignedShortLE()
         assertThat(graphicsSpeed).isEqualTo(50)
+        // The `version >= 981` speed-formula doubles, both `>= 1054`/`>= 1058`
+        // expert bytes, the `>= 1080` store pair and the exiva byte
+        // (protocolgame.cpp:8646-8682).
+        selfFrame.skipBytes(15)
         val expertPvpControls = selfFrame.readUnsignedByte().toInt()
         assertThat(expertPvpControls).isEqualTo(0)
+        assertThat(selfFrame.readUnsignedByte().toInt()).isEqualTo(0)
+        assertThat(selfFrame.readTibiaString()).isEmpty()
+        assertThat(selfFrame.readUnsignedShortLE()).isEqualTo(25)
+        assertThat(selfFrame.readUnsignedByte().toInt()).isEqualTo(0)
         selfFrame.release()
+
+        // The `sendAddCreature` tail frames: bug report (0x1A), tibia time
+        // (0xEF), pending state (0x0A) and enter world (0x0F).
+        val tailOpcodes = List(4) { readLoginFrameOpcode(gameChannel, gameCipher) }
+        assertThat(tailOpcodes).containsExactly(0x1A, 0xEF, 0x0A, 0x0F)
 
         // The login tail then sends the map description as its own frame.
         val gameResponse: ByteBuf? = gameChannel.readOutbound()
@@ -185,5 +198,17 @@ class FullLoginToGameWorldFlowTest {
         assertThat(gameResponse.readUnsignedShortLE()).isEqualTo(1000) // Pos Y
         assertThat(gameResponse.readUnsignedByte().toInt()).isEqualTo(7)    // Pos Z
         gameResponse.release()
+    }
+
+    /** Reads one outbound frame, verifies its framing, decrypts it and returns its opcode. */
+    private fun readLoginFrameOpcode(channel: EmbeddedChannel, cipher: XteaCipher): Int {
+        val frame = channel.readOutbound<ByteBuf>() ?: error("no outbound frame was written")
+        val length = frame.readUnsignedShortLE()
+        assertThat(frame.readableBytes()).isEqualTo(length)
+        frame.readUnsignedIntLE() // Adler32 checksum
+        assertThat(cipher.decrypt(frame, frame.readerIndex(), frame.readableBytes())).isTrue
+        val opcode = frame.readUnsignedByte().toInt()
+        frame.release()
+        return opcode
     }
 }
