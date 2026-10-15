@@ -8,9 +8,7 @@ import org.opentibia.canary.combat.condition.SpellGroup
 import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.PlayerPronoun_t
-import org.opentibia.canary.creatures.appearance.outfit.OutfitPlayer
 import org.opentibia.canary.creatures.appearance.outfit.Outfits
-import org.opentibia.canary.creatures.appearance.outfit.PlayerOutfits
 import org.opentibia.canary.creatures.players.components.AchievementRegistry
 import org.opentibia.canary.creatures.players.components.InMemoryAchievementRegistry
 import org.opentibia.canary.creatures.players.components.PlayerAchievement
@@ -3127,9 +3125,8 @@ class WorldPlayerBatch3Operations(
  *  - `Player::setVarSkill` and `Player::setBonusCapacity` have no Kotlin domain
  *    counterparts and the speed change needs `Game`; the stat callbacks the
  *    scroll path can trigger are inert.
- *  - `Player::getStorageValue` lives in the Lua operations layer, so the shrine
- *    gate reports -1 (unset) and `Player::updateImbuementTrackerStats` has no
- *    protocol seam; `removeMoney` has no player-level money store.
+ *  - `Player::updateImbuementTrackerStats` has no protocol seam and
+ *    `removeMoney` has no player-level money store.
  *  - `internalRemoveItem` only removes items held directly in an inventory slot
  *    (`Player::removeItem`), not items nested in containers (the C++
  *    `Game::internalRemoveItem` walks the parent chain), and `internalAddItem`
@@ -3158,8 +3155,8 @@ internal class PlayerImbuementAdapter(private val player: Player) : ImbuementPla
 
     override fun sendSkills() = player.sendSkills()
 
-    /** PARITY GAP: storage lives in the Lua operations layer, not on `Player`. */
-    override fun getStorageValue(key: Int): Int = -1
+    /** `Player::getStorageValue(key)` (player.cpp:1387-1389) over the composed `m_storage`. */
+    override fun getStorageValue(key: Int): Int = player.storage().get(key)
 
     override fun sendImbuementResult(message: String) = player.sendTextMessage(message)
 
@@ -3393,17 +3390,18 @@ interface PlayerRemainderOperations {
  *  - `getPronoun`/`setPronoun` map out-of-range numbers to `PLAYERPRONOUN_UNSET`
  *    instead of the C++ cast of arbitrary integers into `PlayerPronoun_t`.
  *
- * The per-player outfit and XP-boost maps are weak keys (`Player` uses identity
- * equality) so a released player is not retained, matching the lifetime rule for
- * state that outlives the scripting call.
+ * The outfit bindings delegate to the composed `Player::outfits`
+ * (`PlayerFeatures.outfits`, player.hpp:1686), the same `PlayerOutfitState` the
+ * host `Player::getOutfits()` reads and the storage reserved range appends to.
+ * The per-player XP-boost map is the remaining weak-key map (`Player` uses
+ * identity equality) so a released player is not retained, matching the lifetime
+ * rule for state that outlives the scripting call.
  */
 class WorldPlayerRemainderOperations(
     private val outfitDefinitions: Outfits = Outfits(),
     private val mountDefinitions: Mounts = Mounts(),
     private val clientInfoProvider: ((Player) -> LuaClientInfo?)? = null,
 ) : PlayerRemainderOperations {
-
-    private val outfitsByPlayer = WeakHashMap<Player, PlayerOutfits>()
 
     private val xpBoostsByPlayer = WeakHashMap<Player, XpBoostState>()
 
@@ -3414,24 +3412,24 @@ class WorldPlayerRemainderOperations(
 
     override fun addOutfit(player: Any, lookType: Int, addon: Int): Boolean? {
         val target = player as? Player ?: return null
-        outfitsOf(target).addOutfit(lookType, addon)
+        target.features.outfits.addOutfit(lookType, addon)
         return true
     }
 
     override fun addOutfitAddon(player: Any, lookType: Int, addon: Int): Boolean? {
         val target = player as? Player ?: return null
-        outfitsOf(target).addOutfit(lookType, addon)
+        target.features.outfits.addOutfit(lookType, addon)
         return true
     }
 
     override fun removeOutfit(player: Any, lookType: Int): Boolean? =
-        (player as? Player)?.let { outfitsOf(it).removeOutfit(lookType) }
+        (player as? Player)?.let { it.features.outfits.removeOutfit(lookType) }
 
     override fun removeOutfitAddon(player: Any, lookType: Int, addon: Int): Boolean? =
-        (player as? Player)?.let { outfitsOf(it).removeOutfitAddon(lookType, addon) }
+        (player as? Player)?.let { it.features.outfits.removeOutfitAddon(lookType, addon) }
 
     override fun hasOutfit(player: Any, lookType: Int, addon: Int): Boolean? =
-        (player as? Player)?.let { outfitsOf(it).canWear(lookType, addon) }
+        (player as? Player)?.let { it.features.outfits.canWear(lookType, addon) }
 
     /** PARITY GAP: no outfit-window protocol sink; succeeds without transmitting. */
     override fun sendOutfitWindow(player: Any): Boolean? = (player as? Player)?.let { true }
@@ -3554,15 +3552,6 @@ class WorldPlayerRemainderOperations(
         val target = player as? Player ?: return null
         boostsOf(target).staminaXpBoost = value
         return true
-    }
-
-    private fun outfitsOf(player: Player): PlayerOutfits = outfitsByPlayer.getOrPut(player) {
-        PlayerOutfits(
-            outfits = outfitDefinitions,
-            player = OutfitPlayer { player.getSex() },
-            isPremium = { player.isPremium() },
-            hasAccess = { player.isAccessPlayer() },
-        )
     }
 
     private fun boostsOf(player: Player): XpBoostState = xpBoostsByPlayer.getOrPut(player) { XpBoostState() }

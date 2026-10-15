@@ -182,6 +182,17 @@ class IOLoginData(
      */
     private val bestiaryPersistence: IOBestiaryPersistence? = null,
     /**
+     * `IOLoginDataLoad::loadPlayerAnimusMastery` (iologindata_load_player.cpp:
+     * 277-289) and the inline `players.animus_mastery` write of
+     * `IOLoginDataSave::savePlayerFirst` (iologindata_save_player.cpp:293-299)
+     * codec seam. The bytes go through [IOBestiaryPersistence]'s interim
+     * `player_animus_mastery` mapping (the port schema has no
+     * `players.animus_mastery` column yet, see
+     * [IOBestiaryPersistence.loadAnimusMasteryBlob]); a `null`
+     * [bestiaryPersistence] keeps both directions inert like the other unwired
+     * seams.
+     */
+    /**
      * `IOLoginDataSave::savePlayerPreyClass` / `savePlayerTaskHuntingClass`
      * (src/io/functions/iologindata_save_player.cpp:661-775) sink: the wave-36
      * [IOPreyPersistence] class carrying both slot families. `null` keeps both

@@ -27,6 +27,7 @@ import org.opentibia.canary.creatures.monsters.VoiceBlock
 import org.opentibia.canary.creatures.monsters.LootBlock
 import org.opentibia.canary.creatures.monsters.MonsterType as FullMonsterType
 import org.opentibia.canary.creatures.monsters.MonsterTypeScriptInterface
+import org.opentibia.canary.creatures.players.components.PlayerStorage
 import org.opentibia.canary.creatures.skills_t
 import org.opentibia.canary.creatures.vocations.Vocation
 import org.opentibia.canary.creatures.spawns.MonsterType
@@ -566,8 +567,10 @@ class WorldGameOperations(
  * - `sendTextMessage`: no protocol client to deliver the message to; returns `false`.
  * - `getVocation`: `Player` has no vocation yet; returns `Unit`, which the binding still
  *   wraps as `Vocation` userdata.
- * - storage keys in Canary's reserved ranges are rejected by `setStorageValue`; only the
- *   `key == 0` rejection is reproduced here.
+ * - storage delegates to the composed `Player::m_storage` (`PlayerFeatures.storage`,
+ *   player.hpp:1968): `getStorageValue` returns -1 for a missing key and
+ *   `setStorageValue` reproduces the C++ `luaPlayerSetStorageValue` guards (key 0 and the
+ *   reserved range are rejected) before `PlayerStorage::add`.
  * - `getMagicLevel` inherits the seam's 0 no-op default; the domain models no magic-level
  *   progression (Canary tracks a separate `Player::magLevel` field).
  * - `getGuid` returns [Player.id], the identity this port persists and keys storage by,
@@ -584,9 +587,6 @@ class WorldGameOperations(
 class WorldPlayerOperations(
     private val itemIdsByName: Map<String, Int> = emptyMap(),
 ) : PlayerOperations {
-    /** Per-player storage keyed by `Player::getGUID()`, returning -1 when unset. */
-    private val storage = mutableMapOf<Long, MutableMap<Int, Int>>()
-
     override fun itemIdByName(name: String): Int = itemIdsByName[name] ?: 0
 
     override fun addItem(
@@ -639,7 +639,7 @@ class WorldPlayerOperations(
 
     override fun getStorageValue(player: Any, key: Int): Int {
         val target = player as? Player ?: return -1
-        return storage[target.id]?.get(key) ?: -1
+        return target.features.storage.get(key)
     }
 
     override fun setStorageValue(player: Any, key: Int, value: Int): Boolean {
@@ -647,7 +647,10 @@ class WorldPlayerOperations(
             return false
         }
         val target = player as? Player ?: return false
-        storage.getOrPut(target.id) { mutableMapOf() }[key] = value
+        if (PlayerStorage.isStorageKeyInRange(key, PlayerStorage.PSTRG_RESERVED_RANGE_START, PlayerStorage.PSTRG_RESERVED_RANGE_SIZE)) {
+            return false
+        }
+        target.features.storage.add(key, value)
         return true
     }
 
@@ -1639,8 +1642,8 @@ class WorldPositionOperations(
 /**
  * `Monster` metatable seam backed by the Kotlin [Monster] domain object plus per-monster
  * state the domain does not model yet (idle flag, friend/target lists, attacked
- * creature, master, challenge flag). The per-id state maps follow the existing
- * [WorldPlayerOperations] storage convention and live as long as this operations object.
+ * creature, master, challenge flag). The per-id state maps live as long as this
+ * operations object.
  *
  * Parity gaps, all documented approximations:
  * - `getType` resolves the type from the name catalog because [Monster] carries no
