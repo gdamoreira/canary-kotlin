@@ -486,6 +486,7 @@ class CanaryServer(
         // installed before [start] materializes spawn/zone tiles; tiles the map
         // already holds when this listener is composed keep the inert defaults.
         gameMap.tileInitializer = ::bindTileSeams
+        bindMoveEventSeams()
     }
 
     /**
@@ -576,6 +577,16 @@ class CanaryServer(
         tile.expertPvpEnabled = configuredWorldType?.let(ExpertPvp::isEnabled) ?: false
         tile.worldTypeProvider = { game.getWorldType() }
         tile.playerByGuidProvider = { guid -> game.getPlayerByGUID(guid) }
+    }
+
+    /** `g_moveEvents()` reach of the tile notifications (movement.cpp:290-390). */
+    private fun bindMoveEventSeams() {
+        gameMap.moveEventsOnCreatureMove = { creature, tile, eventType ->
+            scriptingDispatch.moveEventsOnCreatureMove(creature, tile, eventType)
+        }
+        gameMap.moveEventsOnItemMove = { item, tile, isAdd ->
+            scriptingDispatch.moveEventsOnItemMove(item, tile, isAdd)
+        }
     }
 
     /** `g_configManager().getNumber(...)` read backing the `Tile::queryAdd` account limits. */

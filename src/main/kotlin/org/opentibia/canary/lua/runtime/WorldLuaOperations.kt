@@ -439,6 +439,25 @@ class WorldLuaOperations(
      * routes the answers through `Game::playerAnswerModalWindow`
      * (game.cpp:11144).
      */
+    /**
+     * Wave-74 M3 call site: re-installs the player-extra bindings over the
+     * booted `g_livestream()` registry, mirroring the other `attach*` seams.
+     */
+    fun attachPlayerExtras(
+        livestream: () -> org.opentibia.canary.creatures.players.livestream.LivestreamManager?,
+        livestreamClientOf: (Player) -> org.opentibia.canary.creatures.players.livestream.LivestreamClient? =
+            { it.protocolSink },
+    ) {
+        val environment = installedEnvironment ?: return
+        PlayerFunctionsExtra.install(
+            environment,
+            org.opentibia.canary.lua.bindings.core.WorldPlayerExtraOperations(
+                livestream = livestream,
+                livestreamClientOf = livestreamClientOf,
+            ),
+        )
+    }
+
     fun attachModalWindows(managerOf: (Player) -> ModalWindowManager?) {
         val env = installedEnvironment ?: return
         if (env.getLuaState() == null) {

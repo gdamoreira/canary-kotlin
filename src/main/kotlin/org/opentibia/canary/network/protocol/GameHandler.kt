@@ -624,6 +624,17 @@ class GameHandler(
         // `ProtocolGame::login` placement block (protocolgame.cpp:1053-1063):
         // `g_game().placeCreature(player, player->getLoginPosition()) ||
         // g_game().placeCreature(player, player->getTemplePosition(), false, true)`;
+        // `Game::loginRefusal` (game.cpp:12352-12399): STARTUP/MAINTAIN refuse
+        // with the exact message (SHUTDOWN refuses silently); CanAlwaysLogin
+        // players bypass. The C++ call sites are the game-protocol login gates.
+        val refusal = game.loginRefusal(activePlayer)
+        if (refusal != null) {
+            if (refusal.isNotEmpty()) {
+                activePlayer.protocolSink?.sendCancelMessage(refusal)
+            }
+            ctx.close()
+            return
+        }
         // a failed placement disconnects with the temple error. The placement
         // itself runs the ported `Creature::addList` -> `Player::addList`
         // (game.cpp:1513, player.cpp:4519), which announces the session on the

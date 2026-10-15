@@ -304,6 +304,14 @@ object LuaEventDispatcher {
     fun globalEventOnTime(env: LuaEnvironment, name: String): Boolean =
         globalEventExecuteEvent(env, name)
 
+    /** `GlobalEvent::executeEvent(GLOBALEVENT_SAVE)` (globalevent.cpp:198-208): callback with no args. */
+    fun globalEventOnSave(env: LuaEnvironment, name: String): Boolean =
+        globalEventExecuteEvent(env, name)
+
+    /** `GlobalEvent::executeEvent(GLOBALEVENT_SHUTDOWN)`: callback with no args. */
+    fun globalEventOnShutdown(env: LuaEnvironment, name: String): Boolean =
+        globalEventExecuteEvent(env, name)
+
     fun globalEventOnRecord(env: LuaEnvironment, name: String, current: Long, old: Long): Boolean {
         val event = env.globalEvents.get(name) ?: return false
         return invoke(

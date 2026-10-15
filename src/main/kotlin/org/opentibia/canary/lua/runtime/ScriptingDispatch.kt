@@ -241,6 +241,25 @@ class ScriptingDispatch(
             LuaEventDispatcher.globalEventOnRecord(environment, name, current, old)
         }
 
+    /**
+     * Mirrors `GlobalEvents::save` (`execute(GLOBALEVENT_SAVE)`,
+     * globalevent.cpp:210-216): submits every registered `save` global event to
+     * the WorldCommit lane. Returns whether at least one was registered.
+     */
+    fun saveGlobalEvents(): Boolean =
+        submitGlobalEvents(SAVE_EVENT_TYPE) { name ->
+            LuaEventDispatcher.globalEventOnSave(environment, name)
+        }
+
+    /**
+     * Mirrors `GlobalEvents::shutdown` (`execute(GLOBALEVENT_SHUTDOWN)`):
+     * submits every registered `shutdown` global event to the WorldCommit lane.
+     */
+    fun shutdownGlobalEvents(): Boolean =
+        submitGlobalEvents(SHUTDOWN_EVENT_TYPE) { name ->
+            LuaEventDispatcher.globalEventOnShutdown(environment, name)
+        }
+
     fun globalEventOnThink(name: String): Boolean =
         submitGlobal(name) { LuaEventDispatcher.globalEventOnThink(environment, name) }
 
@@ -475,6 +494,8 @@ class ScriptingDispatch(
         const val DEATH_EVENT_TYPE = "death"
         const val STARTUP_EVENT_TYPE = "startup"
         const val RECORD_EVENT_TYPE = "record"
+        const val SAVE_EVENT_TYPE = "save"
+        const val SHUTDOWN_EVENT_TYPE = "shutdown"
         const val STEP_IN_EVENT_TYPE = "stepin"
         const val STEP_OUT_EVENT_TYPE = "stepout"
         const val MODALWINDOW_EVENT_TYPE = "modalwindow"
