@@ -107,11 +107,20 @@ object ContainerBrowsePacketHandler {
     /**
      * `ProtocolGame::resendLivestreamViewerContainer` (protocolgame.cpp:12448-12462):
      * the requested container id resolves one of the viewer's open containers
-     * and re-sends it through the session sink, or closes the window when the
-     * id is not open.
+     * and re-sends it through the session transport, or closes the window when
+     * the id is not open. After `castViewerLogin` the session `player` is the
+     * caster (`player = foundPlayer`, protocolgame.cpp:12389), so the caller
+     * resolves the viewer transport explicitly ([sink]).
      */
-    fun applyLivestreamViewerContainer(player: Player, command: LivestreamViewerContainerCommand) {
-        val sink = player.protocolSink ?: return
+    fun applyLivestreamViewerContainer(
+        player: Player,
+        command: LivestreamViewerContainerCommand,
+        sink: ProtocolSink? = player.protocolSink,
+    ) {
+        if (sink == null) {
+            return
+        }
+
         val open = player.getOpenContainers()[command.containerId]
         val container = open?.container
         if (container == null) {

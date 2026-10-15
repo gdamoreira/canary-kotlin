@@ -48,7 +48,7 @@ object LivestreamViewerWriter {
         fun sendIcons(icons: Set<PlayerIcon>, bakragore: IconBakragore)
 
         /** `ProtocolGame::sendChannel(CHANNEL_LIVESTREAM, "Livestream", nullptr, nullptr)` (protocolgame.cpp:12432). */
-        fun sendChannel(channelId: Int, name: String)
+        fun sendChannel(channelId: Int, channelName: String)
     }
 
     /** `sendLivestreamViewerAppear` (protocolgame.cpp:12405-12434). */

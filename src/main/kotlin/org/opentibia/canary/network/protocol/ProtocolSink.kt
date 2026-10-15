@@ -3,9 +3,13 @@ package org.opentibia.canary.network.protocol
 import io.netty.buffer.ByteBuf
 import io.netty.buffer.ByteBufAllocator
 import io.netty.channel.Channel
+import java.net.InetSocketAddress
 import kotlin.math.abs
 import kotlin.math.floor
+import org.opentibia.canary.chat.ChannelEvent
+import org.opentibia.canary.chat.SpeakClasses
 import org.opentibia.canary.combat.condition.Outfit
+import org.opentibia.canary.combat.condition.PlayerIcon as ConditionPlayerIcon
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.FightMode
 import org.opentibia.canary.creatures.Monster
@@ -15,6 +19,10 @@ import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.players.ExivaRestrictions
 import org.opentibia.canary.creatures.players.PlayerFrameSink
 import org.opentibia.canary.creatures.players.PlayerSendSink
+import org.opentibia.canary.creatures.players.livestream.IconBakragore as LivestreamIconBakragore
+import org.opentibia.canary.creatures.players.livestream.LivestreamClient
+import org.opentibia.canary.creatures.players.livestream.LivestreamMessage
+import org.opentibia.canary.creatures.players.livestream.SessionEndInformation
 import org.opentibia.canary.creatures.players.vip.VipClient
 import org.opentibia.canary.creatures.players.vip.VipStatus
 import org.opentibia.canary.creatures.skills_t
@@ -25,11 +33,15 @@ import org.opentibia.canary.lua.bindings.SpellBindings
 import org.opentibia.canary.lua.bindings.core.returnMessage
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.map.Tile
+import org.opentibia.canary.network.connection.SessionEndInformations
 import org.opentibia.canary.network.protocol.container.ContainerItemWriter
 import org.opentibia.canary.network.protocol.creature.CreaturePacketWriter
 import org.opentibia.canary.network.protocol.map.TilePacketWriter
 import org.opentibia.canary.network.protocol.misc.MiscDataWriter
+import org.opentibia.canary.network.protocol.misc.MiscSessionWriter
 import org.opentibia.canary.network.protocol.npcshop.NpcShopWindowSerializer
+import org.opentibia.canary.network.protocol.player.ChatWindowWriter
 import org.opentibia.canary.network.protocol.player.PlayerWindowWriter
 import org.opentibia.canary.network.protocol.proficiency.WeaponProficiencyPayload
 import org.opentibia.canary.network.protocol.vip.VipWindowWriter
@@ -52,11 +64,17 @@ import org.opentibia.canary.systems.rewardchest.ReturnValue
  * Implementations must be fire-and-forget: `NettyProtocolSink` queues the frame
  * on the channel's event loop, so sink writes never block the WorldCommit lane
  * (AGENTS.md 1.2) and never retain mutable world state.
+ *
+ * [LivestreamClient] is part of the surface because `LivestreamManager` resolves
+ * the broadcaster session through `Player::getClient()` (`casterClient`,
+ * livestream.cpp:314-375) and drives `sendChannel`/`sendChannelMessage`/
+ * `sendChannelEvent`/`sendSessionEndInformation` on it directly, exactly like
+ * `PlayerVIP` drives its [VipClient] sends.
  */
-interface ProtocolSink : VipClient {
+interface ProtocolSink : VipClient, LivestreamClient {
 
     /** `ProtocolGame::sendTextMessage(TextMessage)` (0xB4, protocolgame.cpp:6070). */
-    fun sendTextMessage(type: MessageClass, text: String)
+    override fun sendTextMessage(type: MessageClass, text: String)
 
     /**
      * `ProtocolGame::sendTextMessage(TextMessage)` (0xB4, protocolgame.cpp:6070)
@@ -163,6 +181,18 @@ interface ProtocolSink : VipClient {
     }
 
     /**
+     * `Player::sendUpdateTileItem(updateTile, pos, item)` (player.cpp:7067-7072):
+     * resolves the item's stack position on [tile] for this spectator and writes
+     * the 0x6B update. `Tile::getStackposOfItem == -1` suppresses the frame, and
+     * `ProtocolGame::sendUpdateTileItem`'s `canSee(pos)` gate stays with the
+     * implementation. The corpse-update tail of `Creature::dropCorpse`
+     * (creature.cpp:815) and the quick-loot senders (game.cpp:3752, 6572) reach
+     * it through [Item.sendUpdateToClient].
+     */
+    fun sendUpdateTileItem(tile: Tile?, position: Position, item: Item) {
+    }
+
+    /**
      * `ProtocolGame::sendExivaRestrictions(isLogin, added..., removed...)`
      * (0xCA, protocolgame.cpp:12252-12312). Login mode resolves the stored
      * player/guild whitelists into names; update mode echoes the added/removed
@@ -178,6 +208,27 @@ interface ProtocolSink : VipClient {
         removedGuildNames: List<String> = emptyList(),
     ) {
     }
+}
+
+/**
+ * `Item::sendUpdateToClient(player)` (src/items/item.cpp:3648-3680): the corpse
+ * item-update tail of `Creature::dropCorpse` (creature.cpp:815) and the
+ * quick-loot senders (game.cpp:3752, 6572). The C++ party branch fans the
+ * update out to every `Party::getPlayers()` participant and returns; without a
+ * party only the target's own client receives it. The per-target
+ * `Player::sendUpdateTileItem` stack-position and visibility gates live in
+ * [ProtocolSink.sendUpdateTileItem].
+ */
+fun Item.sendUpdateToClient(player: Player) {
+    val updateTile = getTile() ?: return
+    val party = player.getParty()
+    if (party != null) {
+        for (participant in party.getPlayers()) {
+            participant.protocolSink?.sendUpdateTileItem(updateTile, updateTile.position, this)
+        }
+        return
+    }
+    player.protocolSink?.sendUpdateTileItem(updateTile, updateTile.position, this)
 }
 
 /**
@@ -222,7 +273,8 @@ const val STORE_COIN_PACKET_DEFAULT: Int = 25
  * buffer from that point on.
  */
 abstract class ProtocolFrameSink(
-    protected val player: Player,
+    /** `ProtocolGame::player` (protocolgame.hpp:621); exposed as [player]. */
+    protected val sessionPlayer: Player,
     protected val map: GameMap,
     /** `g_game().getCreatureByID` behind the known-set eviction (`protocolgame.cpp:2346`). */
     creatureById: (Long) -> Creature? = { null },
@@ -243,6 +295,98 @@ abstract class ProtocolFrameSink(
     /** `g_game().getGuild(id, true)->getName()` behind the login-mode 0xCA whitelist (protocolgame.cpp:12292). */
     private val guildNameById: (Long) -> String = { "" },
 ) : ProtocolSink {
+
+    /** `ProtocolGame::player` (protocolgame.hpp:621): the session creature. */
+    override val player: Player get() = sessionPlayer
+
+    /**
+     * `ProtocolGame::oldProtocol` (protocolgame.hpp:640): the session profile
+     * flag. Fixed at login in Canary (never written by `LivestreamManager`), so
+     * the base transport keeps the current-profile default and the session
+     * transports override it from their negotiated profile.
+     */
+    override var oldProtocol: Boolean = false
+
+    /** `ProtocolGame::m_isLivestreamBroadcaster` (protocolgame.hpp:645). */
+    override var isLivestreamBroadcaster: Boolean = false
+
+    /** `ProtocolGame::m_livestreamMessageCooldownTime` (protocolgame.hpp:647). */
+    override var livestreamMessageCooldownTime: Long = 0L
+
+    /** `ProtocolGame::m_livestreamMessageCount` (protocolgame.hpp:648). */
+    override var livestreamMessageCount: Int = 0
+
+    /**
+     * `Protocol::getIP()` (protocol.cpp:228-234). The base transport has no
+     * connection, so it reports `0` like the C++ absent-connection branch; the
+     * Netty transport overrides it with the channel's remote address.
+     */
+    override fun getIP(): Long = 0L
+
+    /**
+     * `ProtocolGame::writeToOutputBuffer` (protocolgame.cpp:1498-1530) payload
+     * append: `NetworkMessage::getLength()` bytes starting at
+     * `NetworkMessage::INITIAL_BUFFER_POSITION`. The profile opcode gate and
+     * the `m_isLivestreamBroadcaster` broadcast fanout stay with the caller.
+     */
+    override fun writeToOutputBuffer(message: LivestreamMessage) {
+        if (message.length <= 0) {
+            return
+        }
+
+        val offset = message.initialBufferPosition
+        val end = offset + message.length
+        if (offset < 0 || end > message.buffer.size) {
+            return
+        }
+        emit { writeBytes(message.buffer, offset, message.length) }
+    }
+
+    /** `ProtocolGame::sendMapDescription(pos)` (protocolgame.cpp:3739-3785). */
+    override fun sendMapDescription(position: Position) {
+        emit { MapPacketWriter.writeMapDescription(this, map, position) }
+    }
+
+    /**
+     * `ProtocolGame::sendIcons(iconSet, IconBakragore)` current-profile branch
+     * (protocolgame.cpp:6257-6294): the 64-bit icon bitset plus the Bakragore
+     * byte. The condition-side `PlayerIcon`/livestream `IconBakragore` enums are
+     * mapped by declared value onto the wire enums, like `PlayerClientIcons`.
+     */
+    override fun sendIcons(icons: Set<ConditionPlayerIcon>, bakragore: LivestreamIconBakragore) {
+        emit {
+            CreatureWindowWriter.writePlayerIcons(
+                this,
+                icons.map { icon -> PlayerIcon.entries.first { it.value == icon.value } }.toSet(),
+                IconBakragore.entries.first { it.value == bakragore.value },
+            )
+        }
+    }
+
+    /** `ProtocolGame::sendSessionEndInformation(information)` (0x18, protocolgame.cpp:2933-2941). */
+    override fun sendSessionEndInformation(information: SessionEndInformation) {
+        emit {
+            MiscSessionWriter.writeSessionEndInformation(
+                this,
+                SessionEndInformations.entries[information.ordinal],
+            )
+        }
+    }
+
+    /** `ProtocolGame::sendChannel(channelId, name, nullptr, nullptr)` (0xAC, protocolgame.cpp:6223-6235). */
+    override fun sendChannel(channelId: Int, channelName: String) {
+        emit { SocialWindowWriter.writeChannel(this, channelId, channelName, null, null) }
+    }
+
+    /** `ProtocolGame::sendChannelMessage(author, text, type, channelId)` (protocolgame.cpp:6237-6255). */
+    override fun sendChannelMessage(author: String, text: String, type: SpeakClasses, channelId: Int) {
+        emit { ChatWindowWriter.writeChannelMessage(this, author, type, text, channelId) }
+    }
+
+    /** `ProtocolGame::sendChannelEvent(channelId, playerName, event)` (protocolgame.cpp:4538-4545). */
+    override fun sendChannelEvent(channelId: Int, viewerName: String, event: ChannelEvent) {
+        emit { ChannelWindowWriter.writeChannelEvent(this, channelId, viewerName, event) }
+    }
 
     /**
      * `ProtocolGame::knownCreatureSet` (`protocolgame.hpp:620`) with the
@@ -317,6 +461,26 @@ abstract class ProtocolFrameSink(
 
     override fun sendRemoveTileThing(position: Position, stackpos: Int) {
         emit { GameWindowWriter.writeRemoveTileThing(this, position, stackpos) }
+    }
+
+    /**
+     * `Player::sendUpdateTileItem(updateTile, pos, item)` (player.cpp:7067-7072)
+     * -> `ProtocolGame::sendUpdateTileItem` (0x6B, protocolgame.cpp:8498-8509):
+     * the item's stack position on [tile] for this spectator suppresses the
+     * frame at `-1`, and the C++ `canSee(pos)` gate follows.
+     */
+    override fun sendUpdateTileItem(tile: Tile?, position: Position, item: Item) {
+        val updateTile = tile ?: return
+        val stackpos = updateTile.getStackposOfItem(player, item)
+        if (stackpos == -1) {
+            return
+        }
+
+        if (!canSee(position)) {
+            return
+        }
+
+        emit { TilePacketWriter.writeUpdateTileItem(this, position, stackpos, item) }
     }
 
     override fun sendCreatureMove(
@@ -761,6 +925,25 @@ internal fun protocolCanSeePosition(player: Player, x: Int, y: Int, z: Int): Boo
 }
 
 /**
+ * `Protocol::getIP()` (protocol.cpp:228-234) over the port's Netty session: the
+ * IPv4 of the channel's remote endpoint as `Connection::getIP`'s numeric value
+ * (`asio::ip::address_v4::to_uint()` ordering); a channel without a remote
+ * endpoint reports `0`.
+ */
+internal fun protocolIpOf(channel: Channel): Long {
+    val remote = channel.remoteAddress() as? InetSocketAddress ?: return 0L
+    val bytes = remote.address?.address ?: return 0L
+    if (bytes.size != 4) {
+        return 0L
+    }
+
+    return ((bytes[0].toLong() and 0xFF) shl 24) or
+        ((bytes[1].toLong() and 0xFF) shl 16) or
+        ((bytes[2].toLong() and 0xFF) shl 8) or
+        (bytes[3].toLong() and 0xFF)
+}
+
+/**
  * `Player::sendSaleItemList(inventoryMap)` emission shared by the sink
  * transports: the `client && shopOwner` gate (player.cpp:2408) plus the
  * owner's shop-vector/currency resolution into
@@ -807,7 +990,7 @@ internal fun emitSaleItemList(
  */
 class NettyProtocolSink private constructor(
     private val channel: Channel,
-    private val player: Player,
+    private val sessionPlayer: Player,
     private val delegate: PlayerFrameSink,
     /** `Player::getShopOwner` (player.cpp:6123-6125) behind `sendSaleItemList`. */
     private val shopOwner: (Player) -> Npc?,
@@ -873,6 +1056,25 @@ class NettyProtocolSink private constructor(
     }
 
     /**
+     * `Protocol::getIP()` (protocol.cpp:228-234): the session channel's remote
+     * IPv4 as the C++ `Connection::getIP()` numeric value; an addressless
+     * transport (embedded channel) reports `0` like the C++ absent connection.
+     */
+    override fun getIP(): Long = protocolIpOf(channel)
+
+    /**
+     * `ProtocolGame::oldProtocol` (protocolgame.hpp:640): the session's
+     * negotiated profile. The value is fixed at login (`oldProtocol =
+     * profileOldProtocol`, protocolgame.cpp:1207) and `LivestreamManager` only
+     * reads it, so the setter is a no-op.
+     */
+    override var oldProtocol: Boolean
+        get() = selfAppearTail.oldProtocol
+        set(value) {
+            // Fixed at login; writes are ignored like the C++ fixed profile flag.
+        }
+
+    /**
      * `ProtocolGame::sendAddCreature`'s `creature == player` branch resolved
      * with this session's negotiated [SelfAppearTail]. Every other appear path
      * delegates to the shared [PlayerFrameSink] so the known-creature
@@ -881,12 +1083,12 @@ class NettyProtocolSink private constructor(
      * `sendUpdateTile` fallback Canary uses (player.cpp:8791-8794).
      */
     override fun sendCreatureAppear(creature: Creature, position: Position, isLogin: Boolean) {
-        if (creature === player && protocolCanSeePosition(player, position.x, position.y, position.z)) {
+        if (creature === sessionPlayer && protocolCanSeePosition(sessionPlayer, position.x, position.y, position.z)) {
             val tile = creature.getTile()
-            val stackpos = tile?.getClientIndexOfCreature(player, creature) ?: -1
+            val stackpos = tile?.getClientIndexOfCreature(sessionPlayer, creature) ?: -1
             if (stackpos in 0 until PROTOCOL_MAX_STACKPOS) {
                 val frame = channel.alloc().buffer()
-                GameWindowWriter.writeSelfAddCreature(frame, player.id, selfAppearTail)
+                GameWindowWriter.writeSelfAddCreature(frame, sessionPlayer.id, selfAppearTail)
                 if (channel.isActive) {
                     channel.writeAndFlush(frame)
                 } else {
@@ -899,7 +1101,7 @@ class NettyProtocolSink private constructor(
     }
 
     override fun sendSaleItemList(inventoryMap: Map<Int, Int>) {
-        emitSaleItemList(player, shopOwner(player), inventoryMap) { build -> emitSessionFrame(build) }
+        emitSaleItemList(sessionPlayer, shopOwner(sessionPlayer), inventoryMap) { build -> emitSessionFrame(build) }
     }
 
     /**
@@ -919,8 +1121,8 @@ class NettyProtocolSink private constructor(
      * this session's `isUpgradeAvailable` resolver.
      */
     override fun sendWeaponProficiency(weaponId: Int) {
-        val resolvedWeaponId = if (weaponId > 0) weaponId else player.getWeaponId(true)
-        val experience = player.features.weaponProficiencies[resolvedWeaponId]?.experience ?: 0
+        val resolvedWeaponId = if (weaponId > 0) weaponId else sessionPlayer.getWeaponId(true)
+        val experience = sessionPlayer.features.weaponProficiencies[resolvedWeaponId]?.experience ?: 0
         val upgradeAvailable = resolvedWeaponId > 0 && weaponProficiencyUpgradeAvailable(resolvedWeaponId)
 
         emitSessionFrame {
@@ -944,7 +1146,7 @@ class NettyProtocolSink private constructor(
         addedGuildNames: List<String>,
         removedGuildNames: List<String>,
     ) {
-        val restrictions = player.getExivaRestrictions()
+        val restrictions = sessionPlayer.getExivaRestrictions()
         val flags = exivaFlags(restrictions)
 
         if (isLogin) {

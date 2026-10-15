@@ -46,8 +46,8 @@ class LivestreamViewerWriterTest {
             calls.add(Call.Icons(icons, bakragore))
         }
 
-        override fun sendChannel(channelId: Int, name: String) {
-            calls.add(Call.Channel(channelId, name))
+        override fun sendChannel(channelId: Int, channelName: String) {
+            calls.add(Call.Channel(channelId, channelName))
         }
     }
 

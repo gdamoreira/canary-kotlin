@@ -14,6 +14,7 @@ import org.opentibia.canary.creatures.monsters.LootBlock
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.monsters.Monsters
 import org.opentibia.canary.creatures.players.grouping.Groups
+import org.opentibia.canary.creatures.players.livestream.LivestreamManager
 import org.opentibia.canary.creatures.players.vip.VipRepository
 import org.opentibia.canary.creatures.vocations.VocationRates
 import org.opentibia.canary.creatures.vocations.Vocations
@@ -684,6 +685,12 @@ class ServerBootstrap(
             // `monster_death`) write through the world `Game` metrics seam over
             // the same registry the Prometheus endpoint exposes.
             world.metrics = metricsRegistry
+            // `g_livestream()` (src/creatures/players/livestream/livestream.hpp:35-95):
+            // the broadcaster/viewer registry behind `ProtocolGame::castViewerLogin`
+            // (protocolgame.cpp:12380). `casterClient` resolves `Player::getClient()`
+            // as the session transport (a `LivestreamClient`); a player without a
+            // client models `player->client == nullptr`.
+            world.livestream = livestreamManager(configManager)
             // Wave 69 F4: `Game::checkGiftOfLife`'s cooldown reduction
             // (player_wheel.cpp:3155-3170, `reduceAllSpellsCooldownTimer(60000)`)
             // drives the owner's wheel, so the world `Game` seam binds to
@@ -998,5 +1005,31 @@ private fun vocationRates(configManager: ConfigManager): VocationRates {
         rateHealthRegen = rate("RATE_HEALTH_REGEN"),
         rateSoulRegenSpeed = rate("RATE_SOUL_REGEN_SPEED"),
         rateAttackSpeed = rate("RATE_ATTACK_SPEED"),
+    )
+}
+
+/**
+ * Production `g_livestream()` (src/creatures/players/livestream/livestream.cpp):
+ * the `LIVESTREAM_*` config values behind the viewer-capacity gates
+ * (livestream.cpp:406-417) and `Player::getClient()` as the `casterClient`
+ * session transport.
+ *
+ * PARITY GAPS: `saveLiveRecord`, `tableExists` and `executeDatabaseTask` keep
+ * their inert defaults; the broadcaster session state
+ * (`Player::setLivestreamViewers`, the throwing `PlayerFunctionsExtra` seam)
+ * and the `active_livestream_casters` persistence are not wired yet.
+ */
+private fun livestreamManager(configManager: ConfigManager): LivestreamManager {
+    fun value(name: String): Int {
+        val key = ConfigKeys.byName(name) ?: return 0
+        return configManager.getNumber(key, key.defaultValue as Int)
+    }
+
+    return LivestreamManager(
+        casterClient = { player -> player.protocolSink },
+        maximumViewersPerIp = { value("LIVESTREAM_MAXIMUM_VIEWERS_PER_IP") },
+        maximumViewers = { value("LIVESTREAM_MAXIMUM_VIEWERS") },
+        premiumMaximumViewers = { value("LIVESTREAM_PREMIUM_MAXIMUM_VIEWERS") },
+        casterMinLevel = { value("LIVESTREAM_CASTER_MIN_LEVEL") },
     )
 }
