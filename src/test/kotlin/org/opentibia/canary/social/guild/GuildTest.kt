@@ -102,6 +102,22 @@ class GuildTest {
     }
 
     @Test
+    fun `a guild materialized by a repository carries the removal seam`() {
+        val removedGuilds = mutableListOf<Long>()
+        val repository = InMemoryGuildRepository(
+            listOf(Guild(id = 7, name = "Wolves")),
+            removeGuild = { removedGuilds.add(it) },
+        )
+        val guild = repository.loadGuild(7)!!
+        val member = player(1, "Member")
+        guild.addMember(member)
+
+        guild.removeMember(member)
+
+        assertThat(removedGuilds).containsExactly(7L)
+    }
+
+    @Test
     fun `motd balance member count and online flag round trip`() {
         val guild = Guild(id = 1, name = "Red Rose")
 

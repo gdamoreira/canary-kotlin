@@ -40,6 +40,7 @@ import org.opentibia.canary.social.guild.JdbcGuildRepository
 import org.opentibia.canary.systems.imbuement.Imbuements
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import javax.sql.DataSource
 
 /**
@@ -58,6 +59,11 @@ import javax.sql.DataSource
  *    (iologindata.cpp:387-396).
  *  - `Game::removeGuild` (game.cpp:11757-11762) saves through
  *    `SaveManager::saveGuild` (save_manager.cpp:182-194) to `IOGuild`.
+ *  - the login load installs `Guild`'s `g_game().removeGuild(id)` seam
+ *    (guild.cpp:29-31) on every guild `IOGuild::loadGuild` materializes, so an
+ *    emptied guild leaves `Game::guilds` and flushes through the save manager.
+ *  - `SaveManager::saveMap` (save_manager.cpp:196-206) reaches the booted
+ *    `Map::save` (map.cpp:262-273) behind the `saveManager.mapSaver` binding.
  *
  * The root is booted exactly like production over an in-memory H2 database and
  * the production [defaultListenerFactory], so the assertions cover the real
@@ -109,6 +115,7 @@ class ServerBootstrapCompositionBindingsTest {
         config: ConfigManager = configManager(),
         monsterBoot: MonsterBoot = MonsterBoot { _, _, _, _ -> Monsters() },
         luaEnvironment: LuaEnvironment = LuaEnvironment().apply { initState() },
+        mapBoot: MapBoot = MapBoot { GameMap() },
     ): BootedRoot {
         var composition: GameComposition? = null
         var listener: ListenerBoot? = null
@@ -123,7 +130,7 @@ class ServerBootstrapCompositionBindingsTest {
             configBoot = ConfigBoot { _, _ -> ServerConfig(loginPort = 0, gamePort = 0) },
             configManagerBoot = ConfigManagerBoot { _, _ -> config },
             databaseBoot = databaseBoot,
-            mapBoot = MapBoot { GameMap() },
+            mapBoot = mapBoot,
             scriptingBoot = ScriptingBoot { luaEnvironment },
             appearanceBoot = AppearanceBoot { Appearances.load(ByteArray(0)) },
             itemBoot = ItemBoot { _, _ -> Items() },
@@ -314,6 +321,62 @@ class ServerBootstrapCompositionBindingsTest {
             val reloaded = JdbcGuildRepository(databaseBoot.dataSource).loadGuild(7L)
             assertThat(reloaded).isNotNull
             assertThat(reloaded!!.getBankBalance()).isEqualTo(4321L)
+        } finally {
+            root.bootstrap.shutdown()
+        }
+    }
+
+    @Test
+    fun `the last member leaving a loaded guild erases it from the world and flushes it`() {
+        val databaseBoot = TestDatabaseBoot("bindings_guildremoval_${System.nanoTime()}")
+        val root = bootRoot(databaseBoot)
+        var channel: EmbeddedChannel? = null
+        try {
+            seedGuild(databaseBoot.dataSource)
+            val (player, session) = loginSession(root).also { channel = it.second }
+
+            val game = root.server().game
+            val guild = game.getGuild(7L)
+            assertThat(guild).isNotNull
+            guild!!.setBankBalance(4321L)
+
+            guild.removeMember(player)
+
+            assertThat(game.getGuilds()).doesNotContainKey(7L)
+            assertThat(JdbcGuildRepository(databaseBoot.dataSource).loadGuild(7L)!!.getBankBalance())
+                .isEqualTo(4321L)
+            assertThat(session.isOpen).isTrue()
+        } finally {
+            channel?.close()
+            root.bootstrap.shutdown()
+        }
+    }
+
+    @Test
+    fun `save all reaches the booted map saver`() {
+        val databaseBoot = TestDatabaseBoot("bindings_mapsaver_${System.nanoTime()}")
+        val houseInfoSaves = AtomicInteger(0)
+        val houseItemSaves = AtomicInteger(0)
+        val root = bootRoot(
+            databaseBoot,
+            mapBoot = MapBoot {
+                GameMap().apply {
+                    saveHouseInfo = {
+                        houseInfoSaves.incrementAndGet()
+                        true
+                    }
+                    saveHouseItems = {
+                        houseItemSaves.incrementAndGet()
+                        true
+                    }
+                }
+            },
+        )
+        try {
+            assertThat(root.composition.saveManager!!.saveAll()).isZero()
+
+            assertThat(houseInfoSaves.get()).isEqualTo(1)
+            assertThat(houseItemSaves.get()).isEqualTo(1)
         } finally {
             root.bootstrap.shutdown()
         }

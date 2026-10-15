@@ -128,6 +128,29 @@ class GameGuildTest {
         assertThat(savingGame.getGuild(1)).isNull()
     }
 
+    @Test
+    fun `a repository loaded guild leaves the game when its last member leaves`() {
+        val saved = mutableListOf<Guild>()
+        lateinit var game: Game
+        val repository = InMemoryGuildRepository(
+            listOf(guild(7, "Wolves")),
+            removeGuild = { id -> game.removeGuild(id) },
+        )
+        game = newGame(guildRepository = repository, saveGuild = { saved.add(it) })
+
+        val loaded = game.getGuild(7, allowOffline = true)!!
+        // `IOLoginDataLoad::loadPlayerGuild` registers the loaded guild
+        // (iologindata_load_player.cpp:410-411).
+        game.addGuild(loaded)
+        val member = player(1, "Wolfie")
+        loaded.addMember(member)
+
+        loaded.removeMember(member)
+
+        assertThat(game.getGuilds()).doesNotContainKey(7L)
+        assertThat(saved).containsExactly(loaded)
+    }
+
     // ----- getGuildByName -----
 
     @Test

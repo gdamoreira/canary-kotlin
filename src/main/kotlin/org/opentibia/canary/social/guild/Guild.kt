@@ -59,7 +59,9 @@ class GuildRank(
  * (AGENTS.md 1.1).
  *
  * @param removeGuild `g_game().removeGuild(id)`, invoked once the online member
- *   list becomes empty; the default no-op keeps standalone guilds inert.
+ *   list becomes empty; the default no-op keeps standalone guilds inert and
+ *   every [GuildRepository] implementation installs the injected seam on the
+ *   guilds it materializes.
  */
 class Guild(
     val id: Long,
@@ -333,7 +335,8 @@ interface GuildRepository {
  * In-memory stand-in for the `guilds`, `guild_ranks`, `guild_wars` and
  * `guild_invites` tables, used for local runs and tests. Like Canary's
  * `IOGuild::saveGuild`, [saveGuild] persists only the balance; ranks and rank
- * additions are rebuilt from the seeded records on [loadGuild].
+ * additions are rebuilt from the seeded records on [loadGuild], which installs
+ * the injected `removeGuild` seam on every materialized guild.
  *
  * [wars] and [invites] are exposed for seeding, mirroring the website-owned
  * rows the engine only reads.
@@ -342,6 +345,8 @@ class InMemoryGuildRepository(
     initialGuilds: List<Guild> = emptyList(),
     val wars: MutableList<GuildWar> = mutableListOf(),
     val invites: MutableSet<GuildInvite> = mutableSetOf(),
+    /** `Guild`'s `g_game().removeGuild(id)` seam (guild.cpp:29-31) installed on every loaded guild. */
+    private val removeGuild: (Long) -> Unit = {},
 ) : GuildRepository {
 
     private class GuildRecord(
@@ -361,7 +366,7 @@ class InMemoryGuildRepository(
 
     override fun loadGuild(guildId: Long): Guild? {
         val record = guilds[guildId] ?: return null
-        val guild = Guild(record.id, record.name)
+        val guild = Guild(record.id, record.name, removeGuild = removeGuild)
         guild.setBankBalance(record.balance)
         for (rank in record.ranks) {
             guild.addRank(rank.id, rank.name, rank.level)
@@ -401,18 +406,24 @@ class InMemoryGuildRepository(
  * `V9__guild_system.sql`.
  *
  * `loadGuild` reads the `guilds` row (name + balance) and its `guild_ranks`
- * rows, `saveGuild` updates only `guilds.balance` (Canary never persists ranks
- * or MOTD from the engine), `getGuildIdByName` resolves the unique guild name
- * and `getWarList` selects the `status = 1` wars of either side.
+ * rows and installs the injected `removeGuild` seam on the materialized guild,
+ * `saveGuild` updates only `guilds.balance` (Canary never persists ranks or
+ * MOTD from the engine), `getGuildIdByName` resolves the unique guild name and
+ * `getWarList` selects the `status = 1` wars of either side.
  */
-class JdbcGuildRepository(private val dataSource: DataSource) : GuildRepository {
+class JdbcGuildRepository(
+    private val dataSource: DataSource,
+    /** `Guild`'s `g_game().removeGuild(id)` seam (guild.cpp:29-31) installed on every loaded guild. */
+    private val removeGuild: (Long) -> Unit = {},
+) : GuildRepository {
 
     override fun loadGuild(guildId: Long): Guild? = dataSource.connection.use { conn ->
         val guild = conn.prepareStatement("SELECT name, balance FROM guilds WHERE id = ?").use { stmt ->
             stmt.setLong(1, guildId)
             stmt.executeQuery().use { rs ->
                 if (rs.next()) {
-                    Guild(guildId, rs.getString("name")).also { it.setBankBalance(rs.getLong("balance")) }
+                    Guild(guildId, rs.getString("name"), removeGuild = removeGuild)
+                        .also { it.setBankBalance(rs.getLong("balance")) }
                 } else {
                     null
                 }
