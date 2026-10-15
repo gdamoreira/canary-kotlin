@@ -703,8 +703,17 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 73: Wave 69 — Runtime Tails (10:00 – 12:00)
+- **Game loop driver** — `scheduleEvent`/`cycleEvent` bound to the dispatcher (lane-aware), `Game.start()` one-shot after listeners; the production loop now drives forgeable/influenced monsters, light, `checkCreatures`, Lua GC, market prices and players-online (9 tests).
+- **Monster hosts + death payload** — hosts bound in `internalPlaceCreature` (summons/raid/Lua shape); the six-argument `onDeathEventsHost` threads corpse/killer/most-damage/unjustified through one unified Lua `onDeath` path (8 tests).
+- **Login/protocol tails** — full self-appear tail (speed doubles, expert byte, store URL/coin packet, exiva byte), login continuation frames, `0xB3` tracked-weapons windows, proficiency detail-list gate, shop sale-list refresh on state updates (16 tests).
+- **Misc bindings** — Gift-of-Life cooldown binding, real `getPlayerHelpers` count, guild-broadcast decision documented (3 tests).
+- **766 suites / 8127 tests, all green**; all commits ancestry-verified.
+
+---
+
 ### Current Status
-- **Automated Tests**: **758 test suites / 8091 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **766 test suites / 8127 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.

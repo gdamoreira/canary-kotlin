@@ -43,7 +43,7 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 | Monster engine (`monster.cpp`, 4,014 lines) | 198 unique `Monster::` methods | 89 name-matched + async pipelines + host + type state + barrier buckets | **~85%** | wave 51: barrier-parallel creature async buckets, budget/requeue/promotion/rollback |
 | Map engine (`map.cpp`) | — | — | **~85%** | sight/`canWalkTo`/pathing/caches/spectators/houses/towns (wave 38) |
 | Persistence (`iologindata*`, `iomapserialize`) | — | — | **~80%** | 24/24 iologindata, 10/10 iomapserialize, market/prey/bestiary/bosstiary/guild/storage (V10–V14) |
-| **Estimated full-parity completion** | — | — | **~99.9%** | tracked inventory complete; waves 65–68 bound the seams at the root, closed persistence/login/combat/monster tails and the last minor bindings. What remains is the deliberately deferred list plus a handful of small protocol tails |
+| **Estimated full-parity completion** | — | — | **~99.9%** | tracked inventory complete; wave 69 bound the production game loop, monster host coverage + death payload, login frame tails, tracked-weapons/sale-list/detail gates and the misc bindings. What remains is engine internals (damage-map/corpse, cylinder producers), old-protocol frames, dispatcher detail and the deferred list |
 
 #### 1.2 Module completion (by inventory rows in §2)
 
@@ -261,11 +261,13 @@ This document tracks **C++ code that is not yet transcribed to the Kotlin port**
 
 ### 3. Highest-Impact Gaps (ranked, verified)
 
-**The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Waves 63–68 closed
+**The tracked inventory is 100% IMPLEMENTED (115/115 rows).** Waves 63–69 closed
 every planned tail. What remains:
 
-1. **Small tails** — `Game.start()`'s `cycleEvent` driver (attached think events fire only when `Game.checkCreatures()` is driven); monster hosts bound only on the spawn path (summons/raid/Lua-created monsters); death payload (corpse/killer/most-damage); shop-open direct `sendSaleItemList` call site; weapon-proficiency detail-list client-build gate; self-appear login tail (speed doubles, store URL, enter-world); `0xB3` tracked-weapons windows; `Game.reduceAllSpellsCooldownTimer` binding; `Game.getPlayerHelpers` (returns 0); guild broadcast on the world manager (per-session host used); login frame full stats/skills parity.
-2. **Deferred by design** — live differential harness (packet-capture A/B vs a running Canary); CipSoft860/old-protocol wire branches; OpenTelemetry SDK/OStream periodic reader; micro-seams (KV LRU ordering, `DEBUG_LOG`, daemon flags, `TransportCodec` tails).
+1. **Engine internals** — `Creature::onDeath` damage-map last-hit/most-damage resolution + corpse creation (monster corpse/loot/experience on death); `Player::postAddNotification`/`postRemoveNotification` cylinder producers (inventory-change → `updateState` → sale-refresh chain); Lua `Game.createMonster` binding + a production `RaidSpawner`/`RaidMonster` bridge.
+2. **Protocol tails** — old-protocol `0x94` helper emission and the `0xCA` exiva-restrictions frame on no-PVP worlds; `0xB3` actions `0x02-0x09` (perk mutations); inline bug-report byte; unsupported-version disconnect.
+3. **Dispatcher detail** — `stopEvent` race for a currently-executing cycle; per-event telemetry context names.
+4. **Deferred by design** — live differential harness (packet-capture A/B vs a running Canary); CipSoft860/old-protocol wire branches; OpenTelemetry SDK/OStream periodic reader; micro-seams (KV LRU ordering, `DEBUG_LOG`, daemon flags, `TransportCodec` tails).
 
 ---
 

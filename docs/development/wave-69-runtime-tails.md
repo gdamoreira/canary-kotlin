@@ -1,6 +1,6 @@
 # Wave 69 Plan — Runtime Tails: Game Loop, Monster Hosts, Login/Protocol, Misc Bindings
 
-**Status:** Planned — awaiting dispatch
+**Status:** Completed (2026-10-15) — four workstreams merged; 766 suites / 8127 tests green
 **Baseline:** `main` @ `bc02ddb6`; 758 suites / 8091 tests green; zero Kotlin warnings
 **Source of scope:** `docs/development/implementation-status.md` §3 item 1 (remaining small tails). **Explicitly excludes the scaling proposals** (`scaling-and-multi-world.md`) — no service split, no multi-world schema, no Redis.
 **Convention:** documents live directly in `docs/development/` (AGENTS.md §5/§6).
@@ -127,3 +127,14 @@ Update `docs/development/implementation-status.md`, `README.md`, `CHANGELOG.md`
   split, multi-world schema/routing, Redis coordination — not touched.
 - Deferred list unchanged: differential harness; CipSoft860/old protocol;
   OpenTelemetry SDK/OStream; micro-seams.
+
+---
+
+## Completion (2026-10-15)
+
+game-loop-driver (`eaa3fa9e`), monster-host-death (`bef7a1ae`),
+login-protocol-tails (`f242f3c3`), misc-bindings (`58d43c05`) merged with zero
+conflicts. Integrated suite: **766 suites / 8127 tests, 0 failures, zero Kotlin
+warnings**; ancestry verified. Remaining work is engine internals (damage-map/
+corpse, cylinder producers), old-protocol frames, dispatcher detail and the
+deferred list.
