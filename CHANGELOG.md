@@ -806,6 +806,13 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 85: Spawn Boot Visibility, players_online Schema
+- **Spawn boot logs** — `IOMap::loadMonsters`/`loadNpcs` report the loaded block counts (51,896 monster / 1,007 npc blocks on the otservbr world); `GameMonsterFactory` reports unregistered monster type names once and the first failed placements (82,991 placed, 276 failed; `Beholder` is the only unregistered name).
+- **players_online** — Flyway `V25` adds the table to both dialect trees, fixing the recurring `Game::updatePlayersOnline` count errors.
+- **827 suites / 8495 tests, all green.**
+
+---
+
 ### Current Status
 - **Automated Tests**: **827 test suites / 8495 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
