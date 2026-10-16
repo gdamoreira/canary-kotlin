@@ -1,5 +1,6 @@
 package org.opentibia.canary.creatures.spawns
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
 import org.opentibia.canary.creatures.Monster
@@ -39,6 +40,8 @@ import kotlin.random.Random
  * `g_eventsScheduler().getSpawnMonsterSchedule()` read are not wired: the
  * event schedule defaults to the engine's 100.
  */
+private val logger = KotlinLogging.logger {}
+
 class MonsterSpawnPath(
     private val game: Game,
     private val map: GameMap,
@@ -58,7 +61,7 @@ class MonsterSpawnPath(
      */
     private val onMonsterSpawn: (Monster, Position) -> Unit = { _, _ -> },
 ) {
-    private val monsterFactory = GameMonsterFactory(game, monsterTypes, monsterPerfTestForceActive)
+    internal val monsterFactory = GameMonsterFactory(game, monsterTypes, monsterPerfTestForceActive)
 
     /**
      * `IOMap::loadMonsters` (src/io/iomap.hpp:32-46): resolves the map's spawn
@@ -77,6 +80,10 @@ class MonsterSpawnPath(
     /** `SpawnsMonster::startup` (src/creatures/monsters/spawns/spawn_monster.cpp:122-132). */
     fun startup() {
         map.spawnsMonster.startup()
+        logger.info {
+            "[SpawnsMonster::startup] - placed ${monsterFactory.createdPlacements.get()} monsters " +
+                "(${monsterFactory.failedPlacements.get()} failed placements)"
+        }
     }
 
     /**

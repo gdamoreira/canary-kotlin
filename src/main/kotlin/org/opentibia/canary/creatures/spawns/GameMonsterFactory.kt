@@ -1,5 +1,6 @@
 package org.opentibia.canary.creatures.spawns
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.monsters.Monsters
 import org.opentibia.canary.creatures.monsters.MonsterType as RegisteredMonsterType
@@ -9,6 +10,8 @@ import java.util.concurrent.atomic.AtomicLong
 
 /** `Monster::monsterAutoID` seed (src/creatures/monsters/monster.cpp:33). */
 const val MONSTER_AUTO_ID_START: Long = 0x50000001L
+
+private val logger = KotlinLogging.logger {}
 
 /**
  * Production [MonsterFactory] over the composed world: the Kotlin counterpart
@@ -43,8 +46,17 @@ class GameMonsterFactory(
 ) : MonsterFactory {
     private val monsterAutoId = AtomicLong(MONSTER_AUTO_ID_START)
 
+    /** Names already reported as unregistered, so the boot log stays bounded. */
+    private val reportedMissingTypes = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
     override fun create(monsterType: MonsterType, position: Position, startup: Boolean): Monster? {
-        val registeredType = monsterTypes.getMonsterType(monsterType.name, silent = true) ?: return null
+        val registeredType = monsterTypes.getMonsterType(monsterType.name, silent = true)
+        if (registeredType == null) {
+            if (reportedMissingTypes.add(monsterType.name)) {
+                logger.warn { "[SpawnMonster::spawnMonster] - Monster type '${monsterType.name}' is not registered; skipping its spawns" }
+            }
+            return null
+        }
         val monster = construct(registeredType, position)
 
         val placed = if (startup) {
@@ -59,12 +71,24 @@ class GameMonsterFactory(
             game.placeCreature(monster, position, extendedPos = false, forced = true)
         }
         if (!placed) {
+            if (failedPlacements.incrementAndGet() <= 5) {
+                logger.warn {
+                    "[SpawnMonster::spawnMonster] - Failed to place '${monsterType.name}' at ${position.x},${position.y},${position.z}"
+                }
+            }
             return null
         }
 
+        createdPlacements.incrementAndGet()
         game.addMonster(monster)
         return monster
     }
+
+    /** Successful placements since boot (diagnostic). */
+    val createdPlacements = java.util.concurrent.atomic.AtomicLong()
+
+    /** Failed placements since boot (diagnostic). */
+    val failedPlacements = java.util.concurrent.atomic.AtomicLong()
 
     /**
      * `Monster::createMonster(name)` (src/creatures/monsters/monster.cpp:82-88):

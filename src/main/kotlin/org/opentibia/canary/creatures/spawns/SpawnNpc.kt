@@ -267,6 +267,9 @@ class SpawnsNpc {
 
     fun isLoaded(): Boolean = loaded
 
+    /** `SpawnsNpc::spawnNpcList` read view for the boot log (spawn_npc.cpp). */
+    fun getspawnNpcList(): List<SpawnNpc> = spawnNpcList
+
     fun setLoaded(value: Boolean): Boolean {
         loaded = value
         return loaded

@@ -1,5 +1,6 @@
 package org.opentibia.canary.io
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import org.opentibia.canary.config.ConfigKey
 import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
@@ -22,6 +23,8 @@ import java.io.File
  */
 object IOMap {
 
+    private val logger = KotlinLogging.logger {}
+
     private val mapNameKey: ConfigKey = requireNotNull(ConfigKeys.byName("MAP_NAME"))
 
     private fun mapName(config: ConfigManager): String =
@@ -42,6 +45,7 @@ object IOMap {
         val spawns = SpawnXmlLoader.loadMonsters(File(map.monsterfile), spawnFactory = spawnFactory)
             ?: return false
         map.spawnsMonster = spawns
+        logger.info { "Loaded ${spawns.getspawnMonsterList().size} monster spawn blocks from ${map.monsterfile}" }
         return true
     }
 
@@ -60,6 +64,7 @@ object IOMap {
         val spawns = SpawnXmlLoader.loadNpcs(File(map.npcfile), spawnFactory = spawnFactory)
             ?: return false
         map.spawnsNpc = spawns
+        logger.info { "Loaded ${spawns.getspawnNpcList().size} npc spawn blocks from ${map.npcfile}" }
         return true
     }
 
