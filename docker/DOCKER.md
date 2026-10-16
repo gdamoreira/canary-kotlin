@@ -49,15 +49,23 @@ The server image itself is built from the **repository-root `Dockerfile`**
 | `myaac` | `quickstart/myaac/Dockerfile` | Upstream website/admin (MyAAC 2.x, reads `mariadb`) | `${MYAAC_HTTP_PORT:-8080}` |
 | `login-server` | `opentibiabr/login-server` | Upstream client login webservice (reads `mariadb`) | `8088`, `9090` |
 
-Game data is bind-mounted read-only into the server container:
+Game data is bind-mounted into the server container:
 
-- `../data` → `/app/data` (engine Lua core, items, XML)
-- `../data-canary` → `/app/data-canary` (Canary datapack)
-- `../data-otservbr-global` → `/app/data-otservbr-global` (global datapack)
+- `../data` → `/app/data` (engine Lua core, items, XML) — read-only
+- `../data-canary` → `/app/data-canary` (Canary datapack) — read-only
+- `../data-otservbr-global` → `/app/data-otservbr-global` (global datapack) — writable
 
-The main world map (`otservbr.otbm`) is not committed; the server fetches it on
-boot via `mapDownloadUrl` (`MapDownload`). Ensure outbound network access or
-place a local map file where the configuration expects it.
+The stack runs the full **`data-otservbr-global`** datapack by default
+(`CANARY_DATA_DIR`), with `CANARY_MAP_NAME=otservbr`. The main world map
+(`otservbr.otbm`, ~185 MB) is not committed; the server fetches it on boot via
+`CANARY_MAP_DOWNLOAD_URL` (`MapDownload`) into the writable mount above.
+Ensure outbound network access, or pre-place the file at
+`data-otservbr-global/world/otservbr.otbm`.
+
+The global world is much larger than the Canary test map: give Docker Desktop
+at least **16 GB of memory** (Settings → Resources) — the server requests
+`-Xmx12g` by default (`CANARY_JAVA_OPTS` overrides it). A smaller heap boots
+the Canary datapack instead (`CANARY_DATA_DIR=data-canary`).
 
 ---
 

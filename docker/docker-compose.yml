@@ -80,12 +80,18 @@ services:
       CANARY_STATUS_PORT: "${CANARY_STATUS_PORT:-7171}"
       # Application log level (Canary `logLevel`): info (default) | debug | trace...
       CANARY_LOG_LEVEL: "${CANARY_LOG_LEVEL:-info}"
+      # The full otservbr datapack by default; its world map is fetched on boot
+      # (see docker/DOCKER.md) into the writable datapack mount below.
+      CANARY_DATA_DIR: "${CANARY_DATA_DIR:-data-otservbr-global}"
+      CANARY_MAP_NAME: "${CANARY_MAP_NAME:-otservbr}"
+      CANARY_TOGGLE_DOWNLOAD_MAP: "${CANARY_TOGGLE_DOWNLOAD_MAP:-true}"
+      CANARY_MAP_DOWNLOAD_URL: "${CANARY_MAP_DOWNLOAD_URL:-https://github.com/opentibiabr/canary/releases/download/v3.6.1/otservbr.otbm}"
       # Canary `config.lua.dist` value the datapack `raids.lua` parses as HH:MM:SS.
       CANARY_GLOBAL_SERVER_SAVE_TIME: "${CANARY_GLOBAL_SERVER_SAVE_TIME:-06:00:00}"
       CANARY_SAVE_INTERVAL_TYPE: "${CANARY_SAVE_INTERVAL_TYPE:-hour}"
       CANARY_SAVE_INTERVAL_TIME: "${CANARY_SAVE_INTERVAL_TIME:-10}"
       # The OTBM world needs a larger heap than the JVM container default.
-      JAVA_OPTS: "${CANARY_JAVA_OPTS:--Xmx4g}"
+      JAVA_OPTS: "${CANARY_JAVA_OPTS:--Xmx12g}"
       # Optional RSA handshake override; omit to use the built-in OpenTibia pair.
       CANARY_RSA_P: "${CANARY_RSA_P:-}"
       CANARY_RSA_Q: "${CANARY_RSA_Q:-}"
@@ -98,10 +104,11 @@ services:
       # Prometheus exporter (serves only when CANARY_METRICS_ENABLE_PROMETHEUS=true).
       - "${CANARY_METRICS_PORT:-9464}:9464"
     volumes:
-      # Game data (Lua datapacks) mounted read-only; see docker/DOCKER.md.
+      # Core data read-only; the selected datapack is writable because the
+      # world map is downloaded on boot; see docker/DOCKER.md.
       - ../data:/app/data:ro
       - ../data-canary:/app/data-canary:ro
-      - ../data-otservbr-global:/app/data-otservbr-global:ro
+      - ../data-otservbr-global:/app/data-otservbr-global
     networks:
       - canary-net
     healthcheck:
