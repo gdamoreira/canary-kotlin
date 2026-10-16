@@ -44,13 +44,14 @@ docker compose -f docker-compose.yml -f docker/docker-compose.mariadb.yml up -d 
 - MyAAC (optional): `http://localhost:8080`
 - The `db` (Postgres) service still starts (Compose cannot delete it) — harmless.
 
-**Test accounts:** Flyway `V2` seeds account **`1` / password `1`** with
-`Knight Hero` and `Sorcerer Master` on both engines. The extra dumps under
+**Test accounts:** Flyway `V2`/`V24` seed account **`@1` / password `1`** with
+`Knight Hero` and `Sorcerer Master` on both engines (email form, SHA-1 — the
+login-server contract). The extra dumps under
 `docker/data/` are PostgreSQL-format; in MariaDB mode seed with the upstream
 MariaDB dumps (`../canary/docker/data/*.sql`) if you want the 100+ accounts.
 
 **God account (from upstream `schema.sql:869-884`):** Flyway `V23` seeds
-account **`god` / password `god`** (account type 6) with the **`GOD`** player in
+account **`@god` / password `god`** (account type 6) with the **`GOD`** player in
 group 6 (access), in both migration trees. For an existing database, apply
 [`scripts/create-god-account.sql`](../scripts/create-god-account.sql) (MariaDB
 and PostgreSQL variants).
@@ -137,8 +138,10 @@ The RSA key is already compatible: the client's `OTSERV_RSA`
    `../otclient/OTClient.app/Contents/MacOS/OTClient`).
 2. On first launch it downloads the Tibia assets (`clientAssets`, from
    `dudantas/tibia-client`) — needs internet access.
-3. Enter account **`1`**, password **`1`**, pick `Knight Hero` or
-   `Sorcerer Master`, and enter the world.
+3. Enter the account **email** and password — the login-server authenticates by
+   `email` (upstream convention: email = `@` + name):
+   - **`@1`** / **`1`** → `Knight Hero`, `Sorcerer Master`
+   - **`@god`** / **`god`** → `GOD` (access group 6)
 
 ---
 

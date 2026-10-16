@@ -53,9 +53,9 @@ Canary Kotlin is running (MariaDB single-database mode):
   Login server   : http://127.0.0.1:8088/login   (client webservice)
   MariaDB        : internal service `mariadb` (canary / canary / canary)
 
-Accounts:
-  1 / 1       Knight Hero, Sorcerer Master
-  god / god   GOD (access group 6)
+Accounts (log in with the EMAIL; the login-server authenticates by email):
+  @1 / 1        Knight Hero, Sorcerer Master
+  @god / god    GOD (access group 6)
 
 Client: ../otclient (init.lua already points at http://127.0.0.1:8088/login)
 Logs:   docker compose -f docker-compose.yml -f docker/docker-compose.mariadb.yml logs -f server

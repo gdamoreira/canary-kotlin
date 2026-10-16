@@ -61,11 +61,28 @@ interface AccountLoginRepository : AccountRepository {
 
 class JdbcAccountRepository(private val dataSource: DataSource) : AccountLoginRepository, AccountCoinRepository {
 
-    override fun findByAccountName(name: String): Account? {
-        val sqlAccount = "SELECT id, name, password, premdays FROM accounts WHERE LOWER(name) = LOWER(?)"
+    override fun findByAccountName(name: String): Account? = loadAccountBy("name", name)
+
+    /**
+     * `AccountRepositoryDB::loadByEmailOrName` (account_repository_db.cpp:33-37):
+     * modern clients resolve by `email`, old-protocol clients by `name`. The
+     * port falls back to the other column, so the login-server's
+     * `email\npassword` contract and direct-login/name descriptors both work.
+     */
+    override fun findByEmailOrName(oldProtocol: Boolean, descriptor: String): Account? {
+        val primary = if (oldProtocol) "name" else "email"
+        val secondary = if (oldProtocol) "email" else "name"
+        // A schema without the column (the SQLite test fixture) counts as a
+        // miss so the fallback still runs.
+        return runCatching { loadAccountBy(primary, descriptor) }.getOrNull()
+            ?: runCatching { loadAccountBy(secondary, descriptor) }.getOrNull()
+    }
+
+    private fun loadAccountBy(column: String, value: String): Account? {
+        val sqlAccount = "SELECT id, name, password, premdays FROM accounts WHERE LOWER($column) = LOWER(?)"
         dataSource.connection.use { conn ->
             conn.prepareStatement(sqlAccount).use { stmt ->
-                stmt.setString(1, name)
+                stmt.setString(1, value)
                 val rs = stmt.executeQuery()
                 if (rs.next()) {
                     val accountId = rs.getLong("id")
@@ -89,7 +106,11 @@ class JdbcAccountRepository(private val dataSource: DataSource) : AccountLoginRe
     }
 
     override fun authenticate(name: String, password: String): Account? {
-        val account = findByAccountName(name) ?: return null
+        // The login-server sends `email\npassword` (authType=password), so the
+        // descriptor resolves email-first with a name fallback for
+        // direct/legacy logins (`IOLoginData::gameWorldAuthentication`,
+        // iologindata.cpp:24-41).
+        val account = findByEmailOrName(oldProtocol = false, name) ?: return null
         // `Account::authenticatePassword` (src/account/account.cpp:302-313): the
         // argon2id hash wins, then the legacy `transformToSHA1` comparison.
         // The port additionally accepts a stored plaintext value (the Flyway

@@ -27,7 +27,7 @@ class MariaDbMigrationTreeTest {
         assertThat(mariadbNames).containsExactlyElementsOf(postgresNames)
 
         val versions = mariadbNames.map(::versionOf).sorted()
-        assertThat(versions).containsExactlyElementsOf((1..14) + (16..23))
+        assertThat(versions).containsExactlyElementsOf((1..14) + (16..24))
     }
 
     @Test

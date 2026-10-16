@@ -502,11 +502,18 @@ class GameHandler(
             return
         }
 
+        // `IOLoginData::gameWorldAuthentication` (src/io/iologindata.cpp:24-67):
+        // the account loads by descriptor (email for modern clients, name for
+        // old-protocol) and the password verifies through
+        // `Account::authenticatePassword` (argon2id then SHA-1). The repository
+        // seam owns the lookup; a bad credential or a character outside the
+        // account disconnects with the C++ message.
+        val oldProtocol = sessionProfile.hasFeature(ProtocolFeature.OldProtocolCompat)
         val account = accountRepository.authenticate(accountName, password)
         val characterMatch = account?.characters?.find { it.name.equals(characterName, ignoreCase = true) }
 
         if (characterMatch == null) {
-            sendDisconnect(ctx, "Character not found or credentials invalid.")
+            sendDisconnect(ctx, "Your ${if (oldProtocol) "username" else "email"} or password is not correct.")
             return
         }
 

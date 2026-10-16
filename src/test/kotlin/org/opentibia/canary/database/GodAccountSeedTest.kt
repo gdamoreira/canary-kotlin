@@ -69,11 +69,33 @@ class GodAccountSeedTest {
     }
 
     @Test
-    fun `the seeded plaintext account still authenticates`() {
+    fun `the login-server descriptor resolves email-first with a name fallback`() {
         val repository = JdbcAccountRepository(dataSource)
 
-        // V2 seeds account `1` with a plaintext password; the port keeps the
-        // plaintext fallback alongside the C++ argon2/sha1 chain.
+        // The login-server sends `email\npassword` (authType=password).
+        assertThat(repository.findByEmailOrName(false, "@1")).isNotNull
+        assertThat(repository.findByEmailOrName(false, "1")).isNotNull
+        assertThat(repository.authenticate("@1", "1")).isNotNull
+        assertThat(repository.authenticate("@god", "god")).isNotNull
+        assertThat(repository.authenticate("@1", "wrong")).isNull()
+    }
+
+    @Test
+    fun `the seeded account carries the login-server credentials`() {
+        val repository = JdbcAccountRepository(dataSource)
+
+        // V24 rewrites the V2 seed to the login-server contract: email `@1`
+        // and the SHA-1 hash of `1` (the port keeps the plaintext fallback
+        // alongside the C++ argon2/sha1 chain).
+        dataSource.connection.use { connection ->
+            connection.prepareStatement("SELECT email, \"password\" FROM accounts WHERE id = 1").use { statement ->
+                statement.executeQuery().use { result ->
+                    assertThat(result.next()).isTrue()
+                    assertThat(result.getString("email")).isEqualTo("@1")
+                    assertThat(result.getString("password")).isEqualTo(Tools.transformToSHA1("1"))
+                }
+            }
+        }
         assertThat(repository.authenticate("1", "1")).isNotNull
     }
 }

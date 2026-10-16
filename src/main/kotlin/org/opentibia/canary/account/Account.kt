@@ -385,9 +385,11 @@ class Account(
     fun authenticatePassword(password: String): Boolean {
         val storedPassword = getPassword()
 
-        if (storedPassword.startsWith("\$argon2id\$") &&
-            Argon2Security.verifyPassword(password, storedPassword)
-        ) {
+        // `Argon2Security.verifyPassword` verifies the `$argon2id$` form and
+        // falls back to plaintext equality for non-argon hashes (the port's
+        // Flyway seed and local test accounts), keeping the C++ chain's
+        // argon2id step plus the port's plaintext fallback.
+        if (Argon2Security.verifyPassword(password, storedPassword)) {
             return true
         }
 
@@ -441,6 +443,14 @@ class Account(
  */
 interface AccountRepository {
     fun findByAccountName(name: String): Account?
+
+    /**
+     * `AccountRepositoryDB::loadByEmailOrName` (src/account/account_repository_db.cpp:33-37):
+     * modern clients (`oldProtocol = false`) resolve the account by `email`,
+     * old-protocol clients by `name`. The default keeps name-based
+     * repositories (in-memory/tests) working.
+     */
+    fun findByEmailOrName(oldProtocol: Boolean, descriptor: String): Account? = findByAccountName(descriptor)
 
     fun authenticate(name: String, password: String): Account?
 
