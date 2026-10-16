@@ -20,6 +20,9 @@ interface CreatureOperations {
     /** `Creature::clearIcons()` reach of `creature:clearIcons` (creature_functions.cpp:1180-1192). */
     fun clearIcons(creature: Any): Boolean = false
 
+    /** `g_game().internalTeleport` reach of `creature:teleportTo` (creature_functions.cpp:868-890). */
+    fun teleportTo(creature: Any, position: org.opentibia.canary.map.Position, pushMovement: Boolean): Boolean = false
+
     /** `Creature::getCurrentOutfit` reach of `getOutfit` (creature_functions.cpp:716-726). */
     fun getCurrentOutfit(creature: Any): Outfit = Outfit()
 
@@ -88,6 +91,18 @@ interface CreatureOperations {
  */
 object CreatureFunctions {
 
+    /** `Lua::getPosition` (src/lua/functions/lua_functions_loader.cpp:392-419). */
+    private fun luaPosition(value: LuaValue): org.opentibia.canary.map.Position? {
+        if (!value.istable()) {
+            return null
+        }
+        return org.opentibia.canary.map.Position(
+            value.get("x").toint(),
+            value.get("y").toint(),
+            value.get("z").toint(),
+        )
+    }
+
     /** Mirrors `Lua::pushOutfit` (src/lua/functions/lua_functions_loader.cpp:722). */
     private fun pushOutfit(outfit: Outfit): LuaTable =
         LuaTable().also { table ->
@@ -149,6 +164,13 @@ object CreatureFunctions {
         registry.registerMethod(CREATURE_TYPE, "getId", luaFunction { args ->
             val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             LuaValue.valueOf(operations.getId(creature).toDouble())
+        })
+
+        // `CreatureFunctions::luaCreatureTeleportTo` (creature_functions.cpp:868-890).
+        registry.registerMethod(CREATURE_TYPE, "teleportTo", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+            val position = luaPosition(args.arg(2)) ?: return@luaFunction LuaValue.FALSE
+            LuaValue.valueOf(operations.teleportTo(creature, position, args.arg(3).optboolean(false)))
         })
 
         // `CreatureFunctions::luaCreatureRemoveIcon` (creature_functions.cpp:1166-1178).

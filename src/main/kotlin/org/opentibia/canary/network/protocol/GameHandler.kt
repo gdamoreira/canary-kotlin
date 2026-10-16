@@ -1036,6 +1036,13 @@ class GameHandler(
         super.channelActive(ctx)
     }
 
+    override fun exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable) {
+        // Surface the packet/handler failure before Netty closes the channel;
+        // an unhandled exception otherwise disconnects the client silently.
+        logger.warn(cause) { "Game connection failed: ${cause.message}" }
+        ctx.close()
+    }
+
     override fun channelInactive(ctx: ChannelHandlerContext) {
         val viewer = livestreamViewer
         if (viewer != null) {

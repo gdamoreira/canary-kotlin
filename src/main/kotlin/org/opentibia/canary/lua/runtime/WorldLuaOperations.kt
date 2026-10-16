@@ -1461,6 +1461,13 @@ class WorldPlayerOperations(
  * `Creature` metatable family seam backed by the Kotlin [Creature] domain object.
  */
 class WorldCreatureOperations : CreatureOperations {
+
+    /** `g_game().internalTeleport(thing, newPos, pushMove)` seam (game.cpp:4557). */
+    var internalTeleport: ((Any, Position, Boolean) -> Boolean)? = null
+
+    override fun teleportTo(creature: Any, position: Position, pushMovement: Boolean): Boolean =
+        internalTeleport?.invoke(creature, position, pushMovement) ?: false
+
     override fun removeIcon(creature: Any, key: String): Boolean {
         val target = creature as? Creature ?: return false
         target.removeIcon(key)

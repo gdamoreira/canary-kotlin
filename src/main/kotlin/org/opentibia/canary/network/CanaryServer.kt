@@ -53,7 +53,9 @@ import org.opentibia.canary.items.ItemAttribute
 import org.opentibia.canary.items.Items
 import org.opentibia.canary.lua.bindings.SpellBindings
 import org.opentibia.canary.lua.bindings.core.GameFunctions
+import org.opentibia.canary.items.Thing
 import org.opentibia.canary.lua.runtime.LuaEnvironment
+import org.opentibia.canary.lua.runtime.WorldCreatureOperations
 import org.opentibia.canary.lua.runtime.ScriptingDispatch
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.network.codec.RateLimiterHandler
@@ -71,6 +73,7 @@ import org.opentibia.canary.systems.imbuement.ImbuementDecay
 import org.opentibia.canary.systems.imbuement.ImbuementEngine
 import org.opentibia.canary.systems.imbuement.Imbuements
 import org.opentibia.canary.systems.mount.Mounts
+import org.opentibia.canary.systems.rewardchest.ReturnValue
 import org.opentibia.canary.systems.raid.GameRaidSpawner
 import org.opentibia.canary.systems.raid.RaidGameOperations
 import org.opentibia.canary.systems.raid.Raids
@@ -800,6 +803,13 @@ class CanaryServer(
             playerById = { id: Long -> game.getPlayerByID(id) ?: game.getPlayerByGUID(id) },
             playerByNameWildcard = { name: String -> game.getPlayerByNameWildcard(name).second },
         )
+        // `Creature:teleportTo` resolves through `g_game().internalTeleport`
+        // (creature_functions.cpp:881).
+        luaEnvironment.worldOperations?.let { ops ->
+            (ops.creature as? WorldCreatureOperations)?.internalTeleport = { thing, position, pushMovement ->
+                game.internalTeleport(thing as? Thing, position, pushMovement) == ReturnValue.NOERROR
+            }
+        }
 
         // `g_globalEvents().startup()` (game.cpp:988): confined to the
         // WorldCommit lane by ScriptingDispatch.
