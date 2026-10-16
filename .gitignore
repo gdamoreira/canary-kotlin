@@ -13,3 +13,4 @@ config.lua
 
 # Downloaded datapack world map (fetched on boot; see docker/DOCKER.md)
 data-otservbr-global/world/otservbr.otbm
+packet.log
