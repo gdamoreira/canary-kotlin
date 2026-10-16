@@ -76,23 +76,41 @@ Clone (already done on this machine at `../otclient`):
 git clone --depth 1 https://github.com/opentibiabr/otclient.git ../otclient
 ```
 
-### Build (macOS)
+### Build (macOS) — verified recipe
 
 Requires Xcode command line tools, CMake, Ninja and [vcpkg](https://github.com/microsoft/vcpkg):
 
 ```bash
+brew install cmake ninja
+git clone https://github.com/microsoft/vcpkg "$HOME/vcpkg"
+cd "$HOME/vcpkg" && git fetch --unshallow && ./bootstrap-vcpkg.sh   # full history: the manifest baseline needs it
+
 cd ../otclient
-git clone https://github.com/microsoft/vcpkg ~/vcpkg && ~/vcpkg/bootstrap-vcpkg.sh
-export VCPKG_ROOT=~/vcpkg
-cmake --preset macos-release        # Apple Silicon
-# Intel Macs: the preset pins the arm64-osx triplet — override it:
-# cmake --preset macos-release -DVCPKG_TARGET_TRIPLET=x64-osx -DVCPKG_HOST_TRIPLET=x64-osx
+export VCPKG_ROOT="$HOME/vcpkg"
+
+# Intel Macs: the macos-release preset pins the arm64-osx triplet, so override
+# it. Apple clang searches Homebrew's /usr/local/include BEFORE the vcpkg
+# -isystem dirs, and Homebrew's libpng has no APNG; a small shim directory in
+# the user -I group fixes the shadowing.
+SHIM=/tmp/otclient-shim && mkdir -p "$SHIM"
+cp build/macos-release/vcpkg_installed/x64-osx/include/png{,conf,libconf}.h "$SHIM"/ 2>/dev/null || true
+
+cmake --preset macos-release \
+  -DVCPKG_TARGET_TRIPLET=x64-osx -DVCPKG_HOST_TRIPLET=x64-osx \
+  -DCMAKE_C_FLAGS="-I$SHIM" -DCMAKE_CXX_FLAGS="-I$SHIM"
 cmake --build --preset macos-release
 ```
 
-Upstream ships build guides for Debian/Ubuntu/Windows/WSL under
-`../otclient/docs/building/`; there is no upstream macOS guide, so the preset
-path above is the supported route (with the Intel triplet override).
+> On the first configure the shim copy fails (vcpkg has not installed yet):
+> run `cmake --preset …` once to let vcpkg install the dependencies, then copy
+> the three `png*.h` files and re-run the two commands above. The build takes
+> 30–90 minutes on an Intel Mac (vcpkg builds ~45 dependencies).
+>
+> Apple Silicon: drop the triplet overrides and the shim; the preset's
+> `arm64-osx` triplet works as-is (Homebrew lives in `/opt/homebrew`, which
+> clang does not shadow).
+
+Result: **`../otclient/OTClient.app`** (x86_64 on Intel).
 
 ### Configuration (already applied in `../otclient/init.lua`)
 
@@ -115,7 +133,8 @@ The RSA key is already compatible: the client's `OTSERV_RSA`
 
 ### First run
 
-1. Start the client (the built binary under `../otclient/build/macos-release/`).
+1. Start the client: `open ../otclient/OTClient.app` (or run
+   `../otclient/OTClient.app/Contents/MacOS/OTClient`).
 2. On first launch it downloads the Tibia assets (`clientAssets`, from
    `dudantas/tibia-client`) — needs internet access.
 3. Enter account **`1`**, password **`1`**, pick `Knight Hero` or
