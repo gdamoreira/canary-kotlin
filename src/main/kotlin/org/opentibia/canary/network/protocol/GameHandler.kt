@@ -1188,9 +1188,9 @@ class GameHandler(
             writeFrame(ctx) { MiscSessionWriter.writeEnterWorld(this) }
         }
 
-        val out = ctx.alloc().buffer()
-        MapPacketWriter.writeMapDescription(out, gameMap, player.position)
-        ctx.writeAndFlush(out)
+        // `ProtocolGame::sendMapDescription` through the session sink: the
+        // faithful writer with the per-tile skip markers and creature frames.
+        player.protocolSink?.sendMapDescription(player.position)
 
         val sink = player.protocolSink
         sink?.sendStats(player)

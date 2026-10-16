@@ -344,9 +344,21 @@ abstract class ProtocolFrameSink(
         emit { writeBytes(message.buffer, offset, message.length) }
     }
 
-    /** `ProtocolGame::sendMapDescription(pos)` (protocolgame.cpp:3739-3785). */
+    /**
+     * `ProtocolGame::sendMapDescription(pos)` (protocolgame.cpp:8477-8483): the
+     * faithful `GetMapDescription` writer with the per-tile skip markers and
+     * the creature appearance resolver.
+     */
     override fun sendMapDescription(position: Position) {
-        emit { MapPacketWriter.writeMapDescription(this, map, position) }
+        emit {
+            org.opentibia.canary.network.protocol.map.MapDescriptionWriter.writeMapDescription(
+                this,
+                map,
+                player,
+                position,
+                ::appearanceOf,
+            )
+        }
     }
 
     /**
