@@ -48,7 +48,7 @@ The server image itself is built from the **repository-root `Dockerfile`**
 | `server` | root `Dockerfile` | Login/status + game world (`CANARY_DB_ENGINE` selects the engine) | `7171`, `7172`, metrics `9464` |
 | `login` / `game` | root `Dockerfile` | Split-stack roles (`CANARY_ROLE`): login/status, or game world only | `7171` / `7172`, metrics `9464` (game) |
 | `mariadb` | `mariadb:11.4` | Default game database and the shared database for MyAAC/login-server (Flyway migrates on boot) | internal |
-| `myaac` | `quickstart/myaac/Dockerfile` | Upstream website/admin (MyAAC 2.x, reads `mariadb`) | `${MYAAC_HTTP_PORT:-8080}` |
+| `myaac` | `quickstart/myaac/Dockerfile` | Upstream website/admin (MyAAC 2.x, reads `mariadb`); commented out in the compose by default | `${MYAAC_HTTP_PORT:-8080}` |
 | `login-server` | `opentibiabr/login-server` | Upstream client login webservice (reads `mariadb`) | `8088`, `9090` |
 
 Game data is bind-mounted into the server container:
@@ -86,9 +86,16 @@ stays the test engine and is not used by the Docker stack.
 ### MariaDB (default)
 
 `docker compose up -d --build` runs the `mariadb` service as the game database
-(`CANARY_DB_HOST=mariadb`, port 3306), shared with MyAAC and the upstream
-login-server (both are MySQL-only). One database is the single source of
-truth: character level/position edits and the website agree.
+(`CANARY_DB_HOST=mariadb`, port 3306), shared with the upstream login-server
+(MyAAC is commented out in the compose by default; uncomment it to run the
+website). One database is the single source of truth: character level/position
+edits and the website agree.
+
+Database only (no game server/login-server — handy for direct SQL edits):
+
+```bash
+docker compose -f docker/docker-compose.yml up -d mariadb
+```
 
 ### PostgreSQL mode
 
@@ -100,8 +107,8 @@ docker compose --profile postgres -f docker/docker-compose.yml \
   -f docker/docker-compose.postgres.yml up -d --build
 ```
 
-MyAAC and login-server still read `mariadb` (they only speak MySQL), so in
-PostgreSQL mode character-list fields are mirrored manually when edited:
+The login-server still reads `mariadb` (MySQL-only), so in PostgreSQL mode
+character-list fields are mirrored manually when edited:
 run the players `UPDATE` of `scripts/god-loadout.sql` against both databases.
 
 ### MariaDB single-database override
