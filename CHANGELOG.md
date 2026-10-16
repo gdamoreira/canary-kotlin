@@ -790,8 +790,16 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 83: Wave 78 — Canary Position Tables (Lua Value Shape)
+- **Position representation** — `Lua::pushPosition` (lua_functions_loader.cpp:707-718) pushes a writable field table with the `Position` metatable; the userdata wrapping and its receiver-aware `__index` are removed.
+- **Lua library compatibility** — `data/libs/functions/position.lua` works again: `self.z = ...`, `self + Position.directionOffset[...]` with plain tables, `Position(self)` copies and `Position:moveUpstairs`/`moveDownstairs` (the live `ladder_up.lua` failure).
+- **Metamethods** — `__add`/`__sub`/`__eq` read operands via `Lua::getPosition` semantics (missing fields default 0) and keep Canary's `stackpos` propagation.
+- **826 suites / 8488 tests, all green.**
+
+---
+
 ### Current Status
-- **Automated Tests**: **826 test suites / 8486 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **826 test suites / 8488 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.
