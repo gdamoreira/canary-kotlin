@@ -779,8 +779,17 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 82: Wave 77 — Creature Walk Event Pump (Client Step Confirmation)
+- **Walk pump** — `Creature::addEventWalk`/`getEventStepTicks`/`onCreatureWalk` (creature.cpp:342-383, 219-289) plus `getStepDuration` (1607) and `getWalkDelay` (109) ported; `cancelNextWalk`/`checkingWalkCreature` moved to the base creature, new `onWalkAborted`/`onWalkComplete`, `getNextStep`/`clearWalkQueue`/`isListWalkDirEmpty` virtuals and the `internalMoveCreatureProvider`/`scheduleEvent` seams.
+- **Routing** — walk opcodes `0x65..0x6D` and stop-walk `0x69` now enter `Game::playerMove`/`Game::playerStopAutoWalk` (game.cpp:4282/4567) when a composed world exists; the direct-position engine step stays only as the decode-only fallback.
+- **Composition** — `Game::internalPlaceCreature` binds the dispatcher and `internalMoveCreature` reach per accepted creature, so every step commits on the map (`Map::moveCreature`), fires the tile `stepin`/`stepout` notifications and sends the `sendCreatureMove` (0x6D) confirmation the client needs to keep a predicted step.
+- **Tests** — production-composition walk transcript asserts tile membership plus the decrypted `0x6D`; monster walk admission/follow reuse of the pump tracked as residual gaps.
+- **826 suites / 8484 tests, all green.**
+
+---
+
 ### Current Status
-- **Automated Tests**: **821 test suites / 8467 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **826 test suites / 8484 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.
