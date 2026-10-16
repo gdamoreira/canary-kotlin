@@ -122,14 +122,15 @@ object ServerCli {
     }
 
     /**
-     * `CANARY_DB_ENGINE` engine selector: `postgres`/`postgresql` ->
-     * [DatabaseEngine.POSTGRESQL] (default), `maria`/`mariadb`/`mysql` ->
-     * [DatabaseEngine.MARIADB]. An unknown value fails fast naming the variable.
+     * `CANARY_DB_ENGINE` engine selector: `maria`/`mariadb`/`mysql` ->
+     * [DatabaseEngine.MARIADB] (default, matching the shared stack database),
+     * `postgres`/`postgresql` -> [DatabaseEngine.POSTGRESQL]. An unknown value
+     * fails fast naming the variable.
      */
     private fun engineFrom(environment: Map<String, String>): DatabaseEngine =
         when (val value = environment["CANARY_DB_ENGINE"]?.takeIf { it.isNotBlank() }?.lowercase()) {
-            null, "postgres", "postgresql" -> DatabaseEngine.POSTGRESQL
-            "maria", "mariadb", "mysql" -> DatabaseEngine.MARIADB
+            null, "maria", "mariadb", "mysql" -> DatabaseEngine.MARIADB
+            "postgres", "postgresql" -> DatabaseEngine.POSTGRESQL
             else -> throw IllegalArgumentException("Invalid CANARY_DB_ENGINE value: $value")
         }
 }

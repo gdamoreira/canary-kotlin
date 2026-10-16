@@ -12,9 +12,13 @@
 name: canary-kotlin
 
 services:
+  # PostgreSQL is opt-in: the stack defaults to MariaDB (the game, MyAAC and
+  # login-server then share one database). Run with the `postgres` profile and
+  # docker/docker-compose.postgres.yml to use it instead.
   db:
     image: postgres:16-alpine
     container_name: canary-kotlin-postgres
+    profiles: ["postgres"]
     restart: unless-stopped
     environment:
       POSTGRES_DB: "${CANARY_DB_NAME:-canary}"
@@ -32,9 +36,9 @@ services:
       timeout: 5s
       retries: 10
 
-  # MariaDB for the upstream MyAAC website and opentibiabr/login-server
-  # components below (both are MySQL-only). The Kotlin game server keeps using
-  # the PostgreSQL `db` service; see docker/DOCKER.md.
+  # MariaDB: the default game database and the shared database for the
+  # upstream MyAAC website and opentibiabr/login-server components below (both
+  # are MySQL-only); see docker/DOCKER.md.
   mariadb:
     image: mariadb:11.4
     container_name: canary-kotlin-mariadb
@@ -67,9 +71,9 @@ services:
       # Engine selector: postgres (default) or maria/mariadb/mysql. MariaDB
       # also needs docker/docker-compose.mariadb.yml (which repoints host/port);
       # setting only this variable on the base stack keeps CANARY_DB_HOST=db.
-      CANARY_DB_ENGINE: "${CANARY_DB_ENGINE:-postgres}"
-      CANARY_DB_HOST: "db"
-      CANARY_DB_PORT: "5432"
+      CANARY_DB_ENGINE: "${CANARY_DB_ENGINE:-mariadb}"
+      CANARY_DB_HOST: "mariadb"
+      CANARY_DB_PORT: "3306"
       CANARY_DB_NAME: "${CANARY_DB_NAME:-canary}"
       CANARY_DB_USER: "${CANARY_DB_USER:-canary}"
       CANARY_DB_PASSWORD: "${CANARY_DB_PASSWORD:-canary}"
@@ -118,7 +122,7 @@ services:
       retries: 5
       start_period: 90s
     depends_on:
-      db:
+      mariadb:
         condition: service_healthy
 
   # Upstream MyAAC website/admin (canary/docker/docker-compose.yml). MySQL-only:

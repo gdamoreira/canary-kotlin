@@ -2,7 +2,8 @@
 
 This guide covers the containerized stack for the Kotlin server. It is adapted
 from `canary/docker/DOCKER.md`; the main differences are dual database support
-(PostgreSQL 16 by default, MariaDB 11.4 optional) and the native login server
+(MariaDB 11.4 by default — the shared database for the game, MyAAC and the
+login-server — with PostgreSQL 16 optional) and the native login server
 alongside the upstream `opentibiabr/login-server` webservice.
 
 The canonical compose file lives in this folder (`docker/docker-compose.yml`,
@@ -20,8 +21,9 @@ optional), see [`docs/client-setup.md`](../docs/client-setup.md).
 
 | Path | Purpose |
 | --- | --- |
-| `docker-compose.yml` | Canonical stack: PostgreSQL 16 + server (built from the root `Dockerfile`). |
-| `docker-compose.mariadb.yml` | Override: run the whole stack on MariaDB (see [Database engines](#database-engines)). |
+| `docker-compose.yml` | Canonical stack: MariaDB 11.4 + server (built from the root `Dockerfile`). |
+| `docker-compose.mariadb.yml` | Override pinning the MariaDB single-DB mode (redundant with the default; kept for scripted/CI use and split-role pins). |
+| `docker-compose.postgres.yml` | Override: run the game on the PostgreSQL `db` service (`--profile postgres`). |
 | `docker-compose.split.yml` | Override: run the login and game roles as separate services (see [Split login/game mode](#split-logingame-mode-scaling-phase-1)). |
 | `.env.dist` | Environment template; copy to `.env` at the repository root. |
 | `DOCKER.md` | This guide. |
@@ -42,10 +44,10 @@ The server image itself is built from the **repository-root `Dockerfile`**
 
 | Service | Image / build | Purpose | Ports |
 | --- | --- | --- | --- |
-| `db` | `postgres:16-alpine` | Game database in the default mode (Flyway migrates on boot) | `${CANARY_DB_PORT:-5432}` |
+| `db` | `postgres:16-alpine` | Optional PostgreSQL game database (`postgres` profile + override; Flyway migrates on boot) | `${CANARY_DB_PORT:-5432}` |
 | `server` | root `Dockerfile` | Login/status + game world (`CANARY_DB_ENGINE` selects the engine) | `7171`, `7172`, metrics `9464` |
 | `login` / `game` | root `Dockerfile` | Split-stack roles (`CANARY_ROLE`): login/status, or game world only | `7171` / `7172`, metrics `9464` (game) |
-| `mariadb` | `mariadb:11.4` | Database for MyAAC/login-server; in MariaDB single-DB mode also the game database | internal |
+| `mariadb` | `mariadb:11.4` | Default game database and the shared database for MyAAC/login-server (Flyway migrates on boot) | internal |
 | `myaac` | `quickstart/myaac/Dockerfile` | Upstream website/admin (MyAAC 2.x, reads `mariadb`) | `${MYAAC_HTTP_PORT:-8080}` |
 | `login-server` | `opentibiabr/login-server` | Upstream client login webservice (reads `mariadb`) | `8088`, `9090` |
 
@@ -75,29 +77,38 @@ The server supports two relational engines, selected with `CANARY_DB_ENGINE`:
 
 | Engine | Value | Server connection | Flyway tree |
 | --- | --- | --- | --- |
-| PostgreSQL 16+ (default) | `postgres` / `postgresql` | `jdbc:postgresql://<host>:5432/<db>` | `db/migration/postgres` |
-| MariaDB 11.4+ | `maria` / `mariadb` / `mysql` | `jdbc:mariadb://<host>:3306/<db>` | `db/migration/mariadb` |
+| MariaDB 11.4+ (default) | `maria` / `mariadb` / `mysql` | `jdbc:mariadb://<host>:3306/<db>` | `db/migration/mariadb` |
+| PostgreSQL 16+ | `postgres` / `postgresql` | `jdbc:postgresql://<host>:5432/<db>` | `db/migration/postgres` |
 
 An unknown value fails the boot naming the variable. H2 in PostgreSQL mode
 stays the test engine and is not used by the Docker stack.
 
-### PostgreSQL (default)
+### MariaDB (default)
 
-`docker compose up -d --build` runs the `db` service; the server reads it
-(`CANARY_DB_HOST=db`, port 5432). MyAAC and login-server read the separate
-`mariadb` service (they only speak MySQL).
+`docker compose up -d --build` runs the `mariadb` service as the game database
+(`CANARY_DB_HOST=mariadb`, port 3306), shared with MyAAC and the upstream
+login-server (both are MySQL-only). One database is the single source of
+truth: character level/position edits and the website agree.
 
-### MariaDB single-database mode
+### PostgreSQL mode
 
-`docker/docker-compose.mariadb.yml` is an override that points the server at
-the `mariadb` service, so the game server, MyAAC and login-server share one
-database. Run it from the repository root:
+`docker/docker-compose.postgres.yml` plus the `postgres` profile points the
+server at the `db` service instead. Run it from the repository root:
 
 ```bash
-docker compose -f docker-compose.yml -f docker/docker-compose.mariadb.yml up -d --build
+docker compose --profile postgres -f docker/docker-compose.yml \
+  -f docker/docker-compose.postgres.yml up -d --build
 ```
 
-Equivalent without the root include wrapper:
+MyAAC and login-server still read `mariadb` (they only speak MySQL), so in
+PostgreSQL mode character-list fields are mirrored manually when edited:
+run the players `UPDATE` of `scripts/god-loadout.sql` against both databases.
+
+### MariaDB single-database override
+
+`docker/docker-compose.mariadb.yml` pins the (now default) MariaDB mode and
+the split-role database settings; it is redundant for a plain `up` but kept
+for scripted/CI usage:
 
 ```bash
 docker compose -f docker/docker-compose.yml -f docker/docker-compose.mariadb.yml up -d --build

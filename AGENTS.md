@@ -36,7 +36,7 @@ This document records the binding architectural policies, lifetime safety rules,
 ## 2. Database & Persistence Directives
 
 ### 2.1 Database Compatibility & Migration Discipline
-- **Target Relational Databases**: **PostgreSQL 16+** (default) **or MariaDB 11.4+**, selected with `CANARY_DB_ENGINE` (`postgres`/`postgresql` — default; `maria`/`mariadb`/`mysql` — MariaDB). An unknown value fails fast at boot.
+- **Target Relational Databases**: **MariaDB 11.4+** (default — the shared database of the Docker stack, MyAAC and the upstream login-server) **or PostgreSQL 16+**, selected with `CANARY_DB_ENGINE` (`maria`/`mariadb`/`mysql` — default; `postgres`/`postgresql` — PostgreSQL). An unknown value fails fast at boot.
 - **Local Testing Mode**: Always provide zero-configuration local runs via **H2 In-Memory in PostgreSQL mode** (`MODE=PostgreSQL`); the automated suite never requires a live database daemon.
 - **Flyway Migrations** (per-dialect trees):
   - Schema changes must NEVER be executed through ad-hoc manual SQL scripts.

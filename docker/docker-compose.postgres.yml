@@ -1,0 +1,48 @@
+---
+# PostgreSQL single-database override for the Canary Kotlin stack. The base
+# stack defaults to MariaDB (the game, MyAAC and login-server share the
+# `mariadb` service); use this file plus the `postgres` profile to run the
+# game on the PostgreSQL `db` service instead.
+#
+# Run from the repository root:
+#
+#   docker compose --profile postgres -f docker/docker-compose.yml \
+#     -f docker/docker-compose.postgres.yml up -d --build
+#
+# The split roles (docker/docker-compose.split.yml) carry the same pins:
+#
+#   docker compose --profile postgres --profile split \
+#     -f docker/docker-compose.yml -f docker/docker-compose.split.yml \
+#     -f docker/docker-compose.postgres.yml up -d --build login game
+services:
+  server:
+    environment:
+      CANARY_DB_ENGINE: "postgres"
+      CANARY_DB_HOST: "db"
+      CANARY_DB_PORT: "5432"
+
+  login:
+    profiles: ["split"]
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      CANARY_DB_ENGINE: "postgres"
+      CANARY_DB_HOST: "db"
+      CANARY_DB_PORT: "5432"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  game:
+    profiles: ["split"]
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      CANARY_DB_ENGINE: "postgres"
+      CANARY_DB_HOST: "db"
+      CANARY_DB_PORT: "5432"
+    depends_on:
+      db:
+        condition: service_healthy

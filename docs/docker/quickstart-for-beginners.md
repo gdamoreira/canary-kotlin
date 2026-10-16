@@ -3,7 +3,7 @@
 > Adapted from canary/docs/docker/quickstart-for-beginners.md for the Kotlin/JVM
 > engine.
 > Canary-Kotlin status: adapted to the canonical `docker/docker-compose.yml`
-> (PostgreSQL 16 + the Kotlin server built from the root `Dockerfile`; the
+> (MariaDB 11.4 + the Kotlin server built from the root `Dockerfile`; the
 > repository-root `docker-compose.yml` includes it). The upstream
 > quickstart extras (MyAAC website and `opentibiabr/login-server`) are **not**
 > part of this port; the native login server on `7171` is the entry point.
@@ -13,7 +13,7 @@ server from this repository; no local JDK installation is required.
 
 The stack starts:
 
-- PostgreSQL 16 (`postgres:16-alpine`)
+- MariaDB 11.4 (`mariadb:11.4`)
 - Canary Kotlin game server (multi-stage build on `gradle:9.8.1-jdk25` and
   `eclipse-temurin:25-jre-alpine`)
 
@@ -39,7 +39,7 @@ After installing Docker, start Docker Desktop or the Docker service before
 running any commands below.
 
 You also need internet access on the first start so Gradle and Docker can
-download dependencies, the Gradle image layer and the PostgreSQL image.
+download dependencies, the Gradle image layer and the MariaDB image.
 
 ## Local Use Only
 
@@ -121,8 +121,8 @@ All public configuration is environment-driven (`CANARY_*`). Common values:
 
 | Variable | Default in `docker-compose.yml` | Purpose |
 | --- | --- | --- |
-| `CANARY_DB_HOST` | `db` | PostgreSQL host inside the Compose network |
-| `CANARY_DB_PORT` | `5432` | PostgreSQL port |
+| `CANARY_DB_HOST` | `mariadb` | Database host inside the Compose network |
+| `CANARY_DB_PORT` | `3306` | MariaDB port (PostgreSQL mode uses `5432`) |
 | `CANARY_DB_NAME` | `canary` | Database name |
 | `CANARY_DB_USER` | `canary` | Database user |
 | `CANARY_DB_PASSWORD` | `canary` | Database password |
@@ -167,7 +167,7 @@ Delete the database and persisted server data:
 docker compose down -v
 ```
 
-Open a PostgreSQL shell:
+Open a MariaDB shell:
 
 ```bash
 docker compose exec db psql -U canary -d canary

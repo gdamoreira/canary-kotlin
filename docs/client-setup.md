@@ -47,7 +47,8 @@ docker compose -f docker-compose.yml -f docker/docker-compose.mariadb.yml up -d 
 **Test accounts:** Flyway `V2`/`V24` seed account **`@1` / password `1`** with
 `Knight Hero` and `Sorcerer Master` on both engines (email form, SHA-1 — the
 login-server contract). The extra dumps under
-`docker/data/` are PostgreSQL-format; in MariaDB mode seed with the upstream
+`docker/data/` seeds are PostgreSQL-format; the Docker stack now defaults to
+MariaDB (single database for the game, MyAAC and the login-server), so seed with the upstream
 MariaDB dumps (`../canary/docker/data/*.sql`) if you want the 100+ accounts.
 
 **God account (from upstream `schema.sql:869-884`):** Flyway `V23` seeds

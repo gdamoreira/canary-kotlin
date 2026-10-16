@@ -1,6 +1,9 @@
 ---
-# MariaDB single-database mode for the Canary Kotlin stack: the game server,
-# MyAAC and login-server all share the `mariadb` service (the game database).
+# MariaDB single-database mode for the Canary Kotlin stack. NOTE: the base
+# stack now defaults to MariaDB, so this override is redundant for a plain
+# `up`; it is kept for scripted/CI usage and for pinning the split roles.
+# The game server, MyAAC and login-server all share the `mariadb` service (the
+# game database).
 #
 # Run from the repository root (see docker/DOCKER.md "Database engines"):
 #

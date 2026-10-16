@@ -1,9 +1,9 @@
 -- GOD account endgame loadout: level 4000 with the best available gear.
 --
--- Run against the GAME database (PostgreSQL by default):
---   docker exec -i canary-kotlin-postgres psql -U canary -d canary < scripts/god-loadout.sql
--- or the single-DB MariaDB stack:
+-- Run against the GAME database (MariaDB, the stack default):
 --   docker exec -i canary-kotlin-mariadb mariadb -uroot -proot canary < scripts/god-loadout.sql
+-- or in PostgreSQL mode:
+--   docker exec -i canary-kotlin-postgres psql -U canary -d canary < scripts/god-loadout.sql
 --
 -- IMPORTANT (split-DB stacks): the character list page is served by the
 -- upstream `opentibiabr/login-server`, which is MySQL-only and reads the

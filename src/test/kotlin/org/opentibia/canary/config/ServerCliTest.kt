@@ -131,11 +131,11 @@ class ServerCliTest {
     }
 
     @Test
-    fun `database config defaults to the PostgreSQL engine on port 5432`() {
+    fun `database config defaults to the MariaDB engine on port 3306`() {
         val config = ServerCli.databaseConfig(mapOf("CANARY_DB_HOST" to "env-host"), CliOptions())
 
-        assertThat(config?.engine).isEqualTo(DatabaseEngine.POSTGRESQL)
-        assertThat(config?.port).isEqualTo(5432)
+        assertThat(config?.engine).isEqualTo(DatabaseEngine.MARIADB)
+        assertThat(config?.port).isEqualTo(3306)
     }
 
     @Test

@@ -5,7 +5,7 @@
 [![JVM](https://img.shields.io/badge/JVM-25%20LTS-orange.svg?logo=openjdk)](https://adoptium.net)
 [![Gradle](https://img.shields.io/badge/gradle-9.8.1-green.svg?logo=gradle)](https://gradle.org)
 [![Netty](https://img.shields.io/badge/netty-4.1.118-blueviolet.svg)](https://netty.io)
-[![PostgreSQL](https://img.shields.io/badge/postgresql-16-blue.svg?logo=postgresql)](https://www.postgresql.org/)
+[![MariaDB](https://img.shields.io/badge/mariadb-11.4-blue.svg?logo=mariadb)](https://mariadb.org/)
 [![License](https://img.shields.io/github/license/gdamoreira/canary-kotlin.svg)](https://github.com/gdamoreira/canary-kotlin/blob/main/LICENSE)
 
 **Canary Kotlin Edition** is a modern, high-performance rewrite of the [Canary OpenTibia MMORPG Server](https://github.com/gdamoreira/canary-kotlin) designed specifically for the **JVM stack** (Kotlin 2.4, Java 25 LTS, Gradle 9.8, Netty, and Kotlin Coroutines).
@@ -46,7 +46,7 @@ It translates 15+ years of C++20 engine evolution into idiomatic, testable, and 
 | Monolithic `switch (recvbyte)` in `ProtocolGame` (12,000+ lines) | **Modular Packet Handlers** (`MovePacketHandler`, `ItemPacketHandler`, `CombatPacketHandler`, `LookPacketHandler`) | High testability, decoupled responsibilities, zero giant god classes. |
 | Asio Event Loops & `std::recursive_mutex` locks | **Kotlin Coroutine Actor (`GameDispatcher`)** | Lock-free sequential world mutation loop, zero lock contention, zero deadlocks. |
 | Raw memory pointers & circular `std::shared_ptr` references | **Thread-confined Domain Entities** & Value Classes (`@JvmInline value class Direction`) | Memory safety, zero memory leaks, idiomatic GC lifecycle management. |
-| Hardcoded MySQL raw string queries | **Flyway Database Migrations + HikariCP Connection Pool** | Automated database migrations, SQL injection prevention, zero-downtime schemas; runs on **PostgreSQL 16** (default) or **MariaDB 11.4** (`CANARY_DB_ENGINE`). |
+| Hardcoded MySQL raw string queries | **Flyway Database Migrations + HikariCP Connection Pool** | Automated database migrations, SQL injection prevention, zero-downtime schemas; runs on **MariaDB 11.4** (default) or **PostgreSQL 16** (`CANARY_DB_ENGINE`). |
 | Mandatory external database daemons for tests | **H2 In-Memory (PostgreSQL mode)** | Instant out-of-the-box local testing without running external Docker/MariaDB containers. |
 | C-API Lua userdata bindings | **Embedded LuaJ engine + Canary-named binding libraries** | Lua gameplay scripts run *as Lua* through `LuaEnvironment`/`UserdataRegistry`; no JNI, no memory corruption, and no Lua logic re-authored in Kotlin. |
 
@@ -57,7 +57,7 @@ It translates 15+ years of C++20 engine evolution into idiomatic, testable, and 
 ### Prerequisites
 - **JDK 25 LTS** installed and configured (`JAVA_HOME` pointing to Java 25).
 - No external database required for local testing! The server automatically initializes an in-memory database with test accounts.
-- Optional for production-like runs: **PostgreSQL 16** (or the bundled Docker stack below).
+- Optional for production-like runs: **MariaDB 11.4** (or the bundled Docker stack below); PostgreSQL 16 is supported via `CANARY_DB_ENGINE=postgres`.
 
 ### Building & Running Tests
 
@@ -122,7 +122,7 @@ When running in local mode:
 
 ## 🐳 Docker Infrastructure
 
-For production-like environments using real PostgreSQL:
+For production-like environments using a real database (MariaDB by default):
 
 ```bash
 cp docker/.env.dist .env      # optional; defaults work out of the box
