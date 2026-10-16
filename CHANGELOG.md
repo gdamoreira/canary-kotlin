@@ -823,8 +823,16 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 87: Opcode Parity Audit, GM Teleport, OTClient Module Channel
+- **Audit** — canary's 149 inbound dispatcher cases and 200 outbound `send*` methods were diffed against the port: the only missing inbound opcode was `0x73 parseTeleport` (now wired to `Game::playerTeleport`; `0xEF parseCoinTransfer` is commented out upstream); every outbound send resolves to a port writer/sink/seam except the CipSoft-8.60 profile variant.
+- **OTClient modules** — the login tail sends extended opcode 0 (module-channel enable) and inbound opcode 2 gets the latency ping-back, so OTClient stops erroring (and closing) on connect.
+- **GOD loadout script** — documents the split-DB login-list caveat (the login page reads MariaDB via the upstream login-server).
+- **8499 tests, all green.**
+
+---
+
 ### Current Status
-- **Automated Tests**: **827 test suites / 8498 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **827 test suites / 8499 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.
