@@ -784,12 +784,14 @@ All notable technical milestones, architectural transformations, feature impleme
 - **Routing** — walk opcodes `0x65..0x6D` and stop-walk `0x69` now enter `Game::playerMove`/`Game::playerStopAutoWalk` (game.cpp:4282/4567) when a composed world exists; the direct-position engine step stays only as the decode-only fallback.
 - **Composition** — `Game::internalPlaceCreature` binds the dispatcher and `internalMoveCreature` reach per accepted creature, so every step commits on the map (`Map::moveCreature`), fires the tile `stepin`/`stepout` notifications and sends the `sendCreatureMove` (0x6D) confirmation the client needs to keep a predicted step.
 - **Tests** — production-composition walk transcript asserts tile membership plus the decrypted `0x6D`; monster walk admission/follow reuse of the pump tracked as residual gaps.
-- **826 suites / 8484 tests, all green.**
+- **Click to move** — opcode `0x64` now parses the client path (`ProtocolGame::parseAutoWalk`, protocolgame.cpp:2449-2470) and dispatches `Game::playerAutoWalk`, and turn opcodes `0x6F..0x72` route through `Game::playerTurn` (game.cpp:7187) with its event/callback vetoes and spectator broadcast.
+- **Immediate walk policy** — the `Game.startAutoWalk` seam carries the C++ `WalkStartPolicy`; `playerMove`/`forcePlayerMove` pass `ImmediateWhenReady` (game.cpp:4282/4296), removing the full-step delay that made the client revert key-tap steps.
+- **826 suites / 8486 tests, all green.**
 
 ---
 
 ### Current Status
-- **Automated Tests**: **826 test suites / 8484 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **826 test suites / 8486 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.

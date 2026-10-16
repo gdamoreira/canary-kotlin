@@ -24,6 +24,14 @@ timing (`getWalkDelay`, `getEventStepTicks`).
 - Walk opcodes `0x65..0x68`, `0x6A..0x6D`: now route through
   `Game::playerMove` (game.cpp:4282) when a composed world exists.
 - Stop auto-walk `0x69`: now calls `Game::playerStopAutoWalk` (game.cpp:4567).
+- Click-to-move `0x64`: the client path parses through `parseAutoWalk`
+  (protocolgame.cpp:2449-2470) into `Game::playerAutoWalk`; single-step paths
+  start `ImmediateWhenReady`, multi-step paths `RespectDelay` (game.cpp:4472).
+- Spot turns `0x6F..0x72`: route through `Game::playerTurn` (game.cpp:7187)
+  when a world is composed (event/callback vetoes + spectator broadcast).
+- Walk start policy: `Game::playerMove`/`forcePlayerMove` pass
+  `ImmediateWhenReady` (game.cpp:4282/4296) so the first key-tap step commits
+  without a full step duration of delay.
 - Walk admission, step timing and cancellation (`Creature::cancelNextWalk`,
   `Player::stopWalk`), failed-step cancels (`sendCancelMessage` +
   `sendCancelWalk`), the `PlayerWalk` dispatcher lane.
@@ -54,6 +62,8 @@ timing (`getWalkDelay`, `getEventStepTicks`).
   placement `scheduleEvent` binding.
 - `PlayerHostWiringTest`, `PlayerWalkQueueTest`, `CreatureHostHooksTest` —
   admission seam and walk-delay wiring.
+- `MovePacketHandlerTest` — click-to-move path parsing and the
+  `Game::playerTurn` veto transcript.
 
 ## 6. Canary Original Code Reference
 - **Source Files**: `src/creatures/creature.cpp`, `src/creatures/creature.hpp`,
