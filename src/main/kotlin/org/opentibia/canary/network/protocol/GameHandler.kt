@@ -1217,6 +1217,12 @@ class GameHandler(
         if (version >= 1100) {
             sink?.sendInventoryIds()
         }
+
+        // Enable the OTClient module channel (extended opcode 0). Canary parses
+        // inbound extended opcodes only, but OTClient logs a hard error and its
+        // modules stay unusable until this enable arrives
+        // (otclient protocolgameparse.cpp:3822), so the port sends it at login.
+        sink?.sendExtendedOpcode(0, "")
     }
 
     /** Queues one unframed protocol message on [ctx] (fire-and-forget). */

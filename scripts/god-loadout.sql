@@ -1,8 +1,16 @@
 -- GOD account endgame loadout: level 4000 with the best available gear.
 --
--- Run against the server database (PostgreSQL or MariaDB):
---   psql -U canary -d canary -f scripts/god-loadout.sql
---   mariadb -uroot -p canary < scripts/god-loadout.sql
+-- Run against the GAME database (PostgreSQL by default):
+--   docker exec -i canary-kotlin-postgres psql -U canary -d canary < scripts/god-loadout.sql
+-- or the single-DB MariaDB stack:
+--   docker exec -i canary-kotlin-mariadb mariadb -uroot -proot canary < scripts/god-loadout.sql
+--
+-- IMPORTANT (split-DB stacks): the character list page is served by the
+-- upstream `opentibiabr/login-server`, which is MySQL-only and reads the
+-- `mariadb` service, while the game server uses PostgreSQL. Run the player
+-- UPDATE below against BOTH databases so the list shows level 4000; the
+-- `player_inventory_items` INSERT belongs to the game database alone. Prefer
+-- the single-DB mode (`docker-compose.mariadb.yml`) to avoid the divergence.
 --
 -- Experience is Canary's `getExpForLevel(4000)` threshold
 -- (creature.cpp: `(50n^3 - 300n^2 + 850n - 600) / 3`).

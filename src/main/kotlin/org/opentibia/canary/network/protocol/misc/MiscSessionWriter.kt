@@ -123,6 +123,19 @@ object MiscSessionWriter {
         out.writeByte(BUG_REPORT_ENABLED)
     }
 
+    /**
+     * `ProtocolGame` extended-opcode frame (opcode `0x32`): `[0x32][u8 opcode]`
+     * plus the length-prefixed buffer. OTClient enables its outbound extended
+     * opcodes when it receives opcode `0`
+     * (`ProtocolGame::parseExtendedOpcode`, otclient protocolgameparse.cpp:3822)
+     * and treats opcode `2` as the ping-back channel.
+     */
+    fun writeExtendedOpcode(out: ByteBuf, opcode: Int, buffer: String) {
+        out.writeByte(0x32)
+        out.writeByte(opcode)
+        out.writeTibiaString(buffer)
+    }
+
     /** `sendUnjustifiedPoints` (protocolgame.cpp:6308-6323). */
     fun writeUnjustifiedPoints(
         out: ByteBuf,

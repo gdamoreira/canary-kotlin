@@ -37,6 +37,9 @@ object ExtendedOpcodePacketHandler {
     /** `CreatureEvent` type registered by `onExtendedOpcode` (CreatureEventBindings.kt:35). */
     const val EXTENDED_OPCODE_EVENT_TYPE: String = "extendedopcode"
 
+    /** OTClient latency ping-back opcode (protocolgameparse.cpp:3824-3825). */
+    const val OTCLIENT_PING_OPCODE: Int = 2
+
     /**
      * 0x32: reads the opcode byte and the `NetworkMessage::getString()`
      * length-prefixed buffer.
@@ -70,6 +73,12 @@ object ExtendedOpcodePacketHandler {
         luaEnvironment: LuaEnvironment,
     ): Boolean {
         val command = parse(payload) ?: return false
+
+        // OTClient's module ping: opcode 2 expects the same buffer echoed back
+        // so the client can complete `parsePingBack`.
+        if (command.opcode == OTCLIENT_PING_OPCODE) {
+            player.protocolSink?.sendExtendedOpcode(OTCLIENT_PING_OPCODE, command.buffer)
+        }
 
         val scriptingDispatch = ScriptingDispatch(luaEnvironment, dispatcher)
         for (name in luaEnvironment.creatureEvents.names()) {

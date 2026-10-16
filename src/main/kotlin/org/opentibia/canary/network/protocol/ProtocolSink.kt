@@ -135,6 +135,13 @@ interface ProtocolSink : VipClient, LivestreamClient {
     /** `ProtocolGame::sendInventoryIds` (protocolgame.cpp:8893-8932). */
     fun sendInventoryIds()
 
+    /**
+     * Extended-opcode reply (`0x32`, OTClient module channel). Canary parses
+     * inbound extended opcodes only; the port also replies so OTClient enables
+     * its module channel (opcode 0) and resolves its latency pings (opcode 2).
+     */
+    fun sendExtendedOpcode(opcode: Int, buffer: String)
+
     /** `Player::sendContainer(cid, container, hasParent, firstIndex)` (player.cpp:9134). */
     fun sendContainer(cid: Int, container: Container, hasParent: Boolean, firstIndex: Int)
 
@@ -576,6 +583,13 @@ abstract class ProtocolFrameSink(
 
     override fun sendInventoryItem(slot: Slots_t, item: Item?) {
         emit { GameWindowWriter.writeInventoryItem(this, slot, item) }
+    }
+
+    override fun sendExtendedOpcode(opcode: Int, buffer: String) {
+        if (oldProtocol) {
+            return
+        }
+        emit { MiscSessionWriter.writeExtendedOpcode(this, opcode, buffer) }
     }
 
     override fun sendInventoryIds() {

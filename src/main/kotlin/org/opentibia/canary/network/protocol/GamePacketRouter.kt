@@ -15,6 +15,7 @@ import org.opentibia.canary.lua.bindings.SpellBindings
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.LuaEventDispatcher
 import org.opentibia.canary.map.GameMap
+import org.opentibia.canary.map.Position
 import org.opentibia.canary.network.protocol.offline.StartOfflineTrainingPacketParser
 import org.opentibia.canary.network.protocol.proficiency.ItemRegistryProficiencyItems
 import org.opentibia.canary.network.protocol.proficiency.WeaponProficiencyPayload
@@ -176,6 +177,20 @@ object GamePacketRouter {
                         player, opcode, buffer, context.map,
                         context.luaEnvironment, context.dispatcher, context.game,
                     )
+                }
+
+                // Map-click teleport: `0x73 parseTeleport`
+                // (`ProtocolGame::parseTeleport`, protocolgame.cpp:2420-2425):
+                // the position goes through `Game::playerTeleport`
+                // (game.cpp:1622) with the `CanMapClickTeleport` gate.
+                0x73 -> {
+                    val position = readPosition(buffer)
+                    if (position == null) {
+                        false
+                    } else {
+                        context.game?.playerTeleport(player.id, position)
+                        true
+                    }
                 }
 
                 // Items & Containers
@@ -1732,6 +1747,17 @@ object GamePacketRouter {
             updateUIExhausted = { target -> game.updateUIExhausted(target) },
         )
     }
+    /** `NetworkMessage::getPosition()` (message.cpp): `[u16 x][u16 y][u8 z]`. */
+    private fun readPosition(buffer: ByteBuf): Position? {
+        if (buffer.readableBytes() < 5) {
+            return null
+        }
+        val x = buffer.readUnsignedShortLE()
+        val y = buffer.readUnsignedShortLE()
+        val z = buffer.readUnsignedByte().toInt()
+        return Position(x, y, z)
+    }
+
 }
 
 data class GameContext(val context: GamePacketContext)

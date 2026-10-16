@@ -278,6 +278,12 @@ class GameHandlerLoginVipBurstTest {
         val inventoryIds = readFrame(ch)
         assertThat(inventoryIds.readUnsignedByte().toInt()).isEqualTo(GameWindowWriter.PACKET_INVENTORY_IDS)
 
+        // The OTClient module channel enable (extended opcode 0).
+        val extendedOpcode = readFrame(ch)
+        assertThat(extendedOpcode.readUnsignedByte().toInt())
+            .isEqualTo(ExtendedOpcodePacketHandler.OPCODE_EXTENDED_OPCODE)
+        assertThat(extendedOpcode.readUnsignedByte().toInt()).isEqualTo(0)
+
         assertThat(ch.readOutbound<ByteBuf>()).isNull()
     }
 
