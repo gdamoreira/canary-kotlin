@@ -112,6 +112,9 @@ interface ProtocolSink : VipClient, LivestreamClient {
     )
 
     /** `Player::sendCreatureHealth(creature)` (player.cpp:2139). */
+    /** `ProtocolGame::sendSpecialContainersAvailable` (protocolgame.cpp:10317). */
+    fun sendSpecialContainersAvailable(stashMenu: Boolean, marketMenu: Boolean)
+
     fun sendCreatureHealth(creature: Creature)
 
     /** `Player::sendCreatureChangeOutfit(creature, outfit)` (player.cpp:8861). */
@@ -517,6 +520,17 @@ abstract class ProtocolFrameSink(
                 oldStackPos,
                 teleport,
             ) { appearanceOf(it) }
+        }
+    }
+
+    /** `ProtocolGame::sendSpecialContainersAvailable` (protocolgame.cpp:10317-10327). */
+    override fun sendSpecialContainersAvailable(stashMenu: Boolean, marketMenu: Boolean) {
+        emit {
+            org.opentibia.canary.network.protocol.StoreWindowWriter.writeSpecialContainersAvailable(
+                this,
+                stashMenu,
+                marketMenu,
+            )
         }
     }
 

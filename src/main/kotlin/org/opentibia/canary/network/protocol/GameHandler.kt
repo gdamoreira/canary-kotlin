@@ -604,6 +604,14 @@ class GameHandler(
             playerNameByGuid = { guid -> ioLoginData?.getNameByGuid(guid) ?: "" },
             guildNameById = { guildId -> game.getGuild(guildId, allowOffline = true)?.name ?: "" },
         )
+        // `Player::setSpecialMenuAvailable`'s `client->sendSpecialContainersAvailable()`
+        // (player.cpp:6831): the stored menu gates push on every change.
+        activePlayer.sendSpecialContainersAvailable = {
+            activePlayer.protocolSink?.sendSpecialContainersAvailable(
+                activePlayer.isStashMenuAvailable(),
+                activePlayer.marketMenu,
+            )
+        }
 
         // `sendAddCreature`'s `!oldProtocol` exiva tail (protocolgame.cpp:8676-8682):
         // the exiva-button byte is written inline by the self appear frame and

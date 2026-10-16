@@ -2930,9 +2930,12 @@ class WorldPlayerBatch3Operations(
     /** PARITY GAP: the Kotlin `Player` owns no depot; Canary's miss. */
     override fun getDepotLocker(player: Any, depotId: Int): Any? = (player as? Player)?.let { null }
 
-    /** PARITY GAP: see [getDepotLocker]. */
+    /**
+     * `Player::getDepotChest(depotId, autoCreate)` (player.cpp:6807-6813) reach
+     * of `player:getDepotChest(id[, autoCreate])` over the domain chests.
+     */
     override fun getDepotChest(player: Any, depotId: Int, autoCreate: Boolean): Any? =
-        (player as? Player)?.let { null }
+        (player as? Player)?.getDepotChest(depotId, autoCreate)
 
     /** PARITY GAP: the Kotlin `Player` owns no inbox; Canary's miss. */
     override fun getInbox(player: Any): Any? = (player as? Player)?.let { null }
@@ -2973,13 +2976,21 @@ class WorldPlayerBatch3Operations(
         return target.stash.getStashItemCount(itemId).toLong()
     }
 
-    /** PARITY GAP: no special-container menu state; succeeds inertly. */
+    /**
+     * `Player::setSpecialContainersAvailable` (player.cpp:6815-6833) reach of
+     * `player:setSpecialContainersAvailable(...)`; the domain call stores the
+     * stash/market/depot-search gates and pushes `sendSpecialContainersAvailable`
+     * through the session (player.cpp:6829-6831).
+     */
     override fun setSpecialContainersAvailable(
         player: Any,
         stashMenu: Boolean,
         marketMenu: Boolean,
         depotSearchMenu: Boolean,
-    ): Boolean? = (player as? Player)?.let { true }
+    ): Boolean? = (player as? Player)?.let {
+        it.setSpecialMenuAvailable(stashMenu, marketMenu, depotSearchMenu)
+        true
+    }
 
     override fun getStashCount(player: Any): Int? {
         val target = player as? Player ?: return null
