@@ -17,6 +17,7 @@ import org.opentibia.canary.spells.LuaVariantType
 import org.opentibia.canary.spells.MonsterRegisteredSpellRunner
 import org.opentibia.canary.spells.SpellRegistryBoot
 import org.opentibia.canary.spells.Spells as EngineSpells
+import org.opentibia.canary.lua.bindings.core.pushPosition
 
 /**
  * Canonical owner of the `Spell` global and its metatable in the Kotlin port.
@@ -163,7 +164,7 @@ internal class LuaMonsterRegisteredSpellRunner(
             LuaVariantType.VARIANT_NUMBER -> table.set("number", LuaValue.valueOf(variant.number.toDouble()))
             LuaVariantType.VARIANT_STRING -> table.set("string", LuaValue.valueOf(variant.text))
             LuaVariantType.VARIANT_POSITION, LuaVariantType.VARIANT_TARGETPOSITION ->
-                table.set("pos", env.userdata.wrap("Position", variant.pos))
+                table.set("pos", pushPosition(env, variant.pos))
             LuaVariantType.VARIANT_NONE -> Unit
         }
         table.set("instantName", LuaValue.valueOf(variant.instantName))

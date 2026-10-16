@@ -4,6 +4,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.lua.bindings.core.pushPosition
 
 /**
  * Transcript-style tests for the Canary `Npc` binding group. Each test installs
@@ -235,7 +236,7 @@ class NpcFunctionsTest {
     fun `Npc setMasterPos stores the position`() {
         val (environment, fake) = installed()
         withNpc(environment)
-        environment.globals.set("pos", environment.userdata.wrap("Position", Position(10, 20, 7)))
+        environment.globals.set("pos", pushPosition(environment, Position(10, 20, 7)))
 
         environment.loadChunk("ok = npc:setMasterPos(pos)")
 
@@ -247,7 +248,7 @@ class NpcFunctionsTest {
     fun `Npc place returns the npc userdata or nil`() {
         val (environment, fake) = installed()
         val npc = withNpc(environment)
-        environment.globals.set("pos", environment.userdata.wrap("Position", Position(10, 20, 7)))
+        environment.globals.set("pos", pushPosition(environment, Position(10, 20, 7)))
         fake.placeResult = npc
 
         environment.loadChunk("placed = npc:place(pos)")
@@ -264,7 +265,7 @@ class NpcFunctionsTest {
     fun `Npc place returns nil when the world rejects the position`() {
         val (environment, _) = installed()
         withNpc(environment)
-        environment.globals.set("pos", environment.userdata.wrap("Position", Position(10, 20, 7)))
+        environment.globals.set("pos", pushPosition(environment, Position(10, 20, 7)))
 
         environment.loadChunk("placed = npc:place(pos)")
 
@@ -277,7 +278,7 @@ class NpcFunctionsTest {
         withNpc(environment)
         val player = FakePlayer()
         environment.globals.set("player", environment.userdata.wrap("Player", player))
-        environment.globals.set("pos", environment.userdata.wrap("Position", Position(9, 9, 7)))
+        environment.globals.set("pos", pushPosition(environment, Position(9, 9, 7)))
 
         environment.loadChunk("plain = npc:say('hi')")
 
@@ -297,7 +298,7 @@ class NpcFunctionsTest {
         val (environment, _) = installed()
         withNpc(environment)
         environment.globals.set("player", environment.userdata.wrap("Player", FakePlayer()))
-        environment.globals.set("bad", environment.userdata.wrap("Position", Position(0, 10, 7)))
+        environment.globals.set("bad", pushPosition(environment, Position(0, 10, 7)))
 
         environment.loadChunk("said = npc:say('hi', 1, false, player, bad)")
 
@@ -335,7 +336,7 @@ class NpcFunctionsTest {
         withNpc(environment)
         val creature = FakeCreature()
         environment.globals.set("creature", environment.userdata.wrap("Creature", creature))
-        environment.globals.set("pos", environment.userdata.wrap("Position", Position(10, 20, 7)))
+        environment.globals.set("pos", pushPosition(environment, Position(10, 20, 7)))
 
         environment.loadChunk("range = npc:isInTalkRange(pos)")
         environment.loadChunk("range3 = npc:isInTalkRange(pos, 3)")

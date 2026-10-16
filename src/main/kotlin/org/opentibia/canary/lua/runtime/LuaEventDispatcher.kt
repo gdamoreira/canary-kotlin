@@ -11,6 +11,7 @@ import org.opentibia.canary.items.Item
 import org.opentibia.canary.lua.registry.EventCallbackType
 import org.opentibia.canary.lua.registry.LuaMoveEvent
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.lua.bindings.core.pushPosition
 
 /**
  * Mirrors Canary's `LuaVariantType_t` (src/enums/lua_variant_type.hpp) ordinal order.
@@ -574,7 +575,7 @@ object LuaEventDispatcher {
         env.userdata.wrap(if (item is Container) "Container" else "Item", item)
 
     private fun wrapPosition(env: LuaEnvironment, position: Position): LuaValue =
-        env.userdata.wrap("Position", position)
+        pushPosition(env, position)
 
     /**
      * Mirrors Canary's `Lua::pushThing`: a null thing becomes the sentinel table

@@ -8,6 +8,7 @@ import org.opentibia.canary.lua.bindings.core.luaToPosition
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
 import kotlin.math.pow
+import org.opentibia.canary.lua.bindings.core.pushPosition
 
 /**
  * Port of Canary's `NetworkMessage` buffer
@@ -241,7 +242,7 @@ object NetworkMessageFunctions {
         registerGetter(env, "getU64") { LuaValue.valueOf(it.getU64().toDouble()) }
         registerGetter(env, "getString") { LuaValue.valueOf(it.getString()) }
         registerGetter(env, "getUnreadBytes") { LuaValue.valueOf(it.getUnreadBytes().toDouble()) }
-        registerGetter(env, "getPosition") { env.userdata.wrap("Position", it.getPosition()) }
+        registerGetter(env, "getPosition") { pushPosition(env, it.getPosition()) }
 
         registerWriter(env, "addByte") { message, args -> message.addByte(luaArgInt(args, 2)) }
         registerWriter(env, "addU16") { message, args -> message.addU16(luaArgInt(args, 2)) }

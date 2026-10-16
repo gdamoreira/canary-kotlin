@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.lua.bindings.core.luaToPosition
 
 /**
  * Transcript tests for the `GlobalFunctions` globals, mirroring
@@ -185,7 +186,7 @@ class GlobalFunctionsLibraryTest {
         assertThat(environment.getGlobal("uptime").tolong()).isEqualTo(3600L)
         assertThat(environment.getGlobal("saved").toboolean()).isTrue()
         assertThat(environment.getGlobal("item").toint()).isEqualTo(77)
-        assertThat(environment.getGlobal("waypoint").touserdata()).isEqualTo(Position(50, 60, 7))
+        assertThat(luaToPosition(environment.getGlobal("waypoint"))).isEqualTo(Position(50, 60, 7))
         assertThat(environment.getGlobal("channel").toboolean()).isTrue()
         assertThat(environment.getGlobal("guildChannel").toboolean()).isTrue()
         assertThat(environment.getGlobal("cleaned").toint()).isEqualTo(9)

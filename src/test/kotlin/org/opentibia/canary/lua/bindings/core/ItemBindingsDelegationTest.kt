@@ -99,7 +99,7 @@ class ItemBindingsDelegationTest {
         environment.globals.set("item", environment.userdata.wrap("Item", operations.item))
         val bag = Container(id = 1987, capacity = 3, type = ItemType(1987, "backpack", isContainer = true))
         environment.globals.set("bag", environment.userdata.wrap("Container", bag))
-        environment.globals.set("pos", environment.userdata.wrap("Position", Position(30, 40, 7)))
+        environment.globals.set("pos", pushPosition(environment, Position(30, 40, 7)))
 
         environment.loadChunk("toBag = item:moveTo(bag)")
         assertThat(operations.lastMoveTo).isEqualTo(MoveToCall(bag, null, 71))

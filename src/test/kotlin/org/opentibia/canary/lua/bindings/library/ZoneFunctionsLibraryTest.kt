@@ -6,6 +6,7 @@ import org.opentibia.canary.game.zones.Zone
 import org.opentibia.canary.game.zones.Zones
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.lua.bindings.core.luaToPosition
 
 /**
  * Transcript tests for the `Zone` userdata class, mirroring `ZoneFunctions`
@@ -67,9 +68,9 @@ class ZoneFunctionsLibraryTest {
             """.trimIndent(),
         )
 
-        val default = environment.getGlobal("default").touserdata() as Position
+        val default = luaToPosition(environment.getGlobal("default"))!!
         assertThat(default).isEqualTo(Position(0, 0, 0))
-        val updated = environment.getGlobal("updated").touserdata() as Position
+        val updated = luaToPosition(environment.getGlobal("updated"))!!
         assertThat(updated).isEqualTo(Position(5, 6, 7))
     }
 

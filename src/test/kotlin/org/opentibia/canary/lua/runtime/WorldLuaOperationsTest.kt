@@ -10,6 +10,7 @@ import org.opentibia.canary.items.Item
 import org.opentibia.canary.items.ItemType
 import org.opentibia.canary.items.ItemTypeRegistry
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.lua.bindings.core.pushPosition
 
 /**
  * Transcript-style tests proving the real (non-no-op) Lua binding seams in
@@ -274,8 +275,8 @@ class WorldLuaOperationsTest {
     @Test
     fun `Position getDistance uses the Canary max-axis formula including z`() {
         val environment = envWith()
-        environment.globals.set("from", environment.userdata.wrap("Position", Position(1, 2, 3)))
-        environment.globals.set("to", environment.userdata.wrap("Position", Position(4, 6, 1)))
+        environment.globals.set("from", pushPosition(environment, Position(1, 2, 3)))
+        environment.globals.set("to", pushPosition(environment, Position(4, 6, 1)))
 
         environment.loadChunk("dist = from:getDistance(to)")
 

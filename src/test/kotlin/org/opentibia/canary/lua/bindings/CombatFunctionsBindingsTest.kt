@@ -11,6 +11,7 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.LuaVariantType
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.lua.bindings.core.pushPosition
 
 /**
  * Transcript-style tests for the Canary `Combat` binding group
@@ -77,7 +78,7 @@ class CombatFunctionsBindingsTest {
     fun `Combat execute rejects non creature userdata and follows the seam result`() {
         val (environment, operations) = installed()
         wrapPlayer(environment)
-        environment.globals.set("position", environment.userdata.wrap("Position", Position(1, 2, 3)))
+        environment.globals.set("position", pushPosition(environment, Position(1, 2, 3)))
 
         environment.loadChunk(
             """

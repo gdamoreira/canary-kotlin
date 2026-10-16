@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.ScriptError
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.lua.bindings.core.pushPosition
 
 /**
  * Covers the Canary event-function registrations missing from the first binding pass:
@@ -63,7 +64,7 @@ class EventBindingsTest {
     @Test
     fun `action aid uid and position register in their own indexes`() {
         val environment = env()
-        environment.globals.set("trigger_pos", environment.userdata.wrap("Position", Position(10, 20, 7)))
+        environment.globals.set("trigger_pos", pushPosition(environment, Position(10, 20, 7)))
         environment.loadChunk(
             """
             local by_aid = Action()

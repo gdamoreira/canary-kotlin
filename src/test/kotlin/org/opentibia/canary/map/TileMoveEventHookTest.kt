@@ -13,6 +13,7 @@ import org.opentibia.canary.lua.runtime.ScriptingDispatch
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import org.opentibia.canary.lua.bindings.core.pushPosition
 
 /**
  * Transcript tests for the `g_moveEvents()` tile hooks of
@@ -84,7 +85,7 @@ class TileMoveEventHookTest {
         // `Tile::postAddNotification` (tile.cpp:1704).
         val harness = harness()
         try {
-            harness.environment.globals.set("trapPos", harness.environment.userdata.wrap("Position", center))
+            harness.environment.globals.set("trapPos", pushPosition(harness.environment, center))
             harness.environment.loadChunk(
                 """
                 local trap = MoveEvent()

@@ -6,6 +6,7 @@ import org.opentibia.canary.combat.condition.LightInfo
 import org.opentibia.canary.combat.condition.Outfit
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.lua.bindings.core.pushPosition
 
 /**
  * Transcript-style tests for the Canary `MonsterType` binding group. Each test installs
@@ -959,7 +960,7 @@ class MonsterTypeFunctionsBindingsTest {
     @Test
     fun `MonsterType getTypeName and canSpawn use the Canary names`() {
         val (environment, fake, _) = installed()
-        environment.globals.set("pos", environment.userdata.wrap("Position", Position(10, 20, 7)))
+        environment.globals.set("pos", pushPosition(environment, Position(10, 20, 7)))
 
         environment.loadChunk("typeName = t:getTypeName()")
         environment.loadChunk("spawn = t:canSpawn(pos)")

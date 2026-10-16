@@ -565,7 +565,7 @@ class PlayerBatch3BindingsTest {
     @Test
     fun `batch 3 walk position and map bindings use the Canary names`() {
         val (environment, fake) = installed()
-        environment.globals.set("pos", environment.userdata.wrap("Position", Position(100, 100, 7)))
+        environment.globals.set("pos", pushPosition(environment, Position(100, 100, 7)))
         environment.loadChunk(
             """
             mark = p:addMapMark(pos, 5, "Hunt here")

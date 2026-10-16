@@ -7,6 +7,7 @@ import org.opentibia.canary.lua.bindings.MoveEventBindings
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Tile
+import org.opentibia.canary.lua.bindings.core.pushPosition
 
 class MoveEventsTest {
     private fun envWithEvents(): Pair<LuaEnvironment, MoveEvents> {
@@ -69,7 +70,7 @@ class MoveEventsTest {
     @Test
     fun `move event constructor captures level magicLevel slot vocation and position`() {
         val (env, events) = envWithEvents()
-        env.globals.set("pos", env.userdata.wrap("Position", Position(10, 20, 7)))
+        env.globals.set("pos", pushPosition(env, Position(10, 20, 7)))
         env.loadChunk(
             """
             local move = MoveEvent()
@@ -129,7 +130,7 @@ class MoveEventsTest {
         // `MoveEvents::registerLuaPositionEvent` (movement.cpp:84-104) and
         // `getEvent(tile, eventType)` (movement.cpp:278-288).
         val (env, events) = envWithEvents()
-        env.globals.set("trapPos", env.userdata.wrap("Position", Position(10, 20, 7)))
+        env.globals.set("trapPos", pushPosition(env, Position(10, 20, 7)))
         env.loadChunk(
             """
             local trap = MoveEvent()

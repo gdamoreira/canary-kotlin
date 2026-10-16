@@ -6,6 +6,7 @@ import org.opentibia.canary.combat.condition.LightInfo
 import org.opentibia.canary.combat.condition.Outfit
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.lua.bindings.core.pushPosition
 
 /**
  * Transcript-style tests for the Canary `NpcType` binding group, driven through real
@@ -312,7 +313,7 @@ class NpcTypeFunctionsTest {
     @Test
     fun `NpcType canSpawn delegates the position`() {
         val (environment, fake) = installed()
-        environment.globals.set("pos", environment.userdata.wrap("Position", Position(10, 20, 7)))
+        environment.globals.set("pos", pushPosition(environment, Position(10, 20, 7)))
 
         environment.loadChunk("allowed = t:canSpawn(pos)")
 

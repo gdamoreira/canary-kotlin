@@ -399,7 +399,7 @@ object ItemFunctions {
 
         registry.registerMethod(type, "getPosition", luaFunction { args ->
             val item = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            env.userdata.wrap(PositionFunctions.POSITION_TYPE, operations.getPosition(item))
+            pushPosition(env, operations.getPosition(item))
         })
 
         registry.registerMethod(type, "getTile", luaFunction { args ->

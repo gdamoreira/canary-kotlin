@@ -89,6 +89,46 @@ class PositionBindingsExtendedTest {
         assertThat(environment.getGlobal("checks").toboolean()).isTrue()
     }
 
+    /**
+     * `Lua::pushPosition` (lua_functions_loader.cpp:707-718) pushes a field table with
+     * the `Position` metatable. The datapack's `data/libs/functions/position.lua`
+     * depends on table semantics: it mutates `self.z`, adds plain offset tables
+     * (`self + Position.directionOffset[DIRECTION_SOUTH]`) and copies positions with
+     * `Position(self)`. A userdata-backed position breaks every one of those.
+     */
+    @Test
+    fun `position values are writable tables with table operands`() {
+        val environment = env()
+        PositionFunctions.install(environment, FakePositionOperations())
+
+        environment.loadChunk(
+            """
+            local p = Position(100, 100, 7)
+            p.z = p.z - 1
+            local offset = { x = 0, y = 1 }
+            local moved = p + offset
+            local copy = Position(p)
+            copy.x = copy.x + 1
+            result = {
+                pz = p.z,
+                px = p.x,
+                movedY = moved.y,
+                movedZ = moved.z,
+                copyX = copy.x,
+                eq = Position(1, 2, 3) == Position(1, 2, 3),
+            }
+            """.trimIndent(),
+        )
+
+        val result = environment.getGlobal("result")
+        assertThat(result.get("pz").toint()).isEqualTo(6)
+        assertThat(result.get("px").toint()).isEqualTo(100)
+        assertThat(result.get("movedY").toint()).isEqualTo(101)
+        assertThat(result.get("movedZ").toint()).isEqualTo(6)
+        assertThat(result.get("copyX").toint()).isEqualTo(101)
+        assertThat(result.get("eq").toboolean()).isTrue()
+    }
+
     @Test
     fun `Position constructor builds default coordinate and table positions`() {
         val environment = env()
@@ -110,7 +150,7 @@ class PositionBindingsExtendedTest {
     fun `Position getPathTo renders a direction table or false`() {
         val environment = env()
         PositionFunctions.install(environment, FakePositionOperations())
-        environment.globals.set("from", environment.userdata.wrap("Position", Position(10, 20, 7)))
+        environment.globals.set("from", pushPosition(environment, Position(10, 20, 7)))
 
         environment.loadChunk("path = from:getPathTo({ x = 15, y = 25, z = 7 })")
         environment.loadChunk("length = #path")
@@ -127,8 +167,8 @@ class PositionBindingsExtendedTest {
     fun `Position sight tile and zone queries delegate to the seam`() {
         val environment = env()
         PositionFunctions.install(environment, FakePositionOperations())
-        environment.globals.set("here", environment.userdata.wrap("Position", Position(100, 100, 7)))
-        environment.globals.set("elsewhere", environment.userdata.wrap("Position", Position(200, 200, 7)))
+        environment.globals.set("here", pushPosition(environment, Position(100, 100, 7)))
+        environment.globals.set("elsewhere", pushPosition(environment, Position(200, 200, 7)))
 
         environment.loadChunk("clear = here:isSightClear({ x = 101, y = 101, z = 7 })")
         environment.loadChunk("floors = here:isSightClear({ x = 101, y = 101, z = 6 }, true)")
@@ -150,7 +190,7 @@ class PositionBindingsExtendedTest {
     fun `Position effect and sound methods delegate to the seam`() {
         val environment = env()
         PositionFunctions.install(environment, FakePositionOperations())
-        environment.globals.set("here", environment.userdata.wrap("Position", Position(100, 100, 7)))
+        environment.globals.set("here", pushPosition(environment, Position(100, 100, 7)))
         environment.globals.set("actor", environment.userdata.wrap("Creature", Any()))
 
         environment.loadChunk("effect = here:sendMagicEffect(3)")

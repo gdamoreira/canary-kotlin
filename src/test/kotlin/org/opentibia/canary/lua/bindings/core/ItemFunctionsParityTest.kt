@@ -196,7 +196,7 @@ class ItemFunctionsParityTest {
         val environment = env()
         ItemFunctions.install(environment)
         environment.globals.set("item", environment.userdata.wrap("Item", Any()))
-        environment.globals.set("notACreature", environment.userdata.wrap("Position", Any()))
+        environment.globals.set("notACreature", environment.userdata.wrap("Item", Any()))
 
         environment.loadChunk(
             "zeroId = item:setOwner(0) " +

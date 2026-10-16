@@ -248,7 +248,7 @@ object TileFunctions {
         registry.registerMethod(TILE_TYPE, "getPosition", luaFunction { args ->
             val tile = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             val position = operations.getPosition(tile) ?: return@luaFunction LuaValue.NIL
-            env.userdata.wrap(PositionFunctions.POSITION_TYPE, position)
+            pushPosition(env, position)
         })
 
         registry.registerMethod(TILE_TYPE, "getGround", luaFunction { args ->

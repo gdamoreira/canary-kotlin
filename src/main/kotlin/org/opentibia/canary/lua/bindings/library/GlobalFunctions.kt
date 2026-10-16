@@ -12,6 +12,7 @@ import org.opentibia.canary.lua.bindings.core.luaToPosition
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
 import kotlin.math.floor
+import org.opentibia.canary.lua.bindings.core.pushPosition
 
 /**
  * Engine seam behind the global functions of `GlobalFunctions::init`
@@ -393,7 +394,7 @@ object GlobalFunctions {
 
         env.globals.set("getWaypointPositionByName", libraryFunction { args ->
             val position = operations.getWaypointPositionByName(luaArgString(args, args.narg()))
-            if (position == null) LuaValue.FALSE else env.userdata.wrap("Position", position)
+            if (position == null) LuaValue.FALSE else pushPosition(env, position)
         })
 
         env.globals.set("getWorldLight", libraryFunction {

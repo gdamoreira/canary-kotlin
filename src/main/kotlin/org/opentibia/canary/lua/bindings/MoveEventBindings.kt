@@ -10,6 +10,7 @@ import org.opentibia.canary.lua.registry.LuaMoveEvent
 import org.opentibia.canary.lua.registry.MoveEvents
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.lua.bindings.core.luaToPosition
 
 /**
  * Registers the global `MoveEvent()` constructor used by revscriptsys.lua scripts:
@@ -124,7 +125,7 @@ object MoveEventBindings {
                 self.set("position", object : VarArgFunction() {
                     override fun invoke(a: Varargs): Varargs {
                         for (i in 2..a.narg()) {
-                            val position = a.arg(i).touserdata() as? Position ?: return LuaValue.FALSE
+                            val position = luaToPosition(a.arg(i)) ?: return LuaValue.FALSE
                             positions.add(position)
                         }
                         return LuaValue.TRUE

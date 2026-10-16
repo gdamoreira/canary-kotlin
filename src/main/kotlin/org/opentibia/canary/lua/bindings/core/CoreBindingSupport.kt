@@ -77,8 +77,10 @@ internal fun wrapItems(env: LuaEnvironment, items: List<Any>): LuaValue = when {
 }
 
 /**
- * Reads a position argument the way Canary's `Lua::getPosition` does: a `Position`
- * userdata or a table carrying `x`/`y`/`z` fields. Returns null for any other shape.
+ * Reads a position argument the way Canary's `Lua::getPosition` does: a table
+ * carrying `x`/`y`/`z` fields (missing fields default to 0). Returns null for any
+ * other shape. The `Position` userdata branch is a transitional acceptance for
+ * port-internal pushes; Canary only ever pushes the table shape.
  */
 internal fun luaToPosition(value: LuaValue): Position? {
     val userdata = value.touserdata()
@@ -89,6 +91,22 @@ internal fun luaToPosition(value: LuaValue): Position? {
         return null
     }
     return Position(value.get("x").optint(0), value.get("y").optint(0), value.get("z").optint(0))
+}
+
+/**
+ * `Lua::pushPosition` (lua_functions_loader.cpp:707-718): a plain field table
+ * (`x`, `y`, `z`, `stackpos`) with the `Position` metatable. The datapack mutates
+ * the fields (`self.z = ...`), adds plain offset tables and copies positions, so
+ * the table shape is the contract.
+ */
+internal fun pushPosition(env: LuaEnvironment, position: Position, stackpos: Int = 0): LuaTable {
+    val table = LuaTable()
+    table.set("x", LuaValue.valueOf(position.x))
+    table.set("y", LuaValue.valueOf(position.y))
+    table.set("z", LuaValue.valueOf(position.z))
+    table.set("stackpos", LuaValue.valueOf(stackpos))
+    env.userdata.attachMetatable(table, PositionFunctions.POSITION_TYPE)
+    return table
 }
 
 /**

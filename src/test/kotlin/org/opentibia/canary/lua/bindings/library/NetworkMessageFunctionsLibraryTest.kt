@@ -6,6 +6,7 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.lua.bindings.core.luaToPosition
 
 /**
  * Transcript tests for the `NetworkMessage` userdata class, mirroring
@@ -133,7 +134,7 @@ class NetworkMessageFunctionsLibraryTest {
         assertThat(environment.getGlobal("short").toint()).isEqualTo(500)
         assertThat(environment.getGlobal("text").tojstring()).isEqualTo("hello")
         assertThat(environment.getGlobal("unread").toint()).isEqualTo(0)
-        val pos = environment.getGlobal("pos").touserdata() as Position
+        val pos = luaToPosition(environment.getGlobal("pos"))!!
         assertThat(pos).isEqualTo(Position(120, 340, 7))
     }
 

@@ -8,6 +8,7 @@ import org.opentibia.canary.lua.bindings.core.luaToPosition
 import org.opentibia.canary.lua.bindings.core.retrieveUserdata
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.lua.bindings.core.pushPosition
 
 /**
  * Engine seam for the `Teleport` metatable. Mirrors the script environment UID lookup
@@ -52,7 +53,7 @@ object TeleportFunctions {
 
         registry.registerMethod(TELEPORT_TYPE, "getDestination", luaFunction { args ->
             val teleport = retrieveUserdata(args, 1) as? Teleport ?: return@luaFunction LuaValue.NIL
-            env.userdata.wrap(PositionFunctions.POSITION_TYPE, teleport.getDestPos())
+            pushPosition(env, teleport.getDestPos())
         })
 
         registry.registerMethod(TELEPORT_TYPE, "setDestination", luaFunction { args ->

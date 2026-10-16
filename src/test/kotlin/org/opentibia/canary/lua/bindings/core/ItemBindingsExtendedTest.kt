@@ -100,7 +100,7 @@ class ItemBindingsExtendedTest {
         assertThat(environment.getGlobal("plural").tojstring()).isEmpty()
         assertThat(environment.getGlobal("article").tojstring()).isEmpty()
         assertThat(environment.getGlobal("description").tojstring()).isEmpty()
-        assertThat(environment.getGlobal("position").isuserdata()).isTrue()
+        assertThat(environment.getGlobal("position").istable()).isTrue()
         assertThat(environment.getGlobal("positionText").tojstring()).isEqualTo("( 0, 0, 0 )")
         assertThat(environment.getGlobal("tile").isnil()).isTrue()
         assertThat(environment.getGlobal("isContainer").toboolean()).isFalse()

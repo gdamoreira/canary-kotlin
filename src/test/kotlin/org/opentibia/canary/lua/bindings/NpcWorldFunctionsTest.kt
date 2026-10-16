@@ -9,6 +9,7 @@ import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.WorldLuaOperations
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.network.protocol.npcshop.ShopBlock
+import org.opentibia.canary.lua.bindings.core.pushPosition
 
 /**
  * Integration tests proving the `Npc`/`NpcType` groups answer through the real
@@ -207,8 +208,8 @@ class NpcWorldFunctionsTest {
         val hero = player()
         environment.globals.set("npc", environment.userdata.wrap("Npc", tom))
         environment.globals.set("player", environment.userdata.wrap("Player", hero))
-        environment.globals.set("near", environment.userdata.wrap("Position", Position(6, 6, 7)))
-        environment.globals.set("far", environment.userdata.wrap("Position", Position(20, 20, 7)))
+        environment.globals.set("near", pushPosition(environment, Position(6, 6, 7)))
+        environment.globals.set("far", pushPosition(environment, Position(20, 20, 7)))
 
         environment.loadChunk(
             """
@@ -289,7 +290,7 @@ class NpcWorldFunctionsTest {
         val hero = player()
         environment.globals.set("npc", environment.userdata.wrap("Npc", tom))
         environment.globals.set("player", environment.userdata.wrap("Player", hero))
-        environment.globals.set("pos", environment.userdata.wrap("Position", Position(6, 6, 7)))
+        environment.globals.set("pos", pushPosition(environment, Position(6, 6, 7)))
 
         environment.loadChunk(
             """

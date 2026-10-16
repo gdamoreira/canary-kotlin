@@ -645,7 +645,7 @@ object PlayerFunctions {
                 LuaTextMessage(
                     type = type,
                     text = text,
-                    position = retrieveUserdata(args, 4) as? Position,
+                    position = luaToPosition(args.arg(4)),
                     primaryValue = args.arg(5).optint(0),
                     primaryColor = args.arg(6).optint(0),
                     secondaryValue = args.arg(7).optint(0),

@@ -12,6 +12,7 @@ import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import java.util.WeakHashMap
+import org.opentibia.canary.lua.bindings.core.pushPosition
 
 /**
  * Engine seam behind the `Zone` userdata class. Mirrors the `Zone`/`Zone::*`
@@ -139,7 +140,7 @@ object ZoneFunctions {
         })
 
         env.userdata.registerMethod(ZONE_TYPE, "getRemoveDestination", zoneFunction(operations) { _, zone ->
-            env.userdata.wrap("Position", operations.getRemoveDestination(zone))
+            pushPosition(env, operations.getRemoveDestination(zone))
         })
 
         env.userdata.registerMethod(ZONE_TYPE, "setRemoveDestination", zoneFunction(operations) { args, zone ->
@@ -151,7 +152,7 @@ object ZoneFunctions {
         })
 
         env.userdata.registerMethod(ZONE_TYPE, "getPositions", zoneFunction(operations) { _, zone ->
-            luaArrayOf(zone.getPositions().map { env.userdata.wrap("Position", it) })
+            luaArrayOf(zone.getPositions().map { pushPosition(env, it) })
         })
 
         env.userdata.registerMethod(ZONE_TYPE, "refresh", zoneFunction(operations) { _, zone ->

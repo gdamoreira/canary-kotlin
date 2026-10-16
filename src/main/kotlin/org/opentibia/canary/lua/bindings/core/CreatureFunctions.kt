@@ -230,7 +230,7 @@ object CreatureFunctions {
 
         registry.registerMethod(CREATURE_TYPE, "getPosition", luaFunction { args ->
             val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            env.userdata.wrap("Position", operations.getPosition(creature))
+            pushPosition(env, operations.getPosition(creature))
         })
 
         registry.registerMethod(CREATURE_TYPE, "getDirection", luaFunction { args ->

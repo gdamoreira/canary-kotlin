@@ -10,6 +10,7 @@ import org.opentibia.canary.lua.bindings.core.retrieveUserdata
 import org.opentibia.canary.lua.bindings.core.wrapCreatureUserdata
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.lua.bindings.core.pushPosition
 
 /**
  * Engine seam for the `Monster` metatable. Mirrors the primitives of
@@ -159,7 +160,7 @@ object MonsterFunctions {
 
         registry.registerMethod(MONSTER_TYPE, "getSpawnPosition", luaFunction { args ->
             val monster = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
-            operations.getSpawnPosition(monster)?.let { env.userdata.wrap("Position", it) } ?: LuaValue.NIL
+            operations.getSpawnPosition(monster)?.let { pushPosition(env, it) } ?: LuaValue.NIL
         })
 
         registry.registerMethod(MONSTER_TYPE, "isInSpawnRange", luaFunction { args ->

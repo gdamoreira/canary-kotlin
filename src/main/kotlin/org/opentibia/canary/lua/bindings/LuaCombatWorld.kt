@@ -51,6 +51,7 @@ import org.opentibia.canary.map.Tile
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import java.util.IdentityHashMap
 import java.util.Random
+import org.opentibia.canary.lua.bindings.core.pushPosition
 
 /**
  * Per-execution [CombatActor]/[CombatPlayer]/[CombatMonster]/[CombatTarget]/
@@ -373,7 +374,7 @@ class LuaCombatCallbackBridge(private val env: LuaEnvironment) {
     fun tileCallback(combat: LuaCombat): CombatTileCallback? {
         val function = combat.callbacks[CALLBACK_PARAM_TARGETTILE]?.takeIf { it.isfunction() } ?: return null
         return CombatTileCallback { caster, tile ->
-            function.invoke(pushCreature(caster), env.userdata.wrap("Position", tile.getPosition()))
+            function.invoke(pushCreature(caster), pushPosition(env, tile.getPosition()))
         }
     }
 

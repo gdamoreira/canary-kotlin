@@ -6,6 +6,7 @@ import org.opentibia.canary.lua.bindings.core.luaFunction
 import org.opentibia.canary.lua.bindings.core.retrieveUserdata
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Town
+import org.opentibia.canary.lua.bindings.core.pushPosition
 
 /**
  * Engine seam for the `Town` metatable. Mirrors the `g_game().map.towns` lookups of
@@ -64,7 +65,7 @@ object TownFunctions {
 
         registry.registerMethod(TOWN_TYPE, "getTemplePosition", luaFunction { args ->
             val town = retrieveUserdata(args, 1) as? Town ?: return@luaFunction LuaValue.NIL
-            env.userdata.wrap(PositionFunctions.POSITION_TYPE, town.getTemplePosition())
+            pushPosition(env, town.getTemplePosition())
         })
     }
 }

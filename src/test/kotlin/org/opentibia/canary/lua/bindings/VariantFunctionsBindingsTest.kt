@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.lua.bindings.core.pushPosition
+import org.opentibia.canary.lua.bindings.core.luaToPosition
 
 /**
  * Transcript-style tests for the Canary `Variant` binding group
@@ -42,7 +44,7 @@ class VariantFunctionsBindingsTest {
     }
 
     private fun positionOf(environment: LuaEnvironment, name: String): Position =
-        environment.getGlobal(name).get("pos").touserdata() as Position
+        luaToPosition(environment.getGlobal(name).get("pos"))!!
 
     @Test
     fun `Variant number keeps the number and reports zero for the other getters`() {
@@ -61,7 +63,7 @@ class VariantFunctionsBindingsTest {
         assertThat(environment.getGlobal("type").toint()).isEqualTo(1)
         assertThat(environment.getGlobal("number").toint()).isEqualTo(42)
         assertThat(environment.getGlobal("text").tojstring()).isEmpty()
-        val position = environment.getGlobal("position").touserdata() as Position
+        val position = luaToPosition(environment.getGlobal("position"))!!
         assertThat(position).isEqualTo(Position(0, 0, 0))
     }
 
@@ -118,13 +120,34 @@ class VariantFunctionsBindingsTest {
     }
 
     @Test
-    fun `Variant unknown input keeps the none type`() {
-        val (environment, operations) = installed()
-        environment.globals.set("position", environment.userdata.wrap("Position", Position(1, 2, 3)))
+    fun `Variant position table keeps the position type`() {
+        val (environment, _) = installed()
+        environment.globals.set("position", pushPosition(environment, Position(1, 2, 3)))
 
         environment.loadChunk(
             """
             v = Variant(position)
+            type = v.type
+            number = v:getNumber()
+            text = v:getString()
+            """.trimIndent()
+        )
+
+        // `VariantFunctions::luaVariantCreate` (variant_functions.cpp:32-34): a table
+        // becomes `VARIANT_POSITION` (2) with `pos` read through `Lua::getPosition`.
+        assertThat(environment.getGlobal("type").toint()).isEqualTo(2)
+        assertThat(environment.getGlobal("number").toint()).isEqualTo(0)
+        assertThat(environment.getGlobal("text").tojstring()).isEmpty()
+        assertThat(positionOf(environment, "v")).isEqualTo(Position(1, 2, 3))
+    }
+
+    @Test
+    fun `Variant unknown input keeps the none type`() {
+        val (environment, _) = installed()
+
+        environment.loadChunk(
+            """
+            v = Variant(true)
             type = v.type
             number = v:getNumber()
             text = v:getString()
@@ -135,8 +158,7 @@ class VariantFunctionsBindingsTest {
         assertThat(environment.getGlobal("type").toint()).isEqualTo(0)
         assertThat(environment.getGlobal("number").toint()).isEqualTo(0)
         assertThat(environment.getGlobal("text").tojstring()).isEmpty()
-        assertThat(environment.getGlobal("zero").touserdata()).isEqualTo(Position(0, 0, 0))
-        assertThat(operations.thing).isSameAs(environment.getGlobal("position").touserdata())
+        assertThat(luaToPosition(environment.getGlobal("zero"))).isEqualTo(Position(0, 0, 0))
     }
 
 

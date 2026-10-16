@@ -10,6 +10,8 @@ import org.opentibia.canary.creatures.spawns.MonsterType
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.WorldLuaOperations
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.lua.bindings.core.pushPosition
+import org.opentibia.canary.lua.bindings.core.luaToPosition
 
 /**
  * Transcript-style tests proving the monster binding group answers through the real
@@ -48,7 +50,7 @@ class MonsterWorldBindingsTest {
         assertThat(environment.getGlobal("isMonster").toboolean()).isTrue()
         assertThat(environment.getGlobal("type").touserdata()).isSameAs(type)
         assertThat(environment.getGlobal("name").tojstring()).isEqualTo("Rat")
-        assertThat(environment.getGlobal("spawn").touserdata()).isEqualTo(Position(10, 20, 7))
+        assertThat(luaToPosition(environment.getGlobal("spawn"))).isEqualTo(Position(10, 20, 7))
         assertThat(environment.getGlobal("range").toboolean()).isTrue()
     }
 
@@ -253,8 +255,8 @@ class MonsterWorldBindingsTest {
             WorldLuaOperations(monsterTypesByName = mapOf("Rat" to type), isDay = { true }),
         )
         environment.globals.set("t", environment.userdata.wrap("MonsterType", type))
-        environment.globals.set("surface", environment.userdata.wrap("Position", Position(10, 20, 7)))
-        environment.globals.set("underground", environment.userdata.wrap("Position", Position(10, 20, 8)))
+        environment.globals.set("surface", pushPosition(environment, Position(10, 20, 7)))
+        environment.globals.set("underground", pushPosition(environment, Position(10, 20, 8)))
 
         environment.loadChunk("surfaceAllowed = t:canSpawn(surface)")
         environment.loadChunk("undergroundAllowed = t:canSpawn(underground)")

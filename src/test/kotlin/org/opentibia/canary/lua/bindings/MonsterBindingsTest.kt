@@ -4,6 +4,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.lua.bindings.core.luaToPosition
 
 /**
  * Transcript-style tests for the Canary `Monster` binding group. Each test installs
@@ -174,7 +175,7 @@ class MonsterBindingsTest {
         environment.loadChunk("range = m:isInSpawnRange(pos)")
         environment.loadChunk("defaultRange = m:isInSpawnRange()")
 
-        assertThat(environment.getGlobal("pos").touserdata()).isEqualTo(Position(100, 100, 7))
+        assertThat(luaToPosition(environment.getGlobal("pos"))).isEqualTo(Position(100, 100, 7))
         assertThat(environment.getGlobal("range").toboolean()).isTrue()
         assertThat(environment.getGlobal("defaultRange").toboolean()).isTrue()
         assertThat(fake.spawnRangeCalls).containsExactly(Position(100, 100, 7), null)

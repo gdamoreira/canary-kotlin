@@ -17,6 +17,7 @@ import org.opentibia.canary.map.Tile
 import org.opentibia.canary.map.Town
 import org.opentibia.canary.map.house.House
 import org.opentibia.canary.systems.rewardchest.ReturnValue
+import org.opentibia.canary.lua.bindings.core.pushPosition
 
 /**
  * Engine seam for the `House` metatable. Mirrors the `g_game()` /
@@ -131,7 +132,7 @@ object HouseFunctions {
 
         registry.registerMethod(HOUSE_TYPE, "getExitPosition", luaFunction { args ->
             val house = retrieveUserdata(args, 1) as? House ?: return@luaFunction LuaValue.NIL
-            env.userdata.wrap(PositionFunctions.POSITION_TYPE, house.getEntryPosition())
+            pushPosition(env, house.getEntryPosition())
         })
 
         registry.registerMethod(HOUSE_TYPE, "getRent", luaFunction { args ->

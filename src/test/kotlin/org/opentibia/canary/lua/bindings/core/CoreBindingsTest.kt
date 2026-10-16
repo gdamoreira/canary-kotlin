@@ -377,7 +377,7 @@ class CoreBindingsTest {
         environment.loadChunk("c:setHealth(55)")
         environment.loadChunk("after = c:getHealth()")
         environment.loadChunk("pos = c:getPosition()")
-        environment.globals.set("target", environment.userdata.wrap("Position", Position(13, 24, 7)))
+        environment.globals.set("target", pushPosition(environment, Position(13, 24, 7)))
         environment.loadChunk("dist = pos:getDistance(target)")
 
         assertThat(environment.getGlobal("id").toint()).isEqualTo(7)
@@ -426,7 +426,7 @@ class CoreBindingsTest {
         val environment = env()
         val positionOps = FakePositionOps()
         PositionFunctions.install(environment, positionOps)
-        environment.globals.set("pos", environment.userdata.wrap("Position", Position(1, 2, 3)))
+        environment.globals.set("pos", pushPosition(environment, Position(1, 2, 3)))
 
         environment.loadChunk("text = pos:toString()")
         environment.loadChunk("ok = pos:sendMagicEffect(12)")
@@ -512,16 +512,16 @@ class CoreBindingsTest {
     fun `Position arithmetic and equality metamethods follow Canary`() {
         val environment = env()
         PositionFunctions.install(environment, FakePositionOps())
-        environment.globals.set("a", environment.userdata.wrap("Position", Position(1, 2, 3)))
-        environment.globals.set("b", environment.userdata.wrap("Position", Position(4, 5, 6)))
-        environment.globals.set("same", environment.userdata.wrap("Position", Position(1, 2, 3)))
+        environment.loadChunk("a = Position(1, 2, 3)")
+        environment.loadChunk("b = Position(4, 5, 6)")
+        environment.loadChunk("same = Position(1, 2, 3)")
 
         environment.loadChunk("sum = a + b")
         environment.loadChunk("diff = a - b")
         environment.loadChunk("equal = (a == same)")
         environment.loadChunk("different = (a == b)")
 
-        assertThat(environment.getGlobal("sum").isuserdata()).isTrue()
+        assertThat(environment.getGlobal("sum").istable()).isTrue()
         environment.loadChunk("sumText = sum:toString()")
         assertThat(environment.getGlobal("sumText").tojstring()).isEqualTo("( 5, 7, 9 )")
         environment.loadChunk("diffText = diff:toString()")

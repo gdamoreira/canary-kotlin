@@ -24,6 +24,8 @@ import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.LuaVariant
 import org.opentibia.canary.lua.runtime.LuaVariantType
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.lua.bindings.core.pushPosition
+import org.opentibia.canary.lua.bindings.core.luaToPosition
 
 private val logger = KotlinLogging.logger {}
 
@@ -289,7 +291,7 @@ object CombatFunctions {
             text = luaString(value.get("string")),
             instantName = luaString(value.get("instantName")),
             runeName = luaString(value.get("runeName")),
-            pos = value.get("pos").touserdata() as? Position,
+            pos = luaToPosition(value.get("pos")),
         )
     }
 
@@ -529,7 +531,7 @@ object VariantFunctions {
             if (type == LuaVariantType.POSITION.ordinal || type == LuaVariantType.TARGETPOSITION.ordinal) {
                 variant.get("pos")
             } else {
-                env.userdata.wrap("Position", Position(0, 0, 0))
+                pushPosition(env, Position(0, 0, 0))
             }
         })
     }
@@ -542,17 +544,14 @@ object VariantFunctions {
             value.touserdata()?.let { thing ->
                 operations.thingPosition(thing)?.let { position ->
                     type = LuaVariantType.TARGETPOSITION
-                    table.set("pos", env.userdata.wrap("Position", position))
+                    table.set("pos", pushPosition(env, position))
                 }
             }
         } else if (value.istable()) {
             type = LuaVariantType.POSITION
             table.set(
                 "pos",
-                env.userdata.wrap(
-                    "Position",
-                    Position(value.get("x").optint(0), value.get("y").optint(0), value.get("z").optint(0)),
-                ),
+                pushPosition(env, Position(value.get("x").optint(0), value.get("y").optint(0), value.get("z").optint(0))),
             )
         } else if (value.tonumber().isnumber()) {
             type = LuaVariantType.NUMBER
