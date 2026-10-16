@@ -839,6 +839,13 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 89: MyAAC Off by Default, MariaDB-Only Runs, GOD Loadout Applied
+- **MyAAC disabled by default** — the `myaac` service block is commented out in `docker/docker-compose.yml` (uncomment to run the website); DOCKER.md marks it disabled and documents `docker compose up -d mariadb` for database-only runs.
+- **GOD loadout on MariaDB** — `scripts/god-loadout.sql` applied to the shared MariaDB: level 4000 (exp 1,065,067,799,800), 60,005 HP, 20,005 mana, 80,380 cap, speed 1500, magic level 200, combat skills 500 and the nine-piece falcon/sanguine/ring-of-souls set in `player_inventory_items`, so the character list, MyAAC (when enabled) and the game agree.
+- **8499 tests, all green.**
+
+---
+
 ### Current Status
 - **Automated Tests**: **827 test suites / 8499 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
