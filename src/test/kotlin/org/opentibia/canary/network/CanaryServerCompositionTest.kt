@@ -230,6 +230,56 @@ class CanaryServerCompositionTest {
         assertThat(detailed).containsExactly(2160)
     }
 
+    /**
+     * `Game::playerMove` -> `Creature::startAutoWalk` -> `Creature::onCreatureWalk`
+     * (game.cpp:4282, creature.cpp:219-289/342-383): the walk runs through
+     * `Map::moveCreature` so the tiles/sectors update and the spectator
+     * `sendCreatureMove` (0x6D) confirmation reaches the client. The legacy
+     * direct-position path left the map untouched and never confirmed, so the
+     * client reverted every step.
+     */
+    @Test
+    fun `walk packet moves the player through the map and confirms with sendCreatureMove`() {
+        val ch = openChannel()
+        val player = login(ch)
+        gameMap.getOrCreateTile(Position(1001, 1000, 7)).ground = Item(id = 106)
+
+        ch.writeInbound(encryptedGamePacket { it.writeByte(0x66) })
+
+        assertThat(awaitCondition(2000) { player.position == Position(1001, 1000, 7) }).isTrue()
+        awaitLane()
+
+        assertThat(gameMap.getTile(Position(1001, 1000, 7))!!.getCreatures()).contains(player)
+        assertThat(gameMap.getTile(Position(1000, 1000, 7))!!.getCreatures()).doesNotContain(player)
+
+        assertThat(drainOutboundOpcodes(ch)).contains(0x6D)
+    }
+
+    private fun awaitCondition(timeoutMs: Long, condition: () -> Boolean): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (condition()) {
+                return true
+            }
+            Thread.sleep(10)
+        }
+        return condition()
+    }
+
+    /** Decrypts every queued outbound frame and returns the first (opcode) byte of each. */
+    private fun drainOutboundOpcodes(ch: EmbeddedChannel): List<Int> {
+        val opcodes = mutableListOf<Int>()
+        while (true) {
+            val frame = ch.readOutbound<ByteBuf>() ?: break
+            frame.readUnsignedShortLE() // len
+            frame.readUnsignedIntLE() // checksum
+            xteaCipher.decrypt(frame, frame.readerIndex(), frame.readableBytes())
+            opcodes += frame.readUnsignedByte().toInt()
+            frame.release()
+        }
+        return opcodes
+    }
+
     @Test
     fun `imbuement application reaches the composed engine and the player accessor`() {
         server.createGameHandler()
@@ -272,7 +322,7 @@ class CanaryServerCompositionTest {
         assertThat(followRequests).isEqualTo(1)
 
         var walkPolicy: WalkStartPolicy? = null
-        player.addEventWalk = { walkPolicy = it }
+        player.addEventWalkProvider = { walkPolicy = it }
         server.game.startAutoWalk(player, listOf(Direction.North), true)
         assertThat(player.listWalkDir).containsExactly(Direction.North)
         assertThat(walkPolicy).isEqualTo(WalkStartPolicy.RespectDelay)

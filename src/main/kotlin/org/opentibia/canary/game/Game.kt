@@ -2848,6 +2848,19 @@ class Game(
         // is on the map.
         creature.addCreatureHealth = ::addCreatureHealth
 
+        // `g_dispatcher().scheduleEvent`/`stopEvent` (dispatcher.hpp:144-145) and
+        // the `g_game().internalMoveCreature` reach of the walk event pump
+        // (`Creature::addEventWalk`/`onCreatureWalk`, creature.cpp:219-289,
+        // 342-383): without them a queued walk is never scheduled and the step
+        // never reaches `Map::moveCreature`.
+        creature.scheduleEvent = { lane, delayMs, _, action ->
+            dispatcher.schedule(delayMs, lane) { action() }.eventId
+        }
+        creature.stopEvent = { eventId -> dispatcher.stopEvent(eventId) }
+        creature.internalMoveCreatureProvider = { moved, direction, flags ->
+            internalMoveCreature(moved, direction, flags)
+        }
+
         // `Creature::conditionTarget`: the production `ConditionTarget` view the
         // condition engine drives (`Creature::executeConditions`,
         // creature.cpp:1565-1583). Without it condition damage attaches but

@@ -178,6 +178,11 @@ class PlayerWalkState(
     /** Read-only view of `Creature::listWalkDir` for the queue owner and tests. */
     val listWalkDir: List<Direction> get() = walkDirQueue
 
+    /** `listWalkDir.clear()` (creature.hpp:872): the walk abort reset (`creature.cpp:259`). */
+    fun clearWalkQueue() {
+        walkDirQueue.clear()
+    }
+
     /** `Player::setLastWalkthroughAttempt` (player.cpp:897-899). */
     fun setLastWalkthroughAttempt(walkthroughAttempt: Long) {
         lastWalkthroughAttempt = walkthroughAttempt

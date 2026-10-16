@@ -164,7 +164,7 @@ class PlayerHostWiringTest {
         val walked = mutableListOf<Direction>()
         val events = mutableListOf<WalkStartPolicy>()
         player.playerOnWalkCallback = { walked.add(it) }
-        player.addEventWalk = { events.add(it) }
+        player.addEventWalkProvider = { events.add(it) }
 
         player.startAutoWalk(listOf(Direction.East, Direction.North), startPolicy = WalkStartPolicy.ImmediateWhenReady)
 

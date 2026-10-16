@@ -174,7 +174,7 @@ object GamePacketRouter {
                 in 0x64..0x72 -> {
                     MovePacketHandler.handle(
                         player, opcode, buffer, context.map,
-                        context.luaEnvironment, context.dispatcher,
+                        context.luaEnvironment, context.dispatcher, context.game,
                     )
                 }
 

@@ -643,6 +643,10 @@ class GameUseItemHandlersTest {
     fun `queuePlayerAutoWalkAfterItemPickup moves the item and continues the walk`() {
         val harness = newGame()
         val user = player(harness.game)
+        // The world composition binds every accepted creature's dispatcher
+        // (`Game::internalPlaceCreature`); the queued `ImmediateWhenReady`
+        // walk is admitted through it (`Creature::addEventWalk`).
+        user.scheduleEvent = { _, _, _, _ -> 1L }
         val fromTile = harness.game.putOnTile(far, item(harness, 2160))
         var event: (() -> Unit)? = null
         harness.game.addWalkEvent = { _, _, e -> event = e; true }

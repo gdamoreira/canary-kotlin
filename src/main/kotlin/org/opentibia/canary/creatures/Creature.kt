@@ -56,6 +56,7 @@ import org.opentibia.canary.creatures.players.pvp.PlayerPvp
 import org.opentibia.canary.creatures.players.storages.Stash
 import org.opentibia.canary.creatures.players.vip.InMemoryVipRepository
 import org.opentibia.canary.creatures.players.vip.VipRepository
+import org.opentibia.canary.game.CylinderFlags
 import org.opentibia.canary.game.QuickLootFilter_t
 import org.opentibia.canary.game.death.CreatureDeathPipeline
 import org.opentibia.canary.game.movement.Direction
@@ -107,6 +108,7 @@ import java.lang.ref.WeakReference
 import java.util.Collections
 import java.util.IdentityHashMap
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.pow
@@ -392,6 +394,228 @@ abstract class Creature(
             eventWalk = 0
         }
     }
+
+    // --- walk event pump (creature.cpp:219-289, 342-383) -------------------------
+
+    /** `Creature::cancelNextWalk` (creature.hpp:934); `Player::stopWalk` latches it. */
+    var cancelNextWalk: Boolean = false
+
+    /** `Creature::checkingWalkCreature` (creature.hpp:942) reentrancy guard. */
+    private var checkingWalkCreature = false
+
+    /**
+     * `g_dispatcher().scheduleEvent` (dispatcher.hpp:144-145) seam; 0 means
+     * rejected. The world composition binds it per creature when the map
+     * accepts it (both players and monsters share the walk pump,
+     * `Creature::addEventWalk`, creature.cpp:342).
+     */
+    open var scheduleEvent: (DispatcherLane, Long, String, () -> Unit) -> Long = { _, _, _, _ -> 0L }
+
+    /**
+     * `g_game().internalMoveCreature(creature, direction, flags)`
+     * (creature.cpp:246) reach of the walk task, bound by the world
+     * composition (AGENTS.md 1.1: no `g_game()` global).
+     */
+    var internalMoveCreatureProvider: (Creature, Direction, Int) -> ReturnValue =
+        { _, _, _ -> ReturnValue.NOTPOSSIBLE }
+
+    /**
+     * `Creature::getStepDuration` (creature.cpp:1607-1626): the step interval
+     * from the current step speed rounded up to `SERVER_BEAT`. The C++
+     * `walk.duration` recache (`CreatureWalk::needRecache`) collapses to a live
+     * computation; the monster target-nearby extra cost (creature.cpp:1617-1621)
+     * stays with the monster walk parity gap.
+     */
+    open fun getStepDuration(dir: Direction? = null): Int {
+        if (isRemoved()) {
+            return 0
+        }
+
+        val stepSpeed = getStepSpeed()
+        if (stepSpeed <= 0) {
+            return 0
+        }
+
+        val duration = ceil(1000.0 * WALK_GROUND_SPEED / stepSpeed)
+        var stepDuration = (ceil(duration / SERVER_BEAT) * SERVER_BEAT).toInt()
+
+        if (dir != null && dir.dx != 0 && dir.dy != 0) {
+            stepDuration *= WALK_DIAGONAL_EXTRA_COST
+        }
+        return stepDuration
+    }
+
+    /**
+     * `Creature::getWalkDelay` (creature.cpp:109-120): milliseconds left before
+     * the next step; the `DIRECTION_NONE` call scales the last step by its cost.
+     */
+    fun getWalkDelay(dir: Direction? = null): Int {
+        if (lastStep == 0L) {
+            return 0
+        }
+
+        var stepDuration = getStepDuration(dir)
+        if (dir == null) {
+            stepDuration *= lastStepCost
+        }
+
+        return stepDuration - (now() - lastStep).toInt()
+    }
+
+    /**
+     * `Creature::getEventStepTicks` (creature.cpp:1629-1637): the delay for the
+     * walk event; `1` means immediately ready under
+     * [WalkStartPolicy.ImmediateWhenReady].
+     */
+    fun getEventStepTicks(policy: WalkStartPolicy): Long {
+        val remaining = getWalkDelay().toLong()
+        if (remaining > 0) {
+            return remaining
+        }
+
+        val stepDuration = getStepDuration()
+        return if (policy == WalkStartPolicy.ImmediateWhenReady && stepDuration > 0) {
+            1L
+        } else {
+            stepDuration.toLong() * lastStepCost
+        }
+    }
+
+    /**
+     * `Creature::addEventWalk` (creature.cpp:342-383): the scheduler admission
+     * of the walk pump. An immediate tick runs [onCreatureWalk] synchronously
+     * before the follow-up event keeps the pump alive.
+     */
+    fun addEventWalk(policy: WalkStartPolicy = WalkStartPolicy.RespectDelay) {
+        cancelNextWalk = false
+
+        if (getStepSpeed() <= 0) {
+            return
+        }
+
+        if (eventWalk != 0L) {
+            return
+        }
+
+        val ticks = getEventStepTicks(policy)
+        if (ticks <= 0) {
+            return
+        }
+
+        if (ticks == 1L) {
+            onCreatureWalk()
+        }
+
+        val playerWalk = this is Player
+        val lane = if (playerWalk) {
+            DispatcherLane.PlayerWalk
+        } else {
+            DispatcherLane.BackgroundMonster
+        }
+        eventWalk = scheduleEvent(lane, ticks, "Game::checkCreatureWalk") { onCreatureWalk() }
+        if (eventWalk == 0L && !playerWalk) {
+            forceUpdateFollowPath = true
+        }
+    }
+
+    /**
+     * `Creature::onCreatureWalk` (creature.cpp:219-289): the walk task. The
+     * queued step runs through [internalMoveCreatureProvider] (the `g_game()`
+     * seam); a failed step cancels the walk and a rejected admission aborts the
+     * queue.
+     */
+    open fun onCreatureWalk() {
+        if (checkingWalkCreature || isRemoved() || isDead) {
+            return
+        }
+
+        checkingWalkCreature = true
+
+        val walkTask = {
+            checkingWalkCreature = false
+            if (!isRemoved()) {
+                if (getWalkDelay() <= 0) {
+                    val direction = getNextStep()
+                    if (direction != null) {
+                        val ret = internalMoveCreatureProvider(
+                            this,
+                            direction,
+                            CylinderFlags.FLAG_IGNOREFIELDDAMAGE,
+                        )
+                        if (ret != ReturnValue.NOERROR) {
+                            (this as? Player)?.let { player ->
+                                player.sendCancelMessage(ret)
+                                player.sendCancelWalk()
+                            }
+                            forceUpdateFollowPath = true
+                        }
+                    } else {
+                        if (isListWalkDirEmpty()) {
+                            onWalkComplete()
+                        }
+                        stopEventWalk()
+                    }
+                }
+
+                if (cancelNextWalk) {
+                    clearWalkQueue()
+                    onWalkAborted()
+                    cancelNextWalk = false
+                }
+
+                if (eventWalk != 0L) {
+                    eventWalk = 0
+                    addEventWalk()
+                }
+            }
+        }
+
+        val playerWalk = this is Player
+        val lane = if (playerWalk) {
+            DispatcherLane.PlayerWalk
+        } else {
+            DispatcherLane.BackgroundMonster
+        }
+        val accepted = scheduleEvent(lane, 0, "Game::checkCreatureWalk") { walkTask() } != 0L
+
+        if (!accepted) {
+            checkingWalkCreature = false
+            eventWalk = 0
+            if (playerWalk) {
+                clearWalkQueue()
+                cancelNextWalk = false
+                onWalkAborted()
+            } else {
+                forceUpdateFollowPath = true
+            }
+        }
+    }
+
+    /** `Creature::onWalkAborted` (creature.hpp:420) virtual hook; `Player` overrides. */
+    open fun onWalkAborted() {
+        // No behaviour.
+    }
+
+    /** `Creature::onWalkComplete` (creature.hpp:421) virtual hook; `Player` overrides. */
+    open fun onWalkComplete() {
+        // No behaviour.
+    }
+
+    /**
+     * `Creature::getNextStep` (creature.cpp:315-324) virtual queue consumer; the
+     * `Player` queue lives in [org.opentibia.canary.creatures.players.PlayerWalkState].
+     * PARITY GAP: the base queue (`creature.hpp:872`) is owned by the player
+     * walk state, so non-player creatures return no step.
+     */
+    open fun getNextStep(): Direction? = null
+
+    /** `listWalkDir.clear()` (creature.hpp:872) reach of the walk abort; `Player` overrides. */
+    open fun clearWalkQueue() {
+        // No behaviour.
+    }
+
+    /** `listWalkDir.empty()` (creature.hpp:872) reach of the walk complete check. */
+    open fun isListWalkDirEmpty(): Boolean = true
 
     /**
      * `Creature::resetMovementState` (creature.cpp:303-313). The walk queue and
@@ -1900,6 +2124,12 @@ abstract class Creature(
         /** `WALK_DIAGONAL_EXTRA_COST` (`src/creatures/creature.hpp:45`). */
         const val WALK_DIAGONAL_EXTRA_COST = 3
 
+        /** `SERVER_BEAT` (`src/game/game.hpp:64`): the walk duration rounding beat, 50 ms. */
+        const val SERVER_BEAT = 50
+
+        /** `CreatureWalk::groundSpeed` default (`creature.hpp`): 100. */
+        const val WALK_GROUND_SPEED = 100
+
         /**
          * `Creature::canSee(myPos, pos, viewRangeX, viewRangeY)`
          * (`creature.cpp:68-87`).
@@ -2597,10 +2827,7 @@ class Player(
     var sendDoubleSoundEffect: (Position, SoundEffect, SourceEffect, SoundEffect, SourceEffect) -> Unit =
         { _, _, _, _, _ -> }
 
-    /** `Player::cancelNextWalk` (player.hpp); `Player::stopWalk` latches it. */
-    var cancelNextWalk: Boolean = false
-
-    /** `Player::stopWalk()` (player.cpp:6273-6275). */
+    /** `Player::stopWalk()` (player.cpp:6273-6275); latches `Creature::cancelNextWalk`. */
     fun stopWalk() {
         cancelNextWalk = true
     }
@@ -5362,14 +5589,11 @@ class Player(
     /** `g_logger().debug(...)` seam used by the death/walk states. */
     var logDebug: (String) -> Unit = {}
 
-    /** `g_dispatcher().scheduleEvent` (dispatcher.hpp:144-145) seam; 0 means rejected. */
-    var scheduleEvent: (DispatcherLane, Long, String, () -> Unit) -> Long = { _, _, _, _ -> 0L }
-
     /** `g_dispatcher().stopEvent` (player.cpp:2984, 2998) seam; overrides `Creature::stopEvent`. */
     override var stopEvent: (Long) -> Unit = {}
 
     /** `Creature::addEventWalk` (creature.cpp:342-383) scheduler admission seam. */
-    var addEventWalk: (WalkStartPolicy) -> Unit = {}
+    var addEventWalkProvider: (WalkStartPolicy) -> Unit = { addEventWalk(it) }
 
     /** `Player::sendCancelWalk()` (player.cpp:2127-2131) protocol seam. */
     var sendCancelWalk: () -> Unit = {}
@@ -5401,11 +5625,11 @@ class Player(
     /** `g_game().map.getTile(pos)` (`src/game/game.cpp`) seam for the feared-field check. */
     var mapTileProvider: (Position) -> Tile? = { null }
 
-    /** `Creature::getWalkDelay()` (creature.cpp:109) seam; the movement subsystem owns the delay. */
-    var walkDelayProvider: () -> Int = { 0 }
+    /** `Creature::getWalkDelay()` (creature.cpp:109) seam; defaults to the creature's own walk clock. */
+    var walkDelayProvider: () -> Int = { getWalkDelay() }
 
-    /** `Creature::getStepDuration(dir)` (creature.cpp:1607) seam; the movement subsystem owns the step speed. */
-    var stepDurationProvider: (Direction) -> Int = { 0 }
+    /** `Creature::getStepDuration(dir)` (creature.cpp:1607) seam; defaults to the creature's own step timing. */
+    var stepDurationProvider: (Direction) -> Int = { getStepDuration(it) }
 
     /** `Creature::goToFollowCreature()` (creature.cpp:1090-1120) seam for the follow subsystem. */
     var creatureGoToFollowCreature: () -> Unit = {}
@@ -5493,7 +5717,7 @@ class Player(
             getCondition(ConditionType.CONDITION_FEARED)?.executeCondition(conditionTarget, 0)
         },
         logDebug = { logDebug(it) },
-        addEventWalk = { addEventWalk(it) },
+        addEventWalk = { addEventWalkProvider(it) },
         getPlayer = { this },
         hasRootedCondition = { hasCondition(ConditionType.CONDITION_ROOTED) },
         getFollowCreature = { getFollowCreature() },
@@ -5688,12 +5912,12 @@ class Player(
     }
 
     /** `Player::onWalkAborted` (player.cpp:6242-6245). */
-    fun onWalkAborted() {
+    override fun onWalkAborted() {
         walkState.onWalkAborted()
     }
 
     /** `Player::onWalkComplete` (player.cpp:6247-6271). */
-    fun onWalkComplete() {
+    override fun onWalkComplete() {
         walkState.onWalkComplete()
     }
 
@@ -5724,7 +5948,15 @@ class Player(
     }
 
     /** `Creature::getNextStep` (creature.cpp:315-324): the walk event's queue consumer. */
-    fun getNextStep(): Direction? = walkState.getNextStep()
+    override fun getNextStep(): Direction? = walkState.getNextStep()
+
+    /** `listWalkDir.clear()` (creature.hpp:872) reach of the walk abort (`Creature::onCreatureWalk`). */
+    override fun clearWalkQueue() {
+        walkState.clearWalkQueue()
+    }
+
+    /** `listWalkDir.empty()` (creature.hpp:872) reach of the walk-complete check. */
+    override fun isListWalkDirEmpty(): Boolean = walkState.listWalkDir.isEmpty()
 
     /** `Creature::listWalkDir` (creature.hpp:872) read view for the walk event owner. */
     val listWalkDir: List<Direction> get() = walkState.listWalkDir
