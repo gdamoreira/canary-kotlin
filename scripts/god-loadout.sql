@@ -31,16 +31,19 @@ UPDATE players SET
   save = 1
 WHERE name = 'GOD';
 
-DELETE FROM player_items
+-- The port persists the inventory in `player_inventory_items` with `pid` =
+-- slot (CONST_SLOT_FIRST..CONST_SLOT_LAST, iologindata_load_player.cpp:543-632)
+-- and `sid` a unique per-player item id.
+DELETE FROM player_inventory_items
 WHERE player_id = (SELECT id FROM players WHERE name = 'GOD');
 
-INSERT INTO player_items (player_id, pid, sid, itemtype, count, attributes) VALUES
-  ((SELECT id FROM players WHERE name = 'GOD'), 0, 1, 28715, 1, NULL), -- falcon coif
-  ((SELECT id FROM players WHERE name = 'GOD'), 0, 2, 21170, 1, NULL), -- gearwheel chain
-  ((SELECT id FROM players WHERE name = 'GOD'), 0, 3, 3253,  1, NULL), -- backpack of holding
-  ((SELECT id FROM players WHERE name = 'GOD'), 0, 4, 28719, 1, NULL), -- falcon plate
-  ((SELECT id FROM players WHERE name = 'GOD'), 0, 5, 43865, 1, NULL), -- grand sanguine blade
-  ((SELECT id FROM players WHERE name = 'GOD'), 0, 6, 28722, 1, NULL), -- falcon escutcheon
-  ((SELECT id FROM players WHERE name = 'GOD'), 0, 7, 43876, 1, NULL), -- sanguine legs
-  ((SELECT id FROM players WHERE name = 'GOD'), 0, 8, 43884, 1, NULL), -- sanguine boots
-  ((SELECT id FROM players WHERE name = 'GOD'), 0, 9, 32636, 1, NULL); -- ring of souls
+INSERT INTO player_inventory_items (player_id, sid, item_id, count, attributes, pid) VALUES
+  ((SELECT id FROM players WHERE name = 'GOD'), 1001, 28715, 1, NULL, 1), -- falcon coif
+  ((SELECT id FROM players WHERE name = 'GOD'), 1002, 21170, 1, NULL, 2), -- gearwheel chain
+  ((SELECT id FROM players WHERE name = 'GOD'), 1003, 3253,  1, NULL, 3), -- backpack of holding
+  ((SELECT id FROM players WHERE name = 'GOD'), 1004, 28719, 1, NULL, 4), -- falcon plate
+  ((SELECT id FROM players WHERE name = 'GOD'), 1005, 43865, 1, NULL, 5), -- grand sanguine blade
+  ((SELECT id FROM players WHERE name = 'GOD'), 1006, 28722, 1, NULL, 6), -- falcon escutcheon
+  ((SELECT id FROM players WHERE name = 'GOD'), 1007, 43876, 1, NULL, 7), -- sanguine legs
+  ((SELECT id FROM players WHERE name = 'GOD'), 1008, 43884, 1, NULL, 8), -- sanguine boots
+  ((SELECT id FROM players WHERE name = 'GOD'), 1009, 32636, 1, NULL, 9); -- ring of souls
