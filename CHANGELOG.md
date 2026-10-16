@@ -831,6 +831,14 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 88: MariaDB Single-Database Default
+- **Default engine** — the Docker stack now runs the game on the same MariaDB the login page and MyAAC read (`CANARY_DB_ENGINE` defaults to `mariadb`, server depends on `mariadb:3306`); the PostgreSQL `db` service is opt-in behind the `postgres` profile with the new `docker-compose.postgres.yml` override.
+- **Application default** — `ServerCli` defaults to the MariaDB engine (`postgres`/`postgresql` remain explicit aliases); `AGENTS.md`, `DOCKER.md`, quickstart, client-setup, README and `scripts/god-loadout.sql` updated.
+- **Single source of truth** — character level/position edits and the website/character list agree without cross-database mirroring.
+- **8499 tests, all green.**
+
+---
+
 ### Current Status
 - **Automated Tests**: **827 test suites / 8499 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
