@@ -47,6 +47,8 @@ import org.opentibia.canary.network.protocol.proficiency.WeaponProficiencyPayloa
 import org.opentibia.canary.network.protocol.vip.VipWindowWriter
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 
+private val logger = io.github.oshai.kotlinlogging.KotlinLogging.logger {}
+
 /**
  * Per-player outbound `ProtocolGame` surface used by world state changes.
  *
