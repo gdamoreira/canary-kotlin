@@ -806,6 +806,14 @@ class CanaryServer(
         // `Creature:teleportTo` resolves through `g_game().internalTeleport`
         // (creature_functions.cpp:881).
         luaEnvironment.worldOperations?.let { ops ->
+            (ops.creature as? WorldCreatureOperations)?.changeSpeed = { creature, delta ->
+                game.changeSpeed(creature, delta)
+                true
+            }
+            (ops.creature as? WorldCreatureOperations)?.changeLight = { creature -> game.changeLight(creature) }
+            (ops.creature as? WorldCreatureOperations)?.isImmuneCondition = { creature, conditionType ->
+                game.isImmuneCondition(creature, conditionType)
+            }
             (ops.creature as? WorldCreatureOperations)?.internalTeleport = { thing, position, pushMovement ->
                 game.internalTeleport(thing as? Thing, position, pushMovement) == ReturnValue.NOERROR
             }

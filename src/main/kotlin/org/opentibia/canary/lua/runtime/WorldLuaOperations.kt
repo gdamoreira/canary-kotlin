@@ -1465,6 +1465,28 @@ class WorldCreatureOperations : CreatureOperations {
     /** `g_game().internalTeleport(thing, newPos, pushMove)` seam (game.cpp:4557). */
     var internalTeleport: ((Any, Position, Boolean) -> Boolean)? = null
 
+    /** `g_game().changeSpeed(creature, delta)` seam behind `creature:changeSpeed` (game.cpp:4787). */
+    var changeSpeed: ((Creature, Int) -> Boolean)? = null
+
+    /** `g_game().changeLight(creature)` seam behind `creature:setLight` (game.cpp:7801). */
+    var changeLight: ((Creature) -> Unit)? = null
+
+    /** `Creature::isImmune(conditionType)` seam behind `creature:isImmune` (creature.hpp:522). */
+    var isImmuneCondition: ((Creature, ConditionType) -> Boolean)? = null
+
+    override fun changeSpeed(creature: Any, delta: Int): Boolean =
+        (creature as? Creature)?.let { changeSpeed?.invoke(it, delta) ?: false } ?: false
+
+    override fun changeLight(creature: Any) {
+        (creature as? Creature)?.let { changeLight?.invoke(it) }
+    }
+
+    override fun isImmune(creature: Any, conditionType: Int): Boolean? {
+        val target = creature as? Creature ?: return null
+        val type = ConditionType.entries.firstOrNull { it.value == conditionType } ?: return null
+        return isImmuneCondition?.invoke(target, type)
+    }
+
     override fun teleportTo(creature: Any, position: Position, pushMovement: Boolean): Boolean =
         internalTeleport?.invoke(creature, position, pushMovement) ?: false
 

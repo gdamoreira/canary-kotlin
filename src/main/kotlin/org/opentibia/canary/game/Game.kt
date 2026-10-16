@@ -1450,7 +1450,7 @@ class Game(
      * `Creature::isDirectionLocked()` (creature.hpp) seam used by
      * [internalCreatureTurn]; the Kotlin `Creature` does not model the flag yet.
      */
-    var isDirectionLocked: (Creature) -> Boolean = { false }
+    var isDirectionLocked: (Creature) -> Boolean = { it.isDirectionLocked() }
 
     /** `g_events().eventPlayerOnTurn` veto seam (game.cpp:7193). */
     var eventPlayerOnTurn: (Player, Direction) -> Boolean = { _, _ -> true }
@@ -16220,6 +16220,13 @@ class Game(
      * `onPlayerAttack` event in production.
      */
     fun combatTargetOf(creature: Creature): CombatTarget = CreatureCombatTarget(creature, gameCombatTargetState)
+
+    /**
+     * `Creature::isImmune(conditionType)` (creature.hpp:522) reach of the
+     * `creature:isImmune` Lua binding (creature_functions.cpp:820-839).
+     */
+    fun isImmuneCondition(creature: Creature, conditionType: ConditionType): Boolean =
+        gameCombatTargetState.isImmuneCondition(creature, conditionType)
 
     /**
      * Production [ConditionTarget] adapter over a live [Creature].

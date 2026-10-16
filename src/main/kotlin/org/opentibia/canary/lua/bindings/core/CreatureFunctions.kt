@@ -3,7 +3,15 @@ package org.opentibia.canary.lua.bindings.core
 import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
 import org.opentibia.canary.combat.condition.Outfit
+import org.opentibia.canary.combat.condition.Condition
+import org.opentibia.canary.combat.condition.LightInfo
 import org.opentibia.canary.creatures.Creature
+import org.opentibia.canary.creatures.CreatureIcon
+import org.opentibia.canary.creatures.CreatureIconCategory_t
+import org.opentibia.canary.creatures.CreatureIconModifications_t
+import org.opentibia.canary.creatures.CreatureIconQuests_t
+import org.opentibia.canary.creatures.Skulls_t
+import org.opentibia.canary.creatures.players.CountBlock
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
 
@@ -59,6 +67,110 @@ interface CreatureOperations {
         target.setMoveLocked(moveLocked)
         return true
     }
+
+    /** `Creature::isRemoved()` reach of `creature:isRemoved` (creature_functions.cpp:175-186). */
+    fun isRemoved(creature: Any): Boolean? = (creature as? Creature)?.isRemoved()
+
+    /** `Creature::isInGhostMode()` reach of `creature:isInGhostMode` (creature_functions.cpp:192-203). */
+    fun isInGhostMode(creature: Any): Boolean? = (creature as? Creature)?.isInGhostMode()
+
+    /** `Creature::getDamageMap()` reach of `creature:getDamageMap` (creature_functions.cpp:947-963). */
+    fun getDamageMap(creature: Any): Map<Long, CountBlock>? = (creature as? Creature)?.getDamageMap()
+
+    /** `Creature::getSummons()` reach of `creature:getSummons` (creature_functions.cpp:965-983). */
+    fun getSummons(creature: Any): List<Any>? = (creature as? Creature)?.getSummons()
+
+    /** `Creature::setMaxHealth` reach of `creature:setMaxHealth` (creature_functions.cpp:615-633). */
+    fun setMaxHealth(creature: Any, maxHealth: Int): Boolean {
+        val target = creature as? Creature ?: return false
+        target.maxHealth = maxHealth
+        if (target.health > maxHealth) {
+            target.health = maxHealth
+        }
+        target.addCreatureHealth(target)
+        return true
+    }
+
+    /** `Creature::setHiddenHealth` reach of `creature:setHiddenHealth` (creature_functions.cpp:635-646). */
+    fun setHiddenHealth(creature: Any, hidden: Boolean): Boolean {
+        val target = creature as? Creature ?: return false
+        target.setHiddenHealth(hidden)
+        target.addCreatureHealth(target)
+        return true
+    }
+
+    /** `Creature::setDropLoot` reach of `creature:setDropLoot` (creature_functions.cpp:478-489). */
+    fun setDropLoot(creature: Any, drop: Boolean): Boolean {
+        val target = creature as? Creature ?: return false
+        target.setDropLoot(drop)
+        return true
+    }
+
+    /** `Creature::setSkillLoss` reach of `creature:setSkillLoss` (creature_functions.cpp:491-502). */
+    fun setSkillLoss(creature: Any, skillLoss: Boolean): Boolean {
+        val target = creature as? Creature ?: return false
+        target.setSkillLoss(skillLoss)
+        return true
+    }
+
+    /** `Creature::isDirectionLocked()` reach of `creature:isDirectionLocked` (creature_functions.cpp:671-680). */
+    fun isDirectionLocked(creature: Any): Boolean? = (creature as? Creature)?.isDirectionLocked()
+
+    /** `Creature::setDirectionLocked` reach of `creature:setDirectionLocked` (creature_functions.cpp:682-693). */
+    fun setDirectionLocked(creature: Any, locked: Boolean): Boolean {
+        val target = creature as? Creature ?: return false
+        target.setDirectionLocked(locked)
+        return true
+    }
+
+    /** `Creature::getSkull()` reach of `creature:getSkull` (creature_functions.cpp:700-712). */
+    fun getSkull(creature: Any): Int? = (creature as? Creature)?.getSkull()?.value
+
+    /** `Creature::setSkull` reach of `creature:setSkull` (creature_functions.cpp:714-726). */
+    fun setSkull(creature: Any, skull: Int): Boolean {
+        val target = creature as? Creature ?: return false
+        target.setSkull(Skulls_t.entries.firstOrNull { it.value == skull } ?: return false)
+        return true
+    }
+
+    /** `Creature::getCreatureLight()` reach of `creature:getLight` (creature_functions.cpp:395-407). */
+    fun getLight(creature: Any): Pair<Int, Int>? =
+        (creature as? Creature)?.getCreatureLight()?.let { it.level to it.color }
+
+    /** `Creature::setCreatureLight` reach of `creature:setLight` (creature_functions.cpp:409-427). */
+    fun setLight(creature: Any, color: Int, level: Int): Boolean {
+        val target = creature as? Creature ?: return false
+        target.setCreatureLight(LightInfo(level = level, color = color))
+        return true
+    }
+
+    /** `Creature::setFollowCreature` reach of `creature:setFollowCreature` (creature_functions.cpp:337-350). */
+    fun setFollowCreature(creature: Any, followed: Any?): Boolean? =
+        (creature as? Creature)?.let { it.setFollowCreature(followed as? Creature) }
+
+    /** `g_game().changeSpeed` reach of `creature:changeSpeed` (creature_functions.cpp:463-476); wired by the world. */
+    fun changeSpeed(creature: Any, delta: Int): Boolean = false
+
+    /** `Creature::isImmune(conditionType)` reach of `creature:isImmune` (creature_functions.cpp:820-839); wired by the world. */
+    fun isImmune(creature: Any, conditionType: Int): Boolean? = null
+
+    /** `g_game().changeLight` reach behind `creature:setLight`; wired by the world. */
+    fun changeLight(creature: Any) {
+        // No behaviour without a composed world.
+    }
+
+    /** `Creature::setIcon(key, icon)` reach of `creature:setIcon` (creature_functions.cpp:1099-1122). */
+    fun setIcon(creature: Any, key: String, icon: CreatureIcon): Boolean {
+        val target = creature as? Creature ?: return false
+        target.setIcon(key, icon)
+        return true
+    }
+
+    /** `Creature::getIcon(key)` reach of `creature:getIcon` (creature_functions.cpp:1145-1164). */
+    fun getIcon(creature: Any, key: String): CreatureIcon? = (creature as? Creature)?.getIcon(key)
+
+    /** `Creature::getIcons()` reach of `creature:getIcons` (creature_functions.cpp:1124-1143). */
+    fun getIcons(creature: Any): List<CreatureIcon>? = (creature as? Creature)?.getIcons()
 
     /** `Creature::registerCreatureEvent` (creature.cpp:1674-1693); null without a receiver. */
     fun registerEvent(creature: Any, name: String): Boolean?
@@ -253,6 +365,164 @@ object CreatureFunctions {
             val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             val moveLocked = args.arg(2).toboolean()
             LuaValue.valueOf(operations.setMoveLocked(creature, moveLocked))
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "isRemoved", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            operations.isRemoved(creature)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "isInGhostMode", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            operations.isInGhostMode(creature)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "getDamageMap", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val damageMap = operations.getDamageMap(creature) ?: return@luaFunction LuaValue.NIL
+            LuaTable().also { table ->
+                for ((attackerId, block) in damageMap) {
+                    val entry = LuaTable()
+                    entry.set("total", LuaValue.valueOf(block.total))
+                    entry.set("ticks", LuaValue.valueOf(block.ticks.toDouble()))
+                    table.set(LuaValue.valueOf(attackerId.toDouble()), entry)
+                }
+            }
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "getSummons", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val summons = operations.getSummons(creature) ?: return@luaFunction LuaValue.NIL
+            LuaTable().also { table ->
+                summons.forEachIndexed { index, summon ->
+                    table.set(index + 1, env.userdata.wrap(CREATURE_TYPE, summon))
+                }
+            }
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "setMaxHealth", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.setMaxHealth(creature, args.arg(2).toint()))
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "setHiddenHealth", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.setHiddenHealth(creature, args.arg(2).toboolean()))
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "isHealthHidden", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) as? Creature
+            creature?.let { LuaValue.valueOf(it.isHealthHidden()) } ?: LuaValue.NIL
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "setDropLoot", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.setDropLoot(creature, args.arg(2).toboolean()))
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "setSkillLoss", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.setSkillLoss(creature, args.arg(2).toboolean()))
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "isDirectionLocked", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            operations.isDirectionLocked(creature)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "setDirectionLocked", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.setDirectionLocked(creature, args.arg(2).toboolean()))
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "getSkull", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            operations.getSkull(creature)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "setSkull", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.setSkull(creature, args.arg(2).toint()))
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "getLight", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val light = operations.getLight(creature) ?: return@luaFunction LuaValue.NIL
+            LuaValue.varargsOf(LuaValue.valueOf(light.first), LuaValue.valueOf(light.second))
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "setLight", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val color = args.arg(2).toint()
+            val level = args.arg(3).toint()
+            val applied = operations.setLight(creature, color, level)
+            if (applied) {
+                operations.changeLight(creature)
+            }
+            LuaValue.valueOf(applied)
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "setFollowCreature", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val followed = retrieveUserdata(args, 2)
+            operations.setFollowCreature(creature, followed)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "changeSpeed", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            LuaValue.valueOf(operations.changeSpeed(creature, args.arg(2).toint()))
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "isImmune", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val condition = retrieveUserdata(args, 2)
+            val conditionType = when {
+                condition is Condition -> condition.type.value
+                args.arg(2).isnumber() -> args.arg(2).toint()
+                else -> return@luaFunction LuaValue.NIL
+            }
+            operations.isImmune(creature, conditionType)?.let { LuaValue.valueOf(it) } ?: LuaValue.NIL
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "setIcon", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val key = args.arg(2).tojstring()
+            val category = args.arg(3).toint()
+            val iconValue = args.arg(4).toint()
+            val count = args.arg(5).toint()
+            val icon = if (category == CreatureIconCategory_t.Modifications.value) {
+                CreatureIcon(CreatureIconModifications_t.entries.firstOrNull { it.value == iconValue } ?: CreatureIconModifications_t.None, count)
+            } else {
+                CreatureIcon(CreatureIconQuests_t.entries.firstOrNull { it.value == iconValue } ?: CreatureIconQuests_t.None, count)
+            }
+            LuaValue.valueOf(operations.setIcon(creature, key, icon))
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "getIcon", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val icon = operations.getIcon(creature, args.arg(2).tojstring()) ?: return@luaFunction LuaValue.NIL
+            if (!icon.isSet()) {
+                return@luaFunction LuaValue.NIL
+            }
+            LuaTable().also { table ->
+                table.set("category", LuaValue.valueOf(icon.category.value))
+                table.set("icon", LuaValue.valueOf(icon.serialize()))
+                table.set("count", LuaValue.valueOf(icon.count))
+            }
+        })
+
+        registry.registerMethod(CREATURE_TYPE, "getIcons", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val icons = operations.getIcons(creature) ?: return@luaFunction LuaValue.NIL
+            LuaTable().also { table ->
+                for (icon in icons) {
+                    val entry = LuaTable()
+                    entry.set("category", LuaValue.valueOf(icon.category.value))
+                    entry.set("icon", LuaValue.valueOf(icon.serialize()))
+                    entry.set("count", LuaValue.valueOf(icon.count))
+                    table.set(icon.category.value, entry)
+                }
+            }
         })
 
         registry.registerMethod(CREATURE_TYPE, "registerEvent", luaFunction { args ->

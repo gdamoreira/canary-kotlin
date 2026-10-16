@@ -1439,6 +1439,28 @@ abstract class Creature(
      */
     open fun isInGhostMode(): Boolean = false
 
+    /** `Creature::hiddenHealth` (creature.hpp:183-186). */
+    private var hiddenHealth: Boolean = false
+
+    /** `Creature::isHealthHidden` (creature.hpp:183-184). */
+    open fun isHealthHidden(): Boolean = hiddenHealth
+
+    /** `Creature::setHiddenHealth` (creature.hpp:185-186). */
+    fun setHiddenHealth(hidden: Boolean) {
+        hiddenHealth = hidden
+    }
+
+    /** `Creature::directionLocked` (creature.hpp:197-201). */
+    private var directionLocked: Boolean = false
+
+    /** `Creature::isDirectionLocked` (creature.hpp:196-197). */
+    open fun isDirectionLocked(): Boolean = directionLocked
+
+    /** `Creature::setDirectionLocked` (creature.hpp:199-201). */
+    fun setDirectionLocked(locked: Boolean) {
+        directionLocked = locked
+    }
+
     /**
      * `Creature::isInvisible` (`creature.cpp:1849-1853`): any stored
      * `CONDITION_INVISIBLE`, without an end-time check.
