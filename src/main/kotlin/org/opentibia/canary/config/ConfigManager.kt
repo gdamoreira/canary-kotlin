@@ -202,7 +202,11 @@ class ConfigManager(
         val identifier = keys[key] ?: return null
         overrides[key]?.let { return it }
         resolved[identifier]?.let { return it }
-        return environment[environmentNames.getValue(identifier)]
+        environment[environmentNames.getValue(identifier)]?.let { return it }
+        // `ConfigManager::getString` falls back to the registered default when
+        // the configuration source does not provide the key
+        // (configmanager.cpp:516-520).
+        return (key as? ConfigKey)?.defaultValue?.toString()
     }
 
     private fun otcTable(): String? =

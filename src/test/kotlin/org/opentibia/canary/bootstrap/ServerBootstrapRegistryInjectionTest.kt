@@ -94,7 +94,7 @@ class ServerBootstrapRegistryInjectionTest {
         configManagerBoot = ConfigManagerBoot { _, _ -> configManager },
         databaseBoot = databaseBoot,
         mapBoot = MapBoot { _, _, _, _ -> GameMap() },
-        scriptingBoot = ScriptingBoot { LuaEnvironment() },
+        scriptingBoot = ScriptingBoot { _, _, _ -> LuaEnvironment() },
         appearanceBoot = AppearanceBoot { Appearances.load(ByteArray(0)) },
         itemBoot = ItemBoot { _, _ -> Items() },
         imbuementBoot = ImbuementBoot { Imbuements() },

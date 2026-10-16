@@ -15,3 +15,8 @@ function rawgetmetatable(name)
     end
     return metatable
 end
+
+-- Lua 5.1 globals removed by LuaJ's 5.2 baseline; the Canary datapack uses them
+-- (`swimming.lua: swimming:id(unpack(swimmingTiles))`).
+unpack = unpack or table.unpack
+loadstring = loadstring or load

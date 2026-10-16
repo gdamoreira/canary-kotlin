@@ -81,7 +81,7 @@ class ServerBootstrapTest {
                 events += "map.load"
                 GameMap()
             },
-            scriptingBoot = ScriptingBoot {
+            scriptingBoot = ScriptingBoot { _, _, _ ->
                 events += "scripting.boot"
                 LuaEnvironment()
             },
@@ -110,10 +110,10 @@ class ServerBootstrapTest {
                 "config.load",
                 "database.connect",
                 "database.migrate",
-                "scripting.boot",
                 "appearance.load",
                 "imbuement.load",
                 "item.load",
+                "scripting.boot",
                 "map.load",
                 "dispatcher.started",
                 "listeners.start"
@@ -251,7 +251,7 @@ class ServerBootstrapTest {
                 events += "map.load"
                 GameMap()
             },
-            scriptingBoot = ScriptingBoot {
+            scriptingBoot = ScriptingBoot { _, _, _ ->
                 events += "scripting.boot"
                 LuaEnvironment()
             },

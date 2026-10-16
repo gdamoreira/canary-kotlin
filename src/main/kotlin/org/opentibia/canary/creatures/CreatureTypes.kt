@@ -201,3 +201,19 @@ enum class PlayerPronoun_t(val value: Int) {
     PLAYERPRONOUN_ZE(4),
     PLAYERPRONOUN_NAME(5),
 }
+
+/**
+ * `CreatureType_t` (`src/creatures/creatures_definitions.hpp:489-496`).
+ *
+ * Registered as the `CREATURETYPE_*` Lua globals
+ * (`registerEnum`, src/lua/functions/core/game/lua_enums.cpp:582-584); the
+ * datapack `compat.lua` derives the `THING_TYPE_*` constants from them.
+ */
+enum class CreatureType_t(val value: Int) {
+    CREATURETYPE_PLAYER(0),
+    CREATURETYPE_MONSTER(1),
+    CREATURETYPE_NPC(2),
+    CREATURETYPE_SUMMON_PLAYER(3),
+    CREATURETYPE_SUMMON_OTHERS(4),
+    CREATURETYPE_HIDDEN(5),
+}

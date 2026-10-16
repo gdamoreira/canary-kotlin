@@ -612,7 +612,10 @@ class WorldLuaOperations(
 
         /** Convenience factory that installs the real seams on [env] immediately. */
         fun forEnvironment(env: LuaEnvironment): WorldLuaOperations =
-            WorldLuaOperations(itemClassifications = env.itemClassifications).also { it.install(env) }
+            WorldLuaOperations(
+                itemTypes = env.itemTypes,
+                itemClassifications = env.itemClassifications,
+            ).also { it.install(env) }
     }
 }
 
@@ -638,6 +641,17 @@ class WorldGameOperations(
     private val monsterTypesByName: Map<String, Any> = emptyMap(),
     private val itemClassifications: ItemClassifications? = null,
 ) : GameOperations {
+
+    /** `Game::getCharmList()` (`game.hpp:654`), id-keyed like `IOBestiary::getBestiaryCharm`. */
+    private val bestiaryCharms = linkedMapOf<Int, Any>()
+
+    /**
+     * `GameFunctions::luaGameCreateBestiaryCharm` over
+     * `IOBestiary::getBestiaryCharm(id, force = true)` (iobestiary.cpp:231-248):
+     * an unknown id creates the charm and registers it in the charm list.
+     */
+    override fun createBestiaryCharm(id: Int): Any? =
+        bestiaryCharms.getOrPut(id) { org.opentibia.canary.lua.bindings.CharmData() }
     private var gameState: Int = 0
     private var worldType: Int = 0
 

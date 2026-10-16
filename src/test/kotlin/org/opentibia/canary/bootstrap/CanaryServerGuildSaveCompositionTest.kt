@@ -115,7 +115,7 @@ class CanaryServerGuildSaveCompositionTest {
                     }
                 }
             },
-            scriptingBoot = ScriptingBoot { LuaEnvironment().apply { initState() } },
+            scriptingBoot = ScriptingBoot { _, _, _ -> LuaEnvironment().apply { initState() } },
             appearanceBoot = AppearanceBoot { Appearances.load(ByteArray(0)) },
             itemBoot = ItemBoot { _, _ -> Items() },
             imbuementBoot = ImbuementBoot { Imbuements() },

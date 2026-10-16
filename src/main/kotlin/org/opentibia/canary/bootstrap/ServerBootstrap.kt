@@ -58,6 +58,7 @@ import org.opentibia.canary.io.pipeline.MonsterTypeDefinition
 import org.opentibia.canary.items.ItemAttributeParse
 import org.opentibia.canary.items.ItemType
 import org.opentibia.canary.items.Items
+import org.opentibia.canary.items.ItemTypeRegistry
 import org.opentibia.canary.items.functions.ItemParse
 import org.opentibia.canary.items.functions.ItemParseRegistry
 import org.opentibia.canary.items.functions.XmlAttribute
@@ -181,7 +182,7 @@ fun interface MapBoot {
 
 /** Boots the Lua environment (`CanaryServer::loadModules`); scripts stay Lua, never ported. */
 fun interface ScriptingBoot {
-    fun boot(config: ServerConfig): LuaEnvironment
+    fun boot(config: ServerConfig, configManager: ConfigManager, itemTypes: ItemTypeRegistry?): LuaEnvironment
 }
 
 /**
@@ -552,10 +553,12 @@ class ServerBootstrap(
         dataSource = source
         databaseBoot.migrate(source)
 
-        val luaEnvironment = scriptingBoot.boot(config)
         val appearances = appearanceBoot.load(config)
         val imbuements = imbuementBoot.load(config)
         val itemTypes = itemBoot.load(config, appearances)
+        // `CanaryServer::loadModules` (canary_server.cpp:562-576): the item
+        // registry loads before the Lua scripts, whose libs resolve `ItemType`.
+        val luaEnvironment = scriptingBoot.boot(config, configManager, itemTypes)
         val monsters = monsterBoot.load(config, luaEnvironment, configManager, itemTypes)
         val vocations = vocationsBoot.load(config, itemTypes, configManager)
         // `g_game().groups` (`Groups::load`, groups.cpp:78): the registry backs
@@ -829,12 +832,32 @@ class ServerBootstrap(
 }
 
 /** `CanaryServer::loadModules` Lua half: init state, wire directories, load libs + scripts. */
-private fun defaultScriptingBoot(config: ServerConfig): LuaEnvironment {
-    val environment = LuaEnvironment().apply { initState() }
+private fun defaultScriptingBoot(
+    config: ServerConfig,
+    configManager: ConfigManager,
+    itemTypes: ItemTypeRegistry?,
+): LuaEnvironment {
+    val environment = LuaEnvironment().apply {
+        this.itemTypes = itemTypes
+        initState()
+    }
+    // The datapack `core.lua` reads `configManager.getString(configKeys.*)` while
+    // the libs load; the production config surface must be wired before
+    // [Scripts.loadCore] (the environment's default install is unwired).
+    ConfigFunctions.install(environment, WorldConfigOperations(configManager))
     Scripts(environment).apply {
         setDirectories(Path.of(config.dataDir), Path.of(config.coreDir))
-        loadLibs()
+        loadCore()
+        // `CanaryServer::loadModules` script order (canary_server.cpp:576-601):
+        // the core scripts (lib first), then the datapack scripts (lib first),
+        // then the datapack monster scripts.
+        loadScripts(Path.of(config.coreDir, "scripts", "lib"))
+        loadScripts(Path.of(config.coreDir, "scripts"))
+        loadScripts(Path.of(config.dataDir, "scripts", "lib"))
         loadScripts(Path.of(config.dataDir, "scripts"))
+        // The datapack monster scripts are loaded by `monsterBoot`
+        // (`g_scripts().loadScripts(datapackFolder + "/monster")`,
+        // canary_server.cpp:598-600) after the scripts.
     }
     // Wave 65 B3: record the datapack spell scripts into the compiled engine
     // `g_spells()` registry before the monster scripts deserialize their

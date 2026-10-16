@@ -82,7 +82,7 @@ class ServerBootstrapRoleTest {
             events += "map.load"
             GameMap()
         },
-        scriptingBoot = ScriptingBoot {
+        scriptingBoot = ScriptingBoot { _, _, _ ->
             events += "scripting.boot"
             LuaEnvironment()
         },
@@ -194,10 +194,10 @@ class ServerBootstrapRoleTest {
             "config.load",
             "database.connect",
             "database.migrate",
-            "scripting.boot",
             "appearance.load",
             "imbuement.load",
             "item.load",
+            "scripting.boot",
             "monster.load",
             "vocations.load",
             "groups.load",

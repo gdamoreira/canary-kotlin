@@ -1,6 +1,7 @@
 package org.opentibia.canary.lua.loader
 
 import org.assertj.core.api.Assertions.assertThat
+import org.luaj.vm2.LuaValue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import org.opentibia.canary.lua.runtime.LuaEnvironment
@@ -59,12 +60,17 @@ class ScriptsTest {
     }
 
     @Test
-    fun `loadScripts loads libs before scripts when directories are set`(@TempDir core: Path, @TempDir scripts: Path) {
+    fun `loadScripts loads core before scripts when directories are set`(@TempDir core: Path, @TempDir scripts: Path) {
         val libsDir = Files.createDirectories(core.resolve("libs"))
         Files.writeString(libsDir.resolve("libs.lua"), "libs_loaded = true")
+        Files.writeString(
+            core.resolve("core.lua"),
+            "dofile(CORE .. '/libs/libs.lua')",
+        )
         Files.writeString(scripts.resolve("a.lua"), "script_saw_libs = libs_loaded or false")
 
         val env = LuaEnvironment().apply { initState() }
+        env.globals.set("CORE", LuaValue.valueOf(core.toAbsolutePath().normalize().toString()))
         Scripts(env).apply { setDirectories(core, core) }.loadScripts(scripts)
 
         assertThat(env.getGlobal("script_saw_libs").toboolean()).isTrue()

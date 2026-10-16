@@ -60,6 +60,13 @@ class LuaEnvironment {
     val eventsScheduler = EventsScheduler()
     val itemClassifications = org.opentibia.canary.systems.forge.ItemClassifications()
 
+    /**
+     * `Item::items` (`g_luaEnvironment()`'s `ItemType` reach): the booted item
+     * registry behind the Lua `ItemType(id)` lookups. Assigned by the scripting
+     * boot before [initState].
+     */
+    var itemTypes: org.opentibia.canary.items.ItemTypeRegistry? = null
+
     lateinit var spells: Spells
         private set
 
@@ -92,6 +99,14 @@ class LuaEnvironment {
 
     fun initState() {
         state = JsePlatform.debugGlobals()
+        // LuaJ targets Lua 5.2, which dropped `package.config`; the Canary
+        // datapack (`libs/core/quests/loader.lua`) reads the Lua 5.1 field, so
+        // the reference value is restored when the package library omits it.
+        globals.get("package").takeIf { it.istable() }?.let { packageTable ->
+            if (packageTable.get("config").isnil()) {
+                packageTable.set("config", LuaValue.valueOf("/\n;\n?\n!\n-\n"))
+            }
+        }
         loadCompatShim()
         classes = LuaClassRegistry(globals)
         userdata = UserdataRegistry(globals, classes)
@@ -146,9 +161,9 @@ class LuaEnvironment {
 
     fun getGlobal(name: String): LuaValue = globals.get(name)
 
-    fun loadFile(path: Path) {
+    fun loadFile(path: Path): LuaValue {
         val source = Files.readString(path)
-        loadChunk(source, "@${path.toAbsolutePath()}")
+        return loadChunk(source, "@${path.toAbsolutePath()}")
     }
 
     private fun loadCompatShim() {

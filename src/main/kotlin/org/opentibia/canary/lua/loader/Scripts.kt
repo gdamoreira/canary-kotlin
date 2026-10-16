@@ -19,6 +19,7 @@ private val logger = KotlinLogging.logger {}
 class Scripts(private val environment: LuaEnvironment) {
     private var coreDirectory: Path? = null
     private var loadedLibs: Path? = null
+    private val loadedScriptFiles = mutableSetOf<Path>()
 
     fun setDirectories(dataDir: Path, coreDir: Path) {
         val resolvedData = dataDir.toAbsolutePath().normalize()
@@ -106,8 +107,35 @@ class Scripts(private val environment: LuaEnvironment) {
         }
     }
 
+    /**
+     * Loads Canary's core Lua entry (`<coreDir>/core.lua`,
+     * `CanaryServer::loadModules`, src/canary_server.cpp:569-571). `core.lua`
+     * `dofile`s `global.lua` (the `SERVER_NAME`/`IsRetroPVP`/`PARTY_PROTECTION`
+     * globals), the lib aggregate and `stages.lua`; the tolerant `dofile` keeps
+     * a failing file from aborting the rest of the chain.
+     */
+    fun loadCore(coreDir: Path? = coreDirectory) {
+        val dir = coreDir ?: return
+        val core = dir.resolve("core.lua").toAbsolutePath().normalize()
+        if (loadedLibs == core) return
+        if (!Files.isRegularFile(core)) {
+            logger.warn { "Canary core.lua not found, skipping: $core" }
+            return
+        }
+        val previousDofile = environment.globals.get("dofile")
+        environment.globals.set("dofile", TolerantDofile(environment))
+        try {
+            loadFile(core)
+            loadedLibs = core
+        } catch (e: Exception) {
+            logger.error { "Failed to load Canary core.lua $core: ${e.message}" }
+        } finally {
+            environment.globals.set("dofile", previousDofile)
+        }
+    }
+
     fun loadScripts(dir: Path) {
-        loadLibs()
+        loadCore()
         if (!Files.isDirectory(dir)) {
             logger.warn { "Scripts directory does not exist: $dir" }
             return
@@ -115,6 +143,8 @@ class Scripts(private val environment: LuaEnvironment) {
         Files.walk(dir).use { stream ->
             stream.asSequence()
                 .filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".lua") }
+                .map { it.toAbsolutePath().normalize() }
+                .filter { loadedScriptFiles.add(it) }
                 .sorted()
                 .forEach { file ->
                     try {
@@ -133,12 +163,14 @@ class Scripts(private val environment: LuaEnvironment) {
     private class TolerantDofile(private val environment: LuaEnvironment) : VarArgFunction() {
         override fun invoke(args: Varargs): Varargs {
             val path = args.checkjstring(1)
-            try {
+            return try {
+                // The standard `dofile` returns the chunk's value; datapack libs
+                // capture it (`local catalog = dofile(...)`).
                 environment.loadFile(Path.of(path))
             } catch (e: Exception) {
                 logger.error { "Failed to load Lua lib $path: ${e.message}" }
+                LuaValue.NIL
             }
-            return LuaValue.NONE
         }
     }
 }
