@@ -54,9 +54,8 @@ class MariaDbDialectIntegrationTest {
         private const val EXPECTED_MIGRATIONS = 21
 
         private val dockerAvailable: Boolean = try {
-            DockerClientFactory.instance().isDockerAvailable.also { println("DIAG docker available: $it") }
-        } catch (e: Exception) {
-            println("DIAG docker check failed: $e")
+            DockerClientFactory.instance().isDockerAvailable
+        } catch (_: Exception) {
             false
         }
 
@@ -201,7 +200,8 @@ class MariaDbDialectIntegrationTest {
         val accountId = requireNotNull(
             JdbcAccountRepository(dataSource).createAccount("MariaStorageAccount", "hash", "storage@test.com", 0, 1),
         )
-        val playerId = 7L
+        // 7 is taken by the V23 god seed's GOD player; the fixture uses a free id.
+        val playerId = 77L
         dataSource.connection.use { connection ->
             connection.prepareStatement("INSERT INTO players (id, name, account_id) VALUES (?, ?, ?)").use { statement ->
                 statement.setLong(1, playerId)
