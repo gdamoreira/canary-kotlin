@@ -231,6 +231,25 @@ class CanaryServerCompositionTest {
     }
 
     /**
+     * `ProtocolGame::sendAddCreature`'s login tail (protocolgame.cpp:8701-8703)
+     * and the `sendInventoryIds()` gate (protocolgame.cpp:8779-8781): the burst
+     * must carry one inventory-slot frame per slot (0x78/0x79) and the
+     * `0xF5` inventory-ids frame, or the client shows an unequipped character.
+     */
+    @Test
+    fun `login tail sends the inventory slots and the inventory ids`() {
+        val ch = openChannel()
+        login(ch)
+        awaitLane()
+
+        val opcodes = drainOutboundOpcodes(ch)
+        val slotFrames = opcodes.count { it == 0x78 || it == 0x79 }
+        // `CONST_SLOT_LAST = CONST_SLOT_STORE_INBOX` (creatures_definitions.hpp:388).
+        assertThat(slotFrames).isEqualTo(11)
+        assertThat(opcodes).contains(0xF5)
+    }
+
+    /**
      * `Game::playerMove` -> `Creature::startAutoWalk` -> `Creature::onCreatureWalk`
      * (game.cpp:4282, creature.cpp:219-289/342-383): the walk runs through
      * `Map::moveCreature` so the tiles/sectors update and the spectator

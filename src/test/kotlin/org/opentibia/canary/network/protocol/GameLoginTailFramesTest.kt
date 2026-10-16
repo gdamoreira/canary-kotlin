@@ -201,7 +201,16 @@ class GameLoginTailFramesTest {
         assertThat(map.readUnsignedByte().toInt()).isEqualTo(MapPacketWriter.PACKET_MAP_DESCRIPTION.toInt())
         map.release()
 
-        // 7/8. The stats (0xA0) and skills (0xA1) continuation.
+        // 7. `sendAddCreature`'s login tail (protocolgame.cpp:8701-8703):
+        // one inventory-slot frame per slot precedes the stats/skills pair.
+        for (slot in org.opentibia.canary.creatures.Slots_t.FIRST..org.opentibia.canary.creatures.Slots_t.LAST) {
+            val slotFrame = readFrame(ch)
+            assertThat(slotFrame.readUnsignedByte().toInt())
+                .describedAs("slot $slot")
+                .isIn(GameWindowWriter.PACKET_INVENTORY_ITEM, GameWindowWriter.PACKET_INVENTORY_ITEM_REMOVE)
+        }
+
+        // 8/9. The stats (0xA0) and skills (0xA1) continuation.
         assertThat(readFrame(ch).readUnsignedByte().toInt()).isEqualTo(GameWindowWriter.PACKET_STATS)
         assertThat(readFrame(ch).readUnsignedByte().toInt()).isEqualTo(GameWindowWriter.PACKET_SKILLS)
     }

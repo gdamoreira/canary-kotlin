@@ -132,6 +132,9 @@ interface ProtocolSink : VipClient, LivestreamClient {
     /** `Player::sendInventoryItem(slot, item)` (player.cpp:9281). */
     fun sendInventoryItem(slot: Slots_t, item: Item?)
 
+    /** `ProtocolGame::sendInventoryIds` (protocolgame.cpp:8893-8932). */
+    fun sendInventoryIds()
+
     /** `Player::sendContainer(cid, container, hasParent, firstIndex)` (player.cpp:9134). */
     fun sendContainer(cid: Int, container: Container, hasParent: Boolean, firstIndex: Int)
 
@@ -270,6 +273,9 @@ data class SelfAppearTail(
 
 /** `STORE_COIN_PACKET` config default (`loadIntConfig(..., 25)`, configmanager.cpp:359). */
 const val STORE_COIN_PACKET_DEFAULT: Int = 25
+
+/** `ITEM_STORE_INBOX` (`src/utils/utils_definitions.hpp:623`). */
+const val ITEM_STORE_INBOX = 23396
 
 /**
  * Shared frame serialization for every [ProtocolSink] transport: the senders
@@ -570,6 +576,31 @@ abstract class ProtocolFrameSink(
 
     override fun sendInventoryItem(slot: Slots_t, item: Item?) {
         emit { GameWindowWriter.writeInventoryItem(this, slot, item) }
+    }
+
+    override fun sendInventoryIds() {
+        // `Player::getInventoryItemsId` (player.cpp:5478-5500): every slot
+        // 1..10 plus each container's items, totaled by (itemId, tier).
+        val totals = LinkedHashMap<Pair<Int, Int>, Long>()
+        fun add(item: Item, isStoreInbox: Boolean) {
+            if (isStoreInbox) {
+                return
+            }
+            val key = item.id to item.getTier()
+            totals[key] = (totals[key] ?: 0L) + item.getItemAmount()
+        }
+
+        for (slot in Slots_t.FIRST..Slots_t.LAST) {
+            val item = player.getInventoryItem(Slots_t.entries.first { it.value == slot }) ?: continue
+            val isStoreInbox = item.id == ITEM_STORE_INBOX
+            add(item, isStoreInbox)
+            (item as? Container)?.getItems(recursive = true)?.forEach { containerItem ->
+                add(containerItem, containerItem.id == ITEM_STORE_INBOX)
+            }
+        }
+
+        val entries = totals.map { (key, amount) -> InventoryIdEntry(itemId = key.first, tier = key.second, amount = amount) }
+        emit { GameWindowWriter.writeInventoryIds(this, entries) }
     }
 
     override fun sendContainer(cid: Int, container: Container, hasParent: Boolean, firstIndex: Int) {

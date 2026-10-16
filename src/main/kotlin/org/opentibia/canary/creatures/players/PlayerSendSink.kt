@@ -111,7 +111,7 @@ interface PlayerSendSink : ProtocolSink {
     fun sendTextWindow(item: Item, maxlen: Int, canWrite: Boolean)
 
     /** `Player::sendInventoryIds()` (player.cpp:9287). */
-    fun sendInventoryIds()
+    override fun sendInventoryIds()
 
     /** `Player::sendCoinBalance()` (player.cpp:9275). */
     fun sendCoinBalance()

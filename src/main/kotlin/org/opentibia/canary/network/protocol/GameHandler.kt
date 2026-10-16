@@ -22,6 +22,7 @@ import org.opentibia.canary.creatures.players.vip.VipEntry
 import org.opentibia.canary.creatures.players.vip.VipRepository
 import org.opentibia.canary.creatures.players.vip.VipStatus
 import org.opentibia.canary.creatures.vocations.Vocations
+import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.game.Game
 import org.opentibia.canary.game.modal.ModalWindowClient
 import org.opentibia.canary.game.modal.ModalWindowManager
@@ -1199,11 +1200,23 @@ class GameHandler(
         player.protocolSink?.sendMapDescription(player.position)
 
         val sink = player.protocolSink
+        // `ProtocolGame::sendAddCreature`'s login tail (protocolgame.cpp:8701-8703):
+        // every inventory slot (0x78/0x79) precedes the stats and skills frames,
+        // so the client shows the equipped gear Canary would.
+        for (slot in Slots_t.FIRST..Slots_t.LAST) {
+            val slotType = Slots_t.entries.first { it.value == slot }
+            sink?.sendInventoryItem(slotType, player.getInventoryItem(slotType))
+        }
         sink?.sendStats(player)
         sink?.sendSkills(player)
 
         // VIP burst (0xD4 + one 0xD2 per persisted record).
         sendVipBurst(player, version)
+
+        // `sendInventoryIds()` for `version >= 1100` (protocolgame.cpp:8779-8781).
+        if (version >= 1100) {
+            sink?.sendInventoryIds()
+        }
     }
 
     /** Queues one unframed protocol message on [ctx] (fire-and-forget). */

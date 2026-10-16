@@ -203,6 +203,18 @@ class GameHandlerLoginVipBurstTest {
             .isEqualTo(MiscSessionWriter.PACKET_ENTER_WORLD)
     }
 
+    private fun assertInventorySockets(ch: EmbeddedChannel) {
+        for (slot in aSlotsRange()) {
+            val frame = readFrame(ch)
+            val opcode = frame.readUnsignedByte().toInt()
+            assertThat(opcode)
+                .describedAs("slot $slot")
+                .isIn(GameWindowWriter.PACKET_INVENTORY_ITEM, GameWindowWriter.PACKET_INVENTORY_ITEM_REMOVE)
+        }
+    }
+
+    private fun aSlotsRange(): IntRange = org.opentibia.canary.creatures.Slots_t.FIRST..org.opentibia.canary.creatures.Slots_t.LAST
+
     @Test
     fun `login sends the VIP groups dialog and one entry per persisted record`() {
         val handler = GameHandler(
@@ -228,6 +240,10 @@ class GameHandlerLoginVipBurstTest {
 
         val mapFrame = readFrame(ch)
         assertThat(mapFrame.readUnsignedByte().toInt()).isEqualTo(MapPacketWriter.PACKET_MAP_DESCRIPTION.toInt())
+
+        // `sendAddCreature`'s login tail (protocolgame.cpp:8701-8703): one
+        // inventory-slot frame per slot before the stats/skills pair.
+        assertInventorySockets(ch)
 
         val statsFrame = readFrame(ch)
         assertThat(statsFrame.readUnsignedByte().toInt()).isEqualTo(GameWindowWriter.PACKET_STATS)
@@ -256,6 +272,11 @@ class GameHandlerLoginVipBurstTest {
         assertThat(entryFrame.readUnsignedByte().toInt()).isEqualTo(0) // Offline
         assertThat(entryFrame.readUnsignedByte().toInt()).isEqualTo(1) // group count
         assertThat(entryFrame.readUnsignedByte().toInt()).isEqualTo(1) // group id
+
+        // `sendInventoryIds()` (protocolgame.cpp:8779-8781) closes the login
+        // tail for `version >= 1100`.
+        val inventoryIds = readFrame(ch)
+        assertThat(inventoryIds.readUnsignedByte().toInt()).isEqualTo(GameWindowWriter.PACKET_INVENTORY_IDS)
 
         assertThat(ch.readOutbound<ByteBuf>()).isNull()
     }
@@ -300,6 +321,10 @@ class GameHandlerLoginVipBurstTest {
 
         val mapFrame = readFrame(ch)
         assertThat(mapFrame.readUnsignedByte().toInt()).isEqualTo(MapPacketWriter.PACKET_MAP_DESCRIPTION.toInt())
+
+        // `sendAddCreature`'s login tail (protocolgame.cpp:8701-8703): one
+        // inventory-slot frame per slot before the stats/skills pair.
+        assertInventorySockets(ch)
 
         val statsFrame = readFrame(ch)
         assertThat(statsFrame.readUnsignedByte().toInt()).isEqualTo(GameWindowWriter.PACKET_STATS)
