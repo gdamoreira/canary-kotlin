@@ -7,6 +7,7 @@ import org.opentibia.canary.combat.condition.Skill as ImbuementSkill
 import org.opentibia.canary.combat.condition.SpellGroup
 import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.PlayerPronoun_t
 import org.opentibia.canary.creatures.appearance.outfit.Outfits
 import org.opentibia.canary.creatures.players.components.AchievementRegistry
@@ -71,6 +72,12 @@ data class LuaTextMessage(
 interface PlayerOperations {
     /** Resolves an item name to its id, returning 0 when unknown. */
     fun itemIdByName(name: String): Int
+
+    /** `g_game().getPlayerByID`/`getPlayerByGUID` reach of `Player(id)` (player_functions.cpp:626-632). */
+    fun playerById(id: Long): Player? = null
+
+    /** `g_game().getPlayerByNameWildcard(name)` reach of `Player(name)` (player_functions.cpp:633-640). */
+    fun playerByNameWildcard(name: String): Player? = null
 
     fun addItem(
         player: Any,
@@ -494,7 +501,19 @@ object PlayerFunctions {
         remainder: PlayerRemainderOperations = WorldPlayerRemainderOperations(),
     ) {
         val registry = env.userdata
-        registry.registerClass(PLAYER_TYPE, CreatureFunctions.CREATURE_TYPE)
+        registry.registerClass(PLAYER_TYPE, CreatureFunctions.CREATURE_TYPE, luaFunction { args ->
+            // `PlayerFunctions::luaPlayerCreate` (player_functions.cpp:623-655):
+            // number -> getPlayerByID/GUID, string -> getPlayerByNameWildcard,
+            // userdata -> the shared player.
+            val argument = args.arg(1)
+            val resolved: Player? = when {
+                argument.isnumber() -> operations.playerById(argument.tolong())
+                argument.isstring() -> operations.playerByNameWildcard(argument.tojstring())
+                argument.isuserdata() -> retrieveUserdata(args, 1) as? Player
+                else -> null
+            }
+            resolved?.let { env.userdata.wrap(PLAYER_TYPE, it) } ?: LuaValue.NIL
+        })
         val register: (String, LuaValue) -> Unit = { name, fn ->
             registry.registerMethod(PLAYER_TYPE, name, fn)
         }
@@ -2991,8 +3010,9 @@ class WorldPlayerBatch3Operations(
         flags: Int,
     ): Int? = (player as? Player)?.let { 0 }
 
-    /** PARITY GAP: no store inbox ownership on the Kotlin `Player`; Canary's miss. */
-    override fun getStoreInbox(player: Any): Any? = (player as? Player)?.let { null }
+    /** `Player::getStoreInbox` (player.cpp:12887-12894): the `CONST_SLOT_STORE_INBOX` container. */
+    override fun getStoreInbox(player: Any): Any? =
+        (player as? Player)?.getInventoryItem(Slots_t.CONST_SLOT_STORE_INBOX) as? Container
 
     /** PARITY GAP: no container-send protocol sink; succeeds inertly. */
     override fun sendContainer(player: Any, container: Any): Boolean? = (player as? Player)?.let { true }
@@ -3499,7 +3519,16 @@ class WorldPlayerRemainderOperations(
 
     override fun getClient(player: Any): LuaClientInfo? {
         val target = player as? Player ?: return null
+        // `Player::getClient()` (player.hpp) resolves the session ProtocolGame.
+        // The port is single-version, so the current `CLIENT_VERSION` stands in
+        // until a per-session [clientInfoProvider] is injected.
         return clientInfoProvider?.invoke(target)
+            ?: LuaClientInfo(
+                version = org.opentibia.canary.network.protocol.CLIENT_VERSION,
+                versionString = "${org.opentibia.canary.network.protocol.CLIENT_VERSION / 100}." +
+                    "${org.opentibia.canary.network.protocol.CLIENT_VERSION % 100}",
+                os = 0,
+            )
     }
 
     override fun getBaseXpGain(player: Any): Int? = (player as? Player)?.let { boostsOf(it).baseXpGain }

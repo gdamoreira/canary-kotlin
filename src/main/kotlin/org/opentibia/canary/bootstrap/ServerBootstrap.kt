@@ -182,7 +182,12 @@ fun interface MapBoot {
 
 /** Boots the Lua environment (`CanaryServer::loadModules`); scripts stay Lua, never ported. */
 fun interface ScriptingBoot {
-    fun boot(config: ServerConfig, configManager: ConfigManager, itemTypes: ItemTypeRegistry?): LuaEnvironment
+    fun boot(
+        config: ServerConfig,
+        configManager: ConfigManager,
+        itemTypes: ItemTypeRegistry?,
+        npcs: Npcs?,
+    ): LuaEnvironment
 }
 
 /**
@@ -558,7 +563,10 @@ class ServerBootstrap(
         val itemTypes = itemBoot.load(config, appearances)
         // `CanaryServer::loadModules` (canary_server.cpp:562-576): the item
         // registry loads before the Lua scripts, whose libs resolve `ItemType`.
-        val luaEnvironment = scriptingBoot.boot(config, configManager, itemTypes)
+        // `g_npcs()`: one registry shared by the Lua `Game.createNpcType`
+        // registration and the listener's spawn path (npcs.cpp:106-116).
+        val npcs = Npcs()
+        val luaEnvironment = scriptingBoot.boot(config, configManager, itemTypes, npcs)
         val monsters = monsterBoot.load(config, luaEnvironment, configManager, itemTypes)
         val vocations = vocationsBoot.load(config, itemTypes, configManager)
         // `g_game().groups` (`Groups::load`, groups.cpp:78): the registry backs
@@ -723,6 +731,7 @@ class ServerBootstrap(
                 keyValueStore = kvStore,
                 vipRepository = vipRepository,
                 guildRepository = guildRepository,
+                npcs = npcs,
             ),
         )
         listener = server
@@ -836,9 +845,11 @@ private fun defaultScriptingBoot(
     config: ServerConfig,
     configManager: ConfigManager,
     itemTypes: ItemTypeRegistry?,
+    npcs: Npcs?,
 ): LuaEnvironment {
     val environment = LuaEnvironment().apply {
         this.itemTypes = itemTypes
+        this.npcs = npcs
         initState()
     }
     // The datapack `core.lua` reads `configManager.getString(configKeys.*)` while
@@ -853,11 +864,16 @@ private fun defaultScriptingBoot(
         // then the datapack monster scripts.
         loadScripts(Path.of(config.coreDir, "scripts", "lib"))
         loadScripts(Path.of(config.coreDir, "scripts"))
+        loadNpcLib()
+        loadModules()
         loadScripts(Path.of(config.dataDir, "scripts", "lib"))
         loadScripts(Path.of(config.dataDir, "scripts"))
+        // `Npcs::load(false, true)` (canary_server.cpp:601-603): the datapack
+        // NPC scripts register their types after the monster scripts.
+        loadScripts(Path.of(config.dataDir, "npc"))
         // The datapack monster scripts are loaded by `monsterBoot`
         // (`g_scripts().loadScripts(datapackFolder + "/monster")`,
-        // canary_server.cpp:598-600) after the scripts.
+        // canary_server.cpp:598-600) before the NPC scripts.
     }
     // Wave 65 B3: record the datapack spell scripts into the compiled engine
     // `g_spells()` registry before the monster scripts deserialize their

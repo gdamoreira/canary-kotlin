@@ -236,6 +236,7 @@ import kotlin.random.Random
  */
 class WorldLuaOperations(
     private val itemTypes: ItemTypeRegistry? = null,
+    private val npcs: org.opentibia.canary.creatures.npcs.Npcs? = null,
     private val itemIdsByName: Map<String, Int> = emptyMap(),
     itemAttributeIdsByName: Map<String, Int> = emptyMap(),
     monsterTypesByName: Map<String, Any> = emptyMap(),
@@ -277,13 +278,24 @@ class WorldLuaOperations(
     private var installedEnvironment: LuaEnvironment? = null
 
     private val worldGame: WorldGameOperations =
-        WorldGameOperations(itemIdsByName, itemTypes, gameMap, monsterTypesByName, itemClassifications)
+        WorldGameOperations(itemIdsByName, itemTypes, gameMap, monsterTypesByName, itemClassifications, npcs)
 
     val game: GameOperations = worldGame
 
     private val worldPlayer: WorldPlayerOperations = WorldPlayerOperations(itemIdsByName, itemTypes)
 
     val player: PlayerOperations = worldPlayer
+
+    /**
+     * Late-binds the `Player(id|name)` lookups (`PlayerFunctions::luaPlayerCreate`)
+     * once the game exists; the scripting boot runs before it.
+     */
+    fun bindPlayerResolvers(playerById: (Long) -> Player?, playerByNameWildcard: (String) -> Player?) {
+        (player as? WorldPlayerOperations)?.let { ops ->
+            ops.playerByIdProvider = playerById
+            ops.playerByNameWildcardProvider = playerByNameWildcard
+        }
+    }
 
     val creature: CreatureOperations = WorldCreatureOperations()
 
@@ -615,6 +627,7 @@ class WorldLuaOperations(
             WorldLuaOperations(
                 itemTypes = env.itemTypes,
                 itemClassifications = env.itemClassifications,
+                npcs = env.npcs,
             ).also { it.install(env) }
     }
 }
@@ -640,7 +653,11 @@ class WorldGameOperations(
     private val gameMap: GameMap? = null,
     private val monsterTypesByName: Map<String, Any> = emptyMap(),
     private val itemClassifications: ItemClassifications? = null,
+    private val npcs: org.opentibia.canary.creatures.npcs.Npcs? = null,
 ) : GameOperations {
+
+    /** `Npcs::getNpcType(name, create = true)` (npcs.cpp:138-148) of `Game.createNpcType`. */
+    override fun createNpcType(name: String): Any? = npcs?.getNpcType(name, create = true)
 
     /** `Game::getCharmList()` (`game.hpp:654`), id-keyed like `IOBestiary::getBestiaryCharm`. */
     private val bestiaryCharms = linkedMapOf<Int, Any>()
@@ -944,6 +961,16 @@ class WorldPlayerOperations(
     private val itemIdsByName: Map<String, Int> = emptyMap(),
     private val itemTypes: ItemTypeRegistry? = null,
 ) : PlayerOperations {
+
+    /** `g_game().getPlayerByID`/`getPlayerByGUID` reach of `Player(id)` (player_functions.cpp:626-632). */
+    var playerByIdProvider: (Long) -> Player? = { null }
+
+    /** `g_game().getPlayerByNameWildcard(name)` reach of `Player(name)` (player_functions.cpp:633-640). */
+    var playerByNameWildcardProvider: (String) -> Player? = { null }
+
+    override fun playerById(id: Long): Player? = playerByIdProvider(id)
+
+    override fun playerByNameWildcard(name: String): Player? = playerByNameWildcardProvider(name)
     /**
      * `g_game().internalPlayerAddItem(player, item, dropOnMap, slot)`
      * (game.cpp:2981) seam bound by [WorldLuaOperations.attachPlayerItems]; the
@@ -1431,6 +1458,16 @@ class WorldPlayerOperations(
  * `Creature` metatable family seam backed by the Kotlin [Creature] domain object.
  */
 class WorldCreatureOperations : CreatureOperations {
+    override fun getCurrentOutfit(creature: Any): Outfit =
+        (creature as? Creature)?.getCurrentOutfit() ?: Outfit()
+
+    override fun setDefaultOutfit(creature: Any, outfit: Outfit): Boolean {
+        val target = creature as? Creature ?: return false
+        target.setDefaultOutfit(outfit)
+        target.setCurrentOutfit(outfit)
+        return true
+    }
+
     override fun getId(creature: Any): Long = (creature as? Creature)?.id ?: 0L
 
     override fun getName(creature: Any): String = (creature as? Creature)?.name ?: ""

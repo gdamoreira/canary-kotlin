@@ -151,7 +151,7 @@ class ServerBootstrapCompositionBindingsTest {
             configManagerBoot = ConfigManagerBoot { _, _ -> config },
             databaseBoot = databaseBoot,
             mapBoot = mapBoot,
-            scriptingBoot = ScriptingBoot { _, _, _ -> luaEnvironment },
+            scriptingBoot = ScriptingBoot { _, _, _, _ -> luaEnvironment },
             appearanceBoot = AppearanceBoot { Appearances.load(ByteArray(0)) },
             itemBoot = ItemBoot { _, _ -> Items() },
             imbuementBoot = ImbuementBoot { Imbuements() },

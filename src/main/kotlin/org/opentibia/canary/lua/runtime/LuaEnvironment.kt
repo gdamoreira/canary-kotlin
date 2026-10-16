@@ -67,6 +67,13 @@ class LuaEnvironment {
      */
     var itemTypes: org.opentibia.canary.items.ItemTypeRegistry? = null
 
+    /**
+     * `g_npcs()` (`Npcs`, npcs.hpp:98): the shared NPC type registry behind
+     * `Game.createNpcType(name)`. Assigned by the scripting boot before
+     * [initState].
+     */
+    var npcs: org.opentibia.canary.creatures.npcs.Npcs? = null
+
     lateinit var spells: Spells
         private set
 

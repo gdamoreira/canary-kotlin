@@ -134,6 +134,71 @@ class Scripts(private val environment: LuaEnvironment) {
         }
     }
 
+    /**
+     * `Npcs::load(true, false)` (src/creatures/npcs/npcs.cpp:106-110):
+     * `<coreDir>/npclib/load.lua` chains the NPC library before the NPC
+     * scripts register their types.
+     */
+    fun loadNpcLib(coreDir: Path? = coreDirectory) {
+        val dir = coreDir ?: return
+        val load = dir.resolve("npclib").resolve("load.lua")
+        if (!Files.isRegularFile(load)) {
+            logger.warn { "Canary npclib not found, skipping: $load" }
+            return
+        }
+        try {
+            loadFile(load)
+        } catch (e: Exception) {
+            logger.error { "Failed to load npclib $load: ${e.message}" }
+        }
+    }
+
+    /**
+     * `g_modules().loadFromXml()` (`CanaryServer::loadModules`,
+     * src/canary_server.cpp:585-587): every `modules.xml` module script loads
+     * once (defining globals such as `DailyReward`), after the core scripts and
+     * before the datapack scripts.
+     *
+     * PARITY GAP: the `recvbyte` opcode dispatch of `Modules::executeOnRecvbyte`
+     * is not wired; the module packets stay unhandled.
+     */
+    fun loadModules(coreDir: Path? = coreDirectory) {
+        val dir = coreDir ?: return
+        // `BaseEvents::loadFromXml` (src/lua/global/baseevents.cpp:23-33): the
+        // `<base>/lib/<base>.lua` aggregate loads first.
+        val baseLib = dir.resolve("modules").resolve("lib").resolve("modules.lua")
+        if (Files.isRegularFile(baseLib)) {
+            try {
+                loadFile(baseLib)
+            } catch (e: Exception) {
+                logger.error { "Failed to load module lib $baseLib: ${e.message}" }
+            }
+        }
+
+        val modulesXml = dir.resolve("modules").resolve("modules.xml")
+        if (!Files.isRegularFile(modulesXml)) {
+            logger.warn { "Canary modules.xml not found, skipping: $modulesXml" }
+            return
+        }
+        val content = Files.readString(modulesXml)
+        val scripts = Regex("script=\"([^\"]+)\"").findAll(content)
+            .map { it.groupValues[1] }
+            .toSortedSet()
+        for (script in scripts) {
+            // `scriptFile = "scripts/" + script` (baseevents.cpp:57).
+            val file = dir.resolve("modules").resolve("scripts").resolve(script).toAbsolutePath().normalize()
+            if (!Files.isRegularFile(file)) {
+                logger.warn { "Module script not found, skipping: $file" }
+                continue
+            }
+            try {
+                loadFile(file)
+            } catch (e: Exception) {
+                logger.error { "Failed to load module script $file: ${e.message}" }
+            }
+        }
+    }
+
     fun loadScripts(dir: Path) {
         loadCore()
         if (!Files.isDirectory(dir)) {

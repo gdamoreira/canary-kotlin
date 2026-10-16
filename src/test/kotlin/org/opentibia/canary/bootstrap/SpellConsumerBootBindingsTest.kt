@@ -70,7 +70,7 @@ class SpellConsumerBootBindingsTest {
             configBoot = ConfigBoot { _, _ -> ServerConfig(loginPort = 0, gamePort = 0) },
             databaseBoot = RecordingDatabaseBoot("d4_boot_${System.nanoTime()}"),
             mapBoot = MapBoot { _, _, _, _ -> GameMap() },
-            scriptingBoot = ScriptingBoot { _, _, _ -> environment },
+            scriptingBoot = ScriptingBoot { _, _, _, _ -> environment },
             appearanceBoot = AppearanceBoot { Appearances.load(ByteArray(0)) },
             itemBoot = ItemBoot { _, _ -> Items() },
             imbuementBoot = ImbuementBoot { Imbuements() },

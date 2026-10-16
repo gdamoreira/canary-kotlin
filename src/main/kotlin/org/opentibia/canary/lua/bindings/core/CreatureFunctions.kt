@@ -1,6 +1,8 @@
 package org.opentibia.canary.lua.bindings.core
 
+import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
+import org.opentibia.canary.combat.condition.Outfit
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.map.Position
@@ -11,6 +13,12 @@ import org.opentibia.canary.map.Position
  */
 interface CreatureOperations {
     fun getId(creature: Any): Long
+
+    /** `Creature::getCurrentOutfit` reach of `getOutfit` (creature_functions.cpp:716-726). */
+    fun getCurrentOutfit(creature: Any): Outfit = Outfit()
+
+    /** `Creature::setDefaultOutfit` reach of `setOutfit` (creature_functions.cpp:728-748). */
+    fun setDefaultOutfit(creature: Any, outfit: Outfit): Boolean = false
     fun getName(creature: Any): String
     fun getHealth(creature: Any): Int
     fun getMaxHealth(creature: Any): Int
@@ -73,6 +81,54 @@ interface CreatureOperations {
  * `Creature` only.
  */
 object CreatureFunctions {
+
+    /** Mirrors `Lua::pushOutfit` (src/lua/functions/lua_functions_loader.cpp:722). */
+    private fun pushOutfit(outfit: Outfit): LuaTable =
+        LuaTable().also { table ->
+            table.set("lookType", LuaValue.valueOf(outfit.lookType))
+            table.set("lookTypeEx", LuaValue.valueOf(outfit.lookTypeEx))
+            table.set("lookHead", LuaValue.valueOf(outfit.lookHead))
+            table.set("lookBody", LuaValue.valueOf(outfit.lookBody))
+            table.set("lookLegs", LuaValue.valueOf(outfit.lookLegs))
+            table.set("lookFeet", LuaValue.valueOf(outfit.lookFeet))
+            table.set("lookAddons", LuaValue.valueOf(outfit.lookAddons))
+            table.set("lookMount", LuaValue.valueOf(outfit.lookMount))
+            table.set("lookMountHead", LuaValue.valueOf(outfit.lookMountHead))
+            table.set("lookMountBody", LuaValue.valueOf(outfit.lookMountBody))
+            table.set("lookMountLegs", LuaValue.valueOf(outfit.lookMountLegs))
+            table.set("lookMountFeet", LuaValue.valueOf(outfit.lookMountFeet))
+            table.set("lookFamiliarsType", LuaValue.valueOf(outfit.lookFamiliarsType))
+            table.set("lookWing ", LuaValue.valueOf(outfit.lookWing))
+            table.set("lookAura", LuaValue.valueOf(outfit.lookAura))
+            table.set("lookEffect ", LuaValue.valueOf(outfit.lookEffect))
+            table.set("lookShader ", LuaValue.valueOf(outfit.lookShader))
+        }
+
+    /** Mirrors `Lua::getOutfit` (src/lua/functions/lua_functions_loader.cpp:439). */
+    private fun luaToOutfit(value: LuaValue): Outfit? {
+        if (!value.istable()) {
+            return null
+        }
+        return Outfit(
+            lookMountFeet = value.get("lookMountFeet").toint(),
+            lookMountLegs = value.get("lookMountLegs").toint(),
+            lookMountBody = value.get("lookMountBody").toint(),
+            lookMountHead = value.get("lookMountHead").toint(),
+            lookFamiliarsType = value.get("lookFamiliarsType").toint(),
+            lookMount = value.get("lookMount").toint(),
+            lookAddons = value.get("lookAddons").toint(),
+            lookFeet = value.get("lookFeet").toint(),
+            lookLegs = value.get("lookLegs").toint(),
+            lookBody = value.get("lookBody").toint(),
+            lookHead = value.get("lookHead").toint(),
+            lookTypeEx = value.get("lookTypeEx").toint(),
+            lookType = value.get("lookType").toint(),
+            lookWing = value.get("lookShader ").toint(),
+            lookAura = value.get("lookAura").toint(),
+            lookEffect = value.get("lookEffect ").toint(),
+            lookShader = value.get("lookShader ").toint(),
+        )
+    }
     const val CREATURE_TYPE = "Creature"
 
     /** Classes sharing `Lua::luaUserdataCompare` (`creature_functions.cpp:23-26`). */
@@ -87,6 +143,21 @@ object CreatureFunctions {
         registry.registerMethod(CREATURE_TYPE, "getId", luaFunction { args ->
             val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             LuaValue.valueOf(operations.getId(creature).toDouble())
+        })
+
+        // `CreatureFunctions::luaCreatureGetOutfit` (creature_functions.cpp:716-726):
+        // `Lua::pushOutfit` over `Creature::getCurrentOutfit`.
+        registry.registerMethod(CREATURE_TYPE, "getOutfit", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            pushOutfit(operations.getCurrentOutfit(creature))
+        })
+
+        // `CreatureFunctions::luaCreatureSetOutfit` (creature_functions.cpp:728-748).
+        registry.registerMethod(CREATURE_TYPE, "setOutfit", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
+            val outfit = luaToOutfit(args.arg(2)) ?: return@luaFunction LuaValue.NIL
+            operations.setDefaultOutfit(creature, outfit)
+            LuaValue.TRUE
         })
 
         registry.registerMethod(CREATURE_TYPE, "getName", luaFunction { args ->

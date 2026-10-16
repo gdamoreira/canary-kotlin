@@ -794,6 +794,13 @@ class CanaryServer(
             }
         }
 
+        // `PlayerFunctions::luaPlayerCreate` (player_functions.cpp:623-655): the
+        // `Player(id|name)` lookups resolve through the live game once it exists.
+        luaEnvironment.worldOperations?.bindPlayerResolvers(
+            playerById = { id: Long -> game.getPlayerByID(id) ?: game.getPlayerByGUID(id) },
+            playerByNameWildcard = { name: String -> game.getPlayerByNameWildcard(name).second },
+        )
+
         // `g_globalEvents().startup()` (game.cpp:988): confined to the
         // WorldCommit lane by ScriptingDispatch.
         game.initGlobalEvents = { scriptingDispatch.globalStartup() }
