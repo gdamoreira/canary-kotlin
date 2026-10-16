@@ -35,6 +35,18 @@ jobs:
       - name: Build and test
         run: ./gradlew clean test installDist --console=plain
 
+      - name: Report failing tests as annotations
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          import glob, re
+          for f in sorted(glob.glob('build/test-results/test/*.xml')):
+              src = open(f, encoding='utf-8', errors='ignore').read()
+              for m in re.finditer(r'<testcase name="([^"]+)" classname="([^"]+)"[^>]*>\s*<(failure|error)[^>]*message="([^"]{0,300})', src):
+                  msg = m.group(4).replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:280]
+                  print(f"::error file={f}::{m.group(2)} :: {m.group(1)} :: {msg}")
+          PY
+
       - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@v5

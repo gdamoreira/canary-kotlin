@@ -54,8 +54,9 @@ class MariaDbDialectIntegrationTest {
         private const val EXPECTED_MIGRATIONS = 21
 
         private val dockerAvailable: Boolean = try {
-            DockerClientFactory.instance().isDockerAvailable
-        } catch (_: Exception) {
+            DockerClientFactory.instance().isDockerAvailable.also { println("DIAG docker available: $it") }
+        } catch (e: Exception) {
+            println("DIAG docker check failed: $e")
             false
         }
 
