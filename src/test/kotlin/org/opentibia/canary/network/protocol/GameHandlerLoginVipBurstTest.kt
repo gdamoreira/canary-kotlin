@@ -215,6 +215,7 @@ class GameHandlerLoginVipBurstTest {
         val ch = EmbeddedChannel(TibiaFrameDecoder(), TibiaMessageEncoder(), handler)
         channel = ch
 
+        GameLoginTestSupport.readChallenge(ch)
         ch.writeInbound(loginPacket())
         awaitLane()
 
@@ -284,9 +285,11 @@ class GameHandlerLoginVipBurstTest {
             game = game,
         )
         val otherChannel = EmbeddedChannel(TibiaFrameDecoder(), TibiaMessageEncoder(), otherHandler)
+        GameLoginTestSupport.readChallenge(otherChannel)
         otherChannel.writeInbound(loginPacket(characterName = "Sorcerer Master"))
         awaitLane()
 
+        GameLoginTestSupport.readChallenge(ch)
         ch.writeInbound(loginPacket())
         awaitLane()
 
@@ -334,6 +337,7 @@ class GameHandlerLoginVipBurstTest {
             game = game,
         )
         val firstChannel = EmbeddedChannel(TibiaFrameDecoder(), TibiaMessageEncoder(), firstHandler)
+        GameLoginTestSupport.readChallenge(firstChannel)
         firstChannel.writeInbound(loginPacket(characterName = "Sorcerer Master"))
         awaitLane()
 
@@ -353,6 +357,7 @@ class GameHandlerLoginVipBurstTest {
         )
         val secondChannel = EmbeddedChannel(TibiaFrameDecoder(), TibiaMessageEncoder(), secondHandler)
         channel = secondChannel
+        GameLoginTestSupport.readChallenge(secondChannel)
         secondChannel.writeInbound(loginPacket())
         awaitLane()
 

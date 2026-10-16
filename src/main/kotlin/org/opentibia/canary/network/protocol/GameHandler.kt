@@ -40,6 +40,7 @@ import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.ScriptingDispatch
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.network.codec.TibiaFrameDecoder
 import org.opentibia.canary.network.codec.TibiaMessageEncoder
 import org.opentibia.canary.network.crypto.Adler32Checksum
 import org.opentibia.canary.network.crypto.RsaCipher
@@ -63,6 +64,7 @@ import java.nio.charset.StandardCharsets
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.random.Random
 
 private val logger = KotlinLogging.logger {}
 
@@ -175,6 +177,13 @@ class GameHandler(
 
     private var player: Player? = null
     private var xteaCipher: XteaCipher? = null
+
+    /** `ProtocolGame::challengeTimestamp`/`challengeRandom` (protocolgame.hpp). */
+    private var challengeTimestamp: Int = 0
+    private var challengeRandom: Int = 0
+
+    /** True once the connection switched to `TransportProfileId.CurrentModern`. */
+    private var modernFraming: Boolean = false
 
     /**
      * `ProtocolGame::m_isLivestreamViewer` (protocolgame.hpp:646) session state:
@@ -399,14 +408,24 @@ class GameHandler(
             return
         }
 
-        val checksum = msg.readUnsignedIntLE()
-        val payloadLen = msg.readableBytes()
-        val calculatedChecksum = Adler32Checksum.compute(msg, msg.readerIndex(), payloadLen)
+        // Modern clients (>= 14xx) open the login with `Proto::ClientPendingGame`
+        // (0x0A) and no Adler-32 header (`ProtocolGame::sendLoginPacket`,
+        // src/client/protocolgamesend.cpp); legacy clients send the checksum
+        // first, so a packet whose Adler-32 validates is treated as legacy.
+        val modernLogin = msg.getUnsignedByte(msg.readerIndex()).toInt() == 0x0A &&
+            !legacyChecksumValid(msg)
+        if (modernLogin) {
+            msg.skipBytes(1)
+        } else {
+            val checksum = msg.readUnsignedIntLE()
+            val payloadLen = msg.readableBytes()
+            val calculatedChecksum = Adler32Checksum.compute(msg, msg.readerIndex(), payloadLen)
 
-        if (checksum != calculatedChecksum) {
-            logger.warn { "Adler32 checksum mismatch on game login" }
-            ctx.close()
-            return
+            if (checksum != calculatedChecksum) {
+                logger.warn { "Adler32 checksum mismatch on game login" }
+                ctx.close()
+                return
+            }
         }
 
         val os = msg.readUnsignedShortLE()
@@ -484,6 +503,20 @@ class GameHandler(
         val sessionKey = rsaBuf.readTibiaString()
         val characterName = rsaBuf.readTibiaString()
 
+        // `gameLoginLayout->hasChallengeResponse` (protocolgame.cpp:1366-1373):
+        // the echoed challenge must match the values sent on channel active.
+        // Only modern logins echo it; a legacy-framed login keeps the port's
+        // compatibility path (the C++ resolves the flow through the session hint).
+        if (layout.hasChallengeResponse && modernLogin) {
+            val timeStamp = rsaBuf.readIntLE()
+            val randNumber = rsaBuf.readUnsignedByte().toInt()
+            if (challengeTimestamp != timeStamp || challengeRandom != randNumber) {
+                logger.warn { "Game login challenge mismatch" }
+                ctx.close()
+                return
+            }
+        }
+
         val tokens = sessionKey.split("\n")
         val accountName = tokens.getOrNull(0) ?: ""
         val password = tokens.getOrNull(1) ?: ""
@@ -491,6 +524,16 @@ class GameHandler(
         val encoder = ctx.pipeline().get(TibiaMessageEncoder::class.java)
         encoder?.xteaCipher = cipher
         encoder?.checksumEnabled = true
+
+        // `ProtocolProfile::initialBehavior.transport` (protocol_profile.cpp):
+        // a modern login (`Proto::ClientPendingGame`) switches the connection to
+        // the modern transport (block-count length, sequence checksum, padding
+        // byte); a legacy-framed login keeps the legacy framing.
+        modernFraming = modernLogin && sessionProfile.initialBehavior.transport == TransportProfileId.CurrentModern
+        if (modernFraming) {
+            encoder?.modernFraming = true
+            ctx.pipeline().get(TibiaFrameDecoder::class.java)?.enableModernFraming(cipher)
+        }
 
         // `ProtocolGame::onRecvFirstMessage`'s `@livestream` account descriptor
         // (protocolgame.cpp:1409-1417): the viewer login resolves the caster
@@ -975,6 +1018,24 @@ class GameHandler(
         }
     }
 
+    /**
+     * `ProtocolGame::sendLoginChallenge` (protocolgame.cpp:682-684, 1442-1480):
+     * the current profile's handshake flow is `ServerChallengeBeforeLogin`, so
+     * the challenge is written as the first packet of the connection (over the
+     * unencrypted modern framing) and the client echoes it inside the login
+     * packet.
+     */
+    override fun channelActive(ctx: ChannelHandlerContext) {
+        val encoder = ctx.pipeline().get(TibiaMessageEncoder::class.java)
+        if (encoder != null) {
+            challengeTimestamp = (System.currentTimeMillis() / 1000L).toInt()
+            challengeRandom = Random.nextInt(0x00, 0x100)
+            val encoderCtx = ctx.pipeline().context(encoder)
+            encoder.writeLoginChallenge(encoderCtx, challengeTimestamp, challengeRandom)
+        }
+        super.channelActive(ctx)
+    }
+
     override fun channelInactive(ctx: ChannelHandlerContext) {
         val viewer = livestreamViewer
         if (viewer != null) {
@@ -1014,12 +1075,25 @@ class GameHandler(
         super.channelInactive(ctx)
     }
 
+    /** True when [msg] opens with a valid legacy Adler-32 header (no consume). */
+    private fun legacyChecksumValid(msg: ByteBuf): Boolean {
+        if (msg.readableBytes() < 5) {
+            return false
+        }
+
+        val checksum = msg.getUnsignedIntLE(msg.readerIndex())
+        val payloadStart = msg.readerIndex() + 4
+        val payloadLen = msg.readableBytes() - 4
+        return checksum == Adler32Checksum.compute(msg, payloadStart, payloadLen)
+    }
+
     private fun handleGamePacket(ctx: ChannelHandlerContext, msg: ByteBuf) {
         val activePlayer = player ?: return
         val cipher = xteaCipher
 
-        // Verify and decrypt incoming game packet if encrypted
-        if (cipher != null && msg.readableBytes() >= 4) {
+        // Verify and decrypt incoming game packet if encrypted; the modern
+        // transport is decoded (sequence + XTEA + padding) by the frame decoder.
+        if (!modernFraming && cipher != null && msg.readableBytes() >= 4) {
             val checksum = msg.readUnsignedIntLE()
             val payloadStart = msg.readerIndex()
             val payloadLen = msg.readableBytes()

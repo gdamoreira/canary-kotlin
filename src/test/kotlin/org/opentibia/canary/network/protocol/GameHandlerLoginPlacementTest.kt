@@ -149,6 +149,7 @@ class GameHandlerLoginPlacementTest {
 
         dispatcher.start()
         val ch = openChannel()
+        GameLoginTestSupport.readChallenge(ch)
         ch.writeInbound(loginPacket())
         assertThat(ch.readOutbound<ByteBuf>()).isNotNull
         awaitLane()
@@ -168,6 +169,7 @@ class GameHandlerLoginPlacementTest {
     fun `login without a valid login or temple position disconnects and does not register the session`() {
         dispatcher.start()
         val ch = openChannel()
+        GameLoginTestSupport.readChallenge(ch)
         ch.writeInbound(loginPacket())
 
         val outbound = ch.readOutbound<ByteBuf>()

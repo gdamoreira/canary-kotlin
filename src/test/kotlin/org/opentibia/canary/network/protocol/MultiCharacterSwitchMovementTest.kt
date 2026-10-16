@@ -150,6 +150,7 @@ class MultiCharacterSwitchMovementTest {
         char1Packet.writeIntLE(char1Checksum.toInt())
         char1Packet.writeBytes(char1GameBody)
 
+        GameLoginTestSupport.readChallenge(char1Channel)
         char1Channel.writeInbound(char1Packet)
 
         // The placement fanout's self branch queues the self appear frame.
@@ -262,6 +263,7 @@ class MultiCharacterSwitchMovementTest {
         char2Packet.writeIntLE(char2Checksum.toInt())
         char2Packet.writeBytes(char2GameBody)
 
+        GameLoginTestSupport.readChallenge(char2Channel)
         char2Channel.writeInbound(char2Packet)
 
         // The placement fanout's self branch queues the self appear frame.

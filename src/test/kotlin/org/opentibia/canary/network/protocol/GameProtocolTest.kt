@@ -86,6 +86,7 @@ class GameProtocolTest {
         packet.writeIntLE(checksum.toInt())
         packet.writeBytes(bodyBuf)
 
+        GameLoginTestSupport.readChallenge(channel)
         channel.writeInbound(packet)
 
         val responseBytes: ByteBuf? = channel.readOutbound()

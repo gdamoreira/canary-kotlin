@@ -1001,7 +1001,7 @@ class CanaryServer(
                     logger.debug { "Game client connected from ${ch.remoteAddress()}" }
                     val pipeline = ch.pipeline()
                     pipeline.addLast("rateLimiter", RateLimiterHandler(maxPacketsPerSecond = 100))
-                    pipeline.addLast("frameDecoder", TibiaFrameDecoder())
+                    pipeline.addLast("frameDecoder", TibiaFrameDecoder(serverName = worldConfigString("SERVER_NAME", "")))
                     pipeline.addLast("messageEncoder", TibiaMessageEncoder())
                     pipeline.addLast("gameHandler", createGameHandler())
                 }

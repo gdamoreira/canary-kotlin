@@ -152,6 +152,7 @@ class FullLoginToGameWorldFlowTest {
         clientGamePacket.writeIntLE(gameChecksum.toInt())
         clientGamePacket.writeBytes(gameBody)
 
+        GameLoginTestSupport.readChallenge(gameChannel)
         gameChannel.writeInbound(clientGamePacket)
 
         // The placement fanout's `sendAddCreature` self branch queues the self

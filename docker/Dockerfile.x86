@@ -9,7 +9,7 @@
 FROM --platform=linux/amd64 gradle:9.8.1-jdk25 AS build
 WORKDIR /app
 COPY . .
-RUN gradle installDist --no-daemon
+RUN gradle clean installDist --no-daemon
 
 FROM --platform=linux/amd64 eclipse-temurin:25-jre-alpine
 WORKDIR /app
