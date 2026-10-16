@@ -1396,12 +1396,14 @@ class Game(
     /**
      * `Creature::startAutoWalk(listDir, ignoreConditions, startPolicy)`
      * (creature.cpp:326-340 / creature.hpp:397), bound to the host player. The
-     * `ignoreConditions` flag preserves the C++ call sites' boolean; the port's
-     * walk queue owns the start policy.
+     * caller picks the C++ start policy: `Game::playerMove`/`forcePlayerMove`
+     * pass `ImmediateWhenReady`, `Game::playerAutoWalk` derives it from the path
+     * length.
      */
-    var startAutoWalk: (Player, List<Direction>, Boolean) -> Unit = { player, listDir, ignoreConditions ->
-        player.startAutoWalk(listDir, ignoreConditions)
-    }
+    var startAutoWalk: (Player, List<Direction>, Boolean, WalkStartPolicy) -> Unit =
+        { player, listDir, ignoreConditions, startPolicy ->
+            player.startAutoWalk(listDir, ignoreConditions, startPolicy)
+        }
 
     /**
      * `Creature::updateCreatureWalk()` (creature.hpp:412): the async
@@ -4528,7 +4530,7 @@ class Game(
         setNextWalkActionTask(player, null)
         cancelPush(player)
 
-        startAutoWalk(player, listOf(direction), false)
+        startAutoWalk(player, listOf(direction), false, WalkStartPolicy.ImmediateWhenReady)
     }
 
     /** `Game::forcePlayerMove` (src/game/game.cpp:4296): as [playerMove] with the forced walk flag. */
@@ -4540,7 +4542,7 @@ class Game(
         setNextWalkActionTask(player, null)
         cancelPush(player)
 
-        startAutoWalk(player, listOf(direction), true)
+        startAutoWalk(player, listOf(direction), true, WalkStartPolicy.ImmediateWhenReady)
     }
 
     /**
@@ -9492,7 +9494,9 @@ class Game(
         player.resetIdleTime()
         player.setNextWalkTask(null)
 
-        startAutoWalk(player, listDir, true)
+        val startPolicy =
+            if (listDir.size == 1) WalkStartPolicy.ImmediateWhenReady else WalkStartPolicy.RespectDelay
+        startAutoWalk(player, listDir, true, startPolicy)
     }
 
     /**

@@ -323,7 +323,7 @@ class CanaryServerCompositionTest {
 
         var walkPolicy: WalkStartPolicy? = null
         player.addEventWalkProvider = { walkPolicy = it }
-        server.game.startAutoWalk(player, listOf(Direction.North), true)
+        server.game.startAutoWalk(player, listOf(Direction.North), true, WalkStartPolicy.RespectDelay)
         assertThat(player.listWalkDir).containsExactly(Direction.North)
         assertThat(walkPolicy).isEqualTo(WalkStartPolicy.RespectDelay)
 

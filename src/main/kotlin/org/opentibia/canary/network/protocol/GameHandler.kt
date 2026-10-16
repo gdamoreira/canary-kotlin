@@ -286,10 +286,8 @@ class GameHandler(
         game.sendItemUpdateToClient = { player, item -> item.sendUpdateToClient(player) }
         game.setNextWalkTask = { player, task -> player.setNextWalkTask(task as? PlayerTask) }
         game.setNextWalkActionTask = { player, task -> player.setNextWalkActionTask(task as? PlayerTask) }
-        // The `Game` seam carries only the `ignoreConditions` flag; the C++
-        // `WalkStartPolicy` (creature.cpp:326) is not forwarded (PARITY GAP).
-        game.startAutoWalk = { player, listDir, ignoreConditions ->
-            player.startAutoWalk(listDir, ignoreConditions)
+        game.startAutoWalk = { player, listDir, ignoreConditions, startPolicy ->
+            player.startAutoWalk(listDir, ignoreConditions, startPolicy)
         }
         // `Creature::updateCreatureWalk` (creature.hpp:412) awaits the async
         // `goToFollowCreature_async()` barrier; the bound host call runs the

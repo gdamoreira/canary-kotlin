@@ -6,6 +6,7 @@ import org.opentibia.canary.combat.condition.ConditionId
 import org.opentibia.canary.combat.condition.ConditionSpeed
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.creatures.Monster
+import org.opentibia.canary.creatures.players.WalkStartPolicy
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.game.movement.Direction
@@ -684,12 +685,17 @@ class GameUseItemHandlersTest {
         val user = player(harness.game)
         var cancelledTarget = false
         var started: Pair<List<Direction>, Boolean>? = null
+        var startPolicy: WalkStartPolicy? = null
         user.sendCancelTarget = { cancelledTarget = true }
-        harness.game.startAutoWalk = { _, dirs, ignoreConditions -> started = dirs to ignoreConditions }
+        harness.game.startAutoWalk = { _, dirs, ignoreConditions, policy ->
+            started = dirs to ignoreConditions
+            startPolicy = policy
+        }
 
         harness.game.forcePlayerAutoWalk(user.id, listOf(Direction.North))
 
         assertThat(cancelledTarget).isTrue()
         assertThat(started).isEqualTo(listOf(Direction.North) to true)
+        assertThat(startPolicy).isEqualTo(WalkStartPolicy.ImmediateWhenReady)
     }
 }

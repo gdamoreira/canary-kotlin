@@ -8,6 +8,7 @@ import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.FightMode
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.players.WalkStartPolicy
 import org.opentibia.canary.creatures.PlayerFlags_t
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.game.scheduling.GameDispatcher
@@ -297,9 +298,11 @@ class GameMovementTargetingTest {
         game.cancelPush = { resets.add("cancelPush") }
         var walkForce: Boolean? = null
         var walkDirs: List<Direction>? = null
-        game.startAutoWalk = { _, dirs, force ->
+        var walkPolicy: WalkStartPolicy? = null
+        game.startAutoWalk = { _, dirs, force, policy ->
             walkDirs = dirs
             walkForce = force
+            walkPolicy = policy
         }
 
         game.playerMove(1, Direction.North)
@@ -307,6 +310,11 @@ class GameMovementTargetingTest {
         assertThat(resets).containsExactly("login", "idle", "nextWalkAction:null", "cancelPush")
         assertThat(walkDirs).containsExactly(Direction.North)
         assertThat(walkForce).isFalse()
+        // `Game::playerMove` (game.cpp:4282) starts the walk immediately:
+        // without `ImmediateWhenReady` every step would wait a full step
+        // duration before the server moves and the client reverts the
+        // predicted step.
+        assertThat(walkPolicy).isEqualTo(WalkStartPolicy.ImmediateWhenReady)
     }
 
     @Test
@@ -315,18 +323,23 @@ class GameMovementTargetingTest {
         val player = player(id = 1, name = "Walker")
         game.placeCreatureOnTile(player)
         var walkForce: Boolean? = null
-        game.startAutoWalk = { _, _, force -> walkForce = force }
+        var walkPolicy: WalkStartPolicy? = null
+        game.startAutoWalk = { _, _, force, policy ->
+            walkForce = force
+            walkPolicy = policy
+        }
 
         game.forcePlayerMove(1, Direction.South)
 
         assertThat(walkForce).isTrue()
+        assertThat(walkPolicy).isEqualTo(WalkStartPolicy.ImmediateWhenReady)
     }
 
     @Test
     fun `playerMove ignores an unknown player`() {
         val game = newGame()
         var invoked = false
-        game.startAutoWalk = { _, _, _ -> invoked = true }
+        game.startAutoWalk = { _, _, _, _ -> invoked = true }
 
         game.playerMove(404, Direction.North)
 

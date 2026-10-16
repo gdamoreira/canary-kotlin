@@ -4,6 +4,7 @@ import io.netty.buffer.Unpooled
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.game.Game
 import org.opentibia.canary.game.movement.Direction
 import org.opentibia.canary.game.scheduling.GameDispatcher
 import org.opentibia.canary.items.Item
@@ -63,6 +64,43 @@ class MovePacketHandlerTest {
 
         assertThat(handled).isTrue()
         assertThat(player.position).isEqualTo(startPos)
+    }
+
+    @Test
+    fun `click to move parses the direction list into the walk queue`() {
+        val map = GameMap()
+        val player = Player(1, "Hero", 100, 100, position = Position(100, 100, 7))
+        val game = Game(map, GameDispatcher())
+        game.addPlayer(player)
+        player.scheduleEvent = { _, _, _, _ -> 1L }
+
+        val payload = Unpooled.buffer()
+        payload.writeByte(2) // numdirs
+        payload.writeByte(1) // East
+        payload.writeByte(3) // North
+
+        val handled = MovePacketHandler.handle(player, 0x64, payload, map, game = game)
+
+        assertThat(handled).isTrue()
+        // `Creature::getNextStep` consumes from the back, so the client's first
+        // direction is the last element (`ProtocolGame::parseAutoWalk`,
+        // protocolgame.cpp:2457-2468).
+        assertThat(player.listWalkDir).containsExactly(Direction.North, Direction.East)
+    }
+
+    @Test
+    fun `turn opcodes defer to the composed game veto`() {
+        val map = GameMap()
+        val player = Player(1, "Hero", 100, 100, position = Position(100, 100, 7))
+        val game = Game(map, GameDispatcher())
+        game.addPlayer(player)
+        game.eventPlayerOnTurn = { _, _ -> false }
+        player.direction = Direction.South
+
+        val handled = MovePacketHandler.handle(player, 0x6F, Unpooled.EMPTY_BUFFER, map, game = game)
+
+        assertThat(handled).isTrue()
+        assertThat(player.direction).isEqualTo(Direction.South)
     }
 
     @Test

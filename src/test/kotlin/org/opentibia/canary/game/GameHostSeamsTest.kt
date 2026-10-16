@@ -5,6 +5,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.opentibia.canary.creatures.FlagAsyncClass_t
+import org.opentibia.canary.creatures.players.WalkStartPolicy
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.Npc
 import org.opentibia.canary.creatures.Player
@@ -102,7 +103,7 @@ class GameHostSeamsTest {
     fun `startAutoWalk is bound to the host player walk queue`() {
         val player = player(1, "Hero")
 
-        game.startAutoWalk(player, listOf(Direction.East, Direction.North), false)
+        game.startAutoWalk(player, listOf(Direction.East, Direction.North), false, WalkStartPolicy.RespectDelay)
 
         assertThat(player.listWalkDir).containsExactly(Direction.East, Direction.North)
     }
