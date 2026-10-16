@@ -798,8 +798,16 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 84: Lua API Audit — Complete Creature Binding Surface
+- **Audit** — extracted all 1251 method names used by `data/` + `data-otservbr-global` and diffed them against the runtime-registered Lua surface; the only real gaps were the remaining `Creature` accessors.
+- **Creature bindings** — `isRemoved`, `isInGhostMode`, `getDamageMap`, `getSummons`, `setMaxHealth`, `setHiddenHealth`/`isHealthHidden`, `setDropLoot`, `setSkillLoss`, `setDirectionLocked`/`isDirectionLocked`, `getSkull`/`setSkull`, `getLight`/`setLight`, `setIcon`/`getIcon`/`getIcons`, `setFollowCreature` (creature_functions.cpp) with the `hiddenHealth`/`directionLocked` creature flags.
+- **World seams** — `WorldCreatureOperations.changeSpeed`/`changeLight`/`isImmuneCondition` wired in `CanaryServer` to `Game::changeSpeed`/`changeLight` and the combat target state.
+- **827 suites / 8495 tests, all green.**
+
+---
+
 ### Current Status
-- **Automated Tests**: **826 test suites / 8488 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **827 test suites / 8495 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.
