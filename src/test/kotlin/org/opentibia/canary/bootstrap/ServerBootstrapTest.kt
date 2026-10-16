@@ -77,7 +77,7 @@ class ServerBootstrapTest {
                 ServerConfig()
             },
             databaseBoot = RecordingDatabaseBoot(events, dataSource),
-            mapBoot = MapBoot {
+            mapBoot = MapBoot { _, _, _, _ ->
                 events += "map.load"
                 GameMap()
             },
@@ -110,11 +110,11 @@ class ServerBootstrapTest {
                 "config.load",
                 "database.connect",
                 "database.migrate",
-                "map.load",
                 "scripting.boot",
                 "appearance.load",
                 "imbuement.load",
                 "item.load",
+                "map.load",
                 "dispatcher.started",
                 "listeners.start"
             )
@@ -247,7 +247,7 @@ class ServerBootstrapTest {
                 ServerConfig()
             },
             databaseBoot = RecordingDatabaseBoot(events, dataSource),
-            mapBoot = MapBoot {
+            mapBoot = MapBoot { _, _, _, _ ->
                 events += "map.load"
                 GameMap()
             },

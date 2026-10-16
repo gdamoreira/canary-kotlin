@@ -109,7 +109,14 @@ class ServerBootstrapProductionCompositionTest {
         configBoot = ConfigBoot { _, _ -> ServerConfig(loginPort = 0, gamePort = 0) },
         configManagerBoot = ConfigManagerBoot { _, _ -> configManager },
         databaseBoot = databaseBoot,
-        mapBoot = MapBoot { GameMap() },
+        mapBoot = MapBoot { _, _, _, _ ->
+            GameMap().apply {
+                towns.getOrCreateTown(1).apply {
+                    setName("Thais")
+                    setTemplePos(Position(1000, 1000, 7))
+                }
+            }
+        },
         scriptingBoot = ScriptingBoot { LuaEnvironment() },
         appearanceBoot = AppearanceBoot { Appearances.load(ByteArray(0)) },
         itemBoot = ItemBoot { _, _ -> Items() },

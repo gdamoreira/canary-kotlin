@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Canary `logLevel` default (`config.lua.dist`); `LogLevels.apply`
+         overrides this logger at boot from the resolved configuration. -->
+    <logger name="org.opentibia.canary" level="INFO"/>
+
+    <!-- Third-party chatter that is DEBUG-heavy and not gameplay relevant. -->
+    <logger name="com.zaxxer.hikari" level="WARN"/>
+    <logger name="org.mariadb.jdbc" level="WARN"/>
+    <logger name="org.postgresql" level="WARN"/>
+    <logger name="org.h2" level="WARN"/>
+    <logger name="io.netty" level="WARN"/>
+    <logger name="org.flywaydb" level="INFO"/>
+
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+</configuration>

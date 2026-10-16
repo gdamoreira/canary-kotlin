@@ -78,7 +78,7 @@ class ServerBootstrapRoleTest {
             ServerConfig(role = role, loginPort = 0, gamePort = 0)
         },
         databaseBoot = RecordingDatabaseBoot(events, dataSource),
-        mapBoot = MapBoot {
+        mapBoot = MapBoot { _, _, _, _ ->
             events += "map.load"
             GameMap()
         },
@@ -194,7 +194,6 @@ class ServerBootstrapRoleTest {
             "config.load",
             "database.connect",
             "database.migrate",
-            "map.load",
             "scripting.boot",
             "appearance.load",
             "imbuement.load",
@@ -202,6 +201,7 @@ class ServerBootstrapRoleTest {
             "monster.load",
             "vocations.load",
             "groups.load",
+            "map.load",
             "world.listeners.create",
             "dispatcher.started",
             "listeners.start",

@@ -47,6 +47,7 @@ import org.opentibia.canary.items.ObjectCategory_t
 import org.opentibia.canary.kv.ValueWrapper
 import org.opentibia.canary.lua.bindings.SpellBindings
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.map.Towns
 import org.opentibia.canary.persistence.PlayerFeatureStateLoader
 import org.opentibia.canary.spells.Spells
 import org.opentibia.canary.systems.imbuement.ImbuementItem
@@ -305,6 +306,14 @@ class IOLoginData(
      * attached registry untouched.
      */
     private val spellRegistry: () -> Spells? = { SpellBindings.spellRegistry() },
+    /**
+     * `g_game().map.towns` reach of `IOLoginDataLoad::loadPlayerBasicInfo`
+     * (src/io/functions/iologindata_load_player.cpp:182-204): the booted town
+     * registry the loader resolves `players.town_id` against. A `null` result
+     * leaves the player's town unset (the placement falls back to the zero
+     * position, mirroring a registry that has no valid town).
+     */
+    private val townsProvider: () -> Towns? = { null },
 ) {
 
     /** The `Condition::serialize` codec of [savePlayerFirst] (condition.cpp:277-301). */
@@ -418,7 +427,9 @@ class IOLoginData(
             return false
         }
 
-        loadPlayerBasicInfo(player, record)
+        if (!loadPlayerBasicInfo(player, record)) {
+            return false
+        }
         loadPlayerExperience(player, record)
         loadPlayerBlessings(player, record)
         subloads?.loadPlayerConditions(player)
@@ -1477,7 +1488,7 @@ class IOLoginData(
         return true
     }
 
-    private fun loadPlayerBasicInfo(player: Player, record: PlayerRecord) {
+    private fun loadPlayerBasicInfo(player: Player, record: PlayerRecord): Boolean {
         player.vocationId = record.vocation
         // `IOLoginDataLoad::loadPlayerBasicInfo` group load
         // (src/io/functions/iologindata_load_player.cpp:140-145): resolve the
@@ -1493,10 +1504,59 @@ class IOLoginData(
         player.capacity = record.capacity
         player.speed = record.speed
         player.position = Position(record.posX, record.posY, record.posZ)
+        // `player->loginPosition = {posx, posy, posz}` (iologindata_load_player.cpp:167-169).
+        player.setLoginPosition(Position(record.posX, record.posY, record.posZ))
         player.setSex(PlayerSex_t.entries.firstOrNull { it.value == record.sex } ?: PlayerSex_t.FEMALE)
         player.setPronoun(
             PlayerPronoun_t.entries.firstOrNull { it.value == record.pronoun } ?: PlayerPronoun_t.PLAYERPRONOUN_UNSET,
         )
+
+        // `IOLoginDataLoad::loadPlayerBasicInfo` town resolution
+        // (src/io/functions/iologindata_load_player.cpp:182-204): the persisted
+        // `town_id` against the booted map towns, with the C++ Thais fallback
+        // and the first-valid-town recovery. A wired registry without any valid
+        // town fails the load (`return false`); an unwired provider skips the
+        // resolution (the port's embedded/test composition).
+        val towns = townsProvider()
+        if (towns != null) {
+            val town = towns.getTown(record.townId)
+            if (town == null) {
+                logger.error {
+                    "Player ${player.name} has invalid town id ${record.townId}. Attempting to set the correct town."
+                }
+
+                val thaisTown = towns.getTown("Thais")
+                if (thaisTown != null) {
+                    player.setTown(thaisTown)
+                    logger.warn { "Assigned town 'Thais' to player ${player.name}" }
+                } else {
+                    val firstValidTown = towns.getTowns().entries.firstOrNull { it.key != 0 && it.value != null }
+                    if (firstValidTown != null) {
+                        player.setTown(firstValidTown.value)
+                        logger.warn {
+                            "Assigned first valid town ${firstValidTown.value.getName()} (id: ${firstValidTown.key}) " +
+                                "to player ${player.name}"
+                        }
+                    }
+
+                    if (player.getTown() == null) {
+                        logger.error {
+                            "Player ${player.name} has invalid town id ${record.townId}. No valid town found to assign."
+                        }
+                        return false
+                    }
+                }
+            } else {
+                player.setTown(town)
+            }
+
+            // `loginPos` zero falls back to the temple (iologindata_load_player.cpp:207-209).
+            if (record.posX == 0 && record.posY == 0 && record.posZ == 0) {
+                player.setLoginPosition(player.getTemplePosition())
+            }
+        }
+
+        return true
     }
 
     private fun loadPlayerExperience(player: Player, record: PlayerRecord) {

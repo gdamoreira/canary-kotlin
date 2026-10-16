@@ -110,9 +110,13 @@ class ServerBootstrapLoginBindingsTest {
             configManagerBoot = ConfigManagerBoot { _, _ -> configManager() },
             databaseBoot = databaseBoot,
             // The seeded `Knight Hero` login position (V2 migration: 1000,1000,7).
-            mapBoot = MapBoot {
+            mapBoot = MapBoot { _, _, _, _ ->
                 GameMap().apply {
                     getOrCreateTile(Position(1000, 1000, 7)).ground = Item(id = 106)
+                    towns.getOrCreateTown(1).apply {
+                        setName("Thais")
+                        setTemplePos(Position(1000, 1000, 7))
+                    }
                 }
             },
             scriptingBoot = ScriptingBoot { LuaEnvironment().apply { initState() } },

@@ -61,6 +61,8 @@ data class PlayerRecord(
     val deletion: Long,
     val blessings: List<Int>,
     val skills: List<PlayerSkillRecord> = emptyList(),
+    /** `players.town_id` (iologindata_load_player.cpp:182): the town registry id. */
+    val townId: Int = 0,
 )
 
 /**
@@ -286,6 +288,7 @@ class JdbcPlayerRepository(
         posX = rs.getInt("posx"),
         posY = rs.getInt("posy"),
         posZ = rs.getInt("posz"),
+        townId = rs.getInt("town_id"),
         sex = rs.getInt("sex"),
         pronoun = rs.getInt("pronoun"),
         balance = rs.getLong("balance"),
@@ -346,6 +349,7 @@ class JdbcPlayerRepository(
         const val RECORD_COLUMNS = """
             SELECT id, name, account_id, group_id, vocation, level, health, healthmax,
                    mana, manamax, cap, speed, experience, posx, posy, posz, sex, pronoun,
+                   town_id,
                    balance, deletion, blessings1, blessings2, blessings3, blessings4,
                    blessings5, blessings6, blessings7, blessings8,
                    skill_fist, skill_fist_tries, skill_club, skill_club_tries,

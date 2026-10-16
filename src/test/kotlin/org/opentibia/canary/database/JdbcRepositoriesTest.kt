@@ -56,6 +56,7 @@ class JdbcRepositoriesTest {
                         posx INTEGER NOT NULL DEFAULT 1000,
                         posy INTEGER NOT NULL DEFAULT 1000,
                         posz INTEGER NOT NULL DEFAULT 7,
+                        town_id INTEGER NOT NULL DEFAULT 0,
                         sex INTEGER NOT NULL DEFAULT 0,
                         pronoun INTEGER NOT NULL DEFAULT 0,
                         balance INTEGER NOT NULL DEFAULT 0,

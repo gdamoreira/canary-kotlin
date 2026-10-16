@@ -69,7 +69,7 @@ class SpellConsumerBootBindingsTest {
         val bootstrap = ServerBootstrap(
             configBoot = ConfigBoot { _, _ -> ServerConfig(loginPort = 0, gamePort = 0) },
             databaseBoot = RecordingDatabaseBoot("d4_boot_${System.nanoTime()}"),
-            mapBoot = MapBoot { GameMap() },
+            mapBoot = MapBoot { _, _, _, _ -> GameMap() },
             scriptingBoot = ScriptingBoot { environment },
             appearanceBoot = AppearanceBoot { Appearances.load(ByteArray(0)) },
             itemBoot = ItemBoot { _, _ -> Items() },

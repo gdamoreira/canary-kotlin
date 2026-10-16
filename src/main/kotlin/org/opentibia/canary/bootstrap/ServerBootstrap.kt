@@ -1,6 +1,7 @@
 package org.opentibia.canary.bootstrap
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import io.netty.buffer.Unpooled
 import org.opentibia.canary.account.AccountRepository
 import org.opentibia.canary.config.CliOptions
 import org.opentibia.canary.config.ConfigKeys
@@ -43,6 +44,8 @@ import org.opentibia.canary.game.scheduling.SaveManager
 import org.opentibia.canary.io.DbPlayerStorageRepository
 import org.opentibia.canary.io.IOBestiaryPersistence
 import org.opentibia.canary.io.IOGuild
+import org.opentibia.canary.io.IOMap
+import org.opentibia.canary.io.otbm.OtbmMapLoader
 import org.opentibia.canary.io.appearances.Appearances
 import org.opentibia.canary.io.iologindata.DbGuildMembershipRepository
 import org.opentibia.canary.io.iologindata.DbPlayerSubloadRepository
@@ -61,6 +64,7 @@ import org.opentibia.canary.items.functions.XmlAttribute
 import org.opentibia.canary.items.functions.XmlNode
 import org.opentibia.canary.kv.KVSQL
 import org.opentibia.canary.kv.KVStore
+import org.opentibia.canary.lib.logging.LogLevels
 import org.opentibia.canary.lua.bindings.LootFunctions
 import org.opentibia.canary.lua.bindings.SpellBindings
 import org.opentibia.canary.lua.bindings.library.ConfigFunctions
@@ -70,6 +74,7 @@ import org.opentibia.canary.lua.runtime.GameCombatEffects
 import org.opentibia.canary.lua.runtime.LuaEnvironment
 import org.opentibia.canary.lua.runtime.WorldLootOperations
 import org.opentibia.canary.map.GameMap
+import org.opentibia.canary.map.cache.MapDownload
 import org.opentibia.canary.network.CanaryServer
 import org.opentibia.canary.network.ListenerBoot
 import org.opentibia.canary.monitoring.MetricsRegistry
@@ -80,8 +85,14 @@ import org.opentibia.canary.social.guild.JdbcGuildRepository
 import org.opentibia.canary.systems.imbuement.Imbuements
 import org.opentibia.canary.systems.prey.IOPreyPersistence
 import org.opentibia.canary.systems.proficiency.WeaponProficiencyLoader
+import java.io.File
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -160,7 +171,12 @@ interface DatabaseBoot {
 
 /** Loads the main map (`CanaryServer::loadMaps` / `Game::loadMainMap`). */
 fun interface MapBoot {
-    fun load(config: ServerConfig): GameMap
+    fun load(
+        config: ServerConfig,
+        configManager: ConfigManager,
+        itemTypes: Items?,
+        imbuements: Imbuements?,
+    ): GameMap
 }
 
 /** Boots the Lua environment (`CanaryServer::loadModules`); scripts stay Lua, never ported. */
@@ -452,7 +468,7 @@ class ServerBootstrap(
     private val configBoot: ConfigBoot = ConfigBoot(ConfigManager::load),
     private val configManagerBoot: ConfigManagerBoot = ConfigManagerBoot(::defaultConfigManagerBoot),
     private val databaseBoot: DatabaseBoot = JdbcDatabaseBoot,
-    private val mapBoot: MapBoot = MapBoot { GameMap() },
+    private val mapBoot: MapBoot = MapBoot(::defaultMapBoot),
     private val scriptingBoot: ScriptingBoot = ScriptingBoot(::defaultScriptingBoot),
     private val appearanceBoot: AppearanceBoot = AppearanceBoot { config ->
         Appearances.load(Path.of(config.coreDir, "items", "appearances.dat").toFile())
@@ -525,6 +541,7 @@ class ServerBootstrap(
         }
 
         val configManager = configManagerBoot.load(environment, options)
+        LogLevels.apply(configManager)
 
         // `metricsEnablePrometheus` HTTP exporter over the in-process registry
         // (`metrics/README.md`); best-effort like the C++ boot.
@@ -535,7 +552,6 @@ class ServerBootstrap(
         dataSource = source
         databaseBoot.migrate(source)
 
-        val gameMap = mapBoot.load(config)
         val luaEnvironment = scriptingBoot.boot(config)
         val appearances = appearanceBoot.load(config)
         val imbuements = imbuementBoot.load(config)
@@ -546,6 +562,13 @@ class ServerBootstrap(
         // the `IOLoginDataLoad::loadPlayerBasicInfo` group resolution
         // (iologindata_load_player.cpp:140-145).
         val groups = groupsBoot.load(config)
+
+        // `CanaryServer::loadMaps` (canary_server.cpp:340-352), run after
+        // `loadModules` (canary_server.cpp:208-210): the main map, the custom
+        // maps under `TOGGLE_MAP_CUSTOM` (default off) and `Zone::refreshAll()`.
+        // The custom-map sweep and the zone-registry refresh are documented
+        // composition gaps (`Game.mapLoadMap` / the `Zones` instance).
+        val gameMap = mapBoot.load(config, configManager, itemTypes, imbuements)
 
         // `g_monsterComputeService().start(monsterComputeConfig)` after
         // `loadMaps` (src/canary_server.cpp:212-216); the dispatcher is
@@ -640,6 +663,10 @@ class ServerBootstrap(
                 // registry in `loadPlayerBasicInfo`
                 // (iologindata_load_player.cpp:140-145).
                 groups = { id -> groups.getGroup(id) },
+                // `g_game().map.towns` (iologindata_load_player.cpp:182): the
+                // booted town registry resolves `players.town_id` and the
+                // temple login fallback.
+                townsProvider = { gameMap.towns },
                 saveTransaction = saveTransaction,
                 depotChests = { player -> player.getDepotChests() },
                 bestiaryPersistence = IOBestiaryPersistence(saveTransaction),
@@ -829,6 +856,81 @@ private fun defaultScriptingBoot(config: ServerConfig): LuaEnvironment {
  * The known proficiency ids come from `proficiencies.json`, mirroring
  * `WeaponProficiency::loadFromJson` (weapon_proficiency.cpp:79).
  */
+/**
+ * `Map::loadMap` for the main map (src/map/map.cpp:159-215) plus the
+ * `IOMap::loadHouses` step of `Game::loadMainMap` (src/game/game.cpp:1013-1021):
+ * the `TOGGLE_DOWNLOAD_MAP` download when the `.otbm` is missing, the OTBM
+ * parse through [OtbmMapLoader] and the house XML.
+ *
+ * PARITY GAPS: `IOMap::loadMonsters`/`loadNpcs` and
+ * `Game::createLuaItemsOnMap` need the spawn-object production composition and
+ * are not wired yet; `TOGGLE_MAP_CUSTOM` (`Game::loadCustomMaps`) runs off
+ * `Game.mapLoadMap`, which the boot does not bind.
+ */
+private fun defaultMapBoot(
+    config: ServerConfig,
+    configManager: ConfigManager,
+    itemTypes: Items?,
+    imbuements: Imbuements?,
+): GameMap {
+    val mapNameKey = requireNotNull(ConfigKeys.byName("MAP_NAME"))
+    val downloadKey = requireNotNull(ConfigKeys.byName("TOGGLE_DOWNLOAD_MAP"))
+    val downloadUrlKey = requireNotNull(ConfigKeys.byName("MAP_DOWNLOAD_URL"))
+
+    val mapName = configManager.getString(mapNameKey, mapNameKey.defaultValue as String)
+    val identifier = File(config.dataDir, "world/$mapName.otbm")
+
+    // `Map::loadMap`: only the main map is downloaded, and only when the
+    // `.otbm` is not already in the world folder.
+    if (!identifier.exists() && configManager.getBoolean(downloadKey, downloadKey.defaultValue as Boolean)) {
+        val mapDownloadUrl = configManager.getString(downloadUrlKey, downloadUrlKey.defaultValue as String)
+        if (mapDownloadUrl.isEmpty()) {
+            logger.warn { "Map download URL in config.lua is empty, download disabled" }
+        } else {
+            MapDownload(::fetchTextUrl, warn = { message -> logger.warn { message } })
+                .warnIfOutdatedMapDownloadUrl(mapDownloadUrl)
+            logger.info { "Downloading $mapName.otbm to world folder" }
+            runCatching { downloadMapFile(mapDownloadUrl, identifier.toPath()) }
+        }
+    }
+
+    val gameMap = try {
+        OtbmMapLoader.load(
+            Unpooled.wrappedBuffer(Files.readAllBytes(identifier.toPath())),
+            identifier.path,
+            itemTypes,
+            imbuements,
+        )
+    } catch (_: Exception) {
+        logger.warn { "[Map::load] - The map in folder ${identifier.path} is missing or corrupted" }
+        return GameMap()
+    }
+
+    // `Game::loadMainMap` passes `loadHouses = true`; the monster/NPC spawn
+    // XMLs (`loadMonsters`/`loadNpcs`) are a documented composition gap.
+    IOMap.loadHouses(gameMap, configManager)
+    return gameMap
+}
+
+/** `fetchTextUrl` seam of [MapDownload] over `java.net.http.HttpClient`. */
+private fun fetchTextUrl(url: String): String? = runCatching {
+    val client = HttpClient.newBuilder()
+        .followRedirects(HttpClient.Redirect.NORMAL)
+        .connectTimeout(Duration.ofSeconds(5))
+        .build()
+    val request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(10)).GET().build()
+    val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+    if (response.statusCode() == 200) response.body() else null
+}.getOrNull()
+
+/** The `curl_easy_perform` download of `Map::loadMap` (src/map/map.cpp:172-179). */
+private fun downloadMapFile(url: String, target: Path) {
+    val client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()
+    val request = HttpRequest.newBuilder(URI.create(url)).GET().build()
+    val response = client.send(request, HttpResponse.BodyHandlers.ofFile(target))
+    check(response.statusCode() == 200) { "Map download failed with HTTP ${response.statusCode()}" }
+}
+
 private fun defaultItemBoot(config: ServerConfig, appearances: Appearances): Items {
     val items = Items()
     val proficiencies = WeaponProficiencyLoader.loadFromFile(

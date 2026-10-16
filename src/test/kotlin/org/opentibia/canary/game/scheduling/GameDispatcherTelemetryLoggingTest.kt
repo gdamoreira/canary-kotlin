@@ -28,12 +28,16 @@ class GameDispatcherTelemetryLoggingTest {
 
     private class LogCapture {
         private val root = LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME) as Logger
+        private val application = LoggerFactory.getLogger("org.opentibia.canary") as Logger
         private val appender = ListAppender<ILoggingEvent>()
         private var previousLevel: Level? = null
+        private var previousApplicationLevel: Level? = null
 
         fun start() {
             previousLevel = root.level
             root.level = Level.DEBUG
+            previousApplicationLevel = application.level
+            application.level = Level.DEBUG
             appender.start()
             root.addAppender(appender)
         }
@@ -42,6 +46,7 @@ class GameDispatcherTelemetryLoggingTest {
             root.detachAppender(appender)
             appender.stop()
             previousLevel?.let { root.level = it }
+            application.level = previousApplicationLevel
         }
 
         fun messages(prefix: String): List<String> =

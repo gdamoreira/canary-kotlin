@@ -23,6 +23,8 @@ object OtbmConstants {
     const val OTBM_ITEM: Byte = 0x06
     const val OTBM_HOUSETILE: Byte = 0x0E
     const val OTBM_TILE_ZONE: Byte = 0x13
+    const val OTBM_TOWNS: Byte = 0x0C
+    const val OTBM_TOWN: Byte = 0x0D
 
     const val OTBM_ATTR_DESCRIPTION: Byte = 0x01
     const val OTBM_ATTR_TILE_FLAGS: Byte = 0x03
@@ -208,6 +210,28 @@ object OtbmMapLoader {
                         )
                     }
                 }
+            }
+        }
+
+        // `IOMap::parseTowns` (src/io/iomap.cpp:263-287): the towns node
+        // carries `[townId][name][temple x/y/z]` per town; the temple position
+        // is the login fallback of `Game::placeCreature`. The node is the last
+        // child of `OTBM_MAP_DATA` in the released maps (the C++ stream reads
+        // it after the tile areas); a root-level node is accepted too.
+        val townsNodes = mapDataNode.children.filter { it.type == OtbmConstants.OTBM_TOWNS } +
+            rootNode.children.filter { it.type == OtbmConstants.OTBM_TOWNS }
+        for (townsNode in townsNodes) {
+            for (townNode in townsNode.children.filter { it.type == OtbmConstants.OTBM_TOWN }) {
+                val townProps = townNode.props
+                val townId = townProps.readUnsignedIntLE().toInt()
+                val townName = readString(townProps)
+                val x = townProps.readUnsignedShortLE().toInt()
+                val y = townProps.readUnsignedShortLE().toInt()
+                val z = townProps.readUnsignedByte().toInt()
+
+                val town = map.towns.getOrCreateTown(townId)
+                town.setName(townName)
+                town.setTemplePos(Position(x, y, z))
             }
         }
 

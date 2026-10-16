@@ -158,4 +158,39 @@ class OtbmMapLoaderExtendedTest {
         assertThat(map.zones.getZone(10)?.contains(position)).isTrue()
         assertThat(map.zones.getZone(11)?.contains(position)).isTrue()
     }
+
+    @Test
+    fun `towns node resolves id, name and temple position`() {
+        val buffer = Unpooled.buffer()
+        buffer.writeInt(0)
+        buffer.writeByte(OtbmConstants.NODE_START.toInt())
+        buffer.writeByte(OtbmConstants.OTBM_ROOT.toInt())
+        buffer.writeIntLE(2)
+        buffer.node(OtbmConstants.OTBM_MAP_DATA.toInt()) {}
+        buffer.node(OtbmConstants.OTBM_TOWNS.toInt()) {
+            node(OtbmConstants.OTBM_TOWN.toInt()) {
+                writeIntLE(1)
+                writeString("Thais")
+                writeShortLE(32369)
+                writeShortLE(32241)
+                writeByte(7)
+            }
+            node(OtbmConstants.OTBM_TOWN.toInt()) {
+                writeIntLE(8)
+                writeString("Dawnport")
+                writeShortLE(32097)
+                writeShortLE(32215)
+                writeByte(7)
+            }
+        }
+        buffer.writeByte(OtbmConstants.NODE_END.toInt())
+
+        val map = OtbmMapLoader.load(buffer, "world/canary.otbm")
+
+        val thais = map.towns.getTown(1)
+        assertThat(thais?.getName()).isEqualTo("Thais")
+        assertThat(thais?.getTemplePosition()).isEqualTo(Position(32369, 32241, 7))
+        assertThat(map.towns.getTown(8)?.getName()).isEqualTo("Dawnport")
+        assertThat(map.towns.getTown("thais")).isSameAs(thais)
+    }
 }

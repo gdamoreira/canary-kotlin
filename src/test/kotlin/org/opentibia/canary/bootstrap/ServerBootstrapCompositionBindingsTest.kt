@@ -127,9 +127,13 @@ class ServerBootstrapCompositionBindingsTest {
         // `ProtocolGame::login` places the session player (protocolgame.cpp:1056):
         // the seeded `Knight Hero` login position needs a tile for the login
         // sessions these tests open.
-        mapBoot: MapBoot = MapBoot {
+        mapBoot: MapBoot = MapBoot { _, _, _, _ ->
             GameMap().apply {
                 getOrCreateTile(Position(1000, 1000, 7)).ground = Item(id = 106)
+                towns.getOrCreateTown(1).apply {
+                    setName("Thais")
+                    setTemplePos(Position(1000, 1000, 7))
+                }
             }
         },
     ): BootedRoot {
@@ -379,8 +383,12 @@ class ServerBootstrapCompositionBindingsTest {
         val houseItemSaves = AtomicInteger(0)
         val root = bootRoot(
             databaseBoot,
-            mapBoot = MapBoot {
+            mapBoot = MapBoot { _, _, _, _ ->
                 GameMap().apply {
+                    towns.getOrCreateTown(1).apply {
+                        setName("Thais")
+                        setTemplePos(Position(1000, 1000, 7))
+                    }
                     saveHouseInfo = {
                         houseInfoSaves.incrementAndGet()
                         true
