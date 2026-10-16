@@ -46,7 +46,7 @@ object CreatureEventBindings {
                 val name = if (args.arg(1).isstring()) args.arg(1).tojstring() else ""
                 val self = LuaTable()
                 var explicitType = ""
-                val callbacks = CallbackMethods()
+                val callbacks = CallbackMethods(env.globals)
 
                 self.set("type", object : VarArgFunction() {
                     override fun invoke(a: Varargs): Varargs {

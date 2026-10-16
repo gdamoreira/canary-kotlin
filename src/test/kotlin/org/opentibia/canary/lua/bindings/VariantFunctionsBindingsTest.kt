@@ -138,4 +138,6 @@ class VariantFunctionsBindingsTest {
         assertThat(environment.getGlobal("zero").touserdata()).isEqualTo(Position(0, 0, 0))
         assertThat(operations.thing).isSameAs(environment.getGlobal("position").touserdata())
     }
+
+
 }

@@ -199,4 +199,6 @@ class NetworkMessageFunctionsLibraryTest {
         assertThat(environment.getGlobal("sent").toboolean()).isTrue()
         assertThat(operations.sent).hasSize(1)
     }
+
+
 }

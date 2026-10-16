@@ -150,4 +150,6 @@ class ZoneFunctionsLibraryTest {
         assertThat(environment.getGlobal("empty").toboolean()).isFalse()
         assertThat(environment.getGlobal("unsupported").toboolean()).isFalse()
     }
+
+
 }

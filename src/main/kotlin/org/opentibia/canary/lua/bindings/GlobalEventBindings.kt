@@ -41,7 +41,7 @@ object GlobalEventBindings {
                 val self = LuaTable()
                 var explicitType = ""
                 var interval = 0
-                val callbacks = CallbackMethods()
+                val callbacks = CallbackMethods(env.globals)
 
                 self.set("type", object : VarArgFunction() {
                     override fun invoke(a: Varargs): Varargs {

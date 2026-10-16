@@ -55,7 +55,7 @@ object TalkActionBindings {
                 val self = LuaTable()
                 self.set("words", LuaValue.valueOf(words))
 
-                val callbacks = CallbackMethods()
+                val callbacks = CallbackMethods(env.globals)
                 callbacks.install(self, "onSay")
 
                 self.set("separator", object : VarArgFunction() {

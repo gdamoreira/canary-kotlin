@@ -41,7 +41,7 @@ object ActionBindings {
                 var allowFarUse = false
                 var checkLineOfSight = true
                 var checkFloor = true
-                val callbacks = CallbackMethods()
+                val callbacks = CallbackMethods(env.globals)
 
                 self.set("id", idCollector(itemIds))
                 self.set("aid", idCollector(actionIds))

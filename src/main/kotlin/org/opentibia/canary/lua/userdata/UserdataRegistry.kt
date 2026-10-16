@@ -80,7 +80,44 @@ class UserdataRegistry(
     /** `Lua::pushUserdata` + `Lua::setMetatable`: attach the registry metatable. */
     fun wrap(typeName: String, obj: Any): LuaValue {
         ensureClass(typeName)
+        if (typeName == POSITION_TYPE) {
+            installPositionFieldIndex()
+        }
         return LuaValue.userdataOf(obj, metatable(typeName))
+    }
+
+    /**
+     * `Lua::pushPosition` (lua_functions_loader.cpp:707-718) exposes the
+     * `x`/`y`/`z`/`stackpos` fields of a position; the datapack reads
+     * `position.x` directly. The class metatable's `__index` becomes a
+     * receiver-aware lookup that serves the fields and then falls back to the
+     * registered class methods.
+     */
+    private fun installPositionFieldIndex() {
+        val positionMeta = metatable(POSITION_TYPE)
+        val classIndex = positionMeta.get("__index")
+        if (classIndex.isfunction()) {
+            return
+        }
+        val classTable = classIndex
+        positionMeta.set(
+            "__index",
+            object : VarArgFunction() {
+                override fun invoke(args: Varargs): Varargs {
+                    val receiver = args.arg1().touserdata() as? org.opentibia.canary.map.Position
+                    if (receiver != null) {
+                        when (args.arg(2).tojstring()) {
+                            "x" -> return LuaValue.valueOf(receiver.x)
+                            "y" -> return LuaValue.valueOf(receiver.y)
+                            "z" -> return LuaValue.valueOf(receiver.z)
+                            "stackpos" -> return LuaValue.valueOf(0)
+                            else -> Unit
+                        }
+                    }
+                    return classTable.get(args.arg(2).tojstring())
+                }
+            },
+        )
     }
 
     /** `Lua::setWeakMetatable` (`lua_functions_loader.cpp:284-323`). */
@@ -94,6 +131,7 @@ class UserdataRegistry(
     }
 
     private companion object {
+        const val POSITION_TYPE = "Position"
         /** `registerSharedClass(..., baseClass, ...)` calls (see each C++ init). */
         val BASE_CLASSES = mapOf(
             "Player" to "Creature",

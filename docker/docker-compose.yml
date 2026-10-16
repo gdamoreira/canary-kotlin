@@ -91,7 +91,7 @@ services:
       CANARY_SAVE_INTERVAL_TYPE: "${CANARY_SAVE_INTERVAL_TYPE:-hour}"
       CANARY_SAVE_INTERVAL_TIME: "${CANARY_SAVE_INTERVAL_TIME:-10}"
       # The OTBM world needs a larger heap than the JVM container default.
-      JAVA_OPTS: "${CANARY_JAVA_OPTS:--Xmx12g}"
+      JAVA_OPTS: "${CANARY_JAVA_OPTS:--Xmx14g}"
       # Optional RSA handshake override; omit to use the built-in OpenTibia pair.
       CANARY_RSA_P: "${CANARY_RSA_P:-}"
       CANARY_RSA_Q: "${CANARY_RSA_Q:-}"

@@ -6,9 +6,11 @@ import org.opentibia.canary.game.zones.TileFlags
 import org.opentibia.canary.io.IOMapException
 import org.opentibia.canary.io.PropStream
 import org.opentibia.canary.items.Item
+import org.opentibia.canary.items.Container
 import org.opentibia.canary.items.ItemTypeRegistry
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
+import org.opentibia.canary.map.Tile
 import org.opentibia.canary.systems.imbuement.Imbuements
 
 object OtbmConstants {
@@ -25,6 +27,7 @@ object OtbmConstants {
     const val OTBM_TILE_ZONE: Byte = 0x13
     const val OTBM_TOWNS: Byte = 0x0C
     const val OTBM_TOWN: Byte = 0x0D
+    const val OTBM_WAYPOINTS: Byte = 0x0F
 
     const val OTBM_ATTR_DESCRIPTION: Byte = 0x01
     const val OTBM_ATTR_TILE_FLAGS: Byte = 0x03
@@ -49,6 +52,16 @@ data class OtbmNode(
     val children: MutableList<OtbmNode> = mutableListOf()
 )
 
+/**
+ * Depth-first visitor for [OtbmNodeReader.readStreaming]. [props] is only valid
+ * for the duration of the call; returning `false` skips the node's subtree.
+ */
+interface OtbmVisitor {
+    fun startNode(type: Byte, props: ByteBuf): Boolean
+
+    fun endNode(type: Byte) {}
+}
+
 object OtbmNodeReader {
 
     fun read(buffer: ByteBuf): OtbmNode {
@@ -61,6 +74,69 @@ object OtbmNodeReader {
         }
 
         return parseNode(buffer)
+    }
+
+    /**
+     * Streaming variant of [read] for the map loader: visits each node
+     * depth-first without materializing the tree, so the retained memory is the
+     * [GameMap] alone (the released otservbr world does not fit the tree in a
+     * container heap).
+     */
+    fun readStreaming(buffer: ByteBuf, visitor: OtbmVisitor) {
+        if (buffer.readByte() != OtbmConstants.NODE_START) {
+            buffer.skipBytes(3)
+            if (buffer.readByte() != OtbmConstants.NODE_START) {
+                throw IllegalStateException("Missing root NODE_START in OTBM stream")
+            }
+        }
+        visitNodeStreaming(buffer, visitor)
+    }
+
+    private fun visitNodeStreaming(buffer: ByteBuf, visitor: OtbmVisitor) {
+        val type = unescapeByte(buffer)
+        val props = Unpooled.buffer()
+        var started = false
+        var descend = false
+
+        while (buffer.isReadable) {
+            when (val b = buffer.readByte()) {
+                OtbmConstants.NODE_START -> {
+                    if (!started) {
+                        descend = visitor.startNode(type, props)
+                        started = true
+                    }
+                    if (descend) {
+                        visitNodeStreaming(buffer, visitor)
+                    } else {
+                        skipNode(buffer)
+                    }
+                }
+                OtbmConstants.NODE_END -> {
+                    if (!started) {
+                        visitor.startNode(type, props)
+                    }
+                    visitor.endNode(type)
+                    props.release()
+                    return
+                }
+                OtbmConstants.ESCAPE -> props.writeByte(buffer.readByte().toInt())
+                else -> props.writeByte(b.toInt())
+            }
+        }
+
+        props.release()
+    }
+
+    /** Consumes one node subtree without materializing it. */
+    private fun skipNode(buffer: ByteBuf) {
+        var depth = 1
+        while (buffer.isReadable && depth > 0) {
+            when (buffer.readByte()) {
+                OtbmConstants.NODE_START -> depth++
+                OtbmConstants.NODE_END -> depth--
+                OtbmConstants.ESCAPE -> buffer.skipBytes(1)
+            }
+        }
     }
 
     private fun parseNode(buffer: ByteBuf): OtbmNode {
@@ -113,129 +189,198 @@ object OtbmMapLoader {
         itemTypes: ItemTypeRegistry? = null,
         imbuements: Imbuements? = null,
     ): GameMap {
-        val rootNode = OtbmNodeReader.read(buffer)
         val map = GameMap()
         map.path = path
 
-        val mapDataNode = rootNode.children.find { it.type == OtbmConstants.OTBM_MAP_DATA } ?: return map
-        parseMapDataAttributes(mapDataNode.props, map)
+        // Streaming state mirroring the C++ recursion locals
+        // (`IOMap::parseTileArea`, src/io/iomap.cpp:130-261): the current tile
+        // area base, the current tile and the open container stack.
+        var baseX = 0
+        var baseY = 0
+        var baseZ = 0
+        var currentTile: Tile? = null
+        val containerStack = ArrayDeque<Container>()
+        val containerFlags = ArrayDeque<Boolean>()
 
-        for (areaNode in mapDataNode.children.filter { it.type == OtbmConstants.OTBM_TILE_AREA }) {
-            val areaProps = areaNode.props
-            val baseX = areaProps.readUnsignedShortLE()
-            val baseY = areaProps.readUnsignedShortLE()
-            val baseZ = areaProps.readUnsignedByte().toInt()
+        OtbmNodeReader.readStreaming(
+            buffer,
+            object : OtbmVisitor {
+                override fun startNode(type: Byte, props: ByteBuf): Boolean = when (type) {
+                    OtbmConstants.OTBM_ROOT -> true
 
-            for (tileNode in areaNode.children.filter {
-                it.type == OtbmConstants.OTBM_TILE || it.type == OtbmConstants.OTBM_HOUSETILE
-            }) {
-                val tileProps = tileNode.props
-                val offsetX = tileProps.readUnsignedByte().toInt()
-                val offsetY = tileProps.readUnsignedByte().toInt()
-                val tilePos = Position(baseX + offsetX, baseY + offsetY, baseZ)
-                val tile = map.getOrCreateTile(tilePos)
-
-                if (tileNode.type == OtbmConstants.OTBM_HOUSETILE) {
-                    val houseId = tileProps.readIntLE()
-                    tile.houseId = houseId
-                    val house = map.houses.addHouse(houseId)
-                    house.addTile(tilePos)
-                }
-
-                while (tileProps.isReadable) {
-                    when (tileProps.readByte()) {
-                        OtbmConstants.OTBM_ATTR_TILE_FLAGS -> {
-                            val flags = tileProps.readIntLE()
-                            if (flags and OtbmTileFlag.PROTECTIONZONE != 0) {
-                                tile.flags = tile.flags or TileFlags.TILESTATE_PROTECTIONZONE.value
-                            } else if (flags and OtbmTileFlag.NOPVPZONE != 0) {
-                                tile.flags = tile.flags or TileFlags.TILESTATE_NOPVPZONE.value
-                            } else if (flags and OtbmTileFlag.PVPZONE != 0) {
-                                tile.flags = tile.flags or TileFlags.TILESTATE_PVPZONE.value
-                            }
-
-                            if (flags and OtbmTileFlag.NOLOGOUT != 0) {
-                                tile.flags = tile.flags or TileFlags.TILESTATE_NOLOGOUT.value
-                            }
-                        }
-
-                        OtbmConstants.OTBM_ATTR_ITEM -> {
-                            val id = tileProps.readUnsignedShortLE()
-                            val itemType = itemTypes?.get(id)
-                            val item = Item(id, type = itemType)
-                            if (imbuements != null) {
-                                item.imbuementRegistry = imbuements
-                            }
-                            if (itemTypes == null || itemType?.isGroundTile == true) {
-                                tile.ground = item
-                            } else {
-                                tile.addItem(item)
-                            }
-                        }
-
-                        else -> break
+                    OtbmConstants.OTBM_MAP_DATA -> {
+                        parseMapDataAttributes(props, map)
+                        true
                     }
-                }
 
-                for (childNode in tileNode.children) {
-                    when (childNode.type) {
-                        OtbmConstants.OTBM_ITEM -> {
-                            val item = parseItem(childNode.props, itemTypes, imbuements)
+                    OtbmConstants.OTBM_TOWNS -> true
+
+                    OtbmConstants.OTBM_TOWN -> {
+                        parseTown(props, map)
+                        false
+                    }
+
+                    OtbmConstants.OTBM_TILE_AREA -> {
+                        baseX = props.readUnsignedShortLE()
+                        baseY = props.readUnsignedShortLE()
+                        baseZ = props.readUnsignedByte().toInt()
+                        true
+                    }
+
+                    OtbmConstants.OTBM_TILE, OtbmConstants.OTBM_HOUSETILE -> {
+                        currentTile = parseTile(props, type, map, baseX, baseY, baseZ, itemTypes, imbuements)
+                        true
+                    }
+
+                    OtbmConstants.OTBM_ITEM -> {
+                        val item = parseItem(props, itemTypes, imbuements)
+                        val parent = containerStack.lastOrNull()
+                        if (parent != null) {
+                            parent.addItem(item)
+                        } else {
+                            val tile = currentTile
                             val itemType = itemTypes?.get(item.id)
-                            if (tile.isHouse() && (itemType?.isBed == true || itemType?.isTrashHolder == true)) {
-                                // House beds and trash holders keep their map position
-                            } else if (itemType?.isGroundTile == true) {
-                                tile.ground = item
-                            } else {
-                                tile.addItem(item)
-                            }
-                        }
-
-                        OtbmConstants.OTBM_TILE_ZONE -> {
-                            val zoneProps = childNode.props
-                            val zoneCount = zoneProps.readUnsignedShortLE()
-                            for (index in 0 until zoneCount) {
-                                val zoneId = zoneProps.readUnsignedShortLE()
-                                if (zoneId == 0) {
-                                    throw IOMapException(
-                                        "[x:${tilePos.x}, y:${tilePos.y}, z:${tilePos.z}] Invalid zone id.",
-                                    )
+                            if (tile != null) {
+                                if (tile.isHouse() && (itemType?.isBed == true || itemType?.isTrashHolder == true)) {
+                                    // House beds and trash holders keep their map position
+                                } else if (itemType?.isGroundTile == true) {
+                                    tile.ground = item
+                                } else {
+                                    tile.addItem(item)
                                 }
-                                map.zones.getZone(zoneId)?.addPosition(tilePos)
                             }
                         }
 
-                        else -> throw IOMapException(
-                            "[x:${tilePos.x}, y:${tilePos.y}, z:${tilePos.z}] Could not read item/zone node.",
-                        )
+                        val isContainer = item is Container
+                        containerFlags.addLast(isContainer)
+                        if (isContainer) {
+                            containerStack.addLast(item as Container)
+                        }
+                        true
+                    }
+
+                    OtbmConstants.OTBM_TILE_ZONE -> {
+                        parseTileZone(props, currentTile, map)
+                        false
+                    }
+
+                    else -> {
+                        // The tile-level unknown node keeps the C++ exception;
+                        // a root-level sibling (waypoints) is skipped.
+                        if (currentTile != null && type != OtbmConstants.OTBM_WAYPOINTS) {
+                            val tilePos = currentTile!!.position
+                            throw IOMapException(
+                                "[x:${tilePos.x}, y:${tilePos.y}, z:${tilePos.z}] Could not read item/zone node.",
+                            )
+                        }
+                        false
                     }
                 }
-            }
-        }
 
-        // `IOMap::parseTowns` (src/io/iomap.cpp:263-287): the towns node
-        // carries `[townId][name][temple x/y/z]` per town; the temple position
-        // is the login fallback of `Game::placeCreature`. The node is the last
-        // child of `OTBM_MAP_DATA` in the released maps (the C++ stream reads
-        // it after the tile areas); a root-level node is accepted too.
-        val townsNodes = mapDataNode.children.filter { it.type == OtbmConstants.OTBM_TOWNS } +
-            rootNode.children.filter { it.type == OtbmConstants.OTBM_TOWNS }
-        for (townsNode in townsNodes) {
-            for (townNode in townsNode.children.filter { it.type == OtbmConstants.OTBM_TOWN }) {
-                val townProps = townNode.props
-                val townId = townProps.readUnsignedIntLE().toInt()
-                val townName = readString(townProps)
-                val x = townProps.readUnsignedShortLE().toInt()
-                val y = townProps.readUnsignedShortLE().toInt()
-                val z = townProps.readUnsignedByte().toInt()
+                override fun endNode(type: Byte) {
+                    when (type) {
+                        OtbmConstants.OTBM_TILE, OtbmConstants.OTBM_HOUSETILE -> currentTile = null
 
-                val town = map.towns.getOrCreateTown(townId)
-                town.setName(townName)
-                town.setTemplePos(Position(x, y, z))
-            }
-        }
+                        OtbmConstants.OTBM_ITEM -> {
+                            if (containerFlags.removeLastOrNull() == true) {
+                                containerStack.removeLastOrNull()
+                            }
+                        }
+
+                        else -> Unit
+                    }
+                }
+            },
+        )
 
         return map
+    }
+
+    /** `IOMap::parseTileArea` tile branch (src/io/iomap.cpp:130-215). */
+    private fun parseTile(
+        props: ByteBuf,
+        type: Byte,
+        map: GameMap,
+        baseX: Int,
+        baseY: Int,
+        baseZ: Int,
+        itemTypes: ItemTypeRegistry?,
+        imbuements: Imbuements?,
+    ): Tile {
+        val offsetX = props.readUnsignedByte().toInt()
+        val offsetY = props.readUnsignedByte().toInt()
+        val tilePos = Position(baseX + offsetX, baseY + offsetY, baseZ)
+        val tile = map.getOrCreateTile(tilePos)
+
+        if (type == OtbmConstants.OTBM_HOUSETILE) {
+            val houseId = props.readIntLE()
+            tile.houseId = houseId
+            val house = map.houses.addHouse(houseId)
+            house.addTile(tilePos)
+        }
+
+        while (props.isReadable) {
+            when (props.readByte()) {
+                OtbmConstants.OTBM_ATTR_TILE_FLAGS -> {
+                    val flags = props.readIntLE()
+                    if (flags and OtbmTileFlag.PROTECTIONZONE != 0) {
+                        tile.flags = tile.flags or TileFlags.TILESTATE_PROTECTIONZONE.value
+                    } else if (flags and OtbmTileFlag.NOPVPZONE != 0) {
+                        tile.flags = tile.flags or TileFlags.TILESTATE_NOPVPZONE.value
+                    } else if (flags and OtbmTileFlag.PVPZONE != 0) {
+                        tile.flags = tile.flags or TileFlags.TILESTATE_PVPZONE.value
+                    }
+
+                    if (flags and OtbmTileFlag.NOLOGOUT != 0) {
+                        tile.flags = tile.flags or TileFlags.TILESTATE_NOLOGOUT.value
+                    }
+                }
+
+                OtbmConstants.OTBM_ATTR_ITEM -> {
+                    val id = props.readUnsignedShortLE()
+                    val itemType = itemTypes?.get(id)
+                    val item = Item(id, type = itemType)
+                    if (imbuements != null) {
+                        item.imbuementRegistry = imbuements
+                    }
+                    if (itemTypes == null || itemType?.isGroundTile == true) {
+                        tile.ground = item
+                    } else {
+                        tile.addItem(item)
+                    }
+                }
+
+                else -> break
+            }
+        }
+
+        return tile
+    }
+
+    /** `IOMap::parseTileArea` zone branch (src/io/iomap.cpp:216-246). */
+    private fun parseTileZone(props: ByteBuf, tile: Tile?, map: GameMap) {
+        val zoneCount = props.readUnsignedShortLE()
+        for (index in 0 until zoneCount) {
+            val zoneId = props.readUnsignedShortLE()
+            if (zoneId == 0) {
+                val tilePos = tile?.position ?: Position(0, 0, 0)
+                throw IOMapException("[x:${tilePos.x}, y:${tilePos.y}, z:${tilePos.z}] Invalid zone id.")
+            }
+            tile?.let { map.zones.getZone(zoneId)?.addPosition(it.position) }
+        }
+    }
+
+    /** `IOMap::parseTowns` town branch (src/io/iomap.cpp:263-287). */
+    private fun parseTown(props: ByteBuf, map: GameMap) {
+        val townId = props.readUnsignedIntLE().toInt()
+        val townName = readString(props)
+        val x = props.readUnsignedShortLE().toInt()
+        val y = props.readUnsignedShortLE().toInt()
+        val z = props.readUnsignedByte().toInt()
+
+        val town = map.towns.getOrCreateTown(townId)
+        town.setName(townName)
+        town.setTemplePos(Position(x, y, z))
     }
 
     /** `IOMap::parseMapDataAttributes` (src/io/iomap.cpp:93-127). */

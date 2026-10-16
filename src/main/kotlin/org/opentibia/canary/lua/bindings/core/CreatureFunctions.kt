@@ -14,6 +14,12 @@ import org.opentibia.canary.map.Position
 interface CreatureOperations {
     fun getId(creature: Any): Long
 
+    /** `Creature::removeIcon(key)` reach of `creature:removeIcon` (creature_functions.cpp:1166-1178). */
+    fun removeIcon(creature: Any, key: String): Boolean = false
+
+    /** `Creature::clearIcons()` reach of `creature:clearIcons` (creature_functions.cpp:1180-1192). */
+    fun clearIcons(creature: Any): Boolean = false
+
     /** `Creature::getCurrentOutfit` reach of `getOutfit` (creature_functions.cpp:716-726). */
     fun getCurrentOutfit(creature: Any): Outfit = Outfit()
 
@@ -143,6 +149,18 @@ object CreatureFunctions {
         registry.registerMethod(CREATURE_TYPE, "getId", luaFunction { args ->
             val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.NIL
             LuaValue.valueOf(operations.getId(creature).toDouble())
+        })
+
+        // `CreatureFunctions::luaCreatureRemoveIcon` (creature_functions.cpp:1166-1178).
+        registry.registerMethod(CREATURE_TYPE, "removeIcon", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+            LuaValue.valueOf(operations.removeIcon(creature, args.arg(2).tojstring()))
+        })
+
+        // `CreatureFunctions::luaCreatureClearIcons` (creature_functions.cpp:1180-1192).
+        registry.registerMethod(CREATURE_TYPE, "clearIcons", luaFunction { args ->
+            val creature = retrieveUserdata(args, 1) ?: return@luaFunction LuaValue.FALSE
+            LuaValue.valueOf(operations.clearIcons(creature))
         })
 
         // `CreatureFunctions::luaCreatureGetOutfit` (creature_functions.cpp:716-726):

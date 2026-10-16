@@ -17,7 +17,10 @@ import org.luaj.vm2.lib.VarArgFunction
  * returns `true`, or returns `false` when the argument is not a function. The method
  * itself is never resolved as the callback.
  */
-internal class CallbackMethods {
+internal class CallbackMethods(
+    /** The script globals, for the plain-script shape (`function onUse(...)`). */
+    private val globals: LuaValue? = null,
+) {
     private val setters = mutableMapOf<String, LuaValue>()
     private val captured = mutableMapOf<String, LuaValue>()
 
@@ -36,9 +39,14 @@ internal class CallbackMethods {
         table.set(field, setter)
     }
 
-    /** Returns the callback for [field], or nil when neither shape assigned one. */
+    /**
+     * Returns the callback for [field]: the setter-captured value, the owner's
+     * field, or the script's global function (the plain-script shape the
+     * otservbr datapack uses, e.g. `function onUse(...)`).
+     */
     fun resolve(table: LuaValue, field: String): LuaValue =
         captured[field]
             ?: table.get(field).takeIf { it !== setters[field] }
+            ?: globals?.get(field)?.takeIf { it.isfunction() }
             ?: LuaValue.NIL
 }

@@ -962,6 +962,9 @@ class WorldPlayerOperations(
     private val itemTypes: ItemTypeRegistry? = null,
 ) : PlayerOperations {
 
+    /** `Player::getTown` (player.cpp:8307-8309) reach of `player:getTown()`. */
+    override fun getTown(player: Any): Any? = (player as? Player)?.getTown()
+
     /** `g_game().getPlayerByID`/`getPlayerByGUID` reach of `Player(id)` (player_functions.cpp:626-632). */
     var playerByIdProvider: (Long) -> Player? = { null }
 
@@ -1458,6 +1461,18 @@ class WorldPlayerOperations(
  * `Creature` metatable family seam backed by the Kotlin [Creature] domain object.
  */
 class WorldCreatureOperations : CreatureOperations {
+    override fun removeIcon(creature: Any, key: String): Boolean {
+        val target = creature as? Creature ?: return false
+        target.removeIcon(key)
+        return true
+    }
+
+    override fun clearIcons(creature: Any): Boolean {
+        val target = creature as? Creature ?: return false
+        target.clearIcons()
+        return true
+    }
+
     override fun getCurrentOutfit(creature: Any): Outfit =
         (creature as? Creature)?.getCurrentOutfit() ?: Outfit()
 

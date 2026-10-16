@@ -75,7 +75,7 @@ object MoveEventBindings {
                 val uniqueIds = mutableListOf<Int>()
                 val positions = mutableListOf<Position>()
                 val vocations = mutableListOf<String>()
-                val callbacks = CallbackMethods()
+                val callbacks = CallbackMethods(env.globals)
 
                 self.set("type", object : VarArgFunction() {
                     override fun invoke(a: Varargs): Varargs {
