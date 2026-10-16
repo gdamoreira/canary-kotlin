@@ -1,8 +1,12 @@
 package org.opentibia.canary.network.codec
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import io.netty.buffer.ByteBuf
+import io.netty.buffer.ByteBufUtil
 import io.netty.channel.ChannelHandlerContext
 import io.netty.handler.codec.ByteToMessageDecoder
+
+private val logger = KotlinLogging.logger {}
 
 /**
  * Splits the TCP byte stream into individual Tibia packets.
@@ -13,7 +17,15 @@ class TibiaFrameDecoder : ByteToMessageDecoder() {
         const val MAX_PACKET_SIZE = 65535
     }
 
+    private var loggedFirstBytes = false
+
     override fun decode(ctx: ChannelHandlerContext, input: ByteBuf, out: MutableList<Any>) {
+        if (!loggedFirstBytes && input.readableBytes() > 0) {
+            loggedFirstBytes = true
+            val preview = ByteBufUtil.hexDump(input, input.readerIndex(), minOf(16, input.readableBytes()))
+            logger.debug { "First game packet bytes from ${ctx.channel().remoteAddress()}: $preview" }
+        }
+
         if (input.readableBytes() < 2) {
             return
         }

@@ -78,6 +78,8 @@ services:
       CANARY_LOGIN_PORT: "${CANARY_LOGIN_PORT:-7171}"
       CANARY_GAME_PORT: "${CANARY_GAME_PORT:-7172}"
       CANARY_STATUS_PORT: "${CANARY_STATUS_PORT:-7171}"
+      # Application log level (Canary `logLevel`): info (default) | debug | trace...
+      CANARY_LOG_LEVEL: "${CANARY_LOG_LEVEL:-info}"
       # Optional RSA handshake override; omit to use the built-in OpenTibia pair.
       CANARY_RSA_P: "${CANARY_RSA_P:-}"
       CANARY_RSA_Q: "${CANARY_RSA_Q:-}"

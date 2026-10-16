@@ -998,6 +998,7 @@ class CanaryServer(
             .childHandler(object : ChannelInitializer<SocketChannel>() {
                 override fun initChannel(ch: SocketChannel) {
                     connectionChannels.add(ch)
+                    logger.debug { "Game client connected from ${ch.remoteAddress()}" }
                     val pipeline = ch.pipeline()
                     pipeline.addLast("rateLimiter", RateLimiterHandler(maxPacketsPerSecond = 100))
                     pipeline.addLast("frameDecoder", TibiaFrameDecoder())
