@@ -813,8 +813,18 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 86: Login Inventory Frames, Depot Wiring, GOD Loadout
+- **Login inventory** — `ProtocolGame::sendAddCreature`'s tail now sends one inventory-slot frame (0x78/0x79) per slot before stats/skills (protocolgame.cpp:8701-8703) and `sendInventoryIds` (0xF5) after the VIP burst (8779-8781), so persisted equipment shows at login.
+- **Depot step-script** — `WorldPlayerBatch3Operations.getDepotChest` reaches the domain chests and `setSpecialContainersAvailable` stores the stash/market/depot-search gates and pushes the 0x2A frame, unblocking `special_tiles.lua`.
+- **Spawn boot visibility** — spawn XML loads report block counts (51,896 monster / 1,007 npc on the otservbr world); the factory reports unregistered types once and failed placements (82,991 placed).
+- **players_online** — Flyway `V25` adds the table, clearing the recurring `Game::updatePlayersOnline` errors.
+- **`scripts/god-loadout.sql`** — GOD account level-4000 endgame loadout (falcon coif/plate/escutcheon, grand sanguine blade/legs/boots, ring of souls).
+- **8498 tests, all green.**
+
+---
+
 ### Current Status
-- **Automated Tests**: **827 test suites / 8495 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **827 test suites / 8498 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.
