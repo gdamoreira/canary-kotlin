@@ -15,10 +15,8 @@ data class HotkeyEquipCommand(
 )
 
 /**
- * Decoder for `ProtocolGame::parseHotkeyEquip` (protocolgame.cpp:2129).
- *
- * PARITY GAP: `Game::playerEquipItem` (game.cpp:4159) is not ported, so the
- * decoded command is only the confinement boundary.
+ * Decoder for `ProtocolGame::parseHotkeyEquip` (protocolgame.cpp:2129) over
+ * `Game::playerEquipItem` (game.cpp:4159).
  */
 object HotkeyEquipPacketHandler {
 

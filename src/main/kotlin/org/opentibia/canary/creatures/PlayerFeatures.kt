@@ -365,6 +365,11 @@ class PlayerFeatures(
      * such protocol method yet, so the default is inert (PARITY GAP).
      */
     private val sendCyclopediaCharacterAchievements: (Int, List<Pair<Achievement, Long>>) -> Unit = { _, _ -> },
+    /**
+     * `Player::sendOutfitWindow()` (`player.cpp:2541-2543`) reached by
+     * `Player::toggleMount` (player.cpp:8004, 8020) through the session sink.
+     */
+    private val sendOutfitWindow: () -> Unit = {},
 ) {
     /** `PlayerWheel m_wheelPlayer` (player.hpp:1959); accessor `wheel()`. */
     val wheel: PlayerWheel by lazy(LazyThreadSafetyMode.NONE) {
@@ -383,7 +388,7 @@ class PlayerFeatures(
     val dailyReward: PlayerDailyReward = PlayerDailyReward()
 
     /** `Player` mount state (`getCurrentMount`/`toggleMount`/...). */
-    val mounts: PlayerMountState = PlayerMountState(mountDefinitions)
+    val mounts: PlayerMountState = PlayerMountState(mountDefinitions, sendOutfitWindow = sendOutfitWindow)
 
     /** `Player::familiars` (player.cpp:6891-6958). */
     val familiars: PlayerFamiliars by lazy(LazyThreadSafetyMode.NONE) {

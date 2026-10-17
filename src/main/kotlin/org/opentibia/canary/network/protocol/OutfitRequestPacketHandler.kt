@@ -5,9 +5,8 @@ import io.netty.buffer.ByteBuf
 /**
  * Outfit-window request (client opcode `0xD2`), mirroring
  * `Game::playerRequestOutfit` (game.cpp:7206-7216): Canary reads no payload,
- * gates on `ALLOW_CHANGEOUTFIT` and calls `Player::sendOutfitWindow`. The
- * sender and the config gate are not ported (PARITY GAP), so the decoded
- * command only marks the confinement boundary.
+ * gates on `ALLOW_CHANGEOUTFIT` and calls `Player::sendOutfitWindow`, which the
+ * session sink composes through `OutfitWindowComposer`.
  */
 object OutfitWindowRequestCommand
 

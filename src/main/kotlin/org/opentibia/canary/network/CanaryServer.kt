@@ -21,6 +21,7 @@ import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.config.ConfigManager
 import org.opentibia.canary.config.ServerRole
 import org.opentibia.canary.creatures.Creature
+import org.opentibia.canary.creatures.appearance.outfit.Outfits
 import org.opentibia.canary.creatures.Monster
 import org.opentibia.canary.creatures.monsters.MonsterBehavior
 import org.opentibia.canary.creatures.monsters.MonsterPipelinesHost
@@ -72,6 +73,7 @@ import org.opentibia.canary.social.guild.GuildRepository
 import org.opentibia.canary.systems.imbuement.ImbuementDecay
 import org.opentibia.canary.systems.imbuement.ImbuementEngine
 import org.opentibia.canary.systems.imbuement.Imbuements
+import org.opentibia.canary.systems.familiar.Familiars
 import org.opentibia.canary.systems.mount.Mounts
 import org.opentibia.canary.systems.rewardchest.ReturnValue
 import org.opentibia.canary.systems.raid.GameRaidSpawner
@@ -281,6 +283,12 @@ class CanaryServer(
      * mount runtime reads the booted definitions.
      */
     internal val mounts: Mounts = Mounts()
+
+    /** `Outfits::getInstance()` (outfit.hpp) loaded from `XML/outfits.xml` (canary_server.cpp:549-551). */
+    internal val outfits: Outfits = Outfits()
+
+    /** `Familiars::getInstance()` loaded from `XML/familiars.xml` (canary_server.cpp:552-554). */
+    internal val familiars: Familiars = Familiars()
 
     /**
      * `g_chat()` (src/creatures/interactions/chat.hpp:91) equivalent composed
@@ -862,6 +870,16 @@ class CanaryServer(
                     game.getAttachedEffects().loadFromXml(content)
                 }
             }
+
+            // `Outfits::getInstance().loadFromXml()` / `Familiars::getInstance()
+            // .loadFromXml()` (canary_server.cpp:549-554) over the XML folder;
+            // the registries feed the `sendOutfitWindow` composition.
+            readCoreXml(Path.of(core, "XML", "outfits.xml"))?.let { content ->
+                outfits.loadFromXml(content)
+            }
+            readCoreXml(Path.of(core, "XML", "familiars.xml"))?.let { content ->
+                familiars.loadFromXml(content)
+            }
         }
 
         // `g_configManager().getString(SERVER_MOTD)` read of `loadMotdNum`
@@ -1111,6 +1129,11 @@ class CanaryServer(
         // booted `{CORE_DIRECTORY}/XML/mounts.xml` registry instead of a
         // per-player empty copy.
         mountDefinitions = mounts,
+        outfitDefinitions = outfits,
+        familiarDefinitions = familiars,
+        enableSupportOutfit = ConfigKeys.byName("ENABLE_SUPPORT_OUTFIT")?.let { key ->
+            configManager?.getBoolean(key, key.defaultValue as Boolean)
+        } ?: true,
         // `ExpertPvp::isRetroPvpWorldType()` (expert_pvp.cpp:375) behind the
         // blessing-window retro layout; `configuredWorldType` is the resolved
         // `WORLD_TYPE` string.

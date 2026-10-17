@@ -18,6 +18,7 @@ import org.opentibia.canary.combat.condition.Skill
 import org.opentibia.canary.combat.condition.SpellGroup
 import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.creatures.appearance.outfit.OutfitEntry
+import org.opentibia.canary.creatures.appearance.outfit.Outfits
 import org.opentibia.canary.creatures.grouping.Group
 import org.opentibia.canary.creatures.grouping.Party
 import org.opentibia.canary.creatures.grouping.PartyShields_t
@@ -91,6 +92,7 @@ import org.opentibia.canary.network.protocol.creature.CreaturePacketWriter
 import org.opentibia.canary.systems.bestiary.Charm
 import org.opentibia.canary.systems.bestiary.CharmRune
 import org.opentibia.canary.systems.forge.PlayerForgeHistory
+import org.opentibia.canary.systems.familiar.Familiars
 import org.opentibia.canary.systems.mount.Mounts
 import org.opentibia.canary.systems.prey.PreySlot
 import org.opentibia.canary.systems.rewardchest.ReturnValue
@@ -2444,6 +2446,17 @@ class Player(
      * resolves the booted definitions instead of a per-player empty copy.
      */
     val mountDefinitions: Mounts = Mounts(),
+    /**
+     * `Outfits::getInstance()` definition registry (outfit.hpp) forwarded to
+     * [PlayerFeatures.attachedOutfits]: the composition root injects the
+     * registry loaded from `{CORE_DIRECTORY}/XML/outfits.xml`
+     * (canary_server.cpp:549-551) so `Player::canWear`/`getOutfitAddons`
+     * (player.cpp:6783-6889) resolve the booted definitions instead of a
+     * per-player empty copy.
+     */
+    attachedOutfits: Outfits = Outfits(),
+    /** `Familiars::getInstance()` definition registry forwarded to [PlayerFeatures]. */
+    familiarDefinitions: Familiars = Familiars(),
 ) : Creature(id, name, maxHealth, health, maxMana, mana, speed, position), BatchUpdateActor {
 
     /**
@@ -2503,6 +2516,9 @@ class Player(
         transformItemCharges = transformItemCharges,
         vipRepository = vipRepository,
         mountDefinitions = mountDefinitions,
+        attachedOutfits = attachedOutfits,
+        familiarDefinitions = familiarDefinitions,
+        sendOutfitWindow = { protocolSink?.sendOutfitWindow() },
     )
 
     /**

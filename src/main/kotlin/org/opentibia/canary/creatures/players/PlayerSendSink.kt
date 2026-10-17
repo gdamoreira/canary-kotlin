@@ -25,6 +25,9 @@ import org.opentibia.canary.network.protocol.ProtocolFrameSink
 import org.opentibia.canary.network.protocol.ProtocolSink
 import org.opentibia.canary.network.protocol.StoreWindowWriter
 import org.opentibia.canary.network.protocol.bosstiary.BosstiaryWindowWriter
+import org.opentibia.canary.network.protocol.outfit.OutfitWindowComposer
+import org.opentibia.canary.network.protocol.outfit.OutfitWindowPayload
+import org.opentibia.canary.network.protocol.outfit.OutfitWindowWriter
 import org.opentibia.canary.network.protocol.creature.CreaturePacketWriter
 import org.opentibia.canary.network.protocol.creature.CreatureUpdateWriter
 import org.opentibia.canary.network.protocol.depot.DepotSearchWriter
@@ -269,6 +272,12 @@ class PlayerFrameSink(
      * blessing-window retro layout (protocolgame.cpp:5906).
      */
     private val isRetroPvpWorldType: () -> Boolean = { false },
+    /**
+     * The composed `ProtocolGame::sendOutfitWindow` payload
+     * (protocolgame.cpp:9027); [oldProtocol] selects the layout. `null` keeps
+     * the sender silent like a transport without the booted registries.
+     */
+    private val outfitWindowPayload: (Player, Boolean) -> OutfitWindowPayload? = { _, _ -> null },
 ) : ProtocolFrameSink(player, map, creatureById), PlayerSendSink {
 
     override fun frameAllocator(): ByteBufAllocator = frameAllocatorProvider()
@@ -279,6 +288,33 @@ class PlayerFrameSink(
         val out = frameAllocator().buffer()
         out.build()
         writeFrame(out)
+    }
+
+    // --- outfit window ------------------------------------------------------------
+
+    /**
+     * `ProtocolGame::sendOutfitWindow()` (protocolgame.cpp:9027-9258): the
+     * composed payload picks the `oldProtocol` layout.
+     */
+    override fun sendOutfitWindow() {
+        when (val payload = outfitWindowPayload(player, oldProtocol)) {
+            is OutfitWindowComposer.CurrentPayload ->
+                emitFrame { OutfitWindowWriter.writeOutfitWindow(this, payload.frame) }
+
+            is OutfitWindowComposer.LegacyPayload ->
+                emitFrame {
+                    OutfitWindowWriter.writeOutfitWindowLegacy(
+                        this,
+                        payload.currentOutfit,
+                        payload.outfits,
+                        payload.mounts,
+                        payload.isOTCR,
+                        payload.customOtcr,
+                    )
+                }
+
+            null -> Unit
+        }
     }
 
     // --- blessing window ----------------------------------------------------------

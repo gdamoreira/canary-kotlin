@@ -13,7 +13,10 @@ import org.opentibia.canary.combat.condition.Skill
 import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.appearance.outfit.Outfits
 import org.opentibia.canary.creatures.players.getLootPouch
+import org.opentibia.canary.network.protocol.outfit.OutfitWindowComposer
+import org.opentibia.canary.systems.familiar.Familiars
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.players.PlayerTask
 import org.opentibia.canary.creatures.players.getAllSaleItemIdAndCount
@@ -182,6 +185,15 @@ class GameHandler(
      * default.
      */
     private val isRetroPvpWorldType: () -> Boolean = { false },
+    /**
+     * `Outfits::getInstance()`/`Familiars::getInstance()` definition registries
+     * (canary_server.cpp:549-554) behind the `sendOutfitWindow` composition;
+     * direct construction keeps self-contained empty registries.
+     */
+    private val outfitDefinitions: Outfits = Outfits(),
+    private val familiarDefinitions: Familiars = Familiars(),
+    /** `g_configManager().getBoolean(ENABLE_SUPPORT_OUTFIT)` (protocolgame.cpp:9128). */
+    private val enableSupportOutfit: Boolean = true,
 ) : SimpleChannelInboundHandler<ByteBuf>() {
 
     private var player: Player? = null
@@ -286,6 +298,10 @@ class GameHandler(
         game.sendCreatureHelpers = { spectator, creatureId, helpers ->
             spectator.protocolSink?.sendCreatureHelpers(creatureId, helpers)
         }
+        // `Game::playerRequestOutfit` -> `Player::sendOutfitWindow`
+        // (game.cpp:7216, player.cpp:2541-2543): the session sink composes the
+        // `0xC8`/old-protocol payload from the booted registries.
+        game.sendOutfitWindow = { player -> player.protocolSink?.sendOutfitWindow() }
         game.getImbuingItem = { player -> player.getImbuingItem() }
         // `Player::getLootPouch` (player.cpp:12864-12885) behind the
         // `Game::playerEquipItem` loot-pouch fallback: a regular player-group
@@ -626,6 +642,20 @@ class GameHandler(
             playerNameByGuid = { guid -> ioLoginData?.getNameByGuid(guid) ?: "" },
             guildNameById = { guildId -> game.getGuild(guildId, allowOffline = true)?.name ?: "" },
             isRetroPvpWorldType = isRetroPvpWorldType,
+            outfitWindowPayload = { payloadPlayer, legacy ->
+                OutfitWindowComposer.compose(
+                    payloadPlayer,
+                    OutfitWindowComposer.Deps(
+                        outfits = outfitDefinitions,
+                        mounts = mountDefinitions,
+                        familiars = familiarDefinitions,
+                        attachedEffects = game.getAttachedEffects(),
+                        outfitSupportsMount = { lookType -> game.outfitSupportsMount(lookType) },
+                        enableSupportOutfit = enableSupportOutfit,
+                    ),
+                    legacy = legacy,
+                )
+            },
         )
         // `Player::setSpecialMenuAvailable`'s `client->sendSpecialContainersAvailable()`
         // (player.cpp:6831): the stored menu gates push on every change.
@@ -991,6 +1021,8 @@ class GameHandler(
             transformItemCharges = transformItemCharges,
             vipRepository = vipRepository ?: InMemoryVipRepository(),
             mountDefinitions = mountDefinitions,
+            attachedOutfits = outfitDefinitions,
+            familiarDefinitions = familiarDefinitions,
         ).also { it.account = account }.also(::bindRegistries)
 
         val guid = loader.getGuidByName(characterName)
@@ -1011,6 +1043,8 @@ class GameHandler(
             transformItemCharges = transformItemCharges,
             vipRepository = vipRepository ?: InMemoryVipRepository(),
             mountDefinitions = mountDefinitions,
+            attachedOutfits = outfitDefinitions,
+            familiarDefinitions = familiarDefinitions,
         )
         loaded.account = account
 

@@ -41,6 +41,7 @@ import org.opentibia.canary.network.protocol.map.TilePacketWriter
 import org.opentibia.canary.network.protocol.misc.MiscDataWriter
 import org.opentibia.canary.network.protocol.misc.MiscSessionWriter
 import org.opentibia.canary.network.protocol.npcshop.NpcShopWindowSerializer
+import org.opentibia.canary.network.protocol.outfit.OutfitWindowPayload
 import org.opentibia.canary.network.protocol.player.ChatWindowWriter
 import org.opentibia.canary.network.protocol.player.PlayerWindowWriter
 import org.opentibia.canary.network.protocol.proficiency.WeaponProficiencyPayload
@@ -81,6 +82,15 @@ interface ProtocolSink : VipClient, LivestreamClient {
      * `sendBlessingWindow`, protocolgame.cpp:5901).
      */
     val protocolVersion: Int
+
+    /**
+     * `ProtocolGame::sendOutfitWindow()` (0xC8, protocolgame.cpp:9027-9258):
+     * the current-profile or old-protocol layout is chosen by the session
+     * transport from the composed payload. Transports without a composed
+     * payload stay silent.
+     */
+    fun sendOutfitWindow() {
+    }
 
     /**
      * `ProtocolGame::sendBlessingWindow()` (0x9B, protocolgame.cpp:5899-5968):
@@ -1094,6 +1104,8 @@ class NettyProtocolSink private constructor(
      * blessing-window retro layout (protocolgame.cpp:5906).
      */
     private val isRetroPvpWorldType: () -> Boolean,
+    /** The composed `0xC8` outfit-window payload behind `sendOutfitWindow`. */
+    private val outfitWindowPayload: (Player, Boolean) -> OutfitWindowPayload?,
     /** `Player::getShopOwner` (player.cpp:6123-6125) behind `sendSaleItemList`. */
     private val shopOwner: (Player) -> Npc?,
     /** `ProtocolGame` session state behind the self appear frame (protocolgame.cpp:8641-8682). */
@@ -1124,6 +1136,8 @@ class NettyProtocolSink private constructor(
         guildNameById: (Long) -> String = { "" },
         /** `ExpertPvp::isRetroPvpWorldType()` behind the blessing-window retro layout. */
         isRetroPvpWorldType: () -> Boolean = { false },
+        /** The composed `0xC8` outfit-window payload behind `sendOutfitWindow`. */
+        outfitWindowPayload: (Player, Boolean) -> OutfitWindowPayload? = { _, _ -> null },
     ) : this(
         channel,
         player,
@@ -1141,8 +1155,10 @@ class NettyProtocolSink private constructor(
             basicDataSpells = { basicDataSpellsOf(player) },
             creatureById = creatureById,
             isRetroPvpWorldType = isRetroPvpWorldType,
+            outfitWindowPayload = outfitWindowPayload,
         ),
         isRetroPvpWorldType,
+        outfitWindowPayload,
         shopOwner,
         selfAppearTail,
         weaponProficiencyUpgradeAvailable,

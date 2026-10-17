@@ -846,8 +846,17 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 90: Outfit/Blessing Windows, Hotkey Equip and the OTC Login Preamble Tail
+- **Outfit window end to end** — `ProtocolGame::sendOutfitWindow` (protocolgame.cpp:9027-9258) composed by the new `OutfitWindowComposer` (current outfit + mount/attached-effect look-ups, owned/premium/store outfit rows, owned/store mount rows, vocation familiars) over booted `outfits.xml`/`familiars.xml` registries; `ProtocolSink.sendOutfitWindow` writes the 0xC8 current-profile or old-protocol layout; `Game::playerRequestOutfit` reached from opcode `0xD2` and from `Player::toggleMount`.
+- **Blessing window** — `ProtocolSink.sendBlessingWindow` (0x9B) composed from the stored/store-summary blessing counts, promoted/skull/amulet-of-loss flags and the retro world type; opcode `0xCF` answers through the session sink.
+- **Hotkey equip** — opcode `0x77` reaches `Game::playerEquipItem` with the loot-pouch fallback bound in the composition root.
+- **Registries** — `CanaryServer` loads `XML/outfits.xml` and `XML/familiars.xml` (canary_server.cpp:549-554) and injects them into every session player; `PlayerFeatures` carries the outfit/familiar registries and the `sendOutfitWindow` seam.
+- **835 suites / 8526 tests, all green.**
+
+---
+
 ### Current Status
-- **Automated Tests**: **827 test suites / 8499 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **835 test suites / 8526 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.

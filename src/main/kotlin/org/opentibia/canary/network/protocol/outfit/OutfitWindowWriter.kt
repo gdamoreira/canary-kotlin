@@ -3,6 +3,7 @@ package org.opentibia.canary.network.protocol.outfit
 import io.netty.buffer.ByteBuf
 import org.opentibia.canary.combat.condition.Outfit
 import org.opentibia.canary.creatures.appearance.effects.AttachedEffect
+import org.opentibia.canary.systems.familiar.Familiar
 import org.opentibia.canary.creatures.appearance.outfit.Outfit as OutfitDefinition
 import org.opentibia.canary.creatures.appearance.outfit.ProtocolOutfit
 import org.opentibia.canary.network.message.writeTibiaString
@@ -232,6 +233,30 @@ object OutfitWindowWriter {
             }
         }
 
+        return entries
+    }
+
+    /**
+     * The `sendOutfitWindow` familiar loop (protocolgame.cpp:9221-9247):
+     * `Familiars::getInstance().getFamiliars(vocationId)` filtered by
+     * `Player::getFamiliar(familiar)`, each row the look type, name and a
+     * `0x00` trailing byte.
+     */
+    fun buildFamiliarEntries(
+        familiars: List<Familiar>,
+        getFamiliar: (Familiar) -> Boolean,
+    ): List<OutfitWindowFamiliarEntry> {
+        val entries = mutableListOf<OutfitWindowFamiliarEntry>()
+        val limitFamiliars = 0xFFFF
+        for (familiar in familiars) {
+            if (!getFamiliar(familiar)) {
+                continue
+            }
+            entries.add(OutfitWindowFamiliarEntry(lookType = familiar.lookType, name = familiar.name))
+            if (entries.size == limitFamiliars) {
+                break
+            }
+        }
         return entries
     }
 

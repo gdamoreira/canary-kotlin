@@ -7,6 +7,7 @@ import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.players.PlayerFrameSink
 import org.opentibia.canary.creatures.players.PlayerSendSink
 import org.opentibia.canary.map.GameMap
+import org.opentibia.canary.network.protocol.outfit.OutfitWindowPayload
 
 /**
  * Test double for the [PlayerSendSink] transport that records every emitted
@@ -21,14 +22,21 @@ class InMemoryProtocolSink private constructor(
     private val recorder: FrameRecorder,
     player: Player,
     map: GameMap,
+    outfitWindowPayload: (Player, Boolean) -> OutfitWindowPayload?,
 ) : PlayerSendSink by PlayerFrameSink(
     player,
     map,
     frameAllocatorProvider = { UnpooledByteBufAllocator.DEFAULT },
     frameWriter = { frame -> recorder.record(frame) },
+    outfitWindowPayload = outfitWindowPayload,
 ) {
 
-    constructor(player: Player, map: GameMap = GameMap()) : this(FrameRecorder(), player, map)
+    constructor(
+        player: Player,
+        map: GameMap = GameMap(),
+        /** The composed `sendOutfitWindow` payload (`null` keeps the sender silent). */
+        outfitWindowPayload: (Player, Boolean) -> OutfitWindowPayload? = { _, _ -> null },
+    ) : this(FrameRecorder(), player, map, outfitWindowPayload)
 
     /** Every frame emitted in call order, copied out of its `ByteBuf`. */
     val frames: MutableList<ByteArray> get() = recorder.frames

@@ -6,8 +6,7 @@ import io.netty.buffer.ByteBuf
  * Blessing-window request (client opcode `0xCF`), mirroring
  * `ProtocolGame::sendBlessingWindow` (protocolgame.cpp:5899-5962): Canary reads
  * no payload and immediately serializes the window from the player's blessing
- * state. The sender is not ported (PARITY GAP), so the decoded command only
- * marks the confinement boundary.
+ * state through the session sink's `sendBlessingWindow` guard chain.
  */
 object BlessingWindowCommand
 
