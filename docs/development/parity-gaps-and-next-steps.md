@@ -34,8 +34,9 @@ Rules:
 - New markers must name the C++ symbol and file:line they transcribe
   (existing convention); a marker with a locatable owner call site belongs in
   the actionable list.
-- Items resolved by wave 90 are already excluded (outfit window 0xD2,
-  blessing window 0xCF, hotkey equip 0x77).
+- Items resolved by wave 90 (outfit window 0xD2, blessing window 0xCF, hotkey
+  equip 0x77) and wave 91 (login preamble + `isOTCR`, §P0-1) are stricken
+  above/here; the §P0-1 "Remaining" list is the live backlog for that item.
 
 ## 1. Priority ladder
 
@@ -50,28 +51,45 @@ Rules:
 
 ## 2. P0 — live-stack blockers and user-visible integrity
 
-### P0-1. OTC login preamble and session `isOTCR` state
-- **Gap:** `LoginFeatureWriter` (features 0x43 `sendFeatures`/`sendOTCRFeatures`,
-  preamble 0x32 `sendClientLoginPreamble`, protocolgame.cpp:10682-10725,
-  12361-12378) exists but is never composed into the session login tail; the
-  port adds its own extended-opcode enable instead. The session never records
-  `isOTCR` (`protocolgame.hpp:642`, set at protocolgame.cpp:12369), so the
-  outfit-window custom block (`sendOutfitWindowCustomOTCR`,
-  protocolgame.cpp:11880-11956 — wings/auras/effects/shaders lists) is never
-  sent even to OTClient Redemption, and no OTCR feature negotiation happens.
-- **Next step:** call `writeClientLoginPreamble` at the login tail for
-  OTClient-family clients, track `isOTCR` on `NettyProtocolSink`/`PlayerSendSink`,
-  and feed `OutfitWindowComposer`'s `customOtcr` lists from
-  `AttachedEffects` (enabled wings/auras/effects/shaders).
-- **Acceptance:** OTClient Redemption log shows the feature frames; the outfit
-  window carries the OTCR block when the client is OTCR-capable; extended
-  opcodes work without the port-specific enable.
-- **Evidence:** `docs/development/wave-82-opcodes.md` (extended-opcode
-  compatibility note); `network/protocol/login/LoginFeatureWriter.kt` unused;
-  user-reported OTClient crash pending a macOS crash report
-  (`~/Library/Logs/DiagnosticReports/OTClient-*.ips`).
+### P0-1. OTC login preamble and session `isOTCR` state — **implemented (wave 91)**
+- **Done:**
+  - the login preamble is now on the wire, one frame per C++
+    `writeToOutputBuffer`: `sendFeatures` (the `0x43` OTCv8 feature map) for an
+    `otclientV8 > 0` login, `sendOTCRFeatures` (the `0x43` enabled/disabled
+    lists, from `ConfigManager` with the C++ fallback 101/102/103/118) for any
+    other OTClient, then the `0x32 0x00 uint16_t 0x0000` opcode frame
+    (`LoginFeatureWriter.writeFeatures`/`writeOTCRFeatures`/
+    `writeClientLoginOpcodeFrame`, protocolgame.cpp:10682-10725,
+    12361-12378). It is emitted at the C++ point — after authentication and
+    before every other login frame — so a failed authentication never sees it.
+  - the port-only "extended opcode 0" login-tail hack is removed: OTClient
+    modules are enabled by the real `0x32 0x00` preamble frame
+    (`ProtocolGame::parseExtendedOpcode` opcode 0).
+  - the OTCv8 probe (`uint16_t 5`, `"OTCv8"`, `uint16_t` build,
+    protocolgame.cpp:1378-1383) is parsed from the decrypted login block and
+    selects the feature map over the OTCR list.
+  - the reported client OS is recorded on the player
+    (`player->setOperatingSystem`, protocolgame.cpp:1031) and the session
+    tracks `ProtocolGame::isOTCR` (protocolgame.hpp:642; the sibling `isOTC` is
+    write-only upstream and intentionally not modelled).
+  - the outfit window's OTCR custom block (owned wings/auras/effects/shaders,
+    protocolgame.cpp:9254, 11880-11956) is composed for OTCR clients on both
+    the current-profile and old-protocol layouts.
+  - players now receive the world attached-effects registry
+    (`g_game().getAttachedEffects()`, player_attached_effects.cpp:56), so
+    `PlayerAttachedEffects::tameShader` and the OTCR lists resolve the booted
+    definitions instead of an empty per-player copy.
+- **Remaining:**
+  - the OTCR-only senders (`sendAttachedEffect`, `sendDetachEffect`,
+    `sendShader`, `sendMapShader`, `sendPlayerTyping`,
+    protocolgame.cpp:11809-11873) still need their live call sites;
+  - the inbound OTCR reads (outfit-request wing/aura/effect/shader,
+    protocolgame.cpp:2503-2506) and the `AddItem`/creature-description shader
+    tails (protocolgame.cpp:913, 9773, 10073) are not ported.
+- **Both login paths covered:** the game login and the livestream viewer login
+  (`castViewerLogin`, protocolgame.cpp:12381) open with the same preamble.
 
-### P0-2. Live validation of the wave-77..90 fixes
+### P0-2. Live validation of the wave-77..91 fixes
 - **Gap:** walk pump, depot search, creature/position bindings, inventory
   frames, outfit/blessing windows and the MariaDB-default stack are committed
   and unit-green but not yet re-verified against the running Docker stack and

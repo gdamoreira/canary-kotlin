@@ -855,8 +855,18 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 91: OTC Login Preamble, Client OS Record and the OTCR Outfit Block
+- **Login preamble on the wire** — `ProtocolGame::sendClientLoginPreamble` (protocolgame.cpp:12361-12378) is composed on both login paths (game login at 936 and the livestream viewer at 12381), one frame per C++ `writeToOutputBuffer`: `sendFeatures` (0x43 OTCv8 map, protocolgame.cpp:10682-10703) for an `otclientV8 > 0` login, `sendOTCRFeatures` (0x43 enabled/disabled lists, 10706-10725) for any other OTClient, then the `0x32 0x00 uint16_t 0x0000` opcode frame. The port-only "extended opcode 0" login-tail hack is gone — OTClient modules are enabled by the real opcode frame.
+- **Client identity** — the OTCv8 probe (`uint16_t 5`, `"OTCv8"`, build, protocolgame.cpp:1378-1383) is parsed and selects the feature map; the reported OS is stored on the player (`Player::setOperatingSystem`, protocolgame.cpp:1031) and the session tracks `isOTCR` (protocolgame.hpp:642; the sibling `isOTC` is write-only upstream). `ConfigManager.getEnabledFeaturesOTC()`/`getDisabledFeaturesOTC()` join the handler with the C++ 101/102/103/118 fallback.
+- **OTCR outfit block** — the outfit window's custom wings/auras/effects/shaders lists (`sendOutfitWindowCustomOTCR`, protocolgame.cpp:9254, 11880-11956) are composed for OTCR clients on both layouts.
+- **Attached-effects registry injection** — session players now receive `g_game().getAttachedEffects()` (player_attached_effects.cpp:56), so `PlayerAttachedEffects::tameShader` and the OTCR lists resolve the booted `XML/attachedeffects.xml` definitions instead of an empty per-player copy.
+- **Tests** — `GameLoginPreambleTest` (6: OTCR frames, plain-client suppression, OTCv8 map, no preamble on a failed auth, player OS, viewer path), `OutfitWindowComposerTest` +3 (owned-entry filtering, non-OTCR suppression, legacy block), `LoginFeatureWriterTest` reworked to the per-frame API.
+- **836 suites / 8534 tests, all green.**
+
+---
+
 ### Current Status
-- **Automated Tests**: **835 test suites / 8526 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **836 test suites / 8534 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.
