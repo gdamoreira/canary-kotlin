@@ -11,6 +11,9 @@ out/
 # Local server configuration (copy config.lua.dist to config.lua)
 config.lua
 
+# Local quickstart environment (copy docker/.env.dist to .env)
+.env
+
 # Downloaded datapack world map (fetched on boot; see docker/DOCKER.md)
 data-otservbr-global/world/otservbr.otbm
 packet.log
