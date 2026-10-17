@@ -13,6 +13,7 @@ import org.opentibia.canary.combat.condition.Skill
 import org.opentibia.canary.combat.condition.Stat
 import org.opentibia.canary.config.ConfigKeys
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.players.getLootPouch
 import org.opentibia.canary.creatures.monsters.MonsterType
 import org.opentibia.canary.creatures.players.PlayerTask
 import org.opentibia.canary.creatures.players.getAllSaleItemIdAndCount
@@ -174,6 +175,13 @@ class GameHandler(
      * handler keeps a per-handler empty registry.
      */
     private val mountDefinitions: Mounts = Mounts(),
+    /**
+     * `ExpertPvp::isRetroPvpWorldType()` (expert_pvp.cpp:375) behind the
+     * blessing-window retro layout; the composition root binds the configured
+     * world-type name and a directly constructed handler keeps the non-retro
+     * default.
+     */
+    private val isRetroPvpWorldType: () -> Boolean = { false },
 ) : SimpleChannelInboundHandler<ByteBuf>() {
 
     private var player: Player? = null
@@ -279,6 +287,19 @@ class GameHandler(
             spectator.protocolSink?.sendCreatureHelpers(creatureId, helpers)
         }
         game.getImbuingItem = { player -> player.getImbuingItem() }
+        // `Player::getLootPouch` (player.cpp:12864-12885) behind the
+        // `Game::playerEquipItem` loot-pouch fallback: a regular player-group
+        // character (`group->id <= GROUP_TYPE_SENIORTUTOR`,
+        // account_group_type.hpp:20) sitting in a non-store-inbox parent item
+        // sees no pouch. The port's `Player` is not a `Cylinder`, so the parent
+        // item stays null (PARITY GAP) and the group gate is the effective
+        // condition.
+        game.getPlayerLootPouch = { player ->
+            player.getLootPouch(
+                isPlayerGroup = { player.group?.let { it.id <= 3 } ?: false },
+                parentItem = { null },
+            )
+        }
         // `Item::sendUpdateToClient(player)` / `Container::sendUpdateToClient(player)`
         // (src/items/item.cpp:3648, container.cpp:1201): the corpse item-update
         // tail of `Creature::dropCorpse` (creature.cpp:815) and the quick-loot
@@ -604,6 +625,7 @@ class GameHandler(
             // (protocolgame.cpp:12292).
             playerNameByGuid = { guid -> ioLoginData?.getNameByGuid(guid) ?: "" },
             guildNameById = { guildId -> game.getGuild(guildId, allowOffline = true)?.name ?: "" },
+            isRetroPvpWorldType = isRetroPvpWorldType,
         )
         // `Player::setSpecialMenuAvailable`'s `client->sendSpecialContainersAvailable()`
         // (player.cpp:6831): the stored menu gates push on every change.

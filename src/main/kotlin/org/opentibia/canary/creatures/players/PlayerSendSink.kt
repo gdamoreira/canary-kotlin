@@ -8,12 +8,15 @@ import org.opentibia.canary.creatures.ChaseMode
 import org.opentibia.canary.creatures.Creature
 import org.opentibia.canary.creatures.Npc
 import org.opentibia.canary.creatures.Player
+import org.opentibia.canary.creatures.Skulls_t
+import org.opentibia.canary.creatures.Slots_t
 import org.opentibia.canary.creatures.grouping.TeamFinder
 import org.opentibia.canary.items.Item
 import org.opentibia.canary.lua.bindings.core.returnMessage
 import org.opentibia.canary.map.GameMap
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.map.Tile
+import org.opentibia.canary.network.protocol.BlessingWindowWriter
 import org.opentibia.canary.network.protocol.CreatureWindowWriter
 import org.opentibia.canary.network.protocol.GameWindowWriter
 import org.opentibia.canary.network.protocol.InventoryIdEntry
@@ -56,6 +59,9 @@ import org.opentibia.canary.systems.rewardchest.ReturnValue
  * [Player.protocolSink] (or a sink that is not a [PlayerSendSink]) models
  * `Player::client == nullptr` and every sender is a no-op.
  */
+/** `magic_enum::enum_values<Blessings>()` count (`player_blessings.hpp:16-25`). */
+private const val BLESSING_COUNT = 8
+
 interface PlayerSendSink : ProtocolSink {
 
     /** `Player::sendLeaderTeamFinder(bool reset)` (player.cpp:1808). */
@@ -196,6 +202,7 @@ interface PlayerSendSink : ProtocolSink {
      * so the payload crosses this seam as the already-serialized byte array.
      */
     fun sendNetworkMessage(payload: ByteArray)
+
 }
 
 /**
@@ -257,6 +264,11 @@ class PlayerFrameSink(
     private val shopHiddenSellItems: (Player) -> Boolean = { false },
     /** `g_game().getCreatureByID` behind the known-set eviction (protocolgame.cpp:2346). */
     creatureById: (Long) -> Creature? = { null },
+    /**
+     * `ExpertPvp::isRetroPvpWorldType()` (expert_pvp.cpp:375) behind the
+     * blessing-window retro layout (protocolgame.cpp:5906).
+     */
+    private val isRetroPvpWorldType: () -> Boolean = { false },
 ) : ProtocolFrameSink(player, map, creatureById), PlayerSendSink {
 
     override fun frameAllocator(): ByteBufAllocator = frameAllocatorProvider()
@@ -267,6 +279,39 @@ class PlayerFrameSink(
         val out = frameAllocator().buffer()
         out.build()
         writeFrame(out)
+    }
+
+    // --- blessing window ----------------------------------------------------------
+
+    /**
+     * `ProtocolGame::sendBlessingWindow()` (protocolgame.cpp:5899-5968): the
+     * `oldProtocol || version < 1100` early return, the per-blessing stored
+     * counts (with and without the store summary), the promoted/skull/amulet
+     * of loss flags and the pre-computed equipment-loss bytes.
+     */
+    override fun sendBlessingWindow() {
+        if (oldProtocol || protocolVersion < 1100) {
+            return
+        }
+
+        val blessingCounts = (1..BLESSING_COUNT).map { player.getBlessingCount(it) }
+        val storeCounts = (1..BLESSING_COUNT).map { player.getBlessingCount(it, storeCount = true) }
+
+        val skull = player.getSkull()
+        val hasSkull = skull == Skulls_t.SKULL_RED || skull == Skulls_t.SKULL_BLACK
+        val usingAol = player.getInventoryItem(Slots_t.CONST_SLOT_NECKLACE)?.id == PlayerDeathState.ITEM_AMULETOFLOSS
+
+        emitFrame {
+            BlessingWindowWriter.writeBlessingWindow(
+                out = this,
+                blessingCounts = blessingCounts,
+                storeCounts = storeCounts,
+                retro = isRetroPvpWorldType(),
+                promoted = player.isPromoted(),
+                hasSkull = hasSkull,
+                usingAol = usingAol,
+            )
+        }
     }
 
     // --- team finder -------------------------------------------------------------

@@ -913,9 +913,10 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // Game::playerEquipItem (game.cpp:4159) is not ported; the
-                            // decoded command only marks the confinement boundary
-                            // (PARITY GAP).
+                            // Game::playerEquipItem (game.cpp:4159): slot resolution,
+                            // necklace/ring/action gates and the backpack/loot-pouch
+                            // search run on the WorldCommit lane.
+                            context.game?.playerEquipItem(player.id, command.itemId, command.hasTier, command.tier)
                         }
                         true
                     }
@@ -1374,12 +1375,10 @@ object GamePacketRouter {
                     if (command == null) {
                         false
                     } else {
-                        context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // ProtocolGame::sendBlessingWindow (protocolgame.cpp:5899)
-                            // serializes the player blessing state through the protocol
-                            // output, which this context does not provide; the decoded
-                            // command only marks the confinement boundary (PARITY GAP).
-                        }
+                        // `case 0xCF: sendBlessingWindow();` (protocolgame.cpp:2009-2010):
+                        // the client request re-serializes the player's blessing state
+                        // through the session sink.
+                        (context.sessionSink ?: player.protocolSink)?.sendBlessingWindow()
                         true
                     }
                 }
@@ -1390,10 +1389,10 @@ object GamePacketRouter {
                         false
                     } else {
                         context.dispatcher.dispatch(DispatcherLane.WorldCommit) {
-                            // Game::playerRequestOutfit (game.cpp:7206) gates on
-                            // ALLOW_CHANGEOUTFIT and calls Player::sendOutfitWindow,
-                            // which is not ported; the decoded command only marks the
-                            // confinement boundary (PARITY GAP).
+                            // Game::playerRequestOutfit (game.cpp:7206): gated by
+                            // ALLOW_CHANGEOUTFIT, otherwise the outfit window is sent
+                            // through the session sink.
+                            context.game?.playerRequestOutfit(player.id)
                         }
                         true
                     }

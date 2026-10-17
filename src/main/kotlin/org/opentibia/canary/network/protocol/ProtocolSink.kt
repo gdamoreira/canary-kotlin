@@ -75,6 +75,21 @@ private val logger = io.github.oshai.kotlinlogging.KotlinLogging.logger {}
  */
 interface ProtocolSink : VipClient, LivestreamClient {
 
+    /**
+     * `ProtocolGame::version` (protocolgame.hpp:639): the negotiated client
+     * version behind the `version < 1100` sender gates (e.g.
+     * `sendBlessingWindow`, protocolgame.cpp:5901).
+     */
+    val protocolVersion: Int
+
+    /**
+     * `ProtocolGame::sendBlessingWindow()` (0x9B, protocolgame.cpp:5899-5968):
+     * the `!player`/`oldProtocol`/`version < 1100` guards live in the session
+     * transport. Transports without the negotiated profile stay silent.
+     */
+    fun sendBlessingWindow() {
+    }
+
     /** `ProtocolGame::sendTextMessage(TextMessage)` (0xB4, protocolgame.cpp:6070). */
     override fun sendTextMessage(type: MessageClass, text: String)
 
@@ -324,6 +339,15 @@ abstract class ProtocolFrameSink(
      * transports override it from their negotiated profile.
      */
     override var oldProtocol: Boolean = false
+
+    /**
+     * `ProtocolGame::version` (protocolgame.hpp:639): the negotiated client
+     * version behind the `version < 1100` sender gates (e.g.
+     * `sendBlessingWindow`, protocolgame.cpp:5901). The base transport keeps
+     * the current-profile [CLIENT_VERSION]; the session transport overrides it
+     * from its negotiated profile.
+     */
+    override val protocolVersion: Int = CLIENT_VERSION
 
     /** `ProtocolGame::m_isLivestreamBroadcaster` (protocolgame.hpp:645). */
     override var isLivestreamBroadcaster: Boolean = false
@@ -1065,6 +1089,11 @@ class NettyProtocolSink private constructor(
     private val channel: Channel,
     private val sessionPlayer: Player,
     private val delegate: PlayerFrameSink,
+    /**
+     * `ExpertPvp::isRetroPvpWorldType()` (expert_pvp.cpp:375) behind the
+     * blessing-window retro layout (protocolgame.cpp:5906).
+     */
+    private val isRetroPvpWorldType: () -> Boolean,
     /** `Player::getShopOwner` (player.cpp:6123-6125) behind `sendSaleItemList`. */
     private val shopOwner: (Player) -> Npc?,
     /** `ProtocolGame` session state behind the self appear frame (protocolgame.cpp:8641-8682). */
@@ -1093,6 +1122,8 @@ class NettyProtocolSink private constructor(
         playerNameByGuid: (Long) -> String = { "" },
         /** `g_game().getGuild(id, true)->getName()` behind the login-mode 0xCA whitelist. */
         guildNameById: (Long) -> String = { "" },
+        /** `ExpertPvp::isRetroPvpWorldType()` behind the blessing-window retro layout. */
+        isRetroPvpWorldType: () -> Boolean = { false },
     ) : this(
         channel,
         player,
@@ -1109,7 +1140,9 @@ class NettyProtocolSink private constructor(
             },
             basicDataSpells = { basicDataSpellsOf(player) },
             creatureById = creatureById,
+            isRetroPvpWorldType = isRetroPvpWorldType,
         ),
+        isRetroPvpWorldType,
         shopOwner,
         selfAppearTail,
         weaponProficiencyUpgradeAvailable,
@@ -1141,6 +1174,9 @@ class NettyProtocolSink private constructor(
      * profileOldProtocol`, protocolgame.cpp:1207) and `LivestreamManager` only
      * reads it, so the setter is a no-op.
      */
+    override val protocolVersion: Int
+        get() = selfAppearTail.clientVersion
+
     override var oldProtocol: Boolean
         get() = selfAppearTail.oldProtocol
         set(value) {

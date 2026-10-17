@@ -1111,6 +1111,10 @@ class CanaryServer(
         // booted `{CORE_DIRECTORY}/XML/mounts.xml` registry instead of a
         // per-player empty copy.
         mountDefinitions = mounts,
+        // `ExpertPvp::isRetroPvpWorldType()` (expert_pvp.cpp:375) behind the
+        // blessing-window retro layout; `configuredWorldType` is the resolved
+        // `WORLD_TYPE` string.
+        isRetroPvpWorldType = { ExpertPvp.isRetroPvpWorldTypeName(configuredWorldType ?: "") },
     )
 
     /**
