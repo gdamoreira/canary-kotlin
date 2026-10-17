@@ -164,6 +164,7 @@ canary-kotlin/
 │   │   ├── implementation-status.md  # Parity inventory, 56-feature matrix, audit, improvements
 │   │   ├── architecture-and-roadmap.md  # Architecture mapping, parity strategy, roadmap
 │   │   ├── feature-history.md    # Aggregated 64 feature specifications (001–064)
+│   │   ├── parity-gaps-and-next-steps.md  # Ranked parity backlog (P0–P3) + live-validation checklist
 │   │   └── wave-history.md       # Aggregated wave plans (20–60)
 ├── src/
 │   ├── main/
