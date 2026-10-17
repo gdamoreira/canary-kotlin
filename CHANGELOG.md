@@ -865,8 +865,17 @@ All notable technical milestones, architectural transformations, feature impleme
 
 ---
 
+### Phase 92: OTCR Sender Composition and the Attached-Effects Host Adapter
+- **OTCR senders on the sink** — `ProtocolSink`/`PlayerFrameSink` now expose the OTCR-only frames with the C++ `!isOTCR` early return: `sendAttachedEffect` (0x34), `sendDetachEffect` (0x35), `sendShader` (0x36), `sendMapShader` (0x37) and `sendPlayerTyping` (0x38, protocolgame.cpp:11809-11867). The per-session `ProtocolGame::isOTCR` flag rides the sink, set on both login paths from the preamble.
+- **Attached-effects client** — `PlayerAttachedEffects`'s `m_player.client` seam (player_attached_effects.cpp:844-874) is composed over the session sink, so the wing/aura/effect/shader toggles actually send instead of hitting a dead seam.
+- **Host adapter** — `Player::isRandomMounted` (player.cpp:12943) and `Player::sendOutfitWindow` (player.cpp:2541) resolve the live mount flag and the outfit-window session seam, so random-mount sampling works and the toggle paths refresh the client window.
+- **Tests** — `PlayerFrameSinkOtcSendersTest` (5), `PlayerAttachedEffectsHostAdapterTest` (3).
+- **838 suites / 8542 tests, all green.**
+
+---
+
 ### Current Status
-- **Automated Tests**: **836 test suites / 8534 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
+- **Automated Tests**: **838 test suites / 8542 tests** passing cleanly on **Java 25 LTS** via `./gradlew test` (all `@Test` methods discovered; zero Kotlin warnings).
 - **Gameplay Features**: **56 / 56 implemented**; the 15 advanced systems (`docs/development/feature-history.md`) are delivered as C++ engine cores + application services + protocol layer.
 - **Combat & Lua infrastructure**: Combat stack (`CombatDamage`/`Combat`/`condition`), Lua binding layer + event dispatch, protocol parsers/serializers, feature persistence, vocations, and config gates in place.
 - **Residual work**: per-feature protocol sends, deeper persistence, and Lua-driven side effects — tracked in `docs/development/implementation-status.md`.

@@ -80,12 +80,19 @@ Rules:
     `PlayerAttachedEffects::tameShader` and the OTCR lists resolve the booted
     definitions instead of an empty per-player copy.
 - **Remaining:**
-  - the OTCR-only senders (`sendAttachedEffect`, `sendDetachEffect`,
-    `sendShader`, `sendMapShader`, `sendPlayerTyping`,
-    protocolgame.cpp:11809-11873) still need their live call sites;
+  - the `Game` spectator fan-outs (`Game::sendAttachedEffect`/`sendDetachEffect`
+    /`sendShader`, game.cpp:12674-12708) and `Game::playerSetTyping` still need
+    their world-side call sites — the sink senders and the player-side
+    attached-effects client are wired (wave 92);
   - the inbound OTCR reads (outfit-request wing/aura/effect/shader,
     protocolgame.cpp:2503-2506) and the `AddItem`/creature-description shader
     tails (protocolgame.cpp:913, 9773, 10073) are not ported.
+- **Related, done in wave 92:** the OTCR senders `0x34`-`0x38` are on the sink
+  surface (gated by the per-session `isOTCR`), the player's attached-effects
+  client is composed (`m_player.client`,
+  player_attached_effects.cpp:844-874), and the attached-effects host adapter's
+  `isRandomMounted`/`sendOutfitWindow` now resolve live state and the session
+  seam (closes P1-60).
 - **Both login paths covered:** the game login and the livestream viewer login
   (`castViewerLogin`, protocolgame.cpp:12381) open with the same preamble.
 
@@ -138,7 +145,7 @@ Rules:
 | --- | --- | --- | --- |
 | P1-1 | Party opcodes (invite/join/revoke/pass/leave/shared-exp) decode but never apply: the router context has no global player registry | `GamePacketRouter.kt:480` | Route `playerInviteToParty`…`playerEnableSharedPartyExperience` through `context.game` (`getPlayerByGUID`-style seam) |
 | P1-2 | TeamFinder: member status/join against online members inert; `sendLeaderTeamFinder`/`sendTeamFinderList` senders unported | `GamePacketRouter.kt:838`, `TeamFinderPacketHandler.kt:113` | Resolve members via the game registry; wire the two senders through the sink |
-| P1-3 | `Game::playerSetTyping` spectator broadcast `sendPlayerTyping` unported | `GamePacketRouter.kt:867` | Add the 0x?? sender + spectator fanout |
+| P1-3 | `Game::playerSetTyping` spectator broadcast `sendPlayerTyping` unported (the sink sender is wired, wave 92) | `GamePacketRouter.kt:867` | Add the 0x?? sender + spectator fanout |
 | P1-4 | `Game::playerSetMonsterPodium` writes podium custom attributes + tile resend — podium engine unported | `GamePacketRouter.kt:989` | Port podium item state (custom attributes dependency below) |
 | P1-5 | `playerCancelAttackAndFollow` tail: `resetLoginProtection`, follow state machine, `stopWalk`, cancel-target send | `GamePacketRouter.kt:1203` | Port the missing three calls |
 | P1-6 | Transaction details (`0xC9`) response sender unported (request is a read-and-discard) | `TransactionDetailsPacketHandler.kt:10` | Port `sendTransactionDetails` |
@@ -220,7 +227,7 @@ Rules:
 | P1-57 | `Player::setGuild` `ExpertPvp` broadcast unported; level-1 rank resolved through the injected `Guild` | `Creature.kt:2731` | Port the broadcast |
 | P1-58 | `resetIdleTime` idle-logout clock not modelled | `Creature.kt:5678` | Model the clock |
 | P1-59 | `PlayerSendState` bank-balance seam zero (`getBankBalance` only on the uncomposed `PlayerVitalsState`) | `PlayerSendState.kt:81` | Compose the vitals state |
-| P1-60 | `PlayerFeatures.isRandomMounted()`/`sendOutfitWindow()` note is stale after wave 90 — refresh before the next sweep | `PlayerFeatures.kt:857` | Marker refresh |
+| P1-60 | `PlayerFeatures.isRandomMounted()`/`sendOutfitWindow()` inert defaults — **closed in wave 92**: the attached-effects host adapter now resolves the live mount flag and the session `sendOutfitWindow` seam | `PlayerFeatures.kt` | Done |
 | P1-61 | `setEditHouse` facade advances `windowTextId` but the player members it writes are missing | `Game.kt:6416` | Port the members |
 
 ### 3.7 Map, items, houses, containers
