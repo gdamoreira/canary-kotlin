@@ -52,7 +52,7 @@ object OutfitWindowComposer {
     ) : OutfitWindowPayload
 
     /** `sendOutfitWindow` (protocolgame.cpp:9027-9258); [legacy] selects the old-protocol layout. */
-    fun compose(player: Player, deps: Deps, legacy: Boolean = false): OutfitWindowPayload {
+    fun compose(player: Player, deps: Deps, legacy: Boolean = false, isOTCR: Boolean = false): OutfitWindowPayload {
         val currentOutfit = player.getDefaultOutfit()
         val isSupportOutfit = player.isWearingSupportOutfit()
         val supportsMount = deps.outfitSupportsMount(currentOutfit.lookType)
@@ -93,6 +93,8 @@ object OutfitWindowComposer {
                 currentOutfit = currentOutfit,
                 outfits = OutfitWindowWriter.buildLegacyOutfitEntries(source),
                 mounts = mounts,
+                isOTCR = isOTCR,
+                customOtcr = if (isOTCR) buildCustomOtcrFrame(player, deps) else null,
             )
         }
 
@@ -110,7 +112,24 @@ object OutfitWindowComposer {
                     familiars = deps.familiars.getFamiliars(player.getVocationId()),
                     getFamiliar = { familiar -> player.features.familiars.getFamiliar(familiar) },
                 ),
+                isOTCR = isOTCR,
+                customOtcr = if (isOTCR) buildCustomOtcrFrame(player, deps) else null,
             ),
+        )
+    }
+
+    /**
+     * The `sendOutfitWindowCustomOTCR` lists (protocolgame.cpp:11880-11956):
+     * every registry wing/aura/effect/shader the player owns, in registry order
+     * with their `uint16_t` id and name.
+     */
+    private fun buildCustomOtcrFrame(player: Player, deps: Deps): OutfitWindowWriter.OutfitWindowCustomOtcrFrame {
+        val attached = player.features.attachedEffects
+        return OutfitWindowWriter.OutfitWindowCustomOtcrFrame(
+            wings = deps.attachedEffects.getWings().filter { attached.hasWing(it) },
+            auras = deps.attachedEffects.getAuras().filter { attached.hasAura(it) },
+            effects = deps.attachedEffects.getEffects().filter { attached.hasEffect(it) },
+            shaders = deps.attachedEffects.getShaders().filter { attached.hasShader(it) },
         )
     }
 }

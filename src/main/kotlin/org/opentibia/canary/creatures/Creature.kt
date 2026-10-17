@@ -17,6 +17,7 @@ import org.opentibia.canary.combat.condition.Outfit
 import org.opentibia.canary.combat.condition.Skill
 import org.opentibia.canary.combat.condition.SpellGroup
 import org.opentibia.canary.combat.condition.Stat
+import org.opentibia.canary.creatures.appearance.effects.AttachedEffects
 import org.opentibia.canary.creatures.appearance.outfit.OutfitEntry
 import org.opentibia.canary.creatures.appearance.outfit.Outfits
 import org.opentibia.canary.creatures.grouping.Group
@@ -33,7 +34,9 @@ import org.opentibia.canary.creatures.players.CountBlock
 import org.opentibia.canary.creatures.players.ExivaRestrictions
 import org.opentibia.canary.creatures.players.ITEM_FEMALE_CORPSE
 import org.opentibia.canary.creatures.players.ITEM_MALE_CORPSE
+import org.opentibia.canary.creatures.players.OperatingSystem_t
 import org.opentibia.canary.creatures.players.PlayerActionTimers
+import org.opentibia.canary.creatures.players.PlayerClientState
 import org.opentibia.canary.creatures.players.PlayerDeathState
 import org.opentibia.canary.creatures.players.PlayerExperienceState
 import org.opentibia.canary.creatures.players.PlayerLightState
@@ -2457,6 +2460,17 @@ class Player(
     attachedOutfits: Outfits = Outfits(),
     /** `Familiars::getInstance()` definition registry forwarded to [PlayerFeatures]. */
     familiarDefinitions: Familiars = Familiars(),
+    /**
+     * `g_game().getAttachedEffects()` definition registry
+     * (`player_attached_effects.cpp:56, 63, 110`) forwarded to
+     * [PlayerFeatures.attachedEffectDefinitions]: the composition root passes
+     * the world registry `Game::initAttachedEffects` loaded from
+     * `{CORE_DIRECTORY}/XML/attachedeffects.xml` (game.cpp:983), so
+     * `PlayerAttachedEffects::tameShader` (player_attached_effects.cpp:674) and
+     * the OTCR outfit-window list resolve the booted definitions instead of a
+     * per-player empty copy.
+     */
+    attachedEffectDefinitions: AttachedEffects = AttachedEffects(),
 ) : Creature(id, name, maxHealth, health, maxMana, mana, speed, position), BatchUpdateActor {
 
     /**
@@ -2518,6 +2532,7 @@ class Player(
         mountDefinitions = mountDefinitions,
         attachedOutfits = attachedOutfits,
         familiarDefinitions = familiarDefinitions,
+        attachedEffectDefinitions = attachedEffectDefinitions,
         sendOutfitWindow = { protocolSink?.sendOutfitWindow() },
     )
 
@@ -5550,6 +5565,36 @@ class Player(
 
     /** `Player::getProtocolVersion` (player.cpp:1022-1030): the attached client version, `0` without one. */
     fun getProtocolVersion(): Int = protocolVersionProvider()
+
+    /**
+     * `Player::client->oldProtocol` behind `Player::isOldProtocol`
+     * (player.cpp:1018-1020) seam: the session handler binds the negotiated
+     * profile's `ProtocolFeature.OldProtocolCompat` feature, the unbound
+     * default `false` models `Player::client == nullptr`.
+     */
+    var oldProtocolProvider: () -> Boolean = { false }
+
+    /**
+     * `Player`'s client/session accessors (`player.cpp:1010-1030`,
+     * 3479-3484, 7528-7530) — the operating system, old-protocol and
+     * protocol-version reads, connection protection and the static id ranges.
+     * Composed lazily over this player, exactly like the C++ members.
+     */
+    val clientState: PlayerClientState by lazy(LazyThreadSafetyMode.NONE) {
+        PlayerClientState(
+            player = this,
+            clientOldProtocol = { oldProtocolProvider() },
+            clientVersion = { protocolVersionProvider() },
+        )
+    }
+
+    /** `Player::getOperatingSystem` (player.cpp:1010-1012). */
+    fun getOperatingSystem(): OperatingSystem_t = clientState.getOperatingSystem()
+
+    /** `Player::setOperatingSystem` (player.cpp:1014-1016). */
+    fun setOperatingSystem(clientos: OperatingSystem_t) {
+        clientState.setOperatingSystem(clientos)
+    }
 
     /**
      * `Player::sendTextMessage(TextMessage)` (player.cpp:6350-6407) frame seam:

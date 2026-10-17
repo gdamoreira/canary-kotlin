@@ -6,6 +6,7 @@ import org.opentibia.canary.combat.condition.Outfit
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.appearance.effects.AttachedEffects
 import org.opentibia.canary.creatures.appearance.outfit.Outfits
+import org.opentibia.canary.creatures.players.components.PlayerStorage
 import org.opentibia.canary.creatures.grouping.Group
 import org.opentibia.canary.map.Position
 import org.opentibia.canary.systems.familiar.Familiars
@@ -40,6 +41,17 @@ class OutfitWindowComposerTest {
         </familiars>
     """.trimIndent()
 
+    private val attachedEffectsXml = """
+        <attachedeffects>
+            <wing id="1" name="Wing One"/>
+            <wing id="2" name="Wing Two"/>
+            <aura id="1" name="Aura One"/>
+            <effect id="1" name="Effect One"/>
+            <shader id="1" name="Shader One"/>
+            <shader id="2" name="Shader Two"/>
+        </attachedeffects>
+    """.trimIndent()
+
     private fun deps(
         enableSupportOutfit: Boolean = true,
         outfitSupportsMount: (Int) -> Boolean = { true },
@@ -51,7 +63,7 @@ class OutfitWindowComposerTest {
             outfits = outfits,
             mounts = mounts,
             familiars = familiars,
-            attachedEffects = AttachedEffects(),
+            attachedEffects = AttachedEffects().also { it.loadFromXml(attachedEffectsXml) },
             outfitSupportsMount = outfitSupportsMount,
             enableSupportOutfit = enableSupportOutfit,
         )
@@ -70,6 +82,7 @@ class OutfitWindowComposerTest {
         mountDefinitions = deps.mounts,
         attachedOutfits = deps.outfits,
         familiarDefinitions = deps.familiars,
+        attachedEffectDefinitions = deps.attachedEffects,
     ).also { player ->
         if (access) {
             player.group = Group(id = 6, access = true)
@@ -189,6 +202,54 @@ class OutfitWindowComposerTest {
 
         assertThat(payload.frame.currentOutfit.lookWing).isEqualTo(0)
         assertThat(payload.frame.currentOutfit.lookAura).isEqualTo(0)
+    }
+
+    @Test
+    fun `an OTCR client gets the custom block with only the owned entries`() {
+        val deps = deps()
+        val player = hero(9, deps)
+        // Wing 1 (`PSTRG_WING_RANGE_START` bit 0), aura 1 and effect 1 through
+        // the storage bitmaps, shader 1 through `tameShader`
+        // (player_attached_effects.cpp:197-210, 385-397, 573-586, 714-720).
+        player.storage().add(PlayerStorage.PSTRG_WING_RANGE_START, 1)
+        player.storage().add(PlayerStorage.PSTRG_AURA_RANGE_START, 1)
+        player.storage().add(PlayerStorage.PSTRG_EFFECT_RANGE_START, 1)
+        player.features.attachedEffects.tameShader(1)
+
+        val payload = OutfitWindowComposer.compose(player, deps, isOTCR = true) as
+            OutfitWindowComposer.CurrentPayload
+
+        assertThat(payload.frame.isOTCR).isTrue()
+        val custom = payload.frame.customOtcr
+        assertThat(custom).isNotNull
+        assertThat(custom!!.wings.map { it.name }).containsExactly("Wing One")
+        assertThat(custom.auras.map { it.name }).containsExactly("Aura One")
+        assertThat(custom.effects.map { it.name }).containsExactly("Effect One")
+        assertThat(custom.shaders.map { it.name }).containsExactly("Shader One")
+    }
+
+    @Test
+    fun `a non-OTCR client gets no custom block`() {
+        val deps = deps()
+        val player = hero(10, deps, access = true)
+
+        val payload = OutfitWindowComposer.compose(player, deps) as OutfitWindowComposer.CurrentPayload
+
+        assertThat(payload.frame.isOTCR).isFalse()
+        assertThat(payload.frame.customOtcr).isNull()
+    }
+
+    @Test
+    fun `the legacy payload carries the OTCR flag and custom block`() {
+        val deps = deps()
+        val player = hero(11, deps, access = true)
+
+        val payload = OutfitWindowComposer.compose(player, deps, legacy = true, isOTCR = true) as
+            OutfitWindowComposer.LegacyPayload
+
+        assertThat(payload.isOTCR).isTrue()
+        assertThat(payload.customOtcr?.wings?.map { it.name }).containsExactly("Wing One", "Wing Two")
+        assertThat(payload.customOtcr?.shaders?.map { it.name }).containsExactly("Shader One", "Shader Two")
     }
 
 }

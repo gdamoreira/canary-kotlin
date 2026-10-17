@@ -58,65 +58,32 @@ class LoginFeatureWriterTest {
     }
 
     @Test
-    fun `writes the OTCR login preamble with the feature and opcode frames`() {
+    fun `writes the OTCR login opcode frame`() {
         val out = Unpooled.buffer()
 
-        LoginFeatureWriter.writeClientLoginPreamble(
-            out,
-            operatingSystem = LoginFeatureWriter.CLIENTOS_OTCLIENT_LINUX,
-            otclientV8 = 0,
-            enabledFeatures = listOf(1),
-            disabledFeatures = emptyList(),
-        )
+        LoginFeatureWriter.writeClientLoginOpcodeFrame(out)
 
-        assertThat(out.toByteArray()).containsExactly(
-            *bytes(
-                0x43,
-                0x01, 0x00,
-                0x01, 0x01,
-                0x32,
-                0x00,
-                0x00, 0x00,
-            )
-        )
+        assertThat(out.toByteArray()).containsExactly(*bytes(0x32, 0x00, 0x00, 0x00))
     }
 
     @Test
-    fun `writes the OTCv8 preamble features without the OTCR list`() {
-        val out = Unpooled.buffer()
+    fun `the OTCR feature list is sent only to a non-OTCv8 OTClient`() {
+        assertThat(
+            LoginFeatureWriter.sendsOTCRFeatures(
+                operatingSystem = LoginFeatureWriter.CLIENTOS_OTCLIENT_LINUX,
+                otclientV8 = 0,
+            ),
+        ).isTrue()
 
-        LoginFeatureWriter.writeClientLoginPreamble(
-            out,
-            operatingSystem = LoginFeatureWriter.CLIENTOS_OTCLIENT_LINUX,
-            otclientV8 = 8,
-            enabledFeatures = listOf(1),
-            disabledFeatures = emptyList(),
-        )
+        // An OTCv8 login takes the `sendFeatures` map instead.
+        assertThat(
+            LoginFeatureWriter.sendsOTCRFeatures(
+                operatingSystem = LoginFeatureWriter.CLIENTOS_OTCLIENT_LINUX,
+                otclientV8 = 8,
+            ),
+        ).isFalse()
 
-        assertThat(out.toByteArray()).containsExactly(
-            *bytes(
-                0x43,
-                0x01, 0x00,
-                0x50, 0x01,
-                0x32,
-                0x00,
-                0x00, 0x00,
-            )
-        )
-    }
-
-    @Test
-    fun `the login preamble is empty for regular clients`() {
-        val out = Unpooled.buffer()
-
-        LoginFeatureWriter.writeClientLoginPreamble(
-            out,
-            operatingSystem = 1,
-            otclientV8 = 0,
-            enabledFeatures = listOf(1),
-            disabledFeatures = emptyList(),
-        )
-
-        assertThat(out.toByteArray()).isEmpty()
+        // A plain Tibia client never enters the OTClient arm.
+        assertThat(LoginFeatureWriter.sendsOTCRFeatures(operatingSystem = 2, otclientV8 = 0)).isFalse()
     }
 }

@@ -11,13 +11,16 @@ import org.opentibia.canary.account.AccountType
 import org.opentibia.canary.combat.condition.ConditionType
 import org.opentibia.canary.combat.condition.Skill
 import org.opentibia.canary.combat.condition.Stat
+import org.opentibia.canary.config.CANARY_FORCED_ENABLED_FEATURES_OTC
 import org.opentibia.canary.config.ConfigKeys
+import org.opentibia.canary.config.ConfigManager
 import org.opentibia.canary.creatures.Player
 import org.opentibia.canary.creatures.appearance.outfit.Outfits
 import org.opentibia.canary.creatures.players.getLootPouch
 import org.opentibia.canary.network.protocol.outfit.OutfitWindowComposer
 import org.opentibia.canary.systems.familiar.Familiars
 import org.opentibia.canary.creatures.monsters.MonsterType
+import org.opentibia.canary.creatures.players.OperatingSystem_t
 import org.opentibia.canary.creatures.players.PlayerTask
 import org.opentibia.canary.creatures.players.getAllSaleItemIdAndCount
 import org.opentibia.canary.creatures.players.updateState
@@ -52,6 +55,7 @@ import org.opentibia.canary.network.crypto.RsaCipher
 import org.opentibia.canary.network.crypto.XteaCipher
 import org.opentibia.canary.network.message.readTibiaString
 import org.opentibia.canary.network.message.writeTibiaString
+import org.opentibia.canary.network.protocol.login.LoginFeatureWriter
 import org.opentibia.canary.network.protocol.livestream.LivestreamViewerLogin
 import org.opentibia.canary.network.protocol.livestream.LivestreamViewerTransport
 import org.opentibia.canary.network.protocol.misc.MiscSessionWriter
@@ -194,6 +198,15 @@ class GameHandler(
     private val familiarDefinitions: Familiars = Familiars(),
     /** `g_configManager().getBoolean(ENABLE_SUPPORT_OUTFIT)` (protocolgame.cpp:9128). */
     private val enableSupportOutfit: Boolean = true,
+    /**
+     * `g_configManager()` seam behind `ProtocolGame::sendOTCRFeatures`'s
+     * `getEnabledFeaturesOTC()`/`getDisabledFeaturesOTC()`
+     * (protocolgame.cpp:10709-10710). `null` keeps the C++
+     * `ConfigManager::loadLuaOTCFeatures` fallback list
+     * (configmanager.cpp:596-599), exactly like a `config.lua` without an
+     * `OTCRFeatures` table.
+     */
+    private val configManager: ConfigManager? = null,
 ) : SimpleChannelInboundHandler<ByteBuf>() {
 
     private var player: Player? = null
@@ -231,6 +244,36 @@ class GameHandler(
      * `ProtocolGame::login` (protocolgame.cpp:1383).
      */
     private var clientVersionU32: Int = 0
+
+    /**
+     * `ProtocolGame::operatingSystem` (`onRecvFirstMessage`,
+     * protocolgame.cpp:1174): the client-reported `uint16_t` OS byte that
+     * `ProtocolGame::login` mirrors onto the player
+     * (`player->setOperatingSystem`, protocolgame.cpp:1031) and that gates the
+     * login preamble (`operatingSystem >= CLIENTOS_OTCLIENT_LINUX`,
+     * protocolgame.cpp:12366).
+     */
+    private var operatingSystem: Int = 0
+
+    /**
+     * `ProtocolGame::otclientV8` (protocolgame.hpp:644): the OTCv8 build probed
+     * from the login packet (`gameLoginLayout->hasOtcV8Probe`,
+     * protocolgame.cpp:1378-1383), `0` when the client did not announce
+     * `"OTCv8"`. Selects the `sendFeatures` OTCv8 map over the `sendOTCRFeatures`
+     * list in the login preamble (protocolgame.cpp:12362-12370).
+     */
+    private var otclientV8: Int = 0
+
+    /**
+     * `ProtocolGame::isOTCR` (protocolgame.hpp:642): set by
+     * `sendOTCRFeatures` (protocolgame.cpp:10707) when an OTClient that is not
+     * OTCv8 negotiates the OTCR feature list. Gates the OTCR-only frames; the
+     * outfit-window custom block is wired (protocolgame.cpp:9254,
+     * 11880-11956), the item/creature shader tails and the
+     * attached-effect/shader/typing senders (protocolgame.cpp:913, 9773, 10073,
+     * 11809-11873) are still pending.
+     */
+    private var isOTCR: Boolean = false
 
     /**
      * `ProtocolGame::protocolProfile` (protocolgame.hpp) resolved from the
@@ -466,6 +509,9 @@ class GameHandler(
 
         val os = msg.readUnsignedShortLE()
         val version = msg.readUnsignedShortLE()
+        operatingSystem = os
+        otclientV8 = 0
+        isOTCR = false
 
         // `ProtocolGame::onRecvFirstMessage` (protocolgame.cpp:1191-1210): a
         // version without a registered game-login layout, a disallowed profile
@@ -553,6 +599,21 @@ class GameHandler(
             }
         }
 
+        // `gameLoginLayout->hasOtcV8Probe` (protocolgame.cpp:1378-1383): the
+        // `"OTCv8"` `uint16_t`-length probe followed by the OTCv8 build number.
+        // Reading never crosses the decrypted RSA block; a short or non-OTCv8
+        // tail leaves `otclientV8 = 0` like an official client's zero padding.
+        if (layout.hasOtcV8Probe && rsaBuf.readableBytes() >= 2) {
+            val probeLength = rsaBuf.readUnsignedShortLE()
+            if (probeLength == 5 && rsaBuf.readableBytes() >= 5) {
+                val probe = ByteArray(5)
+                rsaBuf.readBytes(probe)
+                if (probe.toString(StandardCharsets.US_ASCII) == "OTCv8" && rsaBuf.readableBytes() >= 2) {
+                    otclientV8 = rsaBuf.readUnsignedShortLE()
+                }
+            }
+        }
+
         val tokens = sessionKey.split("\n")
         val accountName = tokens.getOrNull(0) ?: ""
         val password = tokens.getOrNull(1) ?: ""
@@ -596,6 +657,12 @@ class GameHandler(
             return
         }
 
+        // `ProtocolGame::sendClientLoginPreamble` (protocolgame.cpp:936,
+        // 12361-12378): `ProtocolGame::login` opens with the feature
+        // negotiation, before the load, the world frames and any later
+        // disconnect.
+        sendClientLoginPreamble(ctx)
+
         // Canary resolves the character id (`IOLoginDataLoad::preLoadPlayer`)
         // and materializes the persisted systems through
         // `IOLoginData::loadPlayerById(..., false)` before the creature is
@@ -609,6 +676,15 @@ class GameHandler(
             return
         }
         this.player = activePlayer
+
+        // `ProtocolGame::login` (protocolgame.cpp:1031):
+        // `player->setOperatingSystem(operatingSystem)`, plus the port's
+        // `Player::client->oldProtocol` seam behind `Player::isOldProtocol`
+        // (player.cpp:1018-1020).
+        activePlayer.setOperatingSystem(
+            OperatingSystem_t.entries.firstOrNull { it.value == operatingSystem } ?: OperatingSystem_t.CLIENTOS_NONE,
+        )
+        activePlayer.oldProtocolProvider = { oldProtocol }
 
         // `Creature::enqueueAsyncTask` admits async batches through
         // `g_dispatcher()` (creature.cpp:2031-2055); the port attaches the
@@ -654,6 +730,10 @@ class GameHandler(
                         enableSupportOutfit = enableSupportOutfit,
                     ),
                     legacy = legacy,
+                    // `ProtocolGame::isOTCR` (protocolgame.hpp:642) gates the
+                    // custom wings/auras/effects/shaders block
+                    // (protocolgame.cpp:9254, 11880-11956).
+                    isOTCR = isOTCR,
                 )
             },
         )
@@ -783,6 +863,11 @@ class GameHandler(
         version: Int,
     ): Boolean {
         val oldProtocol = sessionProfile.hasFeature(ProtocolFeature.OldProtocolCompat)
+
+        // `ProtocolGame::castViewerLogin` opens with the same feature
+        // negotiation (protocolgame.cpp:12381), before the viewer admission
+        // check and any disconnect.
+        sendClientLoginPreamble(ctx)
 
         var accepted = false
         var reason = ""
@@ -1023,6 +1108,10 @@ class GameHandler(
             mountDefinitions = mountDefinitions,
             attachedOutfits = outfitDefinitions,
             familiarDefinitions = familiarDefinitions,
+            // `g_game().getAttachedEffects()` (player_attached_effects.cpp:56):
+            // the world registry `Game::initAttachedEffects` loaded, so shader
+            // ownership and the OTCR lists resolve the booted definitions.
+            attachedEffectDefinitions = game.getAttachedEffects(),
         ).also { it.account = account }.also(::bindRegistries)
 
         val guid = loader.getGuidByName(characterName)
@@ -1045,6 +1134,7 @@ class GameHandler(
             mountDefinitions = mountDefinitions,
             attachedOutfits = outfitDefinitions,
             familiarDefinitions = familiarDefinitions,
+            attachedEffectDefinitions = game.getAttachedEffects(),
         )
         loaded.account = account
 
@@ -1273,19 +1363,51 @@ class GameHandler(
         if (version >= 1100) {
             sink?.sendInventoryIds()
         }
-
-        // Enable the OTClient module channel (extended opcode 0). Canary parses
-        // inbound extended opcodes only, but OTClient logs a hard error and its
-        // modules stay unusable until this enable arrives
-        // (otclient protocolgameparse.cpp:3822), so the port sends it at login.
-        sink?.sendExtendedOpcode(0, "")
     }
 
-    /** Queues one unframed protocol message on [ctx] (fire-and-forget). */
-    private inline fun writeFrame(ctx: ChannelHandlerContext, build: ByteBuf.() -> Unit) {
+    /**
+     * `g_configManager().getEnabledFeaturesOTC()`/`getDisabledFeaturesOTC()`
+     * behind `ProtocolGame::sendOTCRFeatures` (protocolgame.cpp:10709-10710).
+     * Without a composed config the pair is the C++
+     * `ConfigManager::loadLuaOTCFeatures` fallback
+     * (configmanager.cpp:596-599), exactly like a `config.lua` that declares no
+     * `OTCRFeatures` table.
+     */
+    private fun otcrFeatures(): Pair<List<Int>, List<Int>> {
+        val config = configManager ?: return CANARY_FORCED_ENABLED_FEATURES_OTC to emptyList()
+        return config.getEnabledFeaturesOTC() to config.getDisabledFeaturesOTC()
+    }
+
+    /**
+     * `ProtocolGame::sendClientLoginPreamble` (protocolgame.cpp:936, 12381,
+     * 12361-12378): the feature negotiation both login paths open with. Each
+     * C++ `writeToOutputBuffer` is its own message, and a plain Tibia client
+     * gets no frame at all. Records `ProtocolGame::isOTCR`
+     * (protocolgame.hpp:642) for the OTCR-only frames.
+     */
+    private fun sendClientLoginPreamble(ctx: ChannelHandlerContext) {
+        if (otclientV8 > 0) {
+            writeFrame(ctx) { LoginFeatureWriter.writeFeatures(this, otclientV8) }
+        }
+        if (operatingSystem >= LoginFeatureWriter.CLIENTOS_OTCLIENT_LINUX) {
+            isOTCR = LoginFeatureWriter.sendsOTCRFeatures(operatingSystem, otclientV8)
+            if (isOTCR) {
+                val enabledFeatures = otcrFeatures().first
+                val disabledFeatures = otcrFeatures().second
+                writeFrame(ctx) {
+                    LoginFeatureWriter.writeOTCRFeatures(this, enabledFeatures, disabledFeatures)
+                }
+            }
+            writeFrame(ctx) { LoginFeatureWriter.writeClientLoginOpcodeFrame(this) }
+        }
+    }
+
+    /** Queues one unframed protocol message on [ctx] (fire-and-forget), returning [build]'s result. */
+    private inline fun <T> writeFrame(ctx: ChannelHandlerContext, build: ByteBuf.() -> T): T {
         val out = ctx.alloc().buffer()
-        out.build()
+        val result = out.build()
         ctx.writeAndFlush(out)
+        return result
     }
 
     /**

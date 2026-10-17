@@ -161,9 +161,11 @@ interface ProtocolSink : VipClient, LivestreamClient {
     fun sendInventoryIds()
 
     /**
-     * Extended-opcode reply (`0x32`, OTClient module channel). Canary parses
-     * inbound extended opcodes only; the port also replies so OTClient enables
-     * its module channel (opcode 0) and resolves its latency pings (opcode 2).
+     * Extended-opcode frame (`0x32`). OTClient's module channel is enabled by
+     * the login preamble's `0x32 0x00 uint16_t 0x00` opcode frame
+     * (`ProtocolGame::sendClientLoginPreamble`, protocolgame.cpp:12372-12375);
+     * this sink seam carries the outbound replies, e.g. the latency ping-back
+     * (opcode 2).
      */
     fun sendExtendedOpcode(opcode: Int, buffer: String)
 

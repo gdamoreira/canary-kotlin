@@ -11,7 +11,7 @@ import java.util.Properties
 private val logger = KotlinLogging.logger {}
 
 /** Canary `ConfigManager::loadLuaOTCFeatures` fallback (src/config/configmanager.cpp:596-599). */
-private val CANARY_FORCED_ENABLED_FEATURES_OTC = listOf(101, 102, 103, 118)
+internal val CANARY_FORCED_ENABLED_FEATURES_OTC = listOf(101, 102, 103, 118)
 
 /** Integer ids inside a Canary `OTCRFeatures` list (`config.lua.dist:679-688`). */
 private val OTC_FEATURE_NUMBER = Regex("-?\\d+")

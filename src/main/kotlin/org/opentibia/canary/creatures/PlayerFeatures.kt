@@ -208,8 +208,12 @@ class PlayerFeatures(
     val titleRegistry: MutableTitleRegistry = MutableTitleRegistry(),
     /**
      * `g_game().getAttachedEffects()` (player_attached_effects.cpp:56,63,110)
-     * definition registry of [attachedEffects]; the composition root injects
-     * the instance loaded from `data/XML/attachedeffects.xml`.
+     * definition registry of [attachedEffects]: the session handler passes the
+     * world registry `Game::initAttachedEffects` loaded from
+     * `{CORE_DIRECTORY}/XML/attachedeffects.xml` (game.cpp:983), so the
+     * wing/aura/effect/shader look-ups, `tameShader` and the OTCR
+     * outfit-window lists resolve the booted definitions instead of an empty
+     * per-player copy.
      */
     val attachedEffectDefinitions: AttachedEffects = AttachedEffects(),
     /**

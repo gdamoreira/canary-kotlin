@@ -57,26 +57,21 @@ object LoginFeatureWriter {
         }
     }
 
-    /** `sendClientLoginPreamble` (protocolgame.cpp:12361-12378). */
-    fun writeClientLoginPreamble(
-        out: ByteBuf,
-        operatingSystem: Int,
-        otclientV8: Int,
-        enabledFeatures: List<Int>,
-        disabledFeatures: List<Int>,
-    ) {
-        if (otclientV8 > 0) {
-            writeFeatures(out, otclientV8)
-        }
-
-        if (operatingSystem >= CLIENTOS_OTCLIENT_LINUX) {
-            if (otclientV8 == 0) {
-                writeOTCRFeatures(out, enabledFeatures, disabledFeatures)
-            }
-
-            out.writeByte(PACKET_LOGIN_OPCODE)
-            out.writeByte(0x00)
-            out.writeShortLE(0x00)
-        }
+    /**
+     * The `0x32 0x00 uint16_t 0x00` frame every OTClient gets from
+     * `sendClientLoginPreamble` (protocolgame.cpp:12372-12375).
+     */
+    fun writeClientLoginOpcodeFrame(out: ByteBuf) {
+        out.writeByte(PACKET_LOGIN_OPCODE)
+        out.writeByte(0x00)
+        out.writeShortLE(0x00)
     }
+
+    /**
+     * The `sendOTCRFeatures` invocation of `sendClientLoginPreamble`
+     * (protocolgame.cpp:12366-12370); `true` is the `ProtocolGame::isOTCR` flag
+     * the C++ method leaves behind (protocolgame.cpp:10707).
+     */
+    fun sendsOTCRFeatures(operatingSystem: Int, otclientV8: Int): Boolean =
+        operatingSystem >= CLIENTOS_OTCLIENT_LINUX && otclientV8 == 0
 }

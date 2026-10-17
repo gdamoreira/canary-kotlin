@@ -278,12 +278,10 @@ class GameHandlerLoginVipBurstTest {
         val inventoryIds = readFrame(ch)
         assertThat(inventoryIds.readUnsignedByte().toInt()).isEqualTo(GameWindowWriter.PACKET_INVENTORY_IDS)
 
-        // The OTClient module channel enable (extended opcode 0).
-        val extendedOpcode = readFrame(ch)
-        assertThat(extendedOpcode.readUnsignedByte().toInt())
-            .isEqualTo(ExtendedOpcodePacketHandler.OPCODE_EXTENDED_OPCODE)
-        assertThat(extendedOpcode.readUnsignedByte().toInt()).isEqualTo(0)
-
+        // The login tail ends here: the OTClient module channel is enabled by
+        // the `sendClientLoginPreamble` opcode frame, which only an OTClient
+        // login receives (`operatingSystem >= CLIENTOS_OTCLIENT_LINUX`,
+        // protocolgame.cpp:12361-12378).
         assertThat(ch.readOutbound<ByteBuf>()).isNull()
     }
 
