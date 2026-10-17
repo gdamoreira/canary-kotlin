@@ -27,6 +27,7 @@ import org.opentibia.canary.creatures.players.animus_mastery.AnimusMastery
 import org.opentibia.canary.creatures.players.components.Achievement
 import org.opentibia.canary.creatures.players.components.AchievementPlayer
 import org.opentibia.canary.creatures.players.components.AchievementRegistry
+import org.opentibia.canary.creatures.players.components.AttachedEffectsClient
 import org.opentibia.canary.creatures.players.components.AttachedEffectsPlayer
 import org.opentibia.canary.creatures.players.components.BadgePlayer
 import org.opentibia.canary.creatures.players.components.CyclopediaPlayer
@@ -373,7 +374,7 @@ class PlayerFeatures(
      * `Player::sendOutfitWindow()` (`player.cpp:2541-2543`) reached by
      * `Player::toggleMount` (player.cpp:8004, 8020) through the session sink.
      */
-    private val sendOutfitWindow: () -> Unit = {},
+    val sendOutfitWindow: () -> Unit = {},
 ) {
     /** `PlayerWheel m_wheelPlayer` (player.hpp:1959); accessor `wheel()`. */
     val wheel: PlayerWheel by lazy(LazyThreadSafetyMode.NONE) {
@@ -682,6 +683,9 @@ class PlayerFeatures(
             player = HostAttachedEffectsPlayer(wheelPlayer, storage),
             attachedEffects = attachedEffectDefinitions,
             outfits = attachedOutfits,
+            // `m_player.client` (player_attached_effects.cpp:845-873): the
+            // session sink, resolved per call like the C++ late-bound pointer.
+            client = wheelPlayer?.let { player -> ProtocolSinkAttachedEffectsClient(player) },
         )
     }
 }
@@ -842,6 +846,35 @@ private class HostTitlePlayer(
 }
 
 /**
+ * `m_player.client` adapter (`player_attached_effects.cpp:845, 853, 861, 869`)
+ * over the live session sink. Canary reads `Player::client` per call, so this
+ * adapter resolves [Player.protocolSink] on every send; a player without a
+ * session (or one whose transport is not an OTCR client — the `!isOTCR` gate
+ * lives in the sink) stays silent, exactly like the C++ `if (!m_player.client)
+ * return;` guards.
+ */
+private class ProtocolSinkAttachedEffectsClient(
+    private val player: Player,
+) : AttachedEffectsClient {
+
+    override fun sendAttachedEffect(creature: Creature, effectId: Int) {
+        player.protocolSink?.sendAttachedEffect(creature, effectId)
+    }
+
+    override fun sendDetachEffect(creature: Creature, effectId: Int) {
+        player.protocolSink?.sendDetachEffect(creature, effectId)
+    }
+
+    override fun sendShader(creature: Creature, shaderName: String) {
+        player.protocolSink?.sendShader(creature, shaderName)
+    }
+
+    override fun sendMapShader(shaderName: String) {
+        player.protocolSink?.sendMapShader(shaderName)
+    }
+}
+
+/**
  * [AttachedEffectsPlayer] adapter of [PlayerFeatures.attachedEffects] over the
  * live [wheelPlayer] host. Outfit reads/writes, storage, `kv`, access checks
  * and the cancel/outfit-change protocol seams resolve per call; a `null` host
@@ -857,8 +890,10 @@ private class HostTitlePlayer(
  *    265-308, 440-483, 615-657 behaves exactly like Canary, and
  *    `addStorageValue` routes through `PlayerStorage::add`
  *    (player_storage.cpp:56-93) so the pass-through ranges persist.
- *  - `Player::isRandomMounted()` and `Player::sendOutfitWindow()` have no
- *    Kotlin `Player` seam yet (PARITY GAP); they default to `false`/no-op.
+ *  - `Player::isRandomMounted()`/`Player::sendOutfitWindow()` resolve through
+ *    the live mount state and the [PlayerFeatures.sendOutfitWindow] session
+ *    seam, so the random-mount sampling and the window refresh behave like the
+ *    C++ members.
  */
 private class HostAttachedEffectsPlayer(
     private val player: Player?,
@@ -885,7 +920,12 @@ private class HostAttachedEffectsPlayer(
 
     override fun isAccessPlayer(): Boolean = player?.isAccessPlayer() ?: false
 
-    override fun isRandomMounted(): Boolean = false
+    /**
+     * `Player::isRandomMounted` (player.cpp:12943-12945): the live
+     * `randomMount` flag the mount state carries (`Player::setRandomMount`,
+     * player.cpp:12947-12949), not the former inert default.
+     */
+    override fun isRandomMounted(): Boolean = player?.features?.mounts?.isRandomMounted() ?: false
 
     override fun hasCondition(conditionType: ConditionType): Boolean =
         player?.hasCondition(conditionType) ?: false
@@ -894,7 +934,15 @@ private class HostAttachedEffectsPlayer(
         player?.sendCancelMessage?.invoke(returnValue)
     }
 
-    override fun sendOutfitWindow() = Unit
+    /**
+     * `Player::sendOutfitWindow` (player.cpp:2541-2543): `if (client)
+     * client->sendOutfitWindow();` through the composed session seam, so the
+     * wing/aura/effect toggles that request a window refresh actually reach the
+     * client.
+     */
+    override fun sendOutfitWindow() {
+        player?.features?.sendOutfitWindow?.invoke()
+    }
 
     override fun internalCreatureChangeOutfit(outfit: Outfit) {
         player?.let { it.internalCreatureChangeOutfit(it, outfit) }

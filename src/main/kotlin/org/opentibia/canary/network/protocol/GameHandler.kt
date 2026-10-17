@@ -737,6 +737,11 @@ class GameHandler(
                 )
             },
         )
+        // `ProtocolGame::isOTCR` (protocolgame.hpp:642) is fixed at login by the
+        // preamble; the sink gates its OTCR-only senders on it, exactly like the
+        // C++ member the login set before any of them could fire.
+        activePlayer.protocolSink?.isOTCR = isOTCR
+
         // `Player::setSpecialMenuAvailable`'s `client->sendSpecialContainersAvailable()`
         // (player.cpp:6831): the stored menu gates push on every change.
         activePlayer.sendSpecialContainersAvailable = {
@@ -889,6 +894,10 @@ class GameHandler(
                     creatureById = { id -> game.getCreatureByID(id) },
                     selfAppearTail = selfAppearTailFor(version, caster),
                 )
+                // `ProtocolGame::isOTCR` (protocolgame.hpp:642): `castViewerLogin`
+                // runs the same preamble (protocolgame.cpp:12381), so the viewer
+                // transport gates its OTCR senders identically.
+                transport.isOTCR = isOTCR
                 val result = LivestreamViewerLogin.castViewerLogin(
                     playerByName = { name -> game.getPlayerByName(name) },
                     livestream = game.livestream,

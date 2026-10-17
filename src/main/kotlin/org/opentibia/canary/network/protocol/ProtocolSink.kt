@@ -84,6 +84,51 @@ interface ProtocolSink : VipClient, LivestreamClient {
     val protocolVersion: Int
 
     /**
+     * `ProtocolGame::isOTCR` (protocolgame.hpp:642): set by the login preamble
+     * when a non-OTCv8 OTClient negotiates the OTCR feature list
+     * (protocolgame.cpp:10707). Gates the OTCR-only senders
+     * (`sendAttachedEffect`/`sendDetachEffect`/`sendShader`/`sendMapShader`/
+     * `sendPlayerTyping`, protocolgame.cpp:11809-11873) and the outfit-window
+     * custom block (9254).
+     */
+    var isOTCR: Boolean
+
+    /**
+     * `ProtocolGame::sendAttachedEffect` (0x34, protocolgame.cpp:11809-11819):
+     * the `!isOTCR` early return stays here.
+     */
+    fun sendAttachedEffect(creature: Creature, effectId: Int) {
+    }
+
+    /**
+     * `ProtocolGame::sendDetachEffect` (0x35, protocolgame.cpp:11821-11831):
+     * the `!isOTCR` early return stays here.
+     */
+    fun sendDetachEffect(creature: Creature, effectId: Int) {
+    }
+
+    /**
+     * `ProtocolGame::sendShader` (0x36, protocolgame.cpp:11833-11843): the
+     * `!isOTCR` early return stays here.
+     */
+    fun sendShader(creature: Creature, shaderName: String) {
+    }
+
+    /**
+     * `ProtocolGame::sendMapShader` (0x37, protocolgame.cpp:11845-11855): the
+     * `!isOTCR` early return stays here.
+     */
+    fun sendMapShader(shaderName: String) {
+    }
+
+    /**
+     * `ProtocolGame::sendPlayerTyping` (0x38, protocolgame.cpp:11857-11867):
+     * the `!isOTCR` early return stays here.
+     */
+    fun sendPlayerTyping(creature: Creature, typing: Int) {
+    }
+
+    /**
      * `ProtocolGame::sendOutfitWindow()` (0xC8, protocolgame.cpp:9027-9258):
      * the current-profile or old-protocol layout is chosen by the session
      * transport from the composed payload. Transports without a composed
@@ -351,6 +396,14 @@ abstract class ProtocolFrameSink(
      * transports override it from their negotiated profile.
      */
     override var oldProtocol: Boolean = false
+
+    /**
+     * `ProtocolGame::isOTCR` (protocolgame.hpp:642): set from the login
+     * preamble (`ProtocolGame::sendClientLoginPreamble` -> `sendOTCRFeatures`,
+     * protocolgame.cpp:10707). Gates the OTCR-only senders; the base transport
+     * keeps the plain-Tibia default.
+     */
+    override var isOTCR: Boolean = false
 
     /**
      * `ProtocolGame::version` (protocolgame.hpp:639): the negotiated client

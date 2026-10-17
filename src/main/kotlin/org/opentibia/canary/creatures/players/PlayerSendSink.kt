@@ -290,6 +290,48 @@ class PlayerFrameSink(
         writeFrame(out)
     }
 
+    // --- OTCR senders -------------------------------------------------------------
+
+    /** `sendAttachedEffect` (protocolgame.cpp:11809-11819); the `!isOTCR` early return. */
+    override fun sendAttachedEffect(creature: Creature, effectId: Int) {
+        if (!isOTCR) {
+            return
+        }
+        emitFrame { MiscEffectWriter.writeAttachedEffect(this, creature.id, effectId) }
+    }
+
+    /** `sendDetachEffect` (protocolgame.cpp:11821-11831); the `!isOTCR` early return. */
+    override fun sendDetachEffect(creature: Creature, effectId: Int) {
+        if (!isOTCR) {
+            return
+        }
+        emitFrame { MiscEffectWriter.writeDetachEffect(this, creature.id, effectId) }
+    }
+
+    /** `sendShader` (protocolgame.cpp:11833-11843); the `!isOTCR` early return. */
+    override fun sendShader(creature: Creature, shaderName: String) {
+        if (!isOTCR) {
+            return
+        }
+        emitFrame { MiscEffectWriter.writeShader(this, creature.id, shaderName) }
+    }
+
+    /** `sendMapShader` (protocolgame.cpp:11845-11855); the `!isOTCR` early return. */
+    override fun sendMapShader(shaderName: String) {
+        if (!isOTCR) {
+            return
+        }
+        emitFrame { MiscEffectWriter.writeMapShader(this, shaderName) }
+    }
+
+    /** `sendPlayerTyping` (protocolgame.cpp:11857-11867); the `!isOTCR` early return. */
+    override fun sendPlayerTyping(creature: Creature, typing: Int) {
+        if (!isOTCR) {
+            return
+        }
+        emitFrame { MiscWindowWriter.writePlayerTyping(this, creature.id, typing) }
+    }
+
     // --- outfit window ------------------------------------------------------------
 
     /**
